@@ -1,0 +1,90 @@
+{
+    "name": "[EDGE] Lobby",
+    "tree": {
+        "$className": "DataModel",
+
+        "ReplicatedFirst": {
+			"$className": "ReplicatedFirst",
+			"$ignoreUnknownInstances": true
+		},
+
+        "ReplicatedStorage": {
+            "$className": "ReplicatedStorage",
+            "$ignoreUnknownInstances": true,
+            "$path": "Places/Lobby/ReplicatedStorage",
+
+            "Submodules": {
+                "$className": "Folder",
+                "Core": {
+                    "$className": "Folder",
+                    "Source": {
+                        "$className": "Folder",
+                        "$path": "Submodules/Core/Source/Client"
+                    },
+
+                    "Packages": {
+                        "$className": "Folder",
+                        "$path": "Submodules/Core/Packages"
+                    },
+                    
+                    "Libraries": {
+                        "$className": "Folder",
+                        "$path": "Submodules/Core/Libraries"
+                    },
+
+                    "Shared": {
+                        "$className": "Folder",
+                        "$path": "Submodules/Core/Source/Shared"
+                    }
+
+                },
+
+				"DebugTools": {
+					"$path": "Submodules/DebugTools/Source/DebugTools"
+				}
+
+            }
+        },
+        
+        "ServerScriptService": {
+            "$className": "ServerScriptService",
+            "$path": "Places/Lobby/ServerScriptService",
+
+            "Submodules": {
+                "$className": "Folder",
+                "Core": {
+                    "$className": "Folder",
+                    "Source": {
+                        "$className": "Folder",
+                        "$path": "Submodules/Core/Source/Server"
+                    }
+                }
+            }
+        },
+
+        "StarterPlayer": {
+            "$className": "StarterPlayer",
+            
+            "$properties": {
+                "LoadCharacterAppearance": true,
+                "HealthDisplayDistance": 0,
+                "NameDisplayDistance": 0,
+                "CharacterJumpPower": 0,
+                "CharacterUseJumpPower": true,
+				"EnableMouseLockOption": false
+			},
+            
+            "StarterCharacterScripts": {
+                "$className": "StarterCharacterScripts",
+                "$ignoreUnknownInstances": true,
+                "$path": "Places/Lobby/StarterPlayer/StarterCharacterScripts"
+            },
+
+            "StarterPlayerScripts": {
+                "$className": "StarterPlayerScripts",
+                "$ignoreUnknownInstances": true,
+                "$path": "Places/Lobby/StarterPlayer/StarterPlayerScripts"
+            }
+        }
+    }
+}

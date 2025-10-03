@@ -1,0 +1,49 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "inputs": [
+        {
+          "id": "projectJsonFile",
+          "description": "The name of the project.json file",
+          "default": "default",
+          "type": "promptString"
+        }
+      ],
+
+    "tasks": [        
+        {
+            "label": "Update PZ Submodules",
+            "detail": "Force update all submodules used under the PZ Monorepo",
+            "type": "shell",
+            "command": "git submodule update --remote --force --init --recursive",
+            "group": {
+                "kind": "build"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "focus": true
+            }
+        }, 
+
+        {
+            "label": "Build PZ Packages",
+            "detail": "Build all MZM Wally packages, these packages are needed to build the project",
+            "type": "shell",
+            "command": "cd Submodules/Core ; wally install",
+            "group": {
+                "kind": "build"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "focus": true
+            }
+        },  
+    ]
+}
