@@ -13,7 +13,7 @@
 
     "tasks": [        
         {
-            "label": "Update PZ Submodules",
+            "label": "update project-hades submodules",
             "detail": "Force update all submodules used under the PZ Monorepo",
             "type": "shell",
             "command": "git submodule update --remote --force --init --recursive",
@@ -30,7 +30,7 @@
         }, 
 
         {
-            "label": "Build PZ Packages",
+            "label": "build project-hades wally packages",
             "detail": "Build all MZM Wally packages, these packages are needed to build the project",
             "type": "shell",
             "command": "cd Submodules/Core ; wally install",

@@ -1,0 +1,3 @@
+[submodule "bfg-core"]
+	path = bfg-core
+	url = https://github.com/BloxForge-Games/bfg-core
