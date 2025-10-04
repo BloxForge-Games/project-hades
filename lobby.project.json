@@ -1,5 +1,5 @@
 {
-    "name": "[EDGE] Lobby",
+    "name": "[project-hades] lobby",
     "tree": {
         "$className": "DataModel",
 
@@ -19,28 +19,28 @@
                     "$className": "Folder",
                     "Source": {
                         "$className": "Folder",
-                        "$path": "Submodules/Core/Source/Client"
+                        "$path": "bfg-core/Source/Client"
                     },
 
                     "Packages": {
                         "$className": "Folder",
-                        "$path": "Submodules/Core/Packages"
+                        "$path": "bfg-core/Packages"
                     },
                     
                     "Libraries": {
                         "$className": "Folder",
-                        "$path": "Submodules/Core/Libraries"
+                        "$path": "bfg-core/Libraries"
                     },
 
                     "Shared": {
                         "$className": "Folder",
-                        "$path": "Submodules/Core/Source/Shared"
+                        "$path": "bfg-core/Source/Shared"
                     }
 
                 },
 
 				"DebugTools": {
-					"$path": "Submodules/DebugTools/Source/DebugTools"
+					"$path": "bfg-debug/Source/DebugTools"
 				}
 
             }
@@ -56,7 +56,7 @@
                     "$className": "Folder",
                     "Source": {
                         "$className": "Folder",
-                        "$path": "Submodules/Core/Source/Server"
+                        "$path": "bfg-core/Source/Server"
                     }
                 }
             }
