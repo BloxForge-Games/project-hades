@@ -26,6 +26,11 @@
                         "$className": "Folder",
                         "$path": "bfg-core/Packages"
                     },
+
+                    "ServerPackages": {
+                        "$className": "Folder",
+                        "$path": "bfg-core/ServerPackages"
+                    },
                     
                     "Libraries": {
                         "$className": "Folder",
