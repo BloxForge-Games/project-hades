@@ -30,12 +30,10 @@ local DebugController = Knit.CreateController({
 
 --[ Initializers ]--
 
-function DebugController:KnitStart()
-	print("DebugController Started")
-end
+function DebugController:KnitStart() end
 
 function DebugController:KnitInit()
-	DebugTools:Init()
+	--DebugTools:Init()
 end
 
 return DebugController

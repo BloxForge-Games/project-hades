@@ -35,11 +35,9 @@
 			"--[ Initializers ]--",
 			"",
 			"function ${TM_FILENAME_BASE}:KnitStart()",
-			"    print(\"${TM_FILENAME_BASE} Started\")",
 			"end",
 			"",
 			"function ${TM_FILENAME_BASE}:KnitInit()${0}",
-			"    print(\"${TM_FILENAME_BASE} Initialized\")",
 			"end",
 			"",
 			"return ${TM_FILENAME_BASE}"
@@ -81,11 +79,9 @@
 			"--[ Initializers ]--",
 			"",
 			"function ${TM_FILENAME_BASE}:KnitStart()",
-			"    print(\"${TM_FILENAME_BASE} Started\")",
 			"end",
 			"",
 			"function ${TM_FILENAME_BASE}:KnitInit()${0}",
-			"    print(\"${TM_FILENAME_BASE} Initialized\")",
 			"end",
 			"",
 			"return ${TM_FILENAME_BASE}"

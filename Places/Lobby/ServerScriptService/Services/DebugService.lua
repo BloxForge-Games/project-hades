@@ -29,12 +29,8 @@ local DebugService = Knit.CreateService({
 
 --[ Initializers ]--
 
-function DebugService:KnitStart()
-	print("DebugService Started")
-end
+function DebugService:KnitStart() end
 
-function DebugService:KnitInit()
-	print("DebugService Initialized")
-end
+function DebugService:KnitInit() end
 
 return DebugService

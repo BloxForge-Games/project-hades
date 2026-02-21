@@ -75,6 +75,7 @@
                 "HealthDisplayDistance": 0,
                 "NameDisplayDistance": 0,
                 "CharacterJumpPower": 0,
+                "CharacterWalkSpeed": 19,
                 "CharacterUseJumpPower": true,
 				"EnableMouseLockOption": false
 			},
