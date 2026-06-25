@@ -33,7 +33,7 @@ local DebugController = Knit.CreateController({
 function DebugController:KnitStart() end
 
 function DebugController:KnitInit()
-	DebugTools:Init()
+	--DebugTools:Init()
 end
 
 return DebugController
