@@ -1,7 +1,7 @@
 --[[
-	 Author(s): 
-	 Module: DebugController.lua
-	 Description:
+     Author(s): 
+     Module: DebugService.lua
+     Description:
 ]]
 
 --[ Roblox Services ]--
@@ -11,10 +11,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 --[ Exports & Types & Defaults ]--
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local DebugTools = require(ReplicatedStorage.Submodules.DebugTools)
 
-local DebugController = Knit.CreateController({
-	Name = "DebugController",
+local DebugService = Knit.CreateService({
+	Name = "DebugService",
 	Client = {},
 })
 
@@ -30,10 +29,8 @@ local DebugController = Knit.CreateController({
 
 --[ Initializers ]--
 
-function DebugController:KnitStart() end
+function DebugService:KnitStart() end
 
-function DebugController:KnitInit()
-	DebugTools:Init()
-end
+function DebugService:KnitInit() end
 
-return DebugController
+return DebugService

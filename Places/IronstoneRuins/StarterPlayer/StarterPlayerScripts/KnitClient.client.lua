@@ -14,13 +14,13 @@ repeat
 	task.wait()
 until Players.LocalPlayer.Character
 
-Knit.AddControllers(CoreControllers)
-Knit.AddControllers(CoreInterface)
-Knit.AddControllers(UniqueControllers)
-
 for _, component in pairs(ClientComponents:GetChildren()) do
 	require(component)
 end
+
+Knit.AddControllers(CoreControllers)
+Knit.AddControllers(CoreInterface)
+Knit.AddControllers(UniqueControllers)
 
 Knit.Start()
 	:andThen(function()
