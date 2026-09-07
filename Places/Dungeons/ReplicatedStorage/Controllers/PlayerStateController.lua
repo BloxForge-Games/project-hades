@@ -561,8 +561,18 @@ function PlayerStateController:KnitStart()
 	-- the CutscenePlaying attribute clear are fired by the same owner in
 	-- no guaranteed order — the delay lets the whole release settle before
 	-- the write, and a double-write of the same value is harmless anyway.
+	--
+	-- NOT while something legitimately owns movement. A spell's cast
+	-- cutscene beat ends here too, and this wrote baseline over the cast's
+	-- own root and over a woven swing's slow -- the "my walkspeed reset
+	-- mid-cast" pop. Those owners restore on their own timers; a lost
+	-- restore is the watchdog's job, not this back-stop's.
 	CinematicInterfaceController.Signals.OnCinematicEnd:Connect(function()
 		task.delay(0.1, function()
+			local character = Players.LocalPlayer.Character
+			if character and movementLegitimatelyLocked(character) then
+				return
+			end
 			self:RestoreWalkSpeed()
 		end)
 	end)
