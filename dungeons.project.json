@@ -1,5 +1,5 @@
 {
-    "name": "[project-hades] Lobby",
+    "name": "[project-hades] Dungeons",
     "tree": {
         "$className": "DataModel",
 
@@ -11,7 +11,7 @@
         "ReplicatedStorage": {
             "$className": "ReplicatedStorage",
             "$ignoreUnknownInstances": true,
-            "$path": "Places/Lobby/ReplicatedStorage",
+            "$path": "Places/Dungeons/ReplicatedStorage",
 
             "Submodules": {
                 "$className": "Folder",
@@ -53,7 +53,7 @@
         
         "ServerScriptService": {
             "$className": "ServerScriptService",
-            "$path": "Places/Lobby/ServerScriptService",
+            "$path": "Places/Dungeons/ServerScriptService",
 
             "Submodules": {
                 "$className": "Folder",
@@ -82,13 +82,13 @@
             "StarterCharacterScripts": {
                 "$className": "StarterCharacterScripts",
                 "$ignoreUnknownInstances": true,
-                "$path": "Places/Lobby/StarterPlayer/StarterCharacterScripts"
+                "$path": "Places/Dungeons/StarterPlayer/StarterCharacterScripts"
             },
 
             "StarterPlayerScripts": {
                 "$className": "StarterPlayerScripts",
                 "$ignoreUnknownInstances": true,
-                "$path": "Places/Lobby/StarterPlayer/StarterPlayerScripts"
+                "$path": "Places/Dungeons/StarterPlayer/StarterPlayerScripts"
             }
         }
     }
