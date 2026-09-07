@@ -40,7 +40,7 @@ local INDICATOR_LIFETIME = ARC_RISE_TWEEN_INFO.Time + ARC_FALL_TWEEN_INFO.Time +
 -- hit. The TextLabel is forced TextScaled at spawn (see the handler), so
 -- the frame size IS the text size — FONT_SCALED (the shared scale divisor)
 -- is left alone; only the crit frame's base dimensions grow.
-local CRITICAL_COLOR3 = Color3.fromRGB(255, 202, 10)
+local CRITICAL_COLOR3 = Color3.fromRGB(255, 96, 10)
 local CRITICAL_SIZE_DESKTOP = UDim2.fromOffset(100 / FONT_SCALED, 52 / FONT_SCALED)
 local CRITICAL_SIZE_MOBILE = UDim2.fromOffset(70 / FONT_SCALED, 34 / FONT_SCALED)
 
