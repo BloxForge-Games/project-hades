@@ -161,9 +161,10 @@ local PUMPKIN_DELAY = 0.75
 -- (PUMPKIN_DELAY + 0.25), so the cap bites only on a genuine pile-up.
 local BOMB_LIMIT_PER_RELIC = 15
 
--- Zombie Bomb (Venom Legendary): a takedown on a POISONED mob while the
--- killer is BLIGHTED leaves a Poison Cloud at the corpse -- (callback x
--- level) damage per tick for the duration, and each tick has
+-- Zombie Bomb (Venom Legendary): a takedown on a POISONED mob leaves a
+-- Poison Cloud at the corpse (the Blighted clause was dropped in the
+-- 2026-09 un-gating pass) -- (callback x level) damage per tick for the
+-- duration, and each tick has
 -- CLOUD_STATUS_CHANCE to Poison everything inside (the sheet's "+30%
 -- Status Chance"). LIMIT bounds live clouds PER PLAYER, same shape as
 -- the pumpkin cap.
@@ -1391,14 +1392,9 @@ function MobBase:_runZombieBombCloud(killer: Player)
 	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(killer, RelicNames["Zombie Bomb"]) <= 0 then
 		return
 	end
-	-- Gates: the mob died POISONED (family read -- Noxious Venom counts;
-	-- any player's stacks, read before the stack watchers release) AND the
-	-- killer is Blighted right now.
+	-- Gate: the mob died POISONED (family read -- Noxious Venom counts;
+	-- any player's stacks, read before the stack watchers release).
 	if not (StatusConditionService and StatusConditionService:IsPoisoned(self._model)) then
-		return
-	end
-	local killerHrp = killer.Character and killer.Character:FindFirstChild("HumanoidRootPart")
-	if not killerHrp or killerHrp:FindFirstChild(AuraNames.Blighted) == nil then
 		return
 	end
 

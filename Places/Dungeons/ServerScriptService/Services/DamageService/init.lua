@@ -123,10 +123,11 @@ local DRAGON_LANTERN_COIN_TAX = 0.10
 -- on the multiplier). Chances/fractions that live in relic callbacks are
 -- read at the use site; these are the hardcoded halves.
 
--- Lightning Horn of the Heavens: while Stormcharged, a CRIT on a Shocked
--- enemy calls down a Lightning Strike (damage per level from the relic
--- callback) in this radius. Latched so one strike can never chain another
--- off its own crits, and relic-sourced damage can never trigger one.
+-- Lightning Horn of the Heavens: a CRIT on a Shocked enemy has the relic's
+-- data.strikeChance to call down a Lightning Strike (damage per level from
+-- the relic callback) in this radius. Latched so one strike can never
+-- chain another off its own crits, and relic-sourced damage can never
+-- trigger one. (The Stormcharged clause was dropped in the 2026-09 pass.)
 local LIGHTNING_STRIKE_RADIUS = 11
 local LIGHTNING_STRIKE_FANOUT_SECONDS = 0.1
 
@@ -520,24 +521,27 @@ function DamageService:_tryLightningOrbStormcharge(player: Player, wasCrit: bool
 	end
 end
 
--- Lightning Horn of the Heavens (Legendary): while Stormcharged, a crit on
--- a Shocked enemy (Coil Shocked counts) calls down a Lightning Strike —
--- per-level damage from the relic callback, in a radius, every enemy
--- inside. The fan-out latch collapses an AoE crit into ONE strike, and
--- _postDamage's isRelicSourced gate stops a strike's own crits from
+-- Lightning Horn of the Heavens (Legendary): a crit on a Shocked enemy
+-- (Coil Shocked counts) has data.strikeChance to call down a Lightning
+-- Strike — per-level damage from the relic callback, in a radius, every
+-- enemy inside. The fan-out latch collapses an AoE crit into ONE strike,
+-- and _postDamage's isRelicSourced gate stops a strike's own crits from
 -- chaining another.
 function DamageService:_tryLightningHornStrike(player: Player, humanoid: Humanoid)
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Lightning Horn of the Heavens"]) <= 0 then
 		return
 	end
 
-	local casterHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-	if not casterHrp or casterHrp:FindFirstChild(AuraNames.Stormcharged) == nil then
+	local targetModel = humanoid.Parent
+	if not targetModel or not StatusConditionService or not StatusConditionService:IsShocked(targetModel) then
 		return
 	end
 
-	local targetModel = humanoid.Parent
-	if not targetModel or not StatusConditionService or not StatusConditionService:IsShocked(targetModel) then
+	-- The roll, before the latch: a failed roll must not spend the fan-out
+	-- window for the other targets of the same AoE crit.
+	local hornData = RelicData[RelicNames["Lightning Horn of the Heavens"]]
+	local strikeChance = (hornData and hornData.data and hornData.data.strikeChance) or 0.50
+	if math.random() > strikeChance then
 		return
 	end
 

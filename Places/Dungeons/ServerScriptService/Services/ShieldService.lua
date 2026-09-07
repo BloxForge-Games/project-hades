@@ -25,9 +25,10 @@
 	    damage-taken proc in the 2026-08 pass.
 	  * Spartan Sword and Shield: grants Stonebound on a magic cast
 	    (VFXService calls TrySpartanStonebound).
-	  * Golem's Hammer: while Stonebound AND holding a Barrier, the Empower
-	    rig sits on the HRP and a Tremor pulses every second for
-	    (Level x 20) damage in a radius.
+	  * Golem's Hammer: while holding a Barrier, the Empower rig sits on
+	    the HRP and a Tremor pulses every second for (Level x the relic
+	    callback, 50) damage in a radius. (Its Stonebound clause was dropped in the 2026-09
+	    un-gating pass.)
 
 	Cap: the SUM of live buckets never exceeds 100% of the holder's
 	MaxHealth. Absorption drains soonest-expiring buckets first, after all
@@ -380,10 +381,9 @@ function ShieldService:_ensureWatcher(state)
 	end)
 end
 
--- Golem's Hammer: while the holder is Stonebound AND Shielded, keep the
--- Empower rig on their HRP and pulse a Tremor every second — 25% of their
--- BONUS Maximum Health (the relic/rune-sourced extra, from the replicated
--- BonusHealthPercent attribute) to everything in the radius.
+-- Golem's Hammer: while the holder is Shielded, keep the Empower rig on
+-- their HRP and pulse a Tremor every second — (Level x callback) damage to
+-- everything in the radius.
 function ShieldService:_ensureGolemLoop(state, player: Player)
 	if state.golemRunning then
 		return
@@ -411,10 +411,9 @@ function ShieldService:_ensureGolemLoop(state, player: Player)
 		while state.character.Parent and #state.buckets > 0 do
 			local hrp = state.character:FindFirstChild("HumanoidRootPart")
 			local humanoid = state.character:FindFirstChildOfClass("Humanoid")
-			local stonebound = hrp and hrp:FindFirstChild(AuraNames.Stonebound) ~= nil
 			local owned = (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) > 0
 
-			if hrp and humanoid and humanoid.Health > 0 and stonebound and owned then
+			if hrp and humanoid and humanoid.Health > 0 and owned then
 				-- Empower rig up (GameAssets.Auras.Empower under the HRP).
 				if not empowerClone or not empowerClone.Parent then
 					local aurasFolder = ReplicatedStorage.GameAssets:FindFirstChild("Auras")

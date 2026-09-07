@@ -63,6 +63,10 @@ local FALLBACK_SECONDS = 15
 -- with OnCinematicEnd, and by the fallback. Same as Dungeons.
 local LANDING_SOURCE = "Landing"
 
+-- Horizontal drift from the server's landing CFrame past which this client
+-- snaps its own root onto it at OnLandingStart (see _snapToLanding).
+local LANDING_SNAP_TOLERANCE_STUDS = 2
+
 --[ Controller ]--
 
 local LobbyLandingController = Knit.CreateController({
@@ -148,6 +152,25 @@ function LobbyLandingController:_unlockControls()
 	end)
 end
 
+-- The server's landing teleport is a CFrame write on a root THIS client owns;
+-- OnLandingStart carries the target so the owner can make the authoritative
+-- write itself if anything left it off the spot.
+function LobbyLandingController:_snapToLanding(targetCFrame: CFrame?)
+	if typeof(targetCFrame) ~= "CFrame" then
+		return
+	end
+	local character = Players.LocalPlayer.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+	local offset = hrp.Position - targetCFrame.Position
+	if Vector3.new(offset.X, 0, offset.Z).Magnitude > LANDING_SNAP_TOLERANCE_STUDS then
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.CFrame = targetCFrame
+	end
+end
+
 -- Dismisses the loading screen. Idempotent: safe to call from both the
 -- server cue and the fallback.
 function LobbyLandingController:_reveal()
@@ -185,7 +208,8 @@ function LobbyLandingController:KnitStart()
 		end
 	end)
 
-	LobbyLandingService.OnLandingStart:Connect(function()
+	LobbyLandingService.OnLandingStart:Connect(function(targetCFrame: CFrame?)
+		self:_snapToLanding(targetCFrame)
 		self:_lockControls()
 		self:_reveal()
 	end)

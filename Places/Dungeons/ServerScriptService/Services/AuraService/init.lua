@@ -290,6 +290,17 @@ function AuraService:SetAura(
 		if bonus > 0 then
 			resolvedDuration *= 1 + bonus
 		end
+
+		-- Staff of Azure Ever Ice: the owner's Frostburst lasts twice as
+		-- long. A multiplier on top of the additive extensions above (the
+		-- card says "doubled", not "+100%").
+		if
+			auraName == AuraNames.Frostburst
+			and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
+		then
+			local azureData = RelicData[RelicNames["Staff of Azure Ever Ice"]]
+			resolvedDuration *= (azureData and azureData.data and azureData.data.frostburstDurationMultiplier) or 2
+		end
 	end
 
 	local marker = hrp:FindFirstChild(auraName)

@@ -107,8 +107,9 @@ function RelicController:KnitStart()
 		end
 	)
 
-	-- `scale` is 1 for a normal Shatter, 2 while Staff of Azure Ever Ice's
-	-- Frostburst window doubles them.
+	-- `scale` is 1 for a normal Shatter. (The 2x Staff of Azure Ever Ice
+	-- variant was cut in the 2026-09 pass; the parameter stays so a future
+	-- variant needs no signal change.)
 	RelicService.OnShatterActivated:Connect(function(position: Vector3, scale: number?)
 		Shatter.new(position, scale):PlayEffect()
 	end)

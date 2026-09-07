@@ -22,15 +22,18 @@
 
 --[ Roblox Services ]--
 
+local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 local TweenService = game:GetService("TweenService")
 
 --[ Exports & Types & Defaults ]--
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local DungeonSequence = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonSequence)
@@ -137,7 +140,7 @@ local GATE_OPEN_TWEEN_SECONDS = 0.5
 local GATE_CLOSE_TWEEN_SECONDS = 0.35
 local GATE_RISE_EXTRA_STUDS = 2 -- raised height = gate height + this
 local GATE_VISUALS_FADE_SECONDS = 0.3 -- highlight + billboard fade in / fade out
-local GATE_HIGHLIGHT_FILL_TRANSPARENCY = 0.5
+local GATE_HIGHLIGHT_FILL_TRANSPARENCY = 0.65
 local GATE_HIGHLIGHT_OUTLINE_TRANSPARENCY = 0
 local DESYNCED_PLAYERS_FOLDER_NAME = "DesyncedPlayers"
 
@@ -198,6 +201,9 @@ local EXIT_PORTAL_SHAKE_RADIUS = 80
 -- Landing spread: players fan out sideways from the start CFrame so a
 -- party doesn't land in one overlapping pile.
 local LANDING_SPREAD_STUDS = 5
+-- Horizontal drift from the landing spot past which the server snaps the
+-- root back during the fall (see _holdLandingPosition).
+local LANDING_HOLD_TOLERANCE_STUDS = 2
 
 -- Runtime-folder children that are INFRASTRUCTURE, not dungeon content:
 -- kept across teardown (Walls has its children cleared; the rest are left
@@ -220,6 +226,9 @@ local DUNGEON_DONE_EMIT_STRENGTH = 500
 -- The prefabPools name for Event rooms (DungeonData). Only this pool is
 -- weight-picked; every other pool stays uniform.
 local EVENT_POOL_NAME = "Event"
+-- The Planner forces one Event slot per floor to this prefab; placement
+-- keeps it to AT MOST one (see the merchant rule in the placement loop).
+local MERCHANT_SHOP_PREFAB_NAME = "MerchantShop"
 local ROOM_ATTRIBUTE = "RoomId" -- set on each room model so encounter systems can map back to room data
 local WALLS_PARENT_FOLDER = workspace.IgnoreInstances.Map.DungeonRooms.Walls
 
@@ -703,7 +712,7 @@ end
 -- Fades the gate's ActionHighlight visuals in (to their authored look) or
 -- out (to fully invisible, ahead of destroy). Tweened properties per the
 -- design: TextLabel.TextTransparency + UIStroke.Transparency on the
--- billboard; FillTransparency (→0.5) + OutlineTransparency (→0) on the
+-- billboard; FillTransparency (→0.65) + OutlineTransparency (→0) on the
 -- highlight. Server-side tweens — a one-shot 0.3s fade replicates fine.
 local function tweenGateVisuals(highlight: Instance?, billboard: Instance?, fadeIn: boolean)
 	local tweenInfo = TweenInfo.new(GATE_VISUALS_FADE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -814,15 +823,23 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
 	local template = vfxFolder and vfxFolder:FindFirstChild(ACTION_HIGHLIGHT_NAME)
 
-	-- NO gate highlight (per design): the countdown billboard carries the
-	-- "Waiting for Players" beat on its own, and the black fill over the
-	-- door read as a glitch. Any authored one on the gate goes too, so
-	-- it cannot sneak back in from a prefab. `highlight` stays a nil
-	-- argument below — the fade / destroy paths already guard on it.
-	local highlight = nil
-	local authoredHighlight = gate:FindFirstChildOfClass("Highlight")
-	if authoredHighlight then
-		authoredHighlight:Destroy()
+	-- Darkened gate highlight while the door waits for players (back in the
+	-- 2026-09 pass; it had been cut as "read as a glitch"). Prefer one
+	-- authored on the gate, else clone the template's; tweenGateVisuals
+	-- fades it in to GATE_HIGHLIGHT_*_TRANSPARENCY and out before destroy.
+	local highlight = gate:FindFirstChildOfClass("Highlight")
+	if not highlight and template then
+		local highlightTemplate = template:FindFirstChildOfClass("Highlight")
+		highlight = highlightTemplate and highlightTemplate:Clone()
+		if highlight then
+			highlight.Adornee = gate
+			highlight.Parent = gate
+		end
+	end
+	if highlight then
+		-- Occluded: walls in front of the door hide it, so the darkening
+		-- reads as the door itself rather than an X-ray through the room.
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 	end
 
 	local billboard = gate:FindFirstChildOfClass("BillboardGui")
@@ -1133,15 +1150,23 @@ function DungeonService:_startEventGateHold(eventRoom)
 	-- Highlight + countdown billboard, same assets as the gate cycle.
 	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
 	local template = vfxFolder and vfxFolder:FindFirstChild(ACTION_HIGHLIGHT_NAME)
-	-- NO gate highlight (per design): the countdown billboard carries the
-	-- "Waiting for Players" beat on its own, and the black fill over the
-	-- door read as a glitch. Any authored one on the gate goes too, so
-	-- it cannot sneak back in from a prefab. `highlight` stays a nil
-	-- argument below — the fade / destroy paths already guard on it.
-	local highlight = nil
-	local authoredHighlight = gate:FindFirstChildOfClass("Highlight")
-	if authoredHighlight then
-		authoredHighlight:Destroy()
+	-- Darkened gate highlight while the door waits for players (back in the
+	-- 2026-09 pass; it had been cut as "read as a glitch"). Prefer one
+	-- authored on the gate, else clone the template's; tweenGateVisuals
+	-- fades it in to GATE_HIGHLIGHT_*_TRANSPARENCY and out before destroy.
+	local highlight = gate:FindFirstChildOfClass("Highlight")
+	if not highlight and template then
+		local highlightTemplate = template:FindFirstChildOfClass("Highlight")
+		highlight = highlightTemplate and highlightTemplate:Clone()
+		if highlight then
+			highlight.Adornee = gate
+			highlight.Parent = gate
+		end
+	end
+	if highlight then
+		-- Occluded: walls in front of the door hide it, so the darkening
+		-- reads as the door itself rather than an X-ray through the room.
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 	end
 	local billboard = gate:FindFirstChildOfClass("BillboardGui")
 	if not billboard and template then
@@ -1419,12 +1444,39 @@ function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect
 	self.Signals.OnSegmentCleared:Fire(self._activeDungeon, lastChunk)
 end
 
-function DungeonService:_teleportPlayerToStart(dungeon, player)
+-- The APPROACH gate (the cleared room's ExitGate in front of a miniboss /
+-- boss arena) never opens: the encounter intro teleports the party past it
+-- and it stays solid. Stamp it "passed" so gate dressing that keys off
+-- GateState (the ExitGateParticlePart rig) can fade out -- OpenSegmentGate
+-- never gives it the "open" stamp. Called on OnEncounterIntroStarted, while
+-- the party is still standing on the pad in front of it.
+function DungeonService:_markApproachGatePassed(arenaRoom)
+	local dungeon = self._activeDungeon
+	if not dungeon or not arenaRoom or not arenaRoom.id then
+		return
+	end
+	local previous = dungeon.rooms[arenaRoom.id - 1]
+	local gate = previous and previous.model and previous.model:FindFirstChild(EXIT_GATE_NAME)
+	if gate and gate:IsA("BasePart") and gate:GetAttribute("GateState") == nil then
+		gate:SetAttribute("GateState", "passed")
+	end
+end
+
+function DungeonService:_teleportPlayerToStart(dungeon, player): CFrame?
 	local marker = self:_findAnchor(dungeon.startModel, START_SPAWN_NAME, true)
 	local spawnCFrame
 	if marker then
 		spawnCFrame = self:_anchorCFrame(marker) :: CFrame
 	else
+		-- Loud, not silent: "landed somewhere near the start" looked like a
+		-- random teleport failure from the outside.
+		warn(
+			("[DungeonService] %s has no %q marker -- landing at its pivot + %s instead"):format(
+				dungeon.startModel.Name,
+				START_SPAWN_NAME,
+				tostring(START_SPAWN_FALLBACK_OFFSET)
+			)
+		)
 		spawnCFrame = dungeon.startModel:GetPivot() * CFrame.new(START_SPAWN_FALLBACK_OFFSET)
 	end
 
@@ -1451,23 +1503,61 @@ function DungeonService:_teleportPlayerToStart(dungeon, player)
 	-- BELOW the floor (the fall-through). The HRP's own CFrame is unaffected by
 	-- the animation, so setting it directly lands the root exactly on the ground
 	-- and the rig's Motor6Ds keep the body at its animated +25 offset.
+	-- Reparent FIRST so the CFrame write is the last thing to touch the root.
+	character.Parent = workspace.Players
+
 	local hrp = character:FindFirstChild("HumanoidRootPart")
 	if hrp then
+		hrp.AssemblyLinearVelocity = Vector3.zero
 		hrp.CFrame = targetCFrame
 	else
 		character:PivotTo(targetCFrame)
 	end
-	character.Parent = workspace.Players
+	return targetCFrame
+end
+
+-- Re-asserts the landing spot for `seconds` after the teleport (the pose
+-- hold + the fall). The teleport is a server CFrame write on a root the
+-- CLIENT owns; a client-side root write in the same window (a dash, a dodge,
+-- mobile aim -- all gated client-side now, this is the safety net) would
+-- otherwise win. Horizontal only: the humanoid settles vertically onto the
+-- floor by itself and must not be fought.
+function DungeonService:_holdLandingPosition(
+	character: Model,
+	hrp: BasePart,
+	targetCFrame: CFrame,
+	dungeon,
+	seconds: number
+)
+	task.spawn(function()
+		local deadline = os.clock() + seconds
+		while os.clock() < deadline do
+			RunService.Heartbeat:Wait()
+			if not character.Parent or not hrp.Parent or self._activeDungeon ~= dungeon then
+				return
+			end
+			local offset = hrp.Position - targetCFrame.Position
+			if Vector3.new(offset.X, 0, offset.Z).Magnitude > LANDING_HOLD_TOLERANCE_STUDS then
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.CFrame = targetCFrame
+			end
+		end
+	end)
 end
 
 --[ Join landing ]--
 
 function DungeonService:_runPlayerLanding(player: Player)
-	if self._landed[player] then
-		return
-	end
 	local dungeon = self._activeDungeon
 	if not dungeon then
+		return
+	end
+	-- Keyed by dungeon, not a bare flag: a ready cue arriving between
+	-- _activeDungeon being set and OnDungeonGenerated firing used to land
+	-- the player TWICE (the generated handler cleared the flag and re-ran
+	-- this for every ready player) -- two tracks, two teleports, and an
+	-- early OnLandingEnd that unlocked controls mid-fall.
+	if self._landed[player] == dungeon then
 		return
 	end
 	local character = player.Character
@@ -1486,7 +1576,7 @@ function DungeonService:_runPlayerLanding(player: Player)
 		return
 	end
 
-	self._landed[player] = true
+	self._landed[player] = dungeon
 
 	-- Mark the character as mid-fall for EVERY client (see
 	-- Attributes.Landing). Set before the pose so nothing has a window to
@@ -1529,7 +1619,8 @@ function DungeonService:_runPlayerLanding(player: Player)
 		local isTransitionLanding = self:GetRunDungeonIndex() > 1
 		task.wait(if isTransitionLanding then RUN_TRANSITION_PRE_TELEPORT_SECONDS else LANDING_START_DELAY)
 		if not character.Parent or not hrp.Parent then
-			return -- character gone; the attribute dies with it
+			self._landed[player] = nil -- character gone; let a new one land
+			return
 		end
 
 		-- Pose the character into the animation's first frame (+25 studs up) WHILE
@@ -1544,6 +1635,7 @@ function DungeonService:_runPlayerLanding(player: Player)
 		-- into view, so nobody ever sees the default pose at the dungeon start.
 		task.wait(LANDING_POSE_SETTLE)
 		if not character.Parent or not hrp.Parent then
+			self._landed[player] = nil
 			return
 		end
 
@@ -1551,8 +1643,15 @@ function DungeonService:_runPlayerLanding(player: Player)
 		-- _teleportPlayerToStart sets the HRP CFrame directly (NOT PivotTo, which
 		-- would mis-place the root while the +25 animation is playing), and the
 		-- HRP is anchored, so it lands exactly on the ground and can't fall.
-		self:_teleportPlayerToStart(dungeon, player)
+		local targetCFrame = self:_teleportPlayerToStart(dungeon, player)
 		self:_releaseTransitionFreeze(player)
+		if targetCFrame then
+			local holdSeconds = LANDING_POSE_HOLD_SECONDS + LANDING_DURATION
+			if isTransitionLanding then
+				holdSeconds += RUN_TRANSITION_REVEAL_HOLD_SECONDS
+			end
+			self:_holdLandingPosition(character, hrp, targetCFrame, dungeon, holdSeconds)
+		end
 
 		-- HOLD the frozen first frame in place. The screen is still dark, so
 		-- this is invisible to the player — it exists purely so the pose
@@ -1562,6 +1661,9 @@ function DungeonService:_runPlayerLanding(player: Player)
 		if not character.Parent or not hrp.Parent or self._activeDungeon ~= dungeon then
 			if character.Parent then
 				character:SetAttribute(Attributes.Landing, nil)
+			end
+			if not character.Parent or not hrp.Parent then
+				self._landed[player] = nil
 			end
 			return
 		end
@@ -1581,8 +1683,9 @@ function DungeonService:_runPlayerLanding(player: Player)
 		end
 
 		-- Reveal: fade the joiner's loading screen (or the transition black)
-		-- + lock controls.
-		self.Client.OnLandingStart:Fire(player)
+		-- + lock controls. Carries the landing CFrame: the client OWNS its
+		-- root, so its own snap to it is the authoritative one.
+		self.Client.OnLandingStart:Fire(player, targetCFrame)
 
 		-- Drop: resume the animation from the frozen +25 pose down to the ground.
 		if landAnimationTrack then
@@ -1857,6 +1960,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 	type SlotState = {
 		tried: { [Model]: true },
 		model: Model?,
+		prefabName: string?, -- name of the prefab `model` was cloned from
 		floors: { BasePart },
 		branchModel: Model?,
 		branchFloors: { BasePart },
@@ -1886,6 +1990,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 			removeFloors(slot.floors)
 			slot.model:Destroy()
 			slot.model = nil
+			slot.prefabName = nil
 			slot.floors = {}
 		end
 	end
@@ -1906,6 +2011,35 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 			local blocked = self:_findPrefabByName(node.prefabPool, node.blockedPrefabName)
 			if blocked then
 				slot.tried[blocked] = true
+			end
+		end
+
+		-- AT MOST ONE MerchantShop per floor, whichever Event slot it lands
+		-- in. The Planner forces one slot to the shop; the OTHER slot rolls
+		-- the pool and could roll a second shop by luck (its EventWeights
+		-- share), which read as "two merchants most floors". So: if an
+		-- earlier slot already holds the shop, this slot's shop force is
+		-- dropped (it rolls the pool like any event) and the shop is
+		-- excluded from that roll. Read per visit off the placed slots, so
+		-- a backtrack that removes the earlier shop restores the guarantee
+		-- here, and the Planner's node is never mutated.
+		local forcedPrefabName = node.forcedPrefabName
+		if node.roomType == RoomTypes.Event then
+			local merchantPlacedBefore = false
+			for i = 1, slotIdx - 1 do
+				if slots[i].prefabName == MERCHANT_SHOP_PREFAB_NAME then
+					merchantPlacedBefore = true
+					break
+				end
+			end
+			if merchantPlacedBefore then
+				if forcedPrefabName == MERCHANT_SHOP_PREFAB_NAME then
+					forcedPrefabName = nil
+				end
+				local merchant = self:_findPrefabByName(node.prefabPool, MERCHANT_SHOP_PREFAB_NAME)
+				if merchant then
+					slot.tried[merchant] = true
+				end
 			end
 		end
 
@@ -1936,8 +2070,8 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		local placed = false
 		while true do
 			local prefab
-			if node.forcedPrefabName then
-				local forced = self:_findPrefabByName(node.prefabPool, node.forcedPrefabName)
+			if forcedPrefabName then
+				local forced = self:_findPrefabByName(node.prefabPool, forcedPrefabName)
 				if forced and not slot.tried[forced] then
 					prefab = forced
 				elseif not forced then
@@ -1945,9 +2079,9 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 						(
 							"[DungeonService] Forced prefab '%s' not found in pool '%s' "
 							.. "— rolling the pool instead"
-						):format(node.forcedPrefabName, node.prefabPool)
+						):format(forcedPrefabName, node.prefabPool)
 					)
-					node.forcedPrefabName = nil
+					forcedPrefabName = nil
 				end
 			end
 			prefab = prefab or self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
@@ -1961,6 +2095,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 
 			if not self:_floorsOverlapAny(candidateFloors, placedFloors) then
 				slot.model = candidate
+				slot.prefabName = prefab.Name
 				slot.floors = candidateFloors
 				for _, f in candidateFloors do
 					table.insert(placedFloors, f)
@@ -2028,8 +2163,12 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		elseif backtracks >= MAX_BACKTRACKS then
 			-- Safety net: stop backtracking, force-place this slot and continue.
 			collisionsForced += 1
-			local fp = self:_pickPrefab(node.prefabPool, rng)
+			-- Honour the slot's exclusions (floor-1 shop block, the one-shop
+			-- rule) here too; the bare uniform pick is only the last resort.
+			local fp = self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
+				or self:_pickPrefab(node.prefabPool, rng)
 			slot.model = self:_snapPrefab(fp, ENTRY_ANCHOR_NAME, exitAnchorCFrame, runtimeFolder)
+			slot.prefabName = fp.Name
 			slot.floors = self:_getRoomFloors(slot.model :: Model)
 			for _, f in slot.floors do
 				table.insert(placedFloors, f)
@@ -2126,6 +2265,14 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		-- external encounter system to lock/unlock manually.
 		if not room.isLastChunk then
 			self:_setupGateTrigger(room.model, room.id + 1)
+		else
+			-- The room's REAL gate. Tagged so every client dresses it with the
+			-- chained ExitGateParticlePart rig (DungeonGateController); the
+			-- touch-trigger doorways above are barricade doorways and stay bare.
+			local lockedGate = room.model:FindFirstChild(EXIT_GATE_NAME)
+			if lockedGate and lockedGate:IsA("BasePart") then
+				CollectionService:AddTag(lockedGate, TagList.LockedExitGate)
+			end
 		end
 
 		table.insert(roomsList, room)
@@ -2692,14 +2839,19 @@ function DungeonService:KnitStart()
 		end
 	end)
 
+	-- The party is about to be pulled into the arena: the approach gate
+	-- behind them is done (see _markApproachGatePassed).
+	EncounterService.OnEncounterIntroStarted:Connect(function(_kind: string, room)
+		self:_markApproachGatePassed(room)
+	end)
+
 	self.Signals.OnDungeonGenerated:Connect(function()
 		self.Client.OnDungeonGenerated:FireAll()
 
 		-- New dungeon → everyone re-lands at the new start. Land every player
 		-- whose client already finished preloading; the rest land when their
-		-- own OnPlayerAdded (preload-done) fires.
-		table.clear(self._landed)
-
+		-- own OnPlayerAdded (preload-done) fires. _landed is keyed by dungeon,
+		-- so a player already landing in THIS dungeon is skipped (no clear).
 		for _, player in Players:GetPlayers() do
 			if self._readyForLanding[player] then
 				self:_runPlayerLanding(player)

@@ -18,7 +18,7 @@
 
 	REDIRECTS (decided per APPLICATION, owner-relic gated; only Black Flame
 	also needs an aura, because only its card names one):
-	  Burn   -> BlackFlame    while Enflamed     (Flame Ronin Katana)
+	  Burn   -> BlackFlame    (Flame Ronin Katana)
 	  Poison -> NoxiousVenom  unconditional      (Skeletal Scythe)
 	  Shock  -> CoilShocked   unconditional      (Deluxe Coil Gun)
 	Redirected, never doubled — the upgraded status lands INSTEAD of the
@@ -115,17 +115,19 @@ local SHOCK_FAMILY: { [string]: boolean } = {
 -- Poison weaken cap across every stack on one mob. Balance lever.
 local POISON_WEAKEN_CAP = 0.50
 
--- Upgrade redirects: applying `from` while the OWNER has `aura` up and owns
--- `relicName` lands `to` instead. Checked at the top of ApplyStatus.
+-- Upgrade redirects: applying `from` while the OWNER owns `relicName`
+-- (and, if the row carries one, has `aura` up) lands `to` instead. Checked
+-- at the top of ApplyStatus.
+--
+-- No aura gates today: Poison / Shock dropped theirs in the 2026-08 pass
+-- and Burn's Enflamed clause went in the 2026-09 legendary un-gating pass.
+-- Owning the relic is the whole condition, so each upgrade is available
+-- from the moment the relic is picked up. The `aura` seam is kept.
 local STATUS_REDIRECTS = {
 	[StatusConditions.Burn] = {
 		to = StatusConditions.BlackFlame,
 		relicName = RelicNames["Flame Ronin Katana"],
-		aura = AuraNames.Enflamed,
 	},
-	-- No aura gate: both cards dropped their aura clause in the 2026-08
-	-- pass and became NC openers. Owning the relic is the whole condition,
-	-- so the upgrade is available from the moment the relic is picked up.
 	[StatusConditions.Poison] = {
 		to = StatusConditions.NoxiousVenom,
 		relicName = RelicNames["Skeletal Scythe"],
@@ -140,14 +142,9 @@ local STATUS_REDIRECTS = {
 -- and Shatters for a flat per-level burst. Keep in sync with RelicData.
 local ICE_BREAKER_DAMAGE_PER_LEVEL = 75
 
--- Staff of Azure Ever Ice: while Frostburst is up the owner's Shatters are
--- AoE (this radius) and DOUBLE VFX size, matching the card. An older
--- comment here claimed triple; the code has always fired 2x, so the
--- comment was the wrong half.
---
--- (Its Frost Crater was cut in the element rework — the staff's damage
--- half is now a flat Magic Damage rider in DamageService/AuraDamage.)
-local AZURE_SHATTER_RADIUS = 10
+-- (Staff of Azure Ever Ice's Shatter AoE half was cut in the 2026-09
+-- un-gating pass; its Chill chance lives in _sumApplierChances below and
+-- its Magic Damage rider in DamageService/AuraDamage.)
 
 -- Minimum gap between two plays of the SAME status sound, globally across
 -- every mob — an AoE fresh-applying one status to eight mobs in a frame
@@ -244,10 +241,10 @@ function StatusConditionService:_resolveRedirect(sourcePlayer: Player?, status: 
 	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, redirect.relicName) or 0) <= 0 then
 		return status
 	end
-	-- Aura clause only when the redirect HAS one (Black Flame). The
-	-- unconditional redirects (Noxious Venom, Coil Shocked) carry aura =
-	-- nil, and ownerHasAura(nil) is false — the old bare check silently
-	-- disabled BOTH of them.
+	-- Aura clause only when the redirect HAS one (none do today; the seam
+	-- stays). Unconditional redirects carry aura = nil, and
+	-- ownerHasAura(nil) is false — the old bare check silently disabled
+	-- them.
 	if redirect.aura and not ownerHasAura(sourcePlayer, redirect.aura) then
 		return status
 	end
@@ -713,8 +710,20 @@ function StatusConditionService:_sumApplierChances(
 		local staffData = RelicData[RelicNames["Korblox Mage Staff"]]
 		local raised = staffData and staffData.data and staffData.data.frostburstChance
 		local chance = if ownerHasAura(sourcePlayer, AuraNames.Frostburst)
-			then raised or 0.50
+			then raised or 0.40
 			else RelicService:GetRelicEffect(sourcePlayer, RelicNames["Korblox Mage Staff"]) or 0
+		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance
+	end
+
+	-- Staff of Azure Ever Ice: ADDITIVE Chill chance on all damage while
+	-- Frostburst is up (the card's second half; the number is the relic's
+	-- data.chillChance so the card and the roll share it).
+	if
+		ownerHasAura(sourcePlayer, AuraNames.Frostburst)
+		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
+	then
+		local azureData = RelicData[RelicNames["Staff of Azure Ever Ice"]]
+		local chance = (azureData and azureData.data and azureData.data.chillChance) or 0.50
 		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance
 	end
 
@@ -1010,6 +1019,20 @@ function StatusConditionService:ApplyStatus(
 		end
 	end
 
+	-- Proc feedback: the status sting + the coloured hit burst, on EVERY
+	-- application — fresh, new stack, or refresh — so re-rolling Burn on
+	-- a burning mob still reads as a Burn proc (orange burst, Burn sting;
+	-- Black Flame its own). The sound is debounced per status
+	-- (SOUND_DEBOUNCE_SECONDS), which is what keeps co-op from
+	-- machine-gunning it. The authored apply model (the spark burst)
+	-- stays MOB-LEVEL fresh-only below.
+	local function playProcFeedback()
+		playStatusSound(status, config.soundName, hrp)
+		if config.color and DamageIndicatorService then
+			DamageIndicatorService:ShowStatusVFX(targetModel, config.color, config.hitVFXName)
+		end
+	end
+
 	-- REFRESH paths.
 	if isStackable then
 		local stacks = entry[status]
@@ -1020,12 +1043,14 @@ function StatusConditionService:ApplyStatus(
 			for _, record in stack do
 				refreshRecord(record)
 			end
+			playProcFeedback()
 			return false
 		end
 	else
 		local existing = entry[status]
 		if existing then
 			refreshRecord(existing)
+			playProcFeedback()
 			return false
 		end
 	end
@@ -1065,15 +1090,11 @@ function StatusConditionService:ApplyStatus(
 		targetModel:SetAttribute(SLOW_ATTRIBUTE, 1 - slowFraction)
 	end
 
-	-- Proc sting + spark burst: MOB-LEVEL fresh applications only (the mob
-	-- had no instance of this status at all) — per-stack stings would
-	-- machine-gun in co-op.
+	playProcFeedback()
+	-- Spark burst: MOB-LEVEL fresh applications only (the mob had no
+	-- instance of this status at all).
 	if not hadAnyInstance then
-		playStatusSound(status, config.soundName, hrp)
 		playApplyVFX(config.applyVFXName, hrp)
-		if config.color and DamageIndicatorService then
-			DamageIndicatorService:ShowStatusVFX(targetModel, config.color, config.hitVFXName)
-		end
 	end
 
 	self:_startInstanceThreads(targetModel, humanoid, status, config, record, if isStackable then userId else nil)
@@ -1081,8 +1102,7 @@ function StatusConditionService:ApplyStatus(
 	return true
 end
 
--- Ice Breaker's Shatter: consume the Chill, burst the target, and — with
--- Staff of Azure Ever Ice while Frostburst — turn the burst into an AoE.
+-- Ice Breaker's Shatter: consume the Chill and burst the target.
 -- Returns true when a Shatter actually fired
 -- (the caller then swallows the application that triggered it).
 --
@@ -1113,13 +1133,8 @@ function StatusConditionService:_tryIceBreakerShatter(sourcePlayer: Player, targ
 
 	local hrp = targetModel:FindFirstChild("HumanoidRootPart")
 
-	-- Azure: while Frostburst is up the Shatter's VFX doubles in size and
-	-- hits everything nearby.
-	local isAzure = ownerHasAura(sourcePlayer, AuraNames.Frostburst)
-		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
-
 	if hrp and RelicService.Client and RelicService.Client.OnShatterActivated then
-		RelicService.Client.OnShatterActivated:FireAll(hrp.Position, if isAzure then 2 else 1)
+		RelicService.Client.OnShatterActivated:FireAll(hrp.Position, 1)
 	end
 
 	local function dealShatter(targetHumanoid: Humanoid, model: Model)
@@ -1137,27 +1152,6 @@ function StatusConditionService:_tryIceBreakerShatter(sourcePlayer: Player, targ
 	end
 
 	dealShatter(humanoid, targetModel)
-
-	if isAzure and hrp then
-		-- AoE half: every OTHER mob in radius takes the same burst.
-		local zombiesFolder = workspace.IgnoreInstances:FindFirstChild("Zombies")
-		if zombiesFolder then
-			for _, mob in zombiesFolder:GetChildren() do
-				if mob ~= targetModel and mob:IsA("Model") then
-					local mobHrp = mob:FindFirstChild("HumanoidRootPart")
-					local mobHumanoid = mob:FindFirstChildOfClass("Humanoid")
-					if
-						mobHrp
-						and mobHumanoid
-						and mobHumanoid.Health > 0
-						and (mobHrp.Position - hrp.Position).Magnitude <= AZURE_SHATTER_RADIUS
-					then
-						dealShatter(mobHumanoid, mob)
-					end
-				end
-			end
-		end
-	end
 
 	return true
 end

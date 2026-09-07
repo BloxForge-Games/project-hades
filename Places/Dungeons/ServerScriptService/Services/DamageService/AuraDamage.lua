@@ -85,7 +85,7 @@ return function(player: Player, damage: number, isMagic: boolean)
 			fraction += (RelicService:GetRelicEffect(player, RelicNames["Icy Arctic Fowl"]) or 1) - 1
 		end
 
-		-- Staff of Azure Ever Ice: +25% Magic Damage in the same window.
+		-- Staff of Azure Ever Ice: +50% Magic Damage in the same window.
 		if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0 then
 			fraction += (RelicService:GetRelicEffect(player, RelicNames["Staff of Azure Ever Ice"]) or 1) - 1
 		end

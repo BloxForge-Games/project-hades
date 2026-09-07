@@ -27,6 +27,7 @@
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 --[ Imports ]--
 
@@ -51,6 +52,7 @@ local LANDING_DROP_SPEED = 0.75
 local LANDING_IMPACT_DELAY = 1.6
 local LANDING_DURATION = 1.7
 local LANDING_SPREAD_STUDS = 5
+local LANDING_HOLD_TOLERANCE_STUDS = 2 -- see _holdLandingPosition
 
 --[ Service ]--
 
@@ -83,7 +85,7 @@ function LobbyLandingService:_getSpawnPoint(): BasePart?
 end
 
 -- Mirrors DungeonService:_teleportPlayerToStart minus the marker lookup.
-function LobbyLandingService:_teleportPlayerToSpawnPoint(player: Player)
+function LobbyLandingService:_teleportPlayerToSpawnPoint(player: Player): CFrame?
 	local spawnPoint = self:_getSpawnPoint()
 	if not spawnPoint then
 		return
@@ -110,10 +112,40 @@ function LobbyLandingService:_teleportPlayerToSpawnPoint(player: Player)
 	-- below the floor. The HRP's own CFrame is unaffected by the animation.
 	local hrp = character:FindFirstChild("HumanoidRootPart")
 	if hrp then
+		hrp.AssemblyLinearVelocity = Vector3.zero
 		hrp.CFrame = targetCFrame
 	else
 		character:PivotTo(targetCFrame)
 	end
+	return targetCFrame
+end
+
+-- Re-asserts the landing spot for `seconds` after the teleport (the pose
+-- hold + the fall). The teleport is a server CFrame write on a root the
+-- CLIENT owns; a client-side root write in the same window (a dash, a dodge,
+-- mobile aim -- all gated client-side now, this is the safety net) would
+-- otherwise win. Horizontal only: the humanoid settles vertically onto the
+-- floor by itself and must not be fought.
+function LobbyLandingService:_holdLandingPosition(
+	character: Model,
+	hrp: BasePart,
+	targetCFrame: CFrame,
+	seconds: number
+)
+	task.spawn(function()
+		local deadline = os.clock() + seconds
+		while os.clock() < deadline do
+			RunService.Heartbeat:Wait()
+			if not character.Parent or not hrp.Parent then
+				return
+			end
+			local offset = hrp.Position - targetCFrame.Position
+			if Vector3.new(offset.X, 0, offset.Z).Magnitude > LANDING_HOLD_TOLERANCE_STUDS then
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.CFrame = targetCFrame
+			end
+		end
+	end)
 end
 
 -- Same dust + sound as DungeonService:_onLandingImpact. The Dungeons place
@@ -218,7 +250,10 @@ function LobbyLandingService:_runPlayerLanding(player: Player)
 		end
 
 		-- Teleport in. The character arrives already in the +25 pose.
-		self:_teleportPlayerToSpawnPoint(player)
+		local targetCFrame = self:_teleportPlayerToSpawnPoint(player)
+		if targetCFrame then
+			self:_holdLandingPosition(character, hrp, targetCFrame, LANDING_POSE_HOLD_SECONDS + LANDING_DURATION)
+		end
 
 		-- Hold the frozen frame in place, still behind the loading screen, so
 		-- the pose has rendered on every client before anyone sees it.
@@ -231,7 +266,7 @@ function LobbyLandingService:_runPlayerLanding(player: Player)
 		end
 
 		-- Reveal: drop the joiner's loading screen + lock controls.
-		self.Client.OnLandingStart:Fire(player)
+		self.Client.OnLandingStart:Fire(player, targetCFrame)
 
 		-- Drop: resume the animation from the frozen pose down to the ground.
 		if landAnimationTrack then

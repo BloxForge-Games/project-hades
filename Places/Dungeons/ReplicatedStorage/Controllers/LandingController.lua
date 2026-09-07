@@ -46,6 +46,7 @@ local RelicRenderController
 local WeaponLoadoutController
 local ToolBarController
 local PreloadController
+local PlayerEventController
 local CinematicInterfaceController
 local InterfaceManagerController
 
@@ -72,6 +73,10 @@ local FALLBACK_SECONDS = 15
 -- never appears and tweens away in front of the cutscene. Released together
 -- with OnCinematicEnd, and by the fallback.
 local LANDING_SOURCE = "Landing"
+
+-- Horizontal drift from the server's landing CFrame past which this client
+-- snaps its own root onto it at OnLandingStart (see _snapToLanding).
+local LANDING_SNAP_TOLERANCE_STUDS = 2
 
 --[ Controller ]--
 
@@ -170,6 +175,25 @@ function LandingController:_unlockControls()
 	end)
 end
 
+-- The server's landing teleport is a CFrame write on a root THIS client owns;
+-- OnLandingStart carries the target so the owner can make the authoritative
+-- write itself if anything left it off the spot.
+function LandingController:_snapToLanding(targetCFrame: CFrame?)
+	if typeof(targetCFrame) ~= "CFrame" then
+		return
+	end
+	local character = Players.LocalPlayer.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+	local offset = hrp.Position - targetCFrame.Position
+	if Vector3.new(offset.X, 0, offset.Z).Magnitude > LANDING_SNAP_TOLERANCE_STUDS then
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.CFrame = targetCFrame
+	end
+end
+
 -- Dismisses the loading screen. Idempotent — safe to call from both the server
 -- cue and the fallback.
 function LandingController:_reveal()
@@ -201,8 +225,24 @@ function LandingController:KnitStart()
 	RelicRenderController = Knit.GetController("RelicRenderController")
 	WeaponLoadoutController = Knit.GetController("WeaponLoadoutController")
 	ToolBarController = Knit.GetController("ToolBarController")
+	PlayerEventController = Knit.GetController("PlayerEventController")
 
-	DungeonService.OnLandingStart:Connect(function()
+	-- Lock from the FIRST character load, not from the landing cue. The
+	-- window between spawn and OnLandingStart (preload + the server's
+	-- staging delays) used to take input: a melee swing's dash-push or a
+	-- dodge writes the root CFrame every Heartbeat from a cached start
+	-- position, and one overlapping the server's landing teleport rewound
+	-- the character to the staging spawn. CutscenePlaying gates every one
+	-- of those (PlayerStateController), and the dash loop itself stops on
+	-- it. No bars: the loading screen still covers the view.
+	PlayerEventController.OnCharacterLoaded:Connect(function()
+		if not self._revealed then
+			self:_lockControls(false)
+		end
+	end)
+
+	DungeonService.OnLandingStart:Connect(function(targetCFrame: CFrame?)
+		self:_snapToLanding(targetCFrame)
 		if self._transitionFadeActive then
 			-- Dungeon 2 / 3: the screen is black from the run transition; the
 			-- landing brings it back, and the bars slide in AS that fade ends
