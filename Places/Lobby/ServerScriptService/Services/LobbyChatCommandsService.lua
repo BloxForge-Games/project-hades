@@ -12,12 +12,15 @@
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
 	                                      commands are ignored silently
 
-	--- /dungeon ---
+	--- /tp (aliases /dungeon, /dungeons) ---
 
-	Teleports the CALLER to the Dungeons place (Constants.DUNGEONS_PLACE_ID).
-	TeleportAsync is unavailable in Studio and throws for an unpublished
-	place, so the call is pcall'd and the failure echoed back instead of
-	killing the Chatted connection.
+	Reserves ONE private server of the Dungeons place
+	(Constants.DUNGEONS_PLACE_ID) and teleports EVERY player in this lobby
+	server into it together, so the party lands in the same instance. A
+	second /tp while one is in flight is ignored (the first reservation is
+	the party's). ReserveServer / TeleportAsync are unavailable in Studio
+	and throw for an unpublished place, so both are pcall'd and the failure
+	echoed back instead of killing the Chatted connection.
 ]]
 
 --[ Roblox Services ]--
@@ -38,6 +41,11 @@ local TextIndicatorService
 
 local COMMAND_PREFIX = "/"
 local FEEDBACK_COLOR = Color3.fromRGB(255, 228, 21)
+-- How long a /tp holds the "in flight" latch before another may be issued.
+local TELEPORT_RETRY_GRACE_SECONDS = 15
+
+-- True while a party teleport is being reserved / issued.
+local teleportInFlight = false
 
 --[ Service ]--
 
@@ -50,21 +58,48 @@ local LobbyChatCommandsService = Knit.CreateService({
 
 local COMMANDS: { [string]: { usage: string, description: string, handler: (Player, { string }) -> string? } }
 COMMANDS = {
-	dungeon = {
-		usage = "/dungeon",
-		description = "Teleport yourself to the Dungeons place.",
+	tp = {
+		usage = "/tp",
+		description = "Teleport EVERYONE here into one reserved Dungeons server.",
 		handler = function(player: Player, _args: { string }): string?
 			if RunService:IsStudio() then
 				return "Studio: teleports are unavailable here (TeleportAsync). Publish and test in a live server."
 			end
+			if teleportInFlight then
+				return "A dungeon teleport is already in progress."
+			end
+			teleportInFlight = true
+
+			-- One reservation for the whole party.
+			local reserveOk, accessCode = pcall(function()
+				return TeleportService:ReserveServer(Constants.DUNGEONS_PLACE_ID)
+			end)
+			if not reserveOk then
+				teleportInFlight = false
+				warn(("[LobbyChatCommands] /tp ReserveServer failed: %s"):format(tostring(accessCode)))
+				return "Reserve failed: " .. tostring(accessCode)
+			end
+
+			local options = Instance.new("TeleportOptions")
+			options.ReservedServerAccessCode = accessCode
+			options:SetTeleportData({ partyLeaderUserId = player.UserId })
+
+			local players = Players:GetPlayers()
 			local ok, err = pcall(function()
-				TeleportService:TeleportAsync(Constants.DUNGEONS_PLACE_ID, { player })
+				TeleportService:TeleportAsync(Constants.DUNGEONS_PLACE_ID, players, options)
 			end)
 			if not ok then
-				warn(("[LobbyChatCommands] /dungeon teleport for %s failed: %s"):format(player.Name, tostring(err)))
+				teleportInFlight = false
+				warn(("[LobbyChatCommands] /tp teleport failed: %s"):format(tostring(err)))
 				return "Teleport failed: " .. tostring(err)
 			end
-			return "Teleporting to the Dungeons..."
+
+			-- Released after a grace so a failed arrival (players bounced
+			-- back) can retry; on success this server is empty anyway.
+			task.delay(TELEPORT_RETRY_GRACE_SECONDS, function()
+				teleportInFlight = false
+			end)
+			return ("Teleporting %d player(s) to a reserved Dungeons server..."):format(#players)
 		end,
 	},
 	help = {
@@ -81,8 +116,8 @@ COMMANDS = {
 	},
 }
 -- Aliases: same handler, different spelling.
-COMMANDS.dungeons = COMMANDS.dungeon
-COMMANDS.tp = COMMANDS.dungeon
+COMMANDS.dungeon = COMMANDS.tp
+COMMANDS.dungeons = COMMANDS.tp
 
 --[ Private ]--
 

@@ -149,15 +149,17 @@ local CHEST_DROP_DELAY_SECONDS = 1.5
 -- path never runs at all, and must outlast the outro plus the chest
 -- service's own batch timeout.
 local ENCOUNTER_GATE_FAILSAFE_SECONDS = 150
--- The gate cycle's hold after an encounter. The reward chests already
--- gate _openEncounterGate on every player having opened theirs, so the
--- door opens on arrival: isDone is unconditionally true, which breaks
--- the cycle's countdown on its first poll, then OPEN_DELAY lets the
--- moment land before the door moves. HOLD_CEILING only matters if no
--- player is gate-eligible (all dead) — the cycle then waits it out
--- and opens anyway, so the run can never wedge on an empty room.
+-- The gate cycle's hold after an encounter, started the moment the reward
+-- chests land: the door counts down from WAIT_SECONDS ("Waiting for
+-- Players...") and opens EARLY once every living player has opened their
+-- chest (isDone reads EncounterChestService), exactly like the relic
+-- gate ends early once everyone picked. Unopened chests stay where they
+-- are and remain openable. OPEN_DELAY lets the moment land before the
+-- door moves. The old shape waited on the whole chest batch and THEN ran
+-- a 5s ceiling that broke on its first poll -- the flash of a timer you
+-- saw after the last chest.
 local ENCOUNTER_GATE_OPEN_DELAY_SECONDS = 1
-local ENCOUNTER_GATE_HOLD_CEILING_SECONDS = 5
+local ENCOUNTER_GATE_WAIT_SECONDS = 30
 
 --[ Server-side signals (hookable by BossService, etc.) ]--
 
@@ -968,13 +970,13 @@ function EncounterService:_openEncounterGate(room)
 		return
 	end
 
+	local chestService = Knit.GetService("EncounterChestService")
 	DungeonService:OpenSegmentGate(room.segmentId, true, {
-		seconds = ENCOUNTER_GATE_HOLD_CEILING_SECONDS,
+		seconds = ENCOUNTER_GATE_WAIT_SECONDS,
 		openDelaySeconds = ENCOUNTER_GATE_OPEN_DELAY_SECONDS,
-		-- Every player has opened their chest by the time this runs;
-		-- the chest batch is the real hold (EncounterChestService).
-		isDone = function(_player: Player): boolean
-			return true
+		-- Early open: every living player has opened their chest.
+		isDone = function(player: Player): boolean
+			return chestService == nil or chestService:HasPlayerOpenedChest(player)
 		end,
 	})
 end
@@ -998,12 +1000,31 @@ function EncounterService:_dropEncounterRewards(kind: EncounterKind, room, mob: 
 	local enemyType = if kind == ROOM_TYPES.Boss then EnemyTypes.Boss else EnemyTypes.Miniboss
 	local chestService = Knit.GetService("EncounterChestService")
 	if chestService then
-		-- The gate opens when the LAST chest is opened — one per living
-		-- player. The chest service resolves a chest early if its owner
-		-- leaves, and times the whole batch out, so this always fires.
+		-- onAllOpened still funnels into _openEncounterGate (idempotent):
+		-- for the Boss it is the "everyone opened" early edge of the timer
+		-- below; for a Miniboss the running gate cycle already handles the
+		-- early open and this is a no-op.
 		chestService:DropChestsForEncounter(enemyType, mob, function()
 			self:_openEncounterGate(room)
 		end)
+
+		if kind == ROOM_TYPES.Boss then
+			-- The boss gate never opens; the run continues through the
+			-- portal + vote that OpenSegmentGate's boss path starts. Same
+			-- rule as the miniboss door: ENCOUNTER_GATE_WAIT_SECONDS from
+			-- the chest drop, or as soon as every chest is opened.
+			local generation = self._floorGeneration
+			task.delay(ENCOUNTER_GATE_WAIT_SECONDS, function()
+				if self._floorGeneration ~= generation then
+					return
+				end
+				self:_openEncounterGate(room)
+			end)
+		else
+			-- Miniboss: the gate cycle starts NOW and counts down on the
+			-- door, ending early once every living player opened theirs.
+			self:_openEncounterGate(room)
+		end
 	else
 		-- No chests to wait on.
 		self:_openEncounterGate(room)

@@ -49,6 +49,7 @@ local UserNotificationService -- resolved in KnitStart
 local LifeService -- resolved in KnitStart
 local PlayerEventService
 local RelicMachineService
+local CollisionGroupService
 local CameraShakeService
 local RelicService
 
@@ -152,7 +153,11 @@ local NEXT_GATE_MARKER_SIZE = 0.05
 local AUTO_GENERATE_DELAY = 5
 
 local TRAPS_FOLDER_NAME = "Traps"
-local TRAP_SPAWN_CHANCE = 0.5
+local TRAP_SPAWN_CHANCE = 0.75
+-- Same coin flip for the chunk's authored buildings (pillars): each one
+-- spawns with this chance, before the survivors move to Map.Buildings
+-- (_relocateChunkBuildings).
+local BUILDING_SPAWN_CHANCE = 0.75
 local AUTO_GENERATE_DIFFICULTY = "Normal"
 
 -- Join landing timeline. The character spawns at the off-map staging spawn, is
@@ -209,6 +214,10 @@ local LANDING_HOLD_TOLERANCE_STUDS = 2
 -- kept across teardown (Walls has its children cleared; the rest are left
 -- entirely alone).
 local RUNTIME_FOLDER_KEEP = { Walls = "clearChildren", Highlight = "keep" }
+-- A chunk prefab may carry a "Buildings" folder of breakable building
+-- Models. They are moved out to the map's Buildings folder at generation
+-- (_relocateChunkBuildings) so they behave exactly like the static ones.
+local BUILDINGS_FOLDER_NAME = "Buildings"
 local RUN_TRANSITION_FADE_SECONDS = 0.6
 local RUN_TRANSITION_BLACK_HOLD_SECONDS = 1.4 -- fully black before teardown starts
 -- Transition landings (dungeon 2+): screen stays black through generation
@@ -284,6 +293,10 @@ DungeonService._releasedEventHolds = {} :: { [number]: true }
 DungeonService._nextGateMarker = nil :: Model?
 DungeonService._readyForLanding = {} -- [Player]: true — client preload finished (per join)
 DungeonService._landed = {} -- [Player]: true — already landed in the CURRENT dungeon
+-- Buildings moved out of this floor's chunks (see _relocateChunkBuildings);
+-- Map.Buildings sits outside the runtime folder, so teardown destroys these
+-- explicitly or they pile up across floors.
+DungeonService._floorBuildings = {} :: { Model }
 
 --[ Private Functions ]--
 
@@ -523,6 +536,7 @@ function DungeonService:_snapPrefab(
 	-- flash a one-tick existence before disappearing. No-op for
 	-- prefabs that don't ship a Traps folder.
 	self:_randomizeChunkTraps(clone)
+	self:_randomizeChunkBuildings(clone)
 
 	clone.Parent = parentFolder
 
@@ -548,6 +562,24 @@ function DungeonService:_randomizeChunkTraps(chunk: Model)
 	for _, trap in trapsFolder:GetChildren() do
 		if math.random() > TRAP_SPAWN_CHANCE then
 			trap:Destroy()
+		end
+	end
+end
+
+-- The traps' coin flip, for the chunk's "Buildings" folder: each authored
+-- building (pillar) spawns with BUILDING_SPAWN_CHANCE, so a room's pillar
+-- layout is a random subset of the designer's positions. Runs before the
+-- chunk parents, and before _relocateChunkBuildings moves the survivors
+-- out to Map.Buildings.
+function DungeonService:_randomizeChunkBuildings(chunk: Model)
+	local buildingsFolder = chunk:FindFirstChild(BUILDINGS_FOLDER_NAME)
+	if not buildingsFolder then
+		return
+	end
+
+	for _, building in buildingsFolder:GetChildren() do
+		if math.random() > BUILDING_SPAWN_CHANCE then
+			building:Destroy()
 		end
 	end
 end
@@ -1462,6 +1494,48 @@ function DungeonService:_markApproachGatePassed(arenaRoom)
 	end
 end
 
+-- Moves every building Model in the chunk's "Buildings" folder into
+-- workspace.IgnoreInstances.Map.Buildings and gives it the static-building
+-- setup (CollisionGroupService:SetupBuilding: tags, collision group, Base
+-- to Terrain). Magic with canBreakBuildings then breaks them through
+-- VFXService's Destructable path, and BuildingTransparencyController fades
+-- their roofs, with no code that knows they came from a chunk.
+--
+-- Recorded on `room.buildings` so FogOfWarService hides / reveals them with
+-- the room they left, and on _floorBuildings so teardown destroys them.
+function DungeonService:_relocateChunkBuildings(room, chunkModel: Instance)
+	local folder = chunkModel:FindFirstChild(BUILDINGS_FOLDER_NAME)
+	if not folder then
+		return
+	end
+
+	local map = workspace.IgnoreInstances:FindFirstChild("Map")
+	if not map then
+		return
+	end
+	local destination = map:FindFirstChild(BUILDINGS_FOLDER_NAME)
+	if not destination then
+		destination = Instance.new("Folder")
+		destination.Name = BUILDINGS_FOLDER_NAME
+		destination.Parent = map
+	end
+
+	room.buildings = room.buildings or {}
+	for _, building in folder:GetChildren() do
+		if not building:IsA("Model") then
+			continue
+		end
+		building.Parent = destination
+		if CollisionGroupService then
+			CollisionGroupService:SetupBuilding(building)
+		end
+		table.insert(room.buildings, building)
+		table.insert(self._floorBuildings, building)
+	end
+
+	folder:Destroy()
+end
+
 function DungeonService:_teleportPlayerToStart(dungeon, player): CFrame?
 	local marker = self:_findAnchor(dungeon.startModel, START_SPAWN_NAME, true)
 	local spawnCFrame
@@ -2247,6 +2321,8 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 			end
 		end
 
+		self:_relocateChunkBuildings(room, slot.model)
+
 		if slot.model:FindFirstChild(ENTRY_ANCHOR_NAME) then
 			slot.model:FindFirstChild(ENTRY_ANCHOR_NAME):Destroy()
 		end
@@ -2459,6 +2535,14 @@ function DungeonService:_teardownDungeon()
 			end
 		end
 	end
+
+	-- Chunk buildings live in Map.Buildings, outside the runtime folder.
+	for _, building in self._floorBuildings do
+		if building.Parent then
+			building:Destroy()
+		end
+	end
+	table.clear(self._floorBuildings)
 
 	table.clear(self._openedSegments)
 	table.clear(self._landed)
@@ -2830,6 +2914,7 @@ function DungeonService:KnitStart()
 	LifeService = Knit.GetService("LifeService")
 	PlayerEventService = Knit.GetService("PlayerEventService")
 	CameraShakeService = Knit.GetService("CameraShakeService")
+	CollisionGroupService = Knit.GetService("CollisionGroupService")
 
 	-- Run loop: the boss's rewards have dropped -> portal + vote (or the
 	-- final-dungeon hook).

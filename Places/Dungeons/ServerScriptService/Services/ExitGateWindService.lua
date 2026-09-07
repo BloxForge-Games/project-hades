@@ -10,24 +10,16 @@
 	kinds of spot. GameAssets.VFX.ExitGateWind is cloned onto the gate's
 	CFrame exactly as authored — tune the look in Studio, not here.
 
-	WHEN IT BLOWS. A wind is lit when all of these are true:
+	WHEN IT BLOWS. A wind is lit when both of these are true:
 	  * its OWN chunk is revealed  — you are standing somewhere you can
 	    actually see it from, rather than it glowing away in a chunk you
 	    have never visited
 	  * the chunk BEYOND it is NOT revealed — there is still fog through
 	    that doorway
-	  * if the doorway is a real EXIT GATE (a segment-final chunk's gate,
-	    the one you open by CLEARING the room) the room is COMPLETE: the
-	    gate itself OPENED (GateState = "open" — every timed door: the
-	    combat gate cycle, an event room's hold into combat, an event's
-	    plain open), the segment cleared, the arena's encounter beaten,
-	    or an event room's hold run out into an encounter approach (that
-	    door never opens; the approach beginning is its completion). A
-	    wind on an
-	    uncleared exit would advertise a way out that is not open yet.
-	    BARRICADE doorways — the breakable ones between chunks of one
-	    combat room, and the start area's — have no clear condition and
-	    blow on fog alone.
+	Entering ("unlocking") a room is what lights its exit; CLEARING the
+	room is completion and is not a condition here any more (2026-09 —
+	the gate's chained rig, DungeonGateController, follows the same rule
+	and fades when the door opens).
 
 	So it reads as "the room through here is still dark", and switches
 	itself off the moment you walk through and light that room up. The
@@ -50,10 +42,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 --[ Imports ]--
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 
 local DungeonService
-local EncounterService
 
 --[ Constants ]--
 
@@ -63,10 +53,6 @@ local EXIT_GATE_NAME = "ExitGate"
 
 -- Set by FogOfWarService on a chunk's model when it lights up.
 local ROOM_REVEALED_ATTRIBUTE = "FogRevealed"
--- Stamped by DungeonService on an ExitGate part: "open" when a timed door
--- (the gate cycle, an event room's hold) finally rises.
-local GATE_STATE_ATTRIBUTE = "GateState"
-local GATE_STATE_OPEN = "open"
 
 --[ Service ]--
 
@@ -87,12 +73,6 @@ local ExitGateWindService = Knit.CreateService({
 --                last gate (nothing beyond it is ever revealed, so its
 --                wind simply never switches off)
 ExitGateWindService._winds = {}
-
--- Room ids whose EXIT GATE has been earned this floor: a segment-final
--- chunk whose segment cleared, an arena whose encounter was beaten, or
--- an event room whose exit hold ended.
--- A segment gate's wind stays dark until its room lands here.
-ExitGateWindService._completedRooms = {}
 
 --[ Private ]--
 
@@ -115,17 +95,6 @@ local function setWindActive(model: Model, active: boolean)
 	end
 end
 
--- Whether a chunk is a Miniboss / Boss arena (nil = the start area).
-local function isEncounterRoom(room): boolean
-	return room ~= nil and (room.roomType == RoomTypes.Miniboss or room.roomType == RoomTypes.Boss)
-end
-
--- Whether a chunk's doorway is a real exit gate rather than a barricade
--- (nil = the start area, whose doorway is a barricade).
-local function hasSegmentGate(room): boolean
-	return room ~= nil and (room.isLastChunk == true or isEncounterRoom(room))
-end
-
 -- Whether a chunk has been lit by the fog service.
 local function isRevealed(room): boolean
 	return room ~= nil and room.model ~= nil and room.model:GetAttribute(ROOM_REVEALED_ATTRIBUTE) == true
@@ -141,10 +110,7 @@ function ExitGateWindService:_refresh()
 			-- beyond it will ever be revealed, so the wind stays lit.
 			local beyondIsDark = entry.destination == nil or not isRevealed(entry.destination)
 			local hostIsLit = entry.room == nil or isRevealed(entry.room)
-			-- A real exit gate only blows once its room is complete; a
-			-- barricade doorway has nothing to complete.
-			local roomIsComplete = not hasSegmentGate(entry.room) or self._completedRooms[entry.room.id] == true
-			setWindActive(entry.model, hostIsLit and beyondIsDark and roomIsComplete)
+			setWindActive(entry.model, hostIsLit and beyondIsDark)
 		end
 	end
 end
@@ -155,7 +121,6 @@ function ExitGateWindService:_clear()
 		entry.model:Destroy()
 	end
 	table.clear(self._winds)
-	table.clear(self._completedRooms)
 end
 
 -- Clones one wind onto every chunk's ExitGate. No doorway is skipped —
@@ -187,21 +152,6 @@ function ExitGateWindService:_placeWind(template: Model, model: Instance?, room,
 	wind.Parent = workspace.IgnoreInstances.MagicSpells
 
 	table.insert(self._winds, { model = wind, room = room, destination = destination })
-
-	-- The gate OPENING is the most general "this room is done" edge: every
-	-- timed door stamps it, including the event-room hold that hands off
-	-- to the gate cycle and never reaches a DungeonService signal. The
-	-- connection dies with the gate part on the next floor's teardown.
-	if room and room.id then
-		local function onGateState()
-			if gate:GetAttribute(GATE_STATE_ATTRIBUTE) == GATE_STATE_OPEN then
-				self._completedRooms[room.id] = true
-				self:_refresh()
-			end
-		end
-		gate:GetAttributeChangedSignal(GATE_STATE_ATTRIBUTE):Connect(onGateState)
-		onGateState()
-	end
 end
 
 function ExitGateWindService:_placeWinds(dungeon)
@@ -248,37 +198,6 @@ function ExitGateWindService:KnitInit() end
 
 function ExitGateWindService:KnitStart()
 	DungeonService = Knit.GetService("DungeonService")
-	EncounterService = Knit.GetService("EncounterService")
-
-	-- The kill is what opens an arena's exit, so it is what lights the
-	-- wind on it. Keyed by room id — the signal hands us the same room
-	-- table the entries hold.
-	EncounterService.OnEncounterDefeated:Connect(function(_kind, room)
-		if room and room.id then
-			self._completedRooms[room.id] = true
-			self:_refresh()
-		end
-	end)
-
-	-- A combat segment clearing is what opens its final chunk's gate, so
-	-- it is what lights the wind on that gate. Fires with the segment's
-	-- LAST chunk, which is exactly the room holding the gate.
-	DungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, lastChunk)
-		if lastChunk and lastChunk.id then
-			self._completedRooms[lastChunk.id] = true
-			self:_refresh()
-		end
-	end)
-
-	-- Event rooms never clear — their exit opens when the hold timer runs
-	-- out (or the encounter approach beyond it begins). That edge is the
-	-- room's completion, and it bypasses OpenSegmentGate entirely.
-	DungeonService.Signals.OnEventHoldEnded:Connect(function(eventRoom)
-		if eventRoom and eventRoom.id then
-			self._completedRooms[eventRoom.id] = true
-			self:_refresh()
-		end
-	end)
 
 	DungeonService.Signals.OnDungeonGenerated:Connect(function(dungeon)
 		self:_placeWinds(dungeon)

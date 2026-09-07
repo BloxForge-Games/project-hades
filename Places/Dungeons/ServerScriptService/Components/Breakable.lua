@@ -41,7 +41,7 @@ local KNOCKBACK_STRENGTH = 25
 local IMPULSE_SCALAR = 0.25
 local UPWARD_KICK = 5 -- Y component baked into every part's outward direction
 local ANGULAR_IMPULSE_RANGE = 90 -- degrees per axis for the spin
-local DARKEN_VALUE = 0.35
+local DARKEN_VALUE = 0.2
 
 local DEBRIS_MIN_LIFETIME = 2
 local DEBRIS_MAX_LIFETIME = 4

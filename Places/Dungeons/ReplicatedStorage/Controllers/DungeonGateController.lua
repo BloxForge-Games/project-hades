@@ -27,10 +27,13 @@
 	ExitGate at generation -- boss included; touch-trigger doorways are
 	not tagged) wears a clone of GameAssets.VFX.ExitGateParticlePart: the
 	chains, beams, lights and the looping Unlock ambience, authored at the
-	gate's exact size and placed on its CFrame. It rises with the gate on
-	OnGateOpened while everything fades over GATE_VFX_FADE_SECONDS, drops
-	with the slam still faded, and never comes back. The boss gate never
-	receives the open cue, so its rig stays lit.
+	gate's exact size and placed on its CFrame. It spawns HIDDEN and fades
+	in when the gate's room is revealed by fog (FogRevealed on the chunk
+	model -- "unlocked" = entered; an arena is revealed as its intro starts,
+	so its gate lights before the party can see it). It rises with the gate
+	on OnGateOpened while everything fades over GATE_VFX_FADE_SECONDS,
+	drops with the slam still faded, and never comes back. The boss gate
+	never receives the open cue, so its rig stays lit.
 ]]
 
 --[ Roblox Services ]--
@@ -88,6 +91,9 @@ local GATE_VFX_FADE_SECONDS = 0.65
 -- the party is teleported past it -- so this is its only fade cue.
 local GATE_STATE_ATTRIBUTE = "GateState"
 local GATE_STATE_PASSED = "passed"
+-- Set by FogOfWarService on a chunk's model (the gate's parent) when the
+-- chunk lights up. The rig fades in on it.
+local ROOM_REVEALED_ATTRIBUTE = "FogRevealed"
 
 -- While a gate is tweening up or down it must not be faded by the walls
 -- occlusion system (WallsTransparencyController). That system captures
@@ -254,20 +260,49 @@ function DungeonGateController:_attachGateVFX(gate: Instance)
 	rig.Parent = gate
 
 	-- The ambience is authored on the part (not Playing by default) and
-	-- runs the whole time the gate is locked: start it here, looped, once
-	-- the rig is in the workspace. The open fade tweens it to silence.
+	-- runs the whole time the gate is locked and visible: started, looped,
+	-- by the reveal below. The open fade tweens it to silence.
 	local sound = rig:FindFirstChild(GATE_VFX_SOUND_NAME)
-	if sound and sound:IsA("Sound") then
-		sound.Looped = true
-		sound:Play()
+	if not (sound and sound:IsA("Sound")) then
+		sound = nil
 	end
 
-	self._gateVFX[gate] = {
+	-- Emitters authored ON are switched off until the reveal (a faded
+	-- emitter still spawns invisible particles); remembered so the reveal
+	-- can switch exactly those back on.
+	local emitters = {}
+	for _, descendant in rig:GetDescendants() do
+		if descendant:IsA("ParticleEmitter") and descendant.Enabled then
+			descendant.Enabled = false
+			table.insert(emitters, descendant)
+		end
+	end
+
+	local record = {
 		rig = rig,
 		targets = vfxFade.capture(rig),
-		sound = if sound and sound:IsA("Sound") then sound else nil,
+		emitters = emitters,
+		sound = sound,
+		authoredVolume = if sound then sound.Volume else 0,
+		revealed = false,
 		faded = false,
 	}
+	self._gateVFX[gate] = record
+
+	-- Hidden until the room is revealed.
+	vfxFade.apply(record.targets, 0)
+	local room = gate.Parent
+	if room then
+		if room:GetAttribute(ROOM_REVEALED_ATTRIBUTE) == true then
+			self:_revealGateVFX(gate)
+		else
+			room:GetAttributeChangedSignal(ROOM_REVEALED_ATTRIBUTE):Connect(function()
+				if room:GetAttribute(ROOM_REVEALED_ATTRIBUTE) == true then
+					self:_revealGateVFX(gate)
+				end
+			end)
+		end
+	end
 
 	-- Approach gates fade on the server's "passed" stamp (no rise: the
 	-- gate itself stays put). Late joiners see a gate already stamped.
@@ -281,6 +316,32 @@ function DungeonGateController:_attachGateVFX(gate: Instance)
 	end
 end
 
+-- The room was entered: fade particles / beams / lights and the ambience
+-- in together, once. A gate whose door already opened stays hidden.
+function DungeonGateController:_revealGateVFX(gate: BasePart)
+	local record = self._gateVFX[gate]
+	if not record or record.revealed or record.faded then
+		return
+	end
+	record.revealed = true
+
+	for _, emitter in record.emitters do
+		if emitter.Parent then
+			emitter.Enabled = true
+		end
+	end
+	if record.sound then
+		record.sound.Looped = true
+		record.sound.Volume = 0
+		record.sound:Play()
+		TweenService:Create(record.sound, TweenInfo.new(GATE_VFX_FADE_SECONDS), { Volume = record.authoredVolume })
+			:Play()
+	end
+	task.spawn(function()
+		vfxFade.run(record.targets, 0, 1, GATE_VFX_FADE_SECONDS)
+	end)
+end
+
 -- Fades particles / beams / lights and the ambience out together, once.
 function DungeonGateController:_fadeGateVFX(gate: BasePart)
 	local record = self._gateVFX[gate]
@@ -288,6 +349,12 @@ function DungeonGateController:_fadeGateVFX(gate: BasePart)
 		return
 	end
 	record.faded = true
+
+	-- Never shown (door opened before the room was entered): nothing to
+	-- fade, and the reveal above now refuses to bring it up.
+	if not record.revealed then
+		return
+	end
 
 	if record.sound then
 		TweenService:Create(record.sound, TweenInfo.new(GATE_VFX_FADE_SECONDS), { Volume = 0 }):Play()

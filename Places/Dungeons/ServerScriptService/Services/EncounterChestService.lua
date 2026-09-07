@@ -319,8 +319,12 @@ function EncounterChestService:_openChest(chest: Model, player: Player)
 	-- Read BEFORE resolving: resolving drops the chest from the batch map,
 	-- and the batch may carry a coin row of its own (the Event Chest).
 	local batch = self._batchByChest[chest]
+	if batch and batch.opened then
+		batch.opened[player.UserId] = true
+	end
 
-	-- The encounter's gate waits until every player has opened theirs.
+	-- The encounter's gate countdown ends early once every player has
+	-- opened theirs (EncounterService reads HasPlayerOpenedChest).
 	self:_resolveChest(chest)
 
 	local origin = chest.PrimaryPart
@@ -388,7 +392,17 @@ function EncounterChestService:DropChestsForEncounter(
 	-- The batch exists BEFORE the first bail-out: every early return has
 	-- to complete it, or a missing prefab would leave the gate shut and
 	-- the run unfinishable.
-	local batch = { pending = 0, done = false, onAllOpened = onAllOpened, coins = coinsOverride }
+	local batch = {
+		pending = 0,
+		done = false,
+		onAllOpened = onAllOpened,
+		coins = coinsOverride,
+		-- [userId] = true for every player who got a chest / who opened it.
+		-- The encounter gate's countdown reads these (HasPlayerOpenedChest).
+		owners = {},
+		opened = {},
+	}
+	self._activeBatch = batch
 
 	local modelName = CHEST_MODELS[enemyType]
 	if not modelName then
@@ -483,6 +497,7 @@ function EncounterChestService:DropChestsForEncounter(
 		-- Counted only once it is certain to exist; the placement check
 		-- below un-counts it again if the chest never lands.
 		batch.pending += 1
+		batch.owners[player.UserId] = true
 		self._batchByChest[chest] = batch
 		-- Room cleanup (or any other despawn) must not strand the batch.
 		chest.Destroying:Connect(function()
@@ -536,10 +551,32 @@ function EncounterChestService:DropChestsForEncounter(
 	end
 end
 
+-- True when `player` has opened their chest from the CURRENT batch, or
+-- never had one in it (dead at the drop, joined later): nothing to wait
+-- for. True with no batch at all, for the same reason.
+function EncounterChestService:HasPlayerOpenedChest(player: Player): boolean
+	local batch = self._activeBatch
+	if not batch or batch.done then
+		return true
+	end
+	if not batch.owners[player.UserId] then
+		return true
+	end
+	return batch.opened[player.UserId] == true
+end
+
+-- True once the current batch has fully resolved (every chest opened,
+-- its owner gone, or the backstop timeout).
+function EncounterChestService:AllChestsOpened(): boolean
+	local batch = self._activeBatch
+	return batch == nil or batch.done == true or batch.pending <= 0
+end
+
 --[ Lifecycle ]--
 
 function EncounterChestService:KnitInit()
 	self._batchByChest = {}
+	self._activeBatch = nil
 end
 
 function EncounterChestService:KnitStart()

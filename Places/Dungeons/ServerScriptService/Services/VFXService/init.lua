@@ -55,10 +55,27 @@ local ShieldService
 local InvulnerabilityService
 
 local BUILDING_FLOOR_STRING = "Floor"
-local BUILDING_IMPULSE_SCALAR = 0.1
 local BROKEN_BUILDING_MIN_LIFETIME = 2
 local BROKEN_BUILDING_MAX_LIFETIME = 4
-local BUILDING_KNOCKBACK_STRENGTH = 250
+-- Destructable (map building) break launch. Every broken part leaves at
+-- exactly BUILDING_BREAK_SPEED studs/s (impulse = direction * its own mass
+-- * speed) along the horizontal line from the hit point out through the
+-- part, lifted by BUILDING_UPWARD_KICK (1 = 45 degrees). Mass-independent
+-- and spell-independent on purpose -- see the block in RegisterHitbox.
+local BUILDING_BREAK_SPEED = 30
+local BUILDING_UPWARD_KICK = 1
+local BUILDING_SPIN_RANGE = 90 -- angular impulse per axis, scaled by mass
+-- Broken pieces keep their hue and drop to this brightness (same value the
+-- Breakable component uses). Lower = darker.
+local BUILDING_DARKEN_VALUE = 0.2
+-- SUPPORT parts: any Destructable part whose name starts with this (Support,
+-- Support1, ...) holds the building up. Breaking one collapses every other
+-- breakable part of that building, lowest first, one every
+-- BUILDING_COLLAPSE_STAGGER_SECONDS -- so a pillar shot at the base comes
+-- down from the base up instead of leaving its top floating. Non-support
+-- parts break alone. Authored per prefab: name the bottom pieces.
+local BUILDING_SUPPORT_PREFIX = "Support"
+local BUILDING_COLLAPSE_STAGGER_SECONDS = 0.05
 local AURA_DELAY = 1
 -- Grace between an aura being CAST and its first swing. The aura's rig
 -- (Susanoo's armour) streams in and plays its own activation beat, and an
@@ -259,52 +276,117 @@ function VFXService:RegisterHitbox(
 				continue
 			end
 
-			self.OnBuildingBroken:Fire(part)
-
-			local hue, saturation = part.Color:ToHSV()
-			part.Color = Color3.fromHSV(hue, saturation, 0.35)
-
-			part.Parent = workspace.IgnoreInstances.MagicSpells
-			part.Anchored = false
-
-			local pathfindingModifier = Instance.new("PathfindingModifier")
-			pathfindingModifier.PassThrough = true
-			pathfindingModifier.Parent = part
-
-			local direction = CFrame.new(cframe.Position, rootPart.Position).LookVector + (cframe.UpVector * 2)
-			local mass = part.AssemblyMass
-
-			part:ApplyImpulse((-direction * mass) * (BUILDING_KNOCKBACK_STRENGTH * BUILDING_IMPULSE_SCALAR))
-
-			part:ApplyAngularImpulse(
-				Vector3.new(math.random(-90, 90), math.random(-90, 90), math.random(-90, 90)) * mass
-			)
-
-			task.delay(math.random(BROKEN_BUILDING_MIN_LIFETIME, BROKEN_BUILDING_MAX_LIFETIME), function()
-				if not part.Parent then
-					return
-				end
-
-				for _, child in part:GetChildren() do
-					if child:IsA("ParticleEmitter") then
-						child.Enabled = false
-					elseif child:IsA("Texture") then
-						TweenService:Create(child, TweenInfo.new(1), { Transparency = 1 }):Play()
-					end
-				end
-
-				TweenService:Create(part, TweenInfo.new(1), { Transparency = 1 }):Play()
-				Debris:AddItem(part, 1)
-			end)
+			self:_breakBuildingPart(part, cframe.Position)
 
 			partsTable = partsTable or {}
 			partsTable[#partsTable + 1] = part
+
+			-- A SUPPORT went: the rest of the building comes down after it
+			-- (its own client cue per piece, on the stagger).
+			if string.sub(part.Name, 1, #BUILDING_SUPPORT_PREFIX) == BUILDING_SUPPORT_PREFIX then
+				self:_collapseBuilding(model, cframe.Position)
+			end
 		end
 	end
 
 	if partsTable then
 		self.Client.OnBuildingBroken:FireAll(partsTable)
 	end
+end
+
+-- Breaks ONE Destructable part: darken, detach from its assembly, fling
+-- outward from `origin`, fade out and clean up. The caller owns the client
+-- OnBuildingBroken cue (batched for a hit, per piece for a collapse).
+function VFXService:_breakBuildingPart(part: BasePart, origin: Vector3)
+	self.OnBuildingBroken:Fire(part)
+
+	local hue, saturation = part.Color:ToHSV()
+	part.Color = Color3.fromHSV(hue, saturation, BUILDING_DARKEN_VALUE)
+
+	-- Its OWN assembly first. A part welded to still-anchored siblings
+	-- is part of an anchored assembly and ignores the impulse; once the
+	-- last sibling unanchors, the whole welded pillar took ONE impulse
+	-- with the whole assembly's mass -- order-dependent, which is why
+	-- pieces sometimes drifted and sometimes blasted.
+	for _, joint in part:GetJoints() do
+		joint:Destroy()
+	end
+
+	part.Parent = workspace.IgnoreInstances.MagicSpells
+	part.Anchored = false
+
+	local pathfindingModifier = Instance.new("PathfindingModifier")
+	pathfindingModifier.PassThrough = true
+	pathfindingModifier.Parent = part
+
+	-- Outward from the HIT POINT through the part (not toward the
+	-- caster: a self-centred spell put the hit point ON the caster and
+	-- that direction degenerated), lifted by the fixed kick.
+	local radial = part.Position - origin
+	radial = Vector3.new(radial.X, 0, radial.Z)
+	if radial.Magnitude < 0.05 then
+		local angle = math.random() * math.pi * 2
+		radial = Vector3.new(math.cos(angle), 0, math.sin(angle))
+	end
+	local direction = (radial.Unit + Vector3.new(0, BUILDING_UPWARD_KICK, 0)).Unit
+	local mass = part.AssemblyMass
+
+	part:ApplyImpulse(direction * mass * BUILDING_BREAK_SPEED)
+
+	part:ApplyAngularImpulse(
+		Vector3.new(
+			math.random(-BUILDING_SPIN_RANGE, BUILDING_SPIN_RANGE),
+			math.random(-BUILDING_SPIN_RANGE, BUILDING_SPIN_RANGE),
+			math.random(-BUILDING_SPIN_RANGE, BUILDING_SPIN_RANGE)
+		) * mass
+	)
+
+	task.delay(math.random(BROKEN_BUILDING_MIN_LIFETIME, BROKEN_BUILDING_MAX_LIFETIME), function()
+		if not part.Parent then
+			return
+		end
+
+		for _, child in part:GetChildren() do
+			if child:IsA("ParticleEmitter") then
+				child.Enabled = false
+			elseif child:IsA("Texture") then
+				TweenService:Create(child, TweenInfo.new(1), { Transparency = 1 }):Play()
+			end
+		end
+
+		TweenService:Create(part, TweenInfo.new(1), { Transparency = 1 }):Play()
+		Debris:AddItem(part, 1)
+	end)
+end
+
+-- A support part broke: every remaining breakable part of `model` comes
+-- down too, lowest first, one per BUILDING_COLLAPSE_STAGGER_SECONDS, each
+-- flung outward from `origin`. Parts already broken have left the model,
+-- so a second support going mid-collapse just finds fewer pieces.
+function VFXService:_collapseBuilding(model: Model, origin: Vector3)
+	local remaining = {}
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") and descendant.Name ~= BUILDING_FLOOR_STRING then
+			table.insert(remaining, descendant)
+		end
+	end
+	if #remaining == 0 then
+		return
+	end
+	table.sort(remaining, function(a, b)
+		return a.Position.Y < b.Position.Y
+	end)
+
+	task.spawn(function()
+		for _, piece in remaining do
+			task.wait(BUILDING_COLLAPSE_STAGGER_SECONDS)
+			-- Still standing? A concurrent hit may have taken it already.
+			if piece.Parent ~= nil and piece:IsDescendantOf(model) then
+				self:_breakBuildingPart(piece, origin)
+				self.Client.OnBuildingBroken:FireAll({ piece })
+			end
+		end
+	end)
 end
 
 function VFXService:CreateHitbox(

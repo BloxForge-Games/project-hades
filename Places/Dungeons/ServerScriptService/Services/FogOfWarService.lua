@@ -199,6 +199,16 @@ function FogOfWarService:_hideRoom(room)
 	for _, instance in self:_collectHideables(room.model) do
 		hideInstance(instance)
 	end
+	-- Chunk buildings were moved OUT of the model into Map.Buildings by
+	-- DungeonService (room.buildings); they are still this room's.
+	for _, building in room.buildings or {} do
+		if building.Parent then
+			hideInstance(building)
+			for _, descendant in building:GetDescendants() do
+				hideInstance(descendant)
+			end
+		end
+	end
 	if room.branch then
 		self:_hideRoom(room.branch)
 	end
@@ -219,6 +229,14 @@ function FogOfWarService:RevealRoom(room)
 	-- cache attribute (the structural shell) is a no-op.
 	for _, instance in room.model:GetDescendants() do
 		revealInstance(instance)
+	end
+	for _, building in room.buildings or {} do
+		if building.Parent then
+			revealInstance(building)
+			for _, descendant in building:GetDescendants() do
+				revealInstance(descendant)
+			end
+		end
 	end
 	room.model:SetAttribute(ROOM_REVEALED_ATTRIBUTE, true)
 

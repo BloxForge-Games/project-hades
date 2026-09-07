@@ -253,7 +253,11 @@ function LifeService:_scheduleLobbyTeleport()
 			return -- party-wipe condition no longer holds (rare: late joiner)
 		end
 		self._lobbyTeleportToken = nil
-		self:TeleportAllToLobby()
+		-- DEBUG (2026-09): the party-wipe lobby teleport is disabled so a
+		-- wiped party stays in the dungeon for inspection. Restore the
+		-- call below to re-enable it.
+		warn("[LifeService] Party wiped -- lobby teleport disabled for debugging (see _scheduleLobbyTeleport)")
+		-- self:TeleportAllToLobby()
 	end)
 end
 

@@ -492,6 +492,14 @@ function RelicService:RemoveRelicsRegistry(player: Player, relic: string, count:
 		if index then
 			table.remove(self._relicsList[player.UserId], index)
 		end
+
+		-- Ghost Dragon's rig lives outside the character (see
+		-- _cleanupGhostDragon) and was only torn down on respawn / leave,
+		-- so losing the relic silenced the damage but left the dragon
+		-- circling. Gone with the last stack.
+		if relic == RelicNames["Ghost Dragon"] then
+			self:_cleanupGhostDragon(player.UserId)
+		end
 	end
 
 	self.Client.OnReplicateRelics:FireAll(player.UserId, self._relicRegistry, self._relicsList)
