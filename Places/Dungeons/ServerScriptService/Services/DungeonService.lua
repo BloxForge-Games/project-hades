@@ -2240,7 +2240,17 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 			-- Honour the slot's exclusions (floor-1 shop block, the one-shop
 			-- rule) here too; the bare uniform pick is only the last resort.
 			local fp = self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
-				or self:_pickPrefab(node.prefabPool, rng)
+			if not fp then
+				-- Last resort: any prefab -- but never a SECOND shop. The
+				-- bare uniform pick below ignored the one-shop rule, and a
+				-- floor that backtracked this far could seat two merchants.
+				local shopOnly = {}
+				local merchant = self:_findPrefabByName(node.prefabPool, MERCHANT_SHOP_PREFAB_NAME)
+				if merchant and slot.tried[merchant] then
+					shopOnly[merchant] = true
+				end
+				fp = self:_pickPrefabExcluding(node.prefabPool, shopOnly, rng) or self:_pickPrefab(node.prefabPool, rng)
+			end
 			slot.model = self:_snapPrefab(fp, ENTRY_ANCHOR_NAME, exitAnchorCFrame, runtimeFolder)
 			slot.prefabName = fp.Name
 			slot.floors = self:_getRoomFloors(slot.model :: Model)
@@ -2362,6 +2372,16 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 	-- Start room's ExitGate is also a touch trigger: walking out of Start
 	-- spawns the first room's zombies and advances every player to room 1.
 	self:_setupGateTrigger(startModel, 1)
+
+	-- Which events this floor seated, in sequence order: the fastest way to
+	-- see whether the one-shop rule held on a given seed.
+	local eventNames = {}
+	for _, placedRoom in roomsList do
+		if placedRoom.roomType == RoomTypes.Event and placedRoom.model then
+			table.insert(eventNames, tostring(placedRoom.model:GetAttribute("PrefabName") or placedRoom.model.Name))
+		end
+	end
+	print(("[DungeonService] Events this floor: %s"):format(table.concat(eventNames, ", ")))
 
 	print(
 		("[DungeonService] Generated %s/%s with %d rooms (seed %d, %d backtracks, %d forced)"):format(
