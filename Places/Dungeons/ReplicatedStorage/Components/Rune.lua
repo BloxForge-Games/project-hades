@@ -51,6 +51,19 @@ Knit.OnStart()
 	end)
 	:catch(warn)
 
+-- The prompt card's UserText line: "(name)" of the player who DROPPED this
+-- item from their tray (DroppedByName, stamped by DropService /
+-- GearDropService on a public drop; a name, so it survives them leaving).
+-- Empty -- the card hides the line -- for anything else: a vending
+-- machine's relic is not yours until you take it, so no name on it.
+local function ownerUserText(instance: Instance): string
+	if instance:GetAttribute("PublicDrop") ~= true then
+		return ""
+	end
+	local name = instance:GetAttribute("DroppedByName")
+	return if typeof(name) == "string" and name ~= "" then ("(%s)"):format(name) else ""
+end
+
 local Rune = Component.new({
 	Tag = TagList.Rune,
 	Extensions = { CommAdder, JanitorAdder },
@@ -236,6 +249,7 @@ function Rune:Start()
 
 			proximityPrompt:SetAttribute("Rarity", rarity)
 			proximityPrompt:SetAttribute("Style", promptStyle)
+			proximityPrompt:SetAttribute("UserText", ownerUserText(self.Instance))
 
 			proximityPrompt.Parent = self.Instance.Handle
 

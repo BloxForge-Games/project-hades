@@ -954,11 +954,10 @@ function EventController:_wirePedestal(pedestal: Instance)
 	-- renders name + full description here too:
 	--   ActionText = relic name, ObjectText = rich description,
 	--   Rarity/Style attributes size and tint the card.
-	-- The price rides the description as a gold line — the card has no
-	-- native price slot. All local writes: every player sees their own
-	-- stock and price.
+	-- The price rides the card's UserText slot (gold), the same line that
+	-- carries the owner's name on a dropped relic. All local writes: every
+	-- player sees their own stock and price.
 	local description = getRelicDescription(Players.LocalPlayer, slot.relicName) or "No description available."
-	description = description .. (" <font color='rgb(255,170,0)'>(%d Coins)</font>"):format(slot.price)
 
 	prompt.ActionText = slot.relicName
 	prompt.ObjectText = description
@@ -975,6 +974,8 @@ function EventController:_wirePedestal(pedestal: Instance)
 	local rarity = RelicData[slot.relicName] and RelicData[slot.relicName].rarity
 	prompt:SetAttribute("Rarity", rarity)
 	prompt:SetAttribute("Style", promptStyle)
+	prompt:SetAttribute("UserText", ("%d Coins"):format(slot.price))
+	prompt:SetAttribute("UserTextColor", Color3.fromRGB(255, 170, 0))
 	self._pedestalsByPrompt[prompt] = {
 		pedestal = pedestal,
 		roomId = roomId,

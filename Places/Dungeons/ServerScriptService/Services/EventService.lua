@@ -925,6 +925,25 @@ function EventService.Client:ChooseGreaterBlessing(player: Player, statueModel: 
 	EventService._greaterShrineTaken[player.UserId][blessing] = true
 
 	PlayerStatsService:AddGreaterShrineEffect(player, config.effect, config.amount)
+
+	-- Tell the player what they took. `response` is the dialogue row's
+	-- HyperText ("Spirit <color=...>(+%d%% Max HP)</color>"); the
+	-- notification is plain text, so the tags are stripped.
+	if UserNotificationService then
+		local line = (config.response or blessing):format(math.round(config.amount * 100))
+		line = line:gsub("<color=[^>]*>", ""):gsub("</color>", "")
+		UserNotificationService:RequestUserNotification(player, {
+			titleText = "Greater Blessing",
+			titleTextFont = Enum.Font.SourceSansBold,
+			titleTextColor3 = Color3.fromRGB(174, 95, 252),
+			titleTextTransparency = 0,
+
+			text = line,
+			textFont = Enum.Font.SourceSansBold,
+			textColor3 = Color3.fromRGB(255, 255, 255),
+			textTransparency = 0,
+		})
+	end
 	return "ok"
 end
 

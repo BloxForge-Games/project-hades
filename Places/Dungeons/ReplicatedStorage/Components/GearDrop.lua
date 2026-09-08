@@ -155,6 +155,19 @@ local BILLBOARD_NAME = "GearName"
 local MOBILE_NAME_TEXT_SIZE = 12
 local MOBILE_RARITY_TEXT_SIZE = 10
 
+-- The prompt card's UserText line: "(name)" of the player who DROPPED this
+-- item from their tray (DroppedByName, stamped by DropService /
+-- GearDropService on a public drop; a name, so it survives them leaving).
+-- Empty -- the card hides the line -- for anything else: a vending
+-- machine's relic is not yours until you take it, so no name on it.
+local function ownerUserText(instance: Instance): string
+	if instance:GetAttribute("PublicDrop") ~= true then
+		return ""
+	end
+	local name = instance:GetAttribute("DroppedByName")
+	return if typeof(name) == "string" and name ~= "" then ("(%s)"):format(name) else ""
+end
+
 local GearDrop = Component.new({
 	Tag = TagList.GearDrop,
 	Extensions = { JanitorAdder, CommAdder },
@@ -217,6 +230,7 @@ function GearDrop:_buildPrompt(): ProximityPrompt
 	prompt:SetAttribute("Rarity", rarity)
 	prompt:SetAttribute("RarityColor", RarityColors:Get(rarity))
 	prompt:SetAttribute("GearName", gearName)
+	prompt:SetAttribute("UserText", ownerUserText(self.Instance))
 	prompt.Parent = self._carrier
 	return prompt
 end

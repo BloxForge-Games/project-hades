@@ -43,6 +43,19 @@ local GLOW_NAME = "RarityGlow"
 -- Mirrors the server's PICKUP_FADE_SECONDS, which times the destroy.
 local PICKUP_FADE_SECONDS = 0.75
 
+-- The prompt card's UserText line: "(name)" of the player who DROPPED this
+-- item from their tray (DroppedByName, stamped by DropService /
+-- GearDropService on a public drop; a name, so it survives them leaving).
+-- Empty -- the card hides the line -- for anything else: a vending
+-- machine's relic is not yours until you take it, so no name on it.
+local function ownerUserText(instance: Instance): string
+	if instance:GetAttribute("PublicDrop") ~= true then
+		return ""
+	end
+	local name = instance:GetAttribute("DroppedByName")
+	return if typeof(name) == "string" and name ~= "" then ("(%s)"):format(name) else ""
+end
+
 local Relic = Component.new({
 	Tag = TagList.Relic,
 	Extensions = { CommAdder, JanitorAdder },
@@ -344,6 +357,7 @@ function Relic:Start()
 
 			proximityPrompt:SetAttribute("Rarity", rarity)
 			proximityPrompt:SetAttribute("Style", promptStyle)
+			proximityPrompt:SetAttribute("UserText", ownerUserText(self.Instance))
 
 			proximityPrompt.Parent = self.Instance.Handle
 
