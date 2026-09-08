@@ -615,11 +615,11 @@ local RELIC_HIT_STATUSES = {
 	-- are all gone: the 2026-08 pass turned the first three into damage
 	-- relics, and Short Sword's boost now covers EVERY elemental status
 	-- rather than Poison alone, so it lives in _getStatusChanceBonus.
-	-- Magenta Paintball Gun: 35% on ranged weapon hits.
+	-- Magenta Paintball Gun: EVERY ranged weapon hit Paints (was 35%).
 	{
 		relicName = RelicNames["Magenta Paintball Gun"],
 		status = StatusConditions.Paint,
-		chance = 0.35,
+		chance = 1,
 		weaponOnly = true,
 		rangedOnly = true,
 	},

@@ -1,19 +1,16 @@
--- Teddy Trap (sustain side): heals its owner for 1% of their MAXIMUM
--- HEALTH on every direct hit they land. The other two thirds of the relic
--- live elsewhere:
---   * +100% damage TAKEN -- DamageService:PlayerTakeDamage, which reads the
---     relic callback (2.0) directly.
---   * no normal healing at all -- PlayerStatsService:ApplyHealing, which
---     refuses every non-lifesteal restore for an owner.
+-- Teddy Trap (sustain side): heals its owner for LIFESTEAL_FRACTION of
+-- every point of damage they deal. The other two thirds of the relic live
+-- elsewhere:
+--   * +150% damage TAKEN -- DamageService:PlayerTakeDamage, which reads the
+--     relic callback (2.5) directly.
+--   * Health Orbs never heal an owner -- DropService's health-orb branch.
 -- Together they make it a pure sustain-through-aggression relic: the only
--- way you get health back is by hitting something.
+-- way you get health back is by hurting something.
 --
--- Called once per DIRECT hit from TakeDamage, NOT summed into the damage
--- amplifiers like it used to be (the relic no longer grants damage at all).
--- Its call site sits after the isStatusConditionDamage early-return, so
--- Burn/Poison ticks deliberately do not feed it -- lifesteal is for swings
--- and casts. An AoE that hits ten mobs calls TakeDamage ten times and so
--- heals ten times, which is intended.
+-- "On ALL damage": called with the FINAL applied amount from every path
+-- that lands damage -- each direct hit (_recordLastHit: crit, resisted,
+-- plain) AND every status DoT tick. An AoE that hits ten mobs calls
+-- TakeDamage ten times and so heals ten times, which is intended.
 --
 -- isLifesteal = true on the ApplyHealing call is load-bearing: without it
 -- the relic's own heal block would swallow the relic's own heal.
@@ -32,12 +29,16 @@ Knit.OnStart():andThen(function()
 end)
 
 -- Hardcoded rather than read from the callback: the callback owns the
--- INCOMING damage multiplier (2.0), the same primary-in-data /
+-- INCOMING damage multiplier (2.5), the same primary-in-data /
 -- secondary-in-module split Murder Knife and Volleyball use.
-local LIFESTEAL_MAX_HEALTH_FRACTION = 0.01
+-- Keep in sync with the "+5% Lifesteal" on the card.
+local LIFESTEAL_FRACTION = 0.05
 
-return function(player: Player)
+return function(player: Player, damageDealt: number?)
 	if not RelicService or not PlayerStatsService then
+		return
+	end
+	if typeof(damageDealt) ~= "number" or damageDealt <= 0 then
 		return
 	end
 	-- Presence check, not GetRelicEffect: the callback returns 2.0, which is
@@ -52,5 +53,5 @@ return function(player: Player)
 		return
 	end
 
-	PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * LIFESTEAL_MAX_HEALTH_FRACTION, nil, true)
+	PlayerStatsService:ApplyHealing(player, damageDealt * LIFESTEAL_FRACTION, nil, true)
 end

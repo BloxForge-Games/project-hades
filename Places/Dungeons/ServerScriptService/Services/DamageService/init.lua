@@ -223,7 +223,7 @@ function DamageService:PlayerTakeDamage(
 		damage = damage * 0.5
 	end
 
-	-- Teddy Trap (incoming side): +100% damage taken if owned. Callback
+	-- Teddy Trap (incoming side): +150% damage taken if owned. Callback
 	-- returns 2.0; nil → 1 (no-op when not owned). Its lifesteal half is
 	-- TeddyTrap.lua; its heal block is DropService's health-orb branch.
 	damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Teddy Trap"]) or 1)
@@ -472,7 +472,9 @@ function DamageService:_postDamage(player: Player, humanoid: Humanoid, wasCrit: 
 	end
 end
 
--- Stamps the FINAL damage of the hit that just landed.
+-- Stamps the FINAL damage of the hit that just landed. Every direct-hit
+-- path (crit, resisted, plain) ends here, so it is also where Teddy Trap's
+-- lifesteal reads the amount that actually landed.
 function DamageService:_recordLastHit(player: Player, humanoid: Humanoid, amount: number)
 	if not player or amount <= 0 then
 		return
@@ -482,6 +484,7 @@ function DamageService:_recordLastHit(player: Player, humanoid: Humanoid, amount
 		amount = amount,
 		t = os.clock(),
 	}
+	self._onDamageModules["TeddyTrap"](player, amount)
 end
 
 -- The final damage `player` last dealt to `targetModel`, or 0 if their most
@@ -974,6 +977,8 @@ function DamageService:TakeDamage(
 			)
 		end
 		humanoid:TakeDamage(damage)
+		-- Teddy Trap: "on ALL damage" -- a DoT tick is damage you dealt.
+		self._onDamageModules["TeddyTrap"](player, damage)
 		self:_postDamage(player, humanoid, false, true)
 		return
 	end
@@ -1155,10 +1160,6 @@ function DamageService:TakeDamage(
 			sparks
 		)
 	end
-
-	-- Teddy Trap's lifesteal: the single direct-hit hook — once per landed
-	-- hit, once per target for an AoE, never for a DoT tick.
-	self._onDamageModules["TeddyTrap"](player)
 
 	if isResistedHit then
 		if math.random() * 100 <= critChance then

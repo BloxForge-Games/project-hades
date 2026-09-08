@@ -33,7 +33,7 @@ local RelicRenderController
 local TWEEN_DURATION = 0.25
 local TWEEN_INFO = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 
-local DIMMED_TRANSPARENCY = 0.5
+local DIMMED_TRANSPARENCY = 0.7
 
 -- Idle scale ladder now lives in
 -- Shared/Functions/Gear/getGearIdleScale. HOVER_SCALE_MULTIPLIER stays
@@ -80,7 +80,7 @@ local ATTR_PICKUP_PENDING = "PickupPending"
 -- Billboard text transparency while another drop is hovered. Matches
 -- RelicRenderController's TOGGLE_TRANSPARENCY so a mixed floor of relics
 -- and gear dims to one level.
-local BILLBOARD_TEXT_DIMMED_TRANSPARENCY = 0.6
+local BILLBOARD_TEXT_DIMMED_TRANSPARENCY = 0.8
 
 --[ Controller ]--
 
@@ -117,6 +117,12 @@ end
 --     would expose geometry that's meant to stay invisible.
 function GearDropsRenderController:_tweenDropTransparency(model: Instance, targetTransparency: number)
 	for _, descendant in model:GetDescendants() do
+		-- The billboard's labels / strokes have their OWN dim value
+		-- (_tweenDropBillboardText); tweening them here too made the last
+		-- tween to play win.
+		if descendant:FindFirstAncestorWhichIsA("BillboardGui") then
+			continue
+		end
 		if descendant:IsA("BasePart") then
 			if descendant.Transparency ~= 1 then
 				TweenService:Create(descendant, TWEEN_INFO, { Transparency = targetTransparency }):Play()

@@ -40,7 +40,7 @@ local RelicMachine = Component.new({
 
 --[ Constants ]--
 
-local TRANSPARENCY = 0.65
+local TRANSPARENCY = 0.85
 
 -- The landing thud only shakes cameras of players standing near the drop
 -- point. Local-only, like the rest of this component's landing FX.

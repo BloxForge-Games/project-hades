@@ -43,8 +43,11 @@ local RelicRenderController = Knit.CreateController({
 
 local VISIBILITY_RELIC_TRANSPARENCY = 0.85
 local TWEEN_DURATION = 0.5
-local TOGGLE_TRANSPARENCY = 0.6
-local VENDING_MACHINE_TRANSPARENCY = 0.65
+-- Hover dim of every OTHER owned ground relic: model parts, and the
+-- billboard text separately (text reads through a lighter dim than mesh).
+local TOGGLE_TRANSPARENCY = 0.7
+local TOGGLE_TEXT_TRANSPARENCY = 0.8
+local VENDING_MACHINE_TRANSPARENCY = 0.75
 
 -- Particle brightness targets used by the dim/restore loop on ground
 -- relics. Promoted from inline magic numbers so the unified hover
@@ -239,6 +242,11 @@ end
 -- hover treatment's third leg alongside ground-relic dim and gear dim.
 -- Extracted from the inline PromptShown/PromptHidden blocks so external
 -- hover sources (merchant pedestals) reuse it instead of copying it.
+--
+-- The Miniboss / Boss reward chest ships the SAME billboard rig
+-- (VendingMachineName / NameText / VendingMachineText, see
+-- Components/EncounterChest), so its text dims here too. Only the text:
+-- the chest meshes stay put (an opened chest is scenery, not a pickup).
 function RelicRenderController:_setOwnedMachinesDimmed(dim: boolean)
 	local modelTransparency = dim and 0.5 or 0
 	local textTransparency = dim and VENDING_MACHINE_TRANSPARENCY or 0
@@ -250,13 +258,37 @@ function RelicRenderController:_setOwnedMachinesDimmed(dim: boolean)
 		end
 
 		TweenService:Create(machine.Model, tweenInfo, { Transparency = modelTransparency }):Play()
+		self:_tweenMachineBillboardText(machine, tweenInfo, textTransparency)
+	end
 
-		local nameFrame = machine.PrimaryPart.VendingMachineName.Frame
-		TweenService:Create(nameFrame.NameText, tweenInfo, { TextTransparency = textTransparency }):Play()
-		TweenService:Create(nameFrame.NameText.UIStroke, tweenInfo, { Transparency = textTransparency }):Play()
-		TweenService:Create(nameFrame.VendingMachineText, tweenInfo, { TextTransparency = textTransparency }):Play()
-		TweenService:Create(nameFrame.VendingMachineText.UIStroke, tweenInfo, { Transparency = textTransparency })
-			:Play()
+	for _, chest in pairs(workspace:QueryDescendants(".EncounterChest")) do
+		if chest:GetAttribute("OwnerId") ~= Players.LocalPlayer.UserId then
+			continue
+		end
+		self:_tweenMachineBillboardText(chest, tweenInfo, textTransparency)
+	end
+end
+
+-- The NameText / VendingMachineText pair (and their strokes) of a
+-- machine-style billboard under `model.PrimaryPart`. Guarded: the chest's
+-- billboard replicates progressively and can be missing for a frame.
+function RelicRenderController:_tweenMachineBillboardText(model: Model, tweenInfo: TweenInfo, transparency: number)
+	local primary = model.PrimaryPart
+	local billboard = primary and primary:FindFirstChild("VendingMachineName")
+	local nameFrame = billboard and billboard:FindFirstChild("Frame")
+	if not nameFrame then
+		return
+	end
+	for _, labelName in { "NameText", "VendingMachineText" } do
+		local label = nameFrame:FindFirstChild(labelName)
+		if not (label and label:IsA("TextLabel")) then
+			continue
+		end
+		TweenService:Create(label, tweenInfo, { TextTransparency = transparency }):Play()
+		local stroke = label:FindFirstChild("UIStroke")
+		if stroke then
+			TweenService:Create(stroke, tweenInfo, { Transparency = transparency }):Play()
+		end
 	end
 end
 
@@ -277,6 +309,7 @@ end
 
 function RelicRenderController:_applyGroundRelicsDim(skipModel: Model?, dim: boolean)
 	local targetTransparency = dim and TOGGLE_TRANSPARENCY or 0
+	local textTransparency = dim and TOGGLE_TEXT_TRANSPARENCY or 0
 	local layerBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_LAYER
 	local sparkBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_SPARK
 	local shineBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_SHINE
@@ -306,7 +339,15 @@ function RelicRenderController:_applyGroundRelicsDim(skipModel: Model?, dim: boo
 		if relic:GetAttribute(Attributes.Collected) == true then
 			continue
 		end
-		if relic:GetAttribute("OwnerId") ~= Players.LocalPlayer.UserId then
+		-- The owner filter only exists so this client never un-hides loot
+		-- it cannot see. A PUBLIC drop (one a player dropped: no OwnerId,
+		-- PublicDrop + DroppedByName instead) is visible to everyone, so
+		-- it dims on everyone's client -- same rule GearDropsRenderController
+		-- uses. Without it a dropped relic never dimmed on any hover.
+		if
+			relic:GetAttribute(Attributes.PublicDrop) ~= true
+			and relic:GetAttribute("OwnerId") ~= Players.LocalPlayer.UserId
+		then
 			continue
 		end
 		if not (relic.PrimaryPart and relic.PrimaryPart:FindFirstChild("RelicName")) then
@@ -315,35 +356,41 @@ function RelicRenderController:_applyGroundRelicsDim(skipModel: Model?, dim: boo
 
 		relic.PrimaryPart.RelicName.AlwaysOnTop = alwaysOnTop
 		TweenService
-			:Create(relic.PrimaryPart.RelicName.Frame.NameText, tweenInfo, { TextTransparency = targetTransparency })
+			:Create(relic.PrimaryPart.RelicName.Frame.NameText, tweenInfo, { TextTransparency = textTransparency })
 			:Play()
 		TweenService
-			:Create(
-				relic.PrimaryPart.RelicName.Frame.NameText.UIStroke,
-				tweenInfo,
-				{ Transparency = targetTransparency }
-			)
+			:Create(relic.PrimaryPart.RelicName.Frame.NameText.UIStroke, tweenInfo, { Transparency = textTransparency })
 			:Play()
 		TweenService
-			:Create(relic.PrimaryPart.RelicName.Frame.RarityText, tweenInfo, { TextTransparency = targetTransparency })
+			:Create(relic.PrimaryPart.RelicName.Frame.RarityText, tweenInfo, { TextTransparency = textTransparency })
 			:Play()
 		TweenService
 			:Create(
 				relic.PrimaryPart.RelicName.Frame.RarityText.UIStroke,
 				tweenInfo,
-				{ Transparency = targetTransparency }
+				{ Transparency = textTransparency }
 			)
 			:Play()
+		-- The owner / price line (Shared/Functions/Drop/applyOwnerLabel)
+		-- dims with the rest of the card.
+		local userText = relic.PrimaryPart.RelicName.Frame:FindFirstChild("UserText")
+		if userText then
+			TweenService:Create(userText, tweenInfo, { TextTransparency = textTransparency }):Play()
+			local userStroke = userText:FindFirstChild("UIStroke")
+			if userStroke then
+				TweenService:Create(userStroke, tweenInfo, { Transparency = textTransparency }):Play()
+			end
+		end
 		-- Tween every BasePart EXCEPT PrimaryPart. PrimaryPart is an
 		-- anchor / BillboardGui adornee — must stay invisible
 		-- regardless of hover/dim state.
 		--
 		-- RUNES ONLY: a rune model carries extra geometry (a union) nested
-		-- UNDER its Handle. Dimming both to the same 0.6 puts two coplanar
+		-- UNDER its Handle. Dimming both to the same value puts two coplanar
 		-- semi-transparent surfaces on top of each other, and Roblox's
 		-- transparency sorting flickers between them. So while DIMMED the
 		-- nested parts go fully invisible and only the Handle carries the
-		-- 0.6; on restore everything returns to 0 together.
+		-- dim; on restore everything returns to 0 together.
 		local isRune = CollectionService:HasTag(relic, TagList.Rune)
 		local handle = relic:FindFirstChild("Handle")
 		for _, descendant in relic:GetDescendants() do

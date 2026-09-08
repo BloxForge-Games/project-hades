@@ -157,7 +157,7 @@ local TRAP_SPAWN_CHANCE = 0.75
 -- Same coin flip for the chunk's authored buildings (pillars): each one
 -- spawns with this chance, before the survivors move to Map.Buildings
 -- (_relocateChunkBuildings).
-local BUILDING_SPAWN_CHANCE = 0.75
+local BUILDING_SPAWN_CHANCE = 1 -- 1 = every authored pillar spawns (no roll)
 local AUTO_GENERATE_DIFFICULTY = "Normal"
 
 -- Join landing timeline. The character spawns at the off-map staging spawn, is
@@ -2072,6 +2072,10 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 	local backtracks = 0
 	local collisionsForced = 0
 	local slotIdx = 1
+	-- The Planner's forced MerchantShop slot could not fit the prefab: the
+	-- force rolls forward to the next Event slot (see below) instead of
+	-- silently leaving the floor without a shop.
+	local shopCarryOver = false
 
 	while slotIdx <= #plan.rooms do
 		local slot = slots[slotIdx]
@@ -2099,6 +2103,12 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		-- here, and the Planner's node is never mutated.
 		local forcedPrefabName = node.forcedPrefabName
 		if node.roomType == RoomTypes.Event then
+			-- An earlier forced slot failed to seat the shop: this slot takes
+			-- the force, unless the Planner blocked the shop here (floor 1's
+			-- pre-Miniboss event).
+			if shopCarryOver and node.blockedPrefabName ~= MERCHANT_SHOP_PREFAB_NAME then
+				forcedPrefabName = MERCHANT_SHOP_PREFAB_NAME
+			end
 			local merchantPlacedBefore = false
 			for i = 1, slotIdx - 1 do
 				if slots[i].prefabName == MERCHANT_SHOP_PREFAB_NAME then
@@ -2182,6 +2192,14 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		end
 
 		if placed then
+			if slot.prefabName == MERCHANT_SHOP_PREFAB_NAME then
+				shopCarryOver = false
+			elseif forcedPrefabName == MERCHANT_SHOP_PREFAB_NAME then
+				-- The shop was forced here and could not fit: carry the
+				-- guarantee to the next Event slot.
+				shopCarryOver = true
+			end
+
 			-- Optional branch off this room. Best-effort: if it can't fit, skip
 			-- silently — branches don't affect downstream chain placement.
 			--
@@ -2382,6 +2400,14 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		end
 	end
 	print(("[DungeonService] Events this floor: %s"):format(table.concat(eventNames, ", ")))
+	if not table.find(eventNames, MERCHANT_SHOP_PREFAB_NAME) then
+		warn(
+			"[DungeonService] No MerchantShop this floor: the forced Event slot could not fit the prefab "
+				.. "and no later Event slot could take it (seed "
+				.. tostring(seed)
+				.. ")"
+		)
+	end
 
 	print(
 		("[DungeonService] Generated %s/%s with %d rooms (seed %d, %d backtracks, %d forced)"):format(
