@@ -1,29 +1,56 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local Lighting = game:GetService("Lighting")
 
-local ColorCorrectionDefaults = require(ReplicatedStorage.Submodules.Core.Shared.Data.ColorCorrectionDefaults)
-
--- AUTHORED ColorCorrection tint, from ColorCorrectionDefaults (the one
--- source every grade-bending effect restores to). This effect tints the
--- screen and then puts it back; restoring to a literal would stomp the
--- place's own grade the moment it is authored as anything else.
-local AUTHORED_TINT_COLOR = ColorCorrectionDefaults.TintColor
 local Debris = game:GetService("Debris")
+
+--[[
+	SCREEN EFFECTS ARE CLAIMED, NOT WRITTEN. The tint, Sukuna's theme and
+	the ambient shake all go through MagicAmbienceController under one
+	claim id per cast, which means:
+	  * two domains produce ONE tint, ONE theme and ONE shake, and they
+	    lift only when the LAST domain ends -- the first one ending used to
+	    restore the grade, stop the music and drop the shake out from under
+	    the second;
+	  * a Susanoo cast during a domain no longer repaints the screen and
+	    hands it back to the authored grade;
+	  * all three are PROXIMITY-gated (DOMAIN_AMBIENCE_RADIUS_STUDS): they
+	    follow you in and out of the shrine's neighbourhood, and two
+	    overlapping domains cross-fade rather than fighting.
+	The shrine, its particles and its rise stay GLOBAL, so a domain going
+	up across the room still telegraphs itself.
+]]
+local DOMAIN_AMBIENCE_RADIUS_STUDS = 40
+local DOMAIN_TINT_COLOR = Color3.fromRGB(236, 144, 146)
+local SUKUNA_THEME_SOUND_NAME = "SukunaTheme"
+local SUKUNA_THEME_START_TIME = 96
+local SUKUNA_THEME_VOLUME = 0.075
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
+local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
+
+-- Both shakes go through the PRESET system (Shared/Data/CameraShakeData),
+-- where their feel is tuned. `DomainAmbient` is the sustained rumble held
+-- while you stand in the domain; `Medium` is the one-shot as the shrine
+-- breaks the ground. It fires mid-cutscene, on top of the cinematic bob
+-- (CameraShakeController's overlay composes after it).
+local DOMAIN_AMBIENT_SHAKE = CameraShakePresets.DomainAmbient
+local DOMAIN_RISE_SHAKE = CameraShakePresets.Medium
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
 local CutsceneController
 local VFXService
+local MagicAmbienceController
+local CameraShakeController
 
 Knit.OnStart():andThen(function()
 	CutsceneController = Knit.GetController("CutsceneController")
 	VFXService = Knit.GetService("VFXService")
+	MagicAmbienceController = Knit.GetController("MagicAmbienceController")
+	CameraShakeController = Knit.GetController("CameraShakeController")
 end)
 
 return function(player: Player, preload: boolean, cframe: CFrame)
@@ -42,6 +69,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	if player == Players.LocalPlayer then
 		cframe = character.HumanoidRootPart.CFrame
 	end
+
+	-- One ambience claim per cast (see the header): unique so two domains,
+	-- from the same caster or different ones, never collide.
+	local ambienceId = ("DomainExpansion_%d_%s"):format(player.UserId, tostring(os.clock()))
 
 	local shrineModel = ReplicatedStorage.GameAssets.VFX:FindFirstChild("Domain Expansion").Shrine:Clone()
 	shrineModel:PivotTo(cframe * CFrame.Angles(0, math.rad(90), 0) + cframe.LookVector * -11 + Vector3.new(0, -15, 0))
@@ -78,7 +109,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	if not preload then
 		task.spawn(function()
 			task.spawn(function()
-				if player == Players.LocalPlayer and not preload then
+				if not preload then
 					ReplicatedStorage.GameAssets.Sounds.DomainExpansionCast:Play()
 				end
 				-- "Domain Expansion..." / "...Malevolent Shrine!" are
@@ -86,7 +117,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				-- to this script's waits.
 			end)
 			task.wait(1)
-			if player == Players.LocalPlayer and not preload then
+			if not preload then
 				ReplicatedStorage.GameAssets.Sounds.DomainCastSound:Play()
 			end
 
@@ -150,15 +181,16 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 			task.wait(0.15)
 
-			CutsceneController:Shake(3.5, 20, 0.6)
+			-- The shrine breaking through the ground.
+			if CameraShakeController then
+				CameraShakeController:Shake(DOMAIN_RISE_SHAKE)
+			end
 
 			shrineModel.AppearPart.Shockwave:Play()
 
 			task.wait(0.35)
 
 			task.delay(1.5, function()
-				CutsceneController:Shake(1, 20, MagicData[MagicNames["Domain Expansion"]].hitboxDuration + 2)
-
 				for _, particle in shrineModel.DomainAttachmentPart.Attachment:GetChildren() do
 					if particle:IsA("ParticleEmitter") then
 						particle.Enabled = true
@@ -171,13 +203,30 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					end
 				end
 
-				TweenService:Create(
-					Lighting.ColorCorrection,
-					TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ TintColor = Color3.fromRGB(236, 144, 146) }
-				):Play()
+				-- Tint + theme + shake, as ONE proximity claim (see the header).
+				if MagicAmbienceController then
+					MagicAmbienceController:ClaimAtPosition(ambienceId, {
+						tint = DOMAIN_TINT_COLOR,
+						music = {
+							soundName = SUKUNA_THEME_SOUND_NAME,
+							volume = SUKUNA_THEME_VOLUME,
+							startTime = SUKUNA_THEME_START_TIME,
+						},
+						shake = DOMAIN_AMBIENT_SHAKE,
+					}, function(): Vector3?
+						return if shrineModel.Parent then shrineModel.PrimaryPart.Position else nil
+					end, DOMAIN_AMBIENCE_RADIUS_STUDS)
+				end
 
-				ReplicatedStorage.GameAssets.Sounds.Slashes:Play()
+				-- Slashes: a CLONE parented to the shrine, so it attenuates
+				-- with distance and two domains genuinely layer. The shared
+				-- template was played and stopped by every cast at once,
+				-- which is how one domain ending silenced another.
+				local slashes = ReplicatedStorage.GameAssets.Sounds.Slashes:Clone()
+				slashes.Name = "Slashes"
+				slashes.RollOffMaxDistance = 200
+				slashes.Parent = shrineModel.PrimaryPart
+				slashes:Play()
 
 				for _, particle in pairs(shrineModel.SlashesPart:GetChildren()) do
 					if particle:IsA("ParticleEmitter") then
@@ -194,20 +243,6 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 			end
 
-			local sukunaTheme = ReplicatedStorage.GameAssets.Sounds.SukunaTheme
-
-			sukunaTheme.Volume = 0
-			sukunaTheme:Play()
-			sukunaTheme.TimePosition = 96
-
-			TweenService
-				:Create(
-					sukunaTheme,
-					TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Volume = 0.1 }
-				)
-				:Play()
-
 			VFXService:OnVFXPersistentHitboxRequested(
 				player,
 				MagicNames["Domain Expansion"],
@@ -220,21 +255,19 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					task.wait(2.5)
 				end
 
-				ReplicatedStorage.GameAssets.Sounds.Slashes:Stop()
+				-- Tint / theme / shake let go together. Another domain still
+				-- running keeps all three: the controller only lifts an
+				-- effect when its LAST claim is released.
+				if MagicAmbienceController then
+					MagicAmbienceController:Release(ambienceId)
+				end
+
+				local slashes = shrineModel.PrimaryPart:FindFirstChild("Slashes")
+				if slashes and slashes:IsA("Sound") then
+					slashes:Stop()
+				end
 
 				Debris:AddItem(shrineModel, 1)
-
-				TweenService:Create(
-					Lighting.ColorCorrection,
-					TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ TintColor = AUTHORED_TINT_COLOR }
-				):Play()
-
-				TweenService:Create(
-					ReplicatedStorage.GameAssets.Sounds.SukunaTheme,
-					TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Volume = 0 }
-				):Play()
 
 				TweenService:Create(
 					shrineModel.PrimaryPart,
@@ -268,7 +301,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 	if player == Players.LocalPlayer and not preload then
 		task.defer(function()
-			CutsceneController:PlayCutscene("DomainExpansion")
+			-- Via the MagicData index (which names the "DomainExpansion"
+			-- camera path), so the cutscene and the server's invulnerability
+			-- window read the same numbers.
+			CutsceneController:PlayMagicCutscene(MagicNames["Domain Expansion"])
 		end)
 	end
 

@@ -27,6 +27,12 @@ local FORBIDDEN_BOX_MANA_MULTIPLIER = 2
 -- Cast-cutscene i-frame length when a MagicData `cutscene` entry sets no
 -- duration. MUST match CutsceneController's DEFAULT_MAGIC_CUTSCENE_SECONDS.
 local DEFAULT_MAGIC_CUTSCENE_SECONDS = 2
+-- Cutscene magic is invulnerable for its whole cutscene PLUS this: the
+-- client's camera path and the server's timer start a replication hop
+-- apart, and the player is still recovering (animation tail, walkspeed
+-- restore) as the bars come down. A frame of exposure at either end is
+-- exactly what the window exists to prevent.
+local MAGIC_CUTSCENE_INVULNERABLE_GRACE_SECONDS = 1.5
 -- Icy Arctic Fowl: x0.75 mana while Frostburst is up (its +30% damage
 -- half rides the AuraDamage module; the callback owns that value).
 local ICY_ARCTIC_FOWL_MANA_MULTIPLIER = 0.75
@@ -82,7 +88,7 @@ local AURA_DELAY = 1
 -- It matters because holding attack THROUGH the cast is a supported (and
 -- good) way to open with an aura — the swing fires the instant the
 -- attribute flips, which is exactly when the rig is least ready.
-local AURA_ACTIVATION_DELAY = 0.2
+local AURA_ACTIVATION_DELAY = 2
 
 local vfxServer = script.VFXServer
 
@@ -655,9 +661,13 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 	-- No highlight: the spell's own presentation is the feedback. The
 	-- duration mirrors the client's beat (CutsceneController's default
 	-- when the entry sets none).
+	-- Any magic with an enabled cutscene index -- bars-only beat OR camera
+	-- path -- makes its caster untouchable for the whole thing. A cast you
+	-- cannot move or dodge out of must not be one you can die during.
 	local cutscene = MagicData[vfxName].cutscene
 	if cutscene and cutscene.enabled == true and InvulnerabilityService then
-		InvulnerabilityService:ApplyTo(player.Character, cutscene.duration or DEFAULT_MAGIC_CUTSCENE_SECONDS, false)
+		local window = (cutscene.duration or DEFAULT_MAGIC_CUTSCENE_SECONDS) + MAGIC_CUTSCENE_INVULNERABLE_GRACE_SECONDS
+		InvulnerabilityService:ApplyTo(player.Character, window)
 	end
 
 	self.Server:_toggleWeaponTransparency(player, 1)

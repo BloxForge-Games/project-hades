@@ -34,7 +34,25 @@
 	  4. NONE          — FillTransparency / OutlineTransparency = 1.
 
 	The local player highlight is separate — kept on the player's own
-	model and only does the occlusion case (no attack/damage layers).
+	model — and resolves FIVE layers through the same single Instance,
+	highest first: DEATH flash (red, LifeController), DAMAGE flash (red),
+	DODGE flash (white, perfect dodge), INVULNERABLE (white fill, on while
+	Attributes.Invulnerable is true -- jetpack, life loss, cutscene magic
+	-- ramped over INVULN_FADE_DURATION) and the occlusion outline. Every
+	one of those used to be its OWN Highlight parented to the character,
+	and Roblox renders one per adornee -- the most recently added -- so a
+	dodge hid the outline for a second, and the death flash (never
+	destroyed) hid it for the rest of the life. OTHER players' invulnerability is drawn
+	by this client too, as one small Highlight per character keyed on the
+	same attribute (they carry no other client highlight, so no slot
+	fight). The server parents no Highlight for it at all.
+	It used to be occlusion-only, with the flash coming from a SECOND
+	Highlight that HumanoidStateController parented to the character.
+	Roblox renders one Highlight per adornee — the most recently added —
+	so from the first hit onward that (Occluded, fully faded, still
+	Enabled) flash instance owned the slot and the white through-wall
+	outline never rendered again. One Instance, one resolver, no slot
+	fight.
 
 	==========================================================
 	Public API
@@ -48,11 +66,14 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local packages: Folder = ReplicatedStorage.Submodules.Core.Packages
 
 local Knit = require(packages.Knit)
 local Janitor = require(packages.Janitor)
+
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 local camera: Camera = workspace.CurrentCamera
 
@@ -70,6 +91,38 @@ local TICK_INTERVAL = 0.025
 local DAMAGE_FLASH_DURATION = 0.25
 local DAMAGE_PEAK_TRANSPARENCY = 0.4
 local DAMAGE_COLOR = Color3.fromRGB(255, 0, 0)
+
+-- Perfect-dodge flash: white, snaps to peak over DODGE_ATTACK then fades
+-- out over DODGE_DECAY (the old onDodgeIndicator's 0.1 / 1 tweens).
+local DODGE_PEAK_TRANSPARENCY = 0.25
+local DODGE_ATTACK_DURATION = 0.1
+local DODGE_DECAY_DURATION = 1
+local DODGE_COLOR = Color3.fromRGB(255, 255, 255)
+
+-- Death flash: red, from fully opaque, fading over DEATH_DECAY (the old
+-- onDeathIndicator's values).
+local DEATH_PEAK_TRANSPARENCY = 0
+local DEATH_DECAY_DURATION = 0.5
+local DEATH_COLOR = Color3.fromRGB(237, 56, 56)
+
+-- Names the legacy per-effect highlights used. Nothing creates them any
+-- more; one left on a live character from an older client build would
+-- take the slot, so they are purged when the local highlight is built.
+local LEGACY_LOCAL_HIGHLIGHT_NAMES = {
+	"LocalCharacterDamageIndicator",
+	"DodgeIndicator",
+	"OnDeathHighlight",
+	"OnDamageHighlight",
+	"InvulnerableHighlight",
+}
+
+-- Invulnerable: white fill while Attributes.Invulnerable is true, ramped
+-- in / out so it never pops. The fill is the old server highlight's.
+local INVULN_FILL_TRANSPARENCY = 0.35
+local INVULN_COLOR = Color3.fromRGB(255, 255, 255)
+local INVULN_FADE_DURATION = 0.25
+-- The per-character highlight this client creates on OTHER players.
+local OTHER_INVULN_HIGHLIGHT_NAME = "InvulnerableHighlight"
 
 -- Occlusion outline: stays at this transparency whenever the head is
 -- behind terrain. White, occlusion-only DepthMode (AlwaysOnTop so it
@@ -105,6 +158,19 @@ local CharacterHighlightController = Knit.CreateController({
 -- Used only for the LOCAL player highlight. Zombies don't get a
 -- client-created Highlight — they use the server-replicated MobHighlight.
 function CharacterHighlightController:_CreatePlayerHighlightInstance(model: Model)
+	for _, name in LEGACY_LOCAL_HIGHLIGHT_NAMES do
+		local legacy = model:FindFirstChild(name)
+		if legacy then
+			legacy:Destroy()
+		end
+	end
+	-- A previous build of OUR highlight on the same character (a second
+	-- OnCharacterLoaded for one character) would be a second Highlight too.
+	local previous = model:FindFirstChild(PLAYER_HIGHLIGHT_NAME)
+	if previous then
+		previous:Destroy()
+	end
+
 	local highlight = Instance.new("Highlight")
 	highlight.Name = PLAYER_HIGHLIGHT_NAME
 	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
@@ -173,10 +239,15 @@ function CharacterHighlightController:_RegisterZombie(zombie: Model)
 end
 
 -- Public: request a damage flash for `model`. Called by
--- DamageIndicatorController when the local player damages a zombie.
--- No-ops if the model isn't in the zombie registry (e.g. non-zombie
--- model — those go through the legacy onDamageIndicator path).
+-- DamageIndicatorController when the local player damages a zombie, and
+-- HumanoidStateController when the LOCAL PLAYER takes damage. No-ops for
+-- any other model (those go through the legacy onDamageIndicator path).
 function CharacterHighlightController:RequestDamageFlash(model: Model)
+	if model == Players.LocalPlayer.Character then
+		self._playerDamageFlashEndAt = os.clock() + DAMAGE_FLASH_DURATION
+		ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
+		return
+	end
 	local data = self._zombieRegistry[model]
 	if not data then
 		return
@@ -184,6 +255,182 @@ function CharacterHighlightController:RequestDamageFlash(model: Model)
 	data.damageFlashEndAt = os.clock() + DAMAGE_FLASH_DURATION
 	-- One sound per hit, mirroring the old onDamageIndicator behavior.
 	ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
+end
+
+-- Perfect dodge: the white snap-and-fade, as a layer. Local player only.
+function CharacterHighlightController:RequestDodgeFlash(model: Model)
+	if model ~= Players.LocalPlayer.Character then
+		return
+	end
+	self._playerDodgeStartAt = os.clock()
+end
+
+-- Death: the red flash, as a layer. Local player only.
+function CharacterHighlightController:RequestDeathFlash(model: Model)
+	if model ~= Players.LocalPlayer.Character then
+		return
+	end
+	self._playerDeathStartAt = os.clock()
+end
+
+-- Per-frame resolver for the LOCAL player's single highlight. Same shape
+-- as the zombie resolver, highest layer wins: death, damage, dodge,
+-- invulnerable, then the through-wall outline, then nothing.
+function CharacterHighlightController:_resolvePlayerHighlight(character: Model, deltaTime: number)
+	local highlight = self._playerHighlight
+	if not highlight or not highlight.Parent then
+		return
+	end
+
+	-- Ramp the invulnerable intensity toward the attribute (1 / 0). NOT
+	-- while a magic cutscene is playing (Susanoo, Domain Expansion): the
+	-- cast's own presentation is the feedback there, and the bars-and-
+	-- vignette frame should not carry a white glow. The glow comes up as
+	-- the cutscene ends and covers the grace tail of the window.
+	local invulnTarget = if character:GetAttribute(Attributes.Invulnerable) == true
+			and character:GetAttribute(Attributes.MagicCutscenePlaying) ~= true
+		then 1
+		else 0
+	local step = deltaTime / INVULN_FADE_DURATION
+	local diff = invulnTarget - (self._playerInvulnIntensity or 0)
+	if math.abs(diff) <= step then
+		self._playerInvulnIntensity = invulnTarget
+	else
+		self._playerInvulnIntensity = (self._playerInvulnIntensity or 0) + (if diff > 0 then step else -step)
+	end
+
+	local now = os.clock()
+
+	-- Priority 0: death (red, opaque -> clear over DEATH_DECAY_DURATION).
+	if self._playerDeathStartAt then
+		local elapsed = now - self._playerDeathStartAt
+		if elapsed < DEATH_DECAY_DURATION then
+			local progress = elapsed / DEATH_DECAY_DURATION
+			highlight.FillColor = DEATH_COLOR
+			highlight.FillTransparency = DEATH_PEAK_TRANSPARENCY + (1 - DEATH_PEAK_TRANSPARENCY) * progress
+			highlight.OutlineTransparency = 1
+			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+			return
+		end
+		self._playerDeathStartAt = nil
+	end
+
+	if self._playerDamageFlashEndAt and now < self._playerDamageFlashEndAt then
+		local remaining = self._playerDamageFlashEndAt - now
+		local progress = 1 - (remaining / DAMAGE_FLASH_DURATION)
+		highlight.FillColor = DAMAGE_COLOR
+		highlight.FillTransparency = DAMAGE_PEAK_TRANSPARENCY + (1 - DAMAGE_PEAK_TRANSPARENCY) * progress
+		highlight.OutlineTransparency = 1
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		return
+	end
+	self._playerDamageFlashEndAt = nil
+
+	local head = character:FindFirstChild("Head")
+	local occluded = head ~= nil and self:_IsOccluded(head.Position)
+
+	-- Priority 1.5: perfect dodge (white: 1 -> peak over the attack, then
+	-- peak -> 1 over the decay).
+	if self._playerDodgeStartAt then
+		local elapsed = now - self._playerDodgeStartAt
+		local total = DODGE_ATTACK_DURATION + DODGE_DECAY_DURATION
+		if elapsed < total then
+			local transparency
+			if elapsed < DODGE_ATTACK_DURATION then
+				transparency = 1 - (1 - DODGE_PEAK_TRANSPARENCY) * (elapsed / DODGE_ATTACK_DURATION)
+			else
+				local progress = (elapsed - DODGE_ATTACK_DURATION) / DODGE_DECAY_DURATION
+				transparency = DODGE_PEAK_TRANSPARENCY + (1 - DODGE_PEAK_TRANSPARENCY) * progress
+			end
+			highlight.FillColor = DODGE_COLOR
+			highlight.FillTransparency = transparency
+			highlight.OutlineTransparency = 1
+			highlight.DepthMode = if occluded
+				then Enum.HighlightDepthMode.AlwaysOnTop
+				else Enum.HighlightDepthMode.Occluded
+			return
+		end
+		self._playerDodgeStartAt = nil
+	end
+
+	-- Priority 2: invulnerable. Keeps the through-wall depth mode while
+	-- occluded so the fill still reads behind cover.
+	local intensity = self._playerInvulnIntensity or 0
+	if intensity > 0 then
+		highlight.FillColor = INVULN_COLOR
+		highlight.FillTransparency = 1 - intensity * (1 - INVULN_FILL_TRANSPARENCY)
+		highlight.OutlineTransparency = 1
+		highlight.DepthMode = if occluded then Enum.HighlightDepthMode.AlwaysOnTop else Enum.HighlightDepthMode.Occluded
+		return
+	end
+
+	if occluded then
+		highlight.FillColor = OUTLINE_COLOR
+		highlight.FillTransparency = OUTLINE_TRANSPARENCY
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	else
+		highlight.FillColor = OUTLINE_COLOR
+		highlight.FillTransparency = 1
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	end
+end
+
+-- OTHER players: one small Highlight per character, created while their
+-- Attributes.Invulnerable is true and faded out + destroyed when it drops.
+-- Their characters carry no other client highlight, so this cannot take
+-- a slot from anything.
+function CharacterHighlightController:_bindOtherCharacter(character: Model)
+	local function refresh()
+		local wants = character:GetAttribute(Attributes.Invulnerable) == true
+		local existing = character:FindFirstChild(OTHER_INVULN_HIGHLIGHT_NAME)
+		if wants and not existing then
+			local highlight = Instance.new("Highlight")
+			highlight.Name = OTHER_INVULN_HIGHLIGHT_NAME
+			highlight.FillColor = INVULN_COLOR
+			highlight.FillTransparency = 1
+			highlight.OutlineTransparency = 1
+			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+			highlight.Parent = character
+			TweenService:Create(
+				highlight,
+				TweenInfo.new(INVULN_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ FillTransparency = INVULN_FILL_TRANSPARENCY }
+			):Play()
+		elseif not wants and existing then
+			local fade = TweenService:Create(
+				existing,
+				TweenInfo.new(INVULN_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ FillTransparency = 1 }
+			)
+			fade.Completed:Once(function()
+				-- Re-checked: the attribute may have come back mid-fade.
+				if existing.Parent and character:GetAttribute(Attributes.Invulnerable) ~= true then
+					existing:Destroy()
+				end
+			end)
+			fade:Play()
+		end
+	end
+	character:GetAttributeChangedSignal(Attributes.Invulnerable):Connect(refresh)
+	refresh()
+end
+
+function CharacterHighlightController:_watchOtherPlayers()
+	local function bind(player: Player)
+		if player == Players.LocalPlayer then
+			return
+		end
+		if player.Character then
+			self:_bindOtherCharacter(player.Character)
+		end
+		player.CharacterAdded:Connect(function(character: Model)
+			self:_bindOtherCharacter(character)
+		end)
+	end
+	for _, player in Players:GetPlayers() do
+		bind(player)
+	end
+	Players.PlayerAdded:Connect(bind)
 end
 
 function CharacterHighlightController:_IsOccluded(point: Vector3)
@@ -275,26 +522,29 @@ function CharacterHighlightController:_InitHighlightThread()
 	local player = Players.LocalPlayer
 	local character = player.Character
 
+	-- RE-ENTRANT. OnCharacterLoaded can fire more than once for one
+	-- character (the initial load and CharacterAdded both fire it); the
+	-- generation lets the previous loop notice it has been superseded and
+	-- stop, instead of two loops driving two highlights on one model.
+	self._threadGeneration = (self._threadGeneration or 0) + 1
+	local generation = self._threadGeneration
+
 	self._playerHighlight = self:_CreatePlayerHighlightInstance(character)
+	self._playerDamageFlashEndAt = nil
+	self._playerDodgeStartAt = nil
+	self._playerDeathStartAt = nil
+	self._playerInvulnIntensity = 0
 
 	local lastTick = os.clock()
 	while task.wait(TICK_INTERVAL) do
+		if self._threadGeneration ~= generation then
+			return
+		end
 		local now = os.clock()
 		local deltaTime = now - lastTick
 		lastTick = now
 
-		-- Local player occlusion (unchanged from legacy).
-		local head = character:FindFirstChild("Head")
-		if head then
-			local occluded = self:_IsOccluded(head.Position)
-			if occluded then
-				self._playerHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-				self._playerHighlight.FillTransparency = 0.65
-			else
-				self._playerHighlight.DepthMode = Enum.HighlightDepthMode.Occluded
-				self._playerHighlight.FillTransparency = 1
-			end
-		end
+		self:_resolvePlayerHighlight(character, deltaTime)
 
 		-- Resolve priority for every registered zombie. AncestryChanged
 		-- has already scrubbed entries for dead/destroyed zombies, so
@@ -330,6 +580,8 @@ function CharacterHighlightController:KnitStart()
 	PlayerEventController.OnCharacterLoaded:Connect(function()
 		self:_InitHighlightThread()
 	end)
+
+	self:_watchOtherPlayers()
 
 	for _, zombie in ipairs(workspace.IgnoreInstances.Zombies:GetChildren()) do
 		self:_RegisterZombie(zombie)

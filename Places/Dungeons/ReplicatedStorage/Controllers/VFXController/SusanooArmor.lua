@@ -1,26 +1,25 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-local Lighting = game:GetService("Lighting")
-
-local ColorCorrectionDefaults = require(ReplicatedStorage.Submodules.Core.Shared.Data.ColorCorrectionDefaults)
-
--- AUTHORED ColorCorrection tint, from ColorCorrectionDefaults (the one
--- source every grade-bending effect restores to). This effect tints the
--- screen and then puts it back; restoring to a literal would stomp the
--- place's own grade the moment it is authored as anything else.
-local AUTHORED_TINT_COLOR = ColorCorrectionDefaults.TintColor
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+
+-- The screen tint is CLAIMED through MagicAmbienceController, not written
+-- to Lighting here: one global property cannot be owned by two casts, and
+-- writing it directly meant a Susanoo landing inside a Domain Expansion
+-- repainted the screen and then handed it back to the AUTHORED grade
+-- rather than to the domain that still owned it. First claim holds.
+local SUSANOO_TINT_COLOR = Color3.fromRGB(217, 156, 255)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
 local CutsceneController
+local MagicAmbienceController
 
 Knit.OnStart():andThen(function()
 	CutsceneController = Knit.GetController("CutsceneController")
+	MagicAmbienceController = Knit.GetController("MagicAmbienceController")
 end)
 
 return function(player: Player, preload: boolean?)
@@ -38,29 +37,30 @@ return function(player: Player, preload: boolean?)
 	susanooAnimation:Play()
 	susanooAnimation:AdjustSpeed(0.3)
 
+	if not preload then
+		ReplicatedStorage.GameAssets.Sounds.SusanooVoiceline:Play()
+	end
+
 	if player == Players.LocalPlayer and not preload then
 		task.defer(function()
-			-- The "Susanoo" camera path (Cutscenes/Susanoo: two waypoints
-			-- pivoted to the caster, GameAssets.CutsceneWaypoints
-			-- .SusanooWaypoints). PlayCutscene brings the bars, the lock,
-			-- the camera bob and the wall hide with it.
-			CutsceneController:PlayCutscene("Susanoo")
+			-- MagicData.cutscene names the "Susanoo" camera path (two
+			-- waypoints pivoted to the caster, GameAssets.CutsceneWaypoints
+			-- .SusanooWaypoints). Going through the data index rather than
+			-- PlayCutscene directly keeps the camera move and the server's
+			-- invulnerability window reading the same numbers.
+			CutsceneController:PlayMagicCutscene(MagicNames["Susanoo Armor"])
 		end)
 
-		ReplicatedStorage.GameAssets.Sounds.SusanooCast:Play()
-
-		TweenService:Create(
-			Lighting.ColorCorrection,
-			TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{ TintColor = Color3.fromRGB(217, 156, 255) }
-		):Play()
+		-- The viewer's OWN Susanoo, so no proximity: it is on their body.
+		local ambienceId = ("Susanoo_%d_%s"):format(player.UserId, tostring(os.clock()))
+		if MagicAmbienceController then
+			MagicAmbienceController:Claim(ambienceId, { tint = SUSANOO_TINT_COLOR })
+		end
 
 		task.delay(MagicData[MagicNames["Susanoo Armor"]].lifetime + 0.1, function()
-			TweenService:Create(
-				Lighting.ColorCorrection,
-				TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ TintColor = AUTHORED_TINT_COLOR }
-			):Play()
+			if MagicAmbienceController then
+				MagicAmbienceController:Release(ambienceId)
+			end
 		end)
 	end
 

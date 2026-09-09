@@ -66,7 +66,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 					radialGroundFracture:Spawn(cachedFrames[i].Position, 6.5)
 
-					for _, particle in pairs(lightingShatterVFX.Starter:GetDescendants()) do
+					for _, particle in pairs(lightingShatterVFX:WaitForChild("Starter"):GetDescendants()) do
 						if particle:IsA("ParticleEmitter") then
 							particle:Emit(15)
 						end

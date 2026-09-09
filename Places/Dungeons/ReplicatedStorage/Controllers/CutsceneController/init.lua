@@ -18,7 +18,6 @@ local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicDat
 
 local IsometricCameraController
 local CinematicInterfaceController
-local WallsTransparencyController
 local AmbientGradientInterfaceController
 
 local CutsceneController = Knit.CreateController({
@@ -79,6 +78,11 @@ function CutsceneController:_startCinematicBob()
 	self._cinematicBobEnabled = true
 	self._bobTime = 0
 
+	-- RenderStepped on purpose: CameraShakeController's overlay is a
+	-- RenderStepped connection made at boot, and connections fire
+	-- most-recent-first, so this bob (connected now) writes BEFORE the
+	-- shake multiplies on top of it. Move this to BindToRenderStep and a
+	-- shake fired mid-cutscene stops showing.
 	self._cinematicBobConnection = RunService.RenderStepped:Connect(function(dt)
 		if not self._cinematicBobEnabled then
 			return
@@ -180,7 +184,10 @@ function CutsceneController:PlayCutscene(cutsceneName: string)
 
 	self:_startCinematicBob()
 
-	WallsTransparencyController:Toggle(false)
+	-- Wall occlusion stays ON for the whole cutscene. It used to be
+	-- switched off here, which is why a camera path that clipped into a
+	-- wall filled the frame with stone: the fade follows the CAMERA, so it
+	-- is exactly the thing a moving cutscene camera needs.
 
 	-- Expose the active module so CancelActive can :Stop it.
 	self._activeCutscene = cutscene
@@ -200,9 +207,9 @@ function CutsceneController:PlayCutscene(cutsceneName: string)
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
 
-	IsometricCameraController:Resume()
-
-	WallsTransparencyController:Toggle(true)
+	-- SNAP back to the isometric view: the camera path ends a few studs
+	-- from the character, and gliding out from there was a whip-zoom.
+	IsometricCameraController:Resume(true)
 end
 
 -- A BEAT cutscene: no camera move at all. Implements the same Play / Stop
@@ -224,25 +231,46 @@ local function newCinematicBeat(duration: number)
 end
 
 -- The cast cutscene for a magic that opts in through MagicData.cutscene
--- ({ enabled, duration }): cinematic bars up, the CutscenePlaying lock
--- taken, the ambient vignette pulled strong, held for the duration, then
--- all three released. Ownership and unlock rules are PlayCutscene's,
--- verbatim — an external owner of the lock (an encounter intro) keeps
--- it, and CancelActive(true) leaves it held on exit. Unlike PlayCutscene
--- there is NO camera pause, bob or wall hiding: the frame stays where
--- the player left it. No-op for magic without the index.
+-- ({ enabled, duration, path }) — the ONE entry point for both kinds, so
+-- a caster's invulnerability window (VFXService reads the same index)
+-- cannot disagree with what actually plays.
+--
+--   * `path` set: hand off to PlayCutscene, which plays that camera-path
+--     module with its own bars, camera pause, bob and wall hide.
+--   * no `path`: cinematic bars up, the CutscenePlaying lock taken, the
+--     ambient vignette pulled strong, held for the duration, then all
+--     three released — no camera pause, bob or wall hiding, the frame
+--     stays where the player left it.
+--
+-- Ownership and unlock rules are PlayCutscene's, verbatim — an external
+-- owner of the lock (an encounter intro) keeps it, and CancelActive(true)
+-- leaves it held on exit. No-op for magic without the index.
+--
+-- Either branch also raises Attributes.MagicCutscenePlaying for its whole
+-- length: that is what empties the world of billboards
+-- (CutsceneBillboardController) and swallows damage / text indicators, and
+-- it is deliberately NOT CutscenePlaying, which every other cinematic
+-- takes and which dresses the screen differently.
 function CutsceneController:PlayMagicCutscene(magicName: string)
 	local data = MagicData[magicName]
 	local config = data and data.cutscene
 	if not config or config.enabled ~= true then
 		return
 	end
-	local duration = if typeof(config.duration) == "number" then config.duration else DEFAULT_MAGIC_CUTSCENE_SECONDS
 
 	local character = Players.LocalPlayer.Character
 	if not character then
 		return
 	end
+
+	character:SetAttribute(Attributes.MagicCutscenePlaying, true)
+	if typeof(config.path) == "string" then
+		-- PlayCutscene yields for the whole camera path.
+		self:PlayCutscene(config.path)
+		character:SetAttribute(Attributes.MagicCutscenePlaying, false)
+		return
+	end
+	local duration = if typeof(config.duration) == "number" then config.duration else DEFAULT_MAGIC_CUTSCENE_SECONDS
 
 	local externallyOwned = character:GetAttribute(Attributes.CutscenePlaying) == true
 	if not externallyOwned then
@@ -267,6 +295,7 @@ function CutsceneController:PlayMagicCutscene(magicName: string)
 		character:SetAttribute(Attributes.CutscenePlaying, false)
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
+	character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 end
 
 -- Cancels whatever cutscene is currently inside PlayCutscene's yield. No-op
@@ -337,7 +366,6 @@ end
 function CutsceneController:KnitStart()
 	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
 	IsometricCameraController = Knit.GetController("IsometricCameraController")
-	WallsTransparencyController = Knit.GetController("WallsTransparencyController")
 	AmbientGradientInterfaceController = Knit.GetController("AmbientGradientInterfaceController")
 
 	for _, cutsceneModule in pairs(script.Cutscenes:GetChildren()) do
@@ -348,6 +376,9 @@ function CutsceneController:KnitStart()
 	end
 
 	Players.LocalPlayer.Character:SetAttribute(Attributes.CutscenePlaying, false)
+	-- The world UI comes back with it: a hard clear must not leave the
+	-- screen stripped of billboards and swallowing indicators.
+	Players.LocalPlayer.Character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 end
 
 function CutsceneController:KnitCutsceneController() end

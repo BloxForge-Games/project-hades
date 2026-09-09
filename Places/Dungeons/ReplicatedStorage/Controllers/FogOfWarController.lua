@@ -24,8 +24,11 @@
 	(the reveal in reverse); booleans flip off at the start of the fade.
 	Nothing is cached -- a re-fogged chunk never comes back (the way back
 	is sealed), and the floor's models are destroyed on the next
-	generation, which is the only reset. `_fogged` is weak-keyed for the
-	same reason.
+	generation, which is the only reset. Idempotency is the LocalFogged
+	attribute on the model itself, not a table: a weak-keyed Instance
+	table loses entries whenever the Instance's Lua object is collected
+	(the DataModel does not keep it alive), and a strong one would pin
+	destroyed floors.
 
 	Every fogged room / building model is stamped Attributes.LocalFogged
 	(client-only attribute) so BuildingTransparencyController leaves its
@@ -62,9 +65,6 @@ local SERVER_FOG_BOOLEAN_ATTRIBUTE = "FogEnabled"
 
 local FogOfWarController = Knit.CreateController({
 	Name = "FogOfWarController",
-	-- [Model] = true for every room / building model already re-fogged.
-	-- Weak keys: destroyed floors drop out on their own.
-	_fogged = setmetatable({}, { __mode = "k" }),
 })
 
 --[ Private ]--
@@ -91,10 +91,9 @@ local function hideLocally(instance: Instance)
 end
 
 function FogOfWarController:_fogModel(model: Instance, hideables: { Instance })
-	if self._fogged[model] or not model.Parent then
+	if not model.Parent or model:GetAttribute(Attributes.LocalFogged) == true then
 		return
 	end
-	self._fogged[model] = true
 	model:SetAttribute(Attributes.LocalFogged, true)
 	for _, instance in hideables do
 		hideLocally(instance)

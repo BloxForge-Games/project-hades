@@ -8,6 +8,26 @@ local packages: Folder = ReplicatedStorage.Submodules.Core.Packages
 local Knit = require(packages.Knit)
 local Janitor = require(packages.Janitor)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local getMobOcclusionPoints = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getMobOcclusionPoints)
+local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+
+-- Parts of a Building-tagged model (pillars, the static map buildings)
+-- belong to BuildingTransparencyController, which fades the WHOLE model
+-- to one value and caches the authored look itself. Two owners on one
+-- part is how a pillar came apart: this system faded the single block on
+-- its ray, then "restored" it to the value it had captured -- opaque --
+-- while the pillar system still held every other block at its faded
+-- value, so lone blocks popped solid as you moved.
+local function isBuildingPart(part: BasePart): boolean
+	local ancestor = part.Parent
+	while ancestor and ancestor ~= workspace do
+		if ancestor:IsA("Model") and ancestor:HasTag(TagList.Building) then
+			return true
+		end
+		ancestor = ancestor.Parent
+	end
+	return false
+end
 
 local camera: Camera = workspace.CurrentCamera
 
@@ -145,6 +165,11 @@ function WallsTransparencyController:_InitOcclusionThread()
 		workspace.CurrentCamera,
 		workspace.IgnoreInstances.MapMarkers,
 		workspace.IgnoreInstances.MagicSpells,
+		-- Spell VFX props (the Domain Expansion shrine). They animate their
+		-- OWN transparency, and this system's capture-once "original" would
+		-- fight that; per design the character highlight is enough to keep
+		-- you readable when you walk under one.
+		workspace.IgnoreInstances.Map.MagicSpells,
 		workspace.PlayerBaseplates,
 		workspace.IgnoreInstances.Drops,
 		workspace.IgnoreInstances.Zombies,
@@ -183,13 +208,21 @@ function WallsTransparencyController:_InitOcclusionThread()
 			end
 		end
 
-		local occludedParts = camera:GetPartsObscuringTarget({ head.Position }, ignore)
+		-- Cast to the player AND to every live mob nearby: a wall hiding a
+		-- mob fades as if you were standing there, so the through-wall
+		-- highlight is not the only cue. One engine call for all points.
+		local castPoints = getMobOcclusionPoints()
+		table.insert(castPoints, head.Position)
+		local occludedParts = camera:GetPartsObscuringTarget(castPoints, ignore)
 
 		local currentFrameParts = {}
 		for _, part in ipairs(occludedParts) do
 			if part:IsA("BasePart") then
 				local model = part:FindFirstAncestorOfClass("Model")
 				if model and Players:GetPlayerFromCharacter(model) then
+					continue
+				end
+				if isBuildingPart(part) then
 					continue
 				end
 				-- A part whose Transparency someone else is driving right now

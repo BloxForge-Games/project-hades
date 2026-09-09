@@ -34,7 +34,12 @@ local getEffectiveBaseWalkSpeed =
 local getEffectiveJetpackWalkSpeed =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveJetpackWalkSpeed)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
-local onDeathIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDeathIndicator)
+-- The death flash is a LAYER of the local character's single Highlight
+-- (CharacterHighlightController), not its own instance: the old
+-- onDeathIndicator highlight was never destroyed, so from the first down
+-- on it owned the character's one rendering slot and the through-wall
+-- outline never drew again for that life.
+local CharacterHighlightController
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 
 -- Hide source held on the HUD scope for the death → revive window. Named so
@@ -480,6 +485,7 @@ function LifeController:KnitInit()
 end
 
 function LifeController:KnitStart()
+	CharacterHighlightController = Knit.GetController("CharacterHighlightController")
 	ScreenFadeInterfaceController = Knit.GetController("ScreenFadeInterfaceController")
 	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
 	ScreenGradientInterfaceController = Knit.GetController("ScreenGradientInterfaceController")
@@ -537,7 +543,7 @@ function LifeController:KnitStart()
 			return
 		end
 
-		onDeathIndicator(Players.LocalPlayer.Character)
+		CharacterHighlightController:RequestDeathFlash(Players.LocalPlayer.Character)
 
 		-- HARDCORE: the Game Over screen is the ONLY death screen — it
 		-- paints on every death regardless of party size or how many

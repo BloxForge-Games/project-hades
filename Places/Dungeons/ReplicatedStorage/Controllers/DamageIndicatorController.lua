@@ -1,4 +1,5 @@
 local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -8,6 +9,8 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
 local HighlightIndicators = require(ReplicatedStorage.Submodules.Core.Shared.Enums.HighlightIndicators)
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
+local isMagicCutscenePlaying =
+	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Cutscene.isMagicCutscenePlaying)
 
 local DEFAULT_TWEEN_INFO_PROPS = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, false, 0)
 local FONT_SCALED = 1.25
@@ -148,7 +151,16 @@ function DamageIndicatorController:KnitStart()
 			_isStatus: boolean?,
 			sparks: boolean?
 		)
-			if CharacterHighlightController and CharacterHighlightController._zombieRegistry[character] then
+			-- Zombies AND the local character resolve through the single-
+			-- highlight controller; only untracked models (breakables, NPCs)
+			-- take the standalone flash.
+			if
+				CharacterHighlightController
+				and (
+					CharacterHighlightController._zombieRegistry[character]
+					or character == Players.LocalPlayer.Character
+				)
+			then
 				CharacterHighlightController:RequestDamageFlash(character)
 			else
 				onDamageIndicator(character, HIGHLIGHT_NAME)
@@ -261,6 +273,12 @@ function DamageIndicatorController:KnitStart()
 			resistKind: string?,
 			isStatus: boolean?
 		)
+			-- Magic cutscene: DROPPED, not deferred (see
+			-- TextIndicatorController for why nothing is deferred).
+			if isMagicCutscenePlaying() then
+				return
+			end
+
 			self.OnIndicatorRequested:Fire()
 
 			local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()

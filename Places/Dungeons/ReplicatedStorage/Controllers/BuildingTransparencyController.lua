@@ -36,13 +36,14 @@ local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
+local getMobOcclusionPoints = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getMobOcclusionPoints)
 
 local camera: Camera = workspace.CurrentCamera
 
 -- Faded transparency for parts and for their Textures / Decals. Applied as
 -- max(authored, value): anything authored MORE transparent keeps its own.
-local PART_FADE_TRANSPARENCY = 0.85
-local SURFACE_FADE_TRANSPARENCY = 1
+local PART_FADE_TRANSPARENCY = 0.75
+local SURFACE_FADE_TRANSPARENCY = 0.9
 local MAX_STUD_RAYCAST_DIST = 10
 local ROOF_STRING = "Roof"
 local THREAD_LOOP_WAIT = 0.15
@@ -213,6 +214,11 @@ function BuildingTransparencyController:_BuildingProximityFunction(overlapParams
 	for _, offset in PILLAR_CAST_OFFSETS do
 		table.insert(castPoints, root.Position + offset)
 	end
+	-- Nearby live mobs count too: a pillar hiding a mob fades whole, as it
+	-- would for you.
+	for _, point in getMobOcclusionPoints() do
+		table.insert(castPoints, point)
+	end
 	local now = os.clock()
 	for _, part in camera:GetPartsObscuringTarget(castPoints, self._buildingIgnoreList) do
 		local building = buildingOf(part)
@@ -242,7 +248,17 @@ function BuildingTransparencyController:_BuildingProximityFunction(overlapParams
 	-- Apply the changes: new / changed modes, then restores for buildings
 	-- that dropped out.
 	for building, mode in desired do
-		if self._activeModes[building] ~= mode and building.Parent then
+		if not building.Parent then
+			continue
+		end
+		-- Apply on change -- and RE-ASSERT every tick while a pillar is
+		-- held faded. The pillar set is instant and idempotent, so that
+		-- costs a handful of property writes, and it means no other writer
+		-- can leave a single block of a covering pillar visible for longer
+		-- than one tick.
+		local changed = self._activeModes[building] ~= mode
+		local heldPillar = mode == MODE_WHOLE and isPillar(building)
+		if changed or heldPillar then
 			applyMode(building, mode)
 		end
 	end

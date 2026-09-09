@@ -14,12 +14,23 @@
 	  unreadable chaos).
 
 	* Overlay, never state. The offset is multiplied onto the camera every
-	  RenderStep at Camera.Value + 1 — AFTER the IsometricCamera's own
-	  write — and the IsometricCamera smooths from its INTERNAL CFrame (see
-	  its _smoothedCFrame), so the shake can never leak into the camera's
-	  base position. The old system fed the shaken CFrame back through the
-	  isometric lerp, which ate or compounded the offset depending on frame
-	  rate — the "sometimes invisible, sometimes violent" bug.
+	  frame from a RenderStepped connection — AFTER the IsometricCamera's
+	  own write (that runs on Stepped) — and the IsometricCamera smooths
+	  from its INTERNAL CFrame (see its _smoothedCFrame), so the shake can
+	  never leak into the camera's base position. The old system fed the
+	  shaken CFrame back through the isometric lerp, which ate or
+	  compounded the offset depending on frame rate — the "sometimes
+	  invisible, sometimes violent" bug.
+
+	* Same slot as the cutscene's cinematic bob, ON TOP of it. The bob
+	  (CutsceneController) is a RenderStepped connection too; connections
+	  fire most-recent-first, the bob is connected when a cutscene starts
+	  (long after this controller's KnitStart), so the bob writes, then
+	  this multiplies the shake onto the bobbed camera. Both are offsets,
+	  so both survive. A BindToRenderStep overlay was used before and the
+	  shake never showed during a cutscene while the bob did: whatever the
+	  engine's exact ordering between that slot and the cutscene's camera
+	  tween, this slot is the one the bob is provably rendered from.
 
 	* Platform parity. Motion is view-space POSITION (studs) plus a small
 	  roll, sampled from time-based sine blends — no frame-rate or FOV
@@ -40,11 +51,6 @@ local CameraShakeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Ca
 local CameraShakeService
 
 --[ Constants ]--
-
-local RENDER_BIND_NAME = "CameraShakeOverlay"
--- One step after the camera pipeline so the offset lands on top of
--- whatever wrote the camera this frame.
-local RENDER_PRIORITY = Enum.RenderPriority.Camera.Value + 1
 
 local TAU = math.pi * 2
 
@@ -157,7 +163,9 @@ function CameraShakeController:KnitInit()
 end
 
 function CameraShakeController:KnitStart()
-	RunService:BindToRenderStep(RENDER_BIND_NAME, RENDER_PRIORITY, function()
+	-- RenderStepped, not BindToRenderStep: see the header's "same slot as
+	-- the cinematic bob" note.
+	RunService.RenderStepped:Connect(function()
 		self:_update()
 	end)
 
