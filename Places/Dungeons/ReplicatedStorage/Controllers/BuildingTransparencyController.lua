@@ -18,6 +18,14 @@
 	Every fade restores to the AUTHORED transparency, cached on first touch
 	(a part authored at 0.4 comes back at 0.4, an invisible helper part
 	stays invisible), never to a hard-coded 0 / 0.7.
+
+	PILLARS (TagList.Pillar) are faded as ONE unit. Their parts are SET, not
+	tweened -- every block and texture lands on the same value in the same
+	frame, so no two blocks ever read differently mid-tween -- and the fade
+	HOLDS for PILLAR_RELEASE_SECONDS after the last frame that saw the
+	pillar occluding, so circling it (the cast flicking on and off at the
+	edge) does not strobe the whole column. Pillars have no roof, so the
+	near fade does nothing to them: occluded or not, nothing in between.
 ]]
 
 local Players = game:GetService("Players")
@@ -26,6 +34,7 @@ local TweenService = game:GetService("TweenService")
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
 
 local camera: Camera = workspace.CurrentCamera
@@ -38,6 +47,13 @@ local MAX_STUD_RAYCAST_DIST = 10
 local ROOF_STRING = "Roof"
 local THREAD_LOOP_WAIT = 0.15
 local FADE_TWEEN_INFO = TweenInfo.new(0.15, Enum.EasingStyle.Quad)
+-- A pillar stays faded this long after the last tick that saw it between
+-- the camera and the player. Longer than one loop so an edge flicker
+-- (one tick occluded, next not) never reaches the parts.
+local PILLAR_RELEASE_SECONDS = 0.4
+-- Extra cast heights (relative to the root) so a pillar covering only the
+-- legs or only the head still counts as occluding.
+local PILLAR_CAST_OFFSETS = { Vector3.new(0, -2.5, 0), Vector3.new(0, 1.5, 0) }
 
 -- Cached authored transparency, stamped on the instance the first time a
 -- fade touches it.
@@ -55,6 +71,8 @@ local BuildingTransparencyController = Knit.CreateController({
 	_buildingIgnoreList = {},
 	-- [building Model] = MODE_WHOLE | MODE_ROOF for every building currently faded.
 	_activeModes = {},
+	-- [pillar Model] = os.clock() deadline the whole-fade holds until.
+	_pillarHoldUntil = {},
 })
 
 --[ Private ]--
@@ -87,6 +105,10 @@ local function tweenTransparency(instance: Instance, target: number)
 	TweenService:Create(instance, FADE_TWEEN_INFO, { Transparency = target }):Play()
 end
 
+local function isPillar(building: Model): boolean
+	return building:HasTag(TagList.Pillar)
+end
+
 -- A building's "Base" parts live under IgnoreInstances.Terrain (moved there
 -- by CollisionGroupService:SetupBuilding, which leaves a `Building`
 -- ObjectValue on each pointing back). They fade with the building.
@@ -111,7 +133,14 @@ end
 -- Applies `mode` to every fadeable descendant of `building` (and its Base
 -- parts): the selected ones go to their faded value, the rest back to
 -- authored. nil = restore all.
+--
+-- A PILLAR is written directly (no tween): one value, every part, this
+-- frame. Tweens are what let two blocks of the same column disagree --
+-- a block still easing toward 0.85 when the mode flipped back to restore
+-- started its return from wherever it was, while its neighbour started
+-- from 0.85.
 local function applyMode(building: Model, mode: string?)
+	local instant = isPillar(building)
 	local instances = building:GetDescendants()
 	for _, extra in basePartsOf(building) do
 		table.insert(instances, extra)
@@ -127,14 +156,31 @@ local function applyMode(building: Model, mode: string?)
 			local fade = if instance:IsA("BasePart") then PART_FADE_TRANSPARENCY else SURFACE_FADE_TRANSPARENCY
 			target = math.max(authored, fade)
 		end
-		tweenTransparency(instance, target)
+		if instant then
+			(instance :: any).Transparency = target
+		else
+			tweenTransparency(instance, target)
+		end
 	end
 end
 
+-- The tagged Building this part belongs to. Walks EVERY ancestor rather
+-- than stopping at the nearest Model: a pillar's torch sits in a nested
+-- TorchModel, and the nearest-Model lookup resolved those parts to the
+-- torch (untagged, so ignored) instead of the pillar.
 local function buildingOf(part: BasePart): Model?
-	local model = part:FindFirstAncestorOfClass("Model")
-	if model and model:HasTag(TagList.Building) then
-		return model
+	local ancestor = part.Parent
+	while ancestor and ancestor ~= workspace do
+		if ancestor:IsA("Model") and ancestor:HasTag(TagList.Building) then
+			-- Re-fogged locally (FogOfWarController): it is behind a sealed
+			-- gate and its parts sit at the fog value on purpose. Fading or
+			-- "restoring" it here would drag it back into view.
+			if ancestor:GetAttribute(Attributes.LocalFogged) == true then
+				return nil
+			end
+			return ancestor
+		end
+		ancestor = ancestor.Parent
 	end
 	return nil
 end
@@ -158,16 +204,38 @@ function BuildingTransparencyController:_BuildingProximityFunction(overlapParams
 	end
 
 	-- OCCLUDED: whole-model fade for anything between the camera and the
-	-- player. Two cast points so a pillar covering only the body still
-	-- counts. Wins over the roof fade.
+	-- player. Several cast points (root, head, legs, chest) so a pillar
+	-- covering only part of the body still counts. Wins over the roof fade.
 	local castPoints = { root.Position }
 	if head then
 		table.insert(castPoints, head.Position)
 	end
+	for _, offset in PILLAR_CAST_OFFSETS do
+		table.insert(castPoints, root.Position + offset)
+	end
+	local now = os.clock()
 	for _, part in camera:GetPartsObscuringTarget(castPoints, self._buildingIgnoreList) do
 		local building = buildingOf(part)
 		if building then
 			desired[building] = MODE_WHOLE
+			if isPillar(building) then
+				self._pillarHoldUntil[building] = now + PILLAR_RELEASE_SECONDS
+			end
+		end
+	end
+
+	-- PILLARS: no roof mode (nothing to fade), and the whole fade HOLDS
+	-- through the release window after the last occluding tick.
+	for building, mode in desired do
+		if isPillar(building) and mode == MODE_ROOF then
+			desired[building] = nil
+		end
+	end
+	for pillar, holdUntil in self._pillarHoldUntil do
+		if pillar.Parent and now < holdUntil then
+			desired[pillar] = MODE_WHOLE
+		else
+			self._pillarHoldUntil[pillar] = nil
 		end
 	end
 

@@ -12,6 +12,13 @@
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
 	                                      commands are ignored silently
 
+	--- /wipedata ---
+
+	Resets YOUR profile to the template (DataService:WipeProfileData) and
+	kicks you a beat later so every service that cached state off the load
+	rebuilds from the fresh profile on rejoin. Same command as the Dungeons
+	place's; the Lobby is where a fresh start is usually wanted.
+
 	--- /tp (aliases /dungeon, /dungeons) ---
 
 	Reserves ONE private server of the Dungeons place
@@ -36,6 +43,7 @@ local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 
 local TextIndicatorService
+local DataService
 
 --[ Constants ]--
 
@@ -43,6 +51,9 @@ local COMMAND_PREFIX = "/"
 local FEEDBACK_COLOR = Color3.fromRGB(255, 228, 21)
 -- How long a /tp holds the "in flight" latch before another may be issued.
 local TELEPORT_RETRY_GRACE_SECONDS = 15
+-- /wipedata: the reply gets this long on screen before the kick.
+local WIPE_KICK_DELAY_SECONDS = 2
+local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
 
 -- True while a party teleport is being reserved / issued.
 local teleportInFlight = false
@@ -100,6 +111,28 @@ COMMANDS = {
 				teleportInFlight = false
 			end)
 			return ("Teleporting %d player(s) to a reserved Dungeons server..."):format(#players)
+		end,
+	},
+	wipedata = {
+		usage = "/wipedata",
+		description = "Wipes YOUR player data back to defaults and kicks you so it reloads.",
+		handler = function(player: Player, _args: { string }): string?
+			if not DataService then
+				return "DataService is unavailable."
+			end
+			if not DataService:WipeProfileData(player) then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+
+			-- Delayed so the reply below is visible; the kick's PlayerRemoved
+			-- releases the profile and saves the wiped state.
+			task.delay(WIPE_KICK_DELAY_SECONDS, function()
+				if player:IsDescendantOf(Players) then
+					player:Kick(WIPE_KICK_MESSAGE)
+				end
+			end)
+
+			return "Data wiped. Kicking you so it reloads..."
 		end,
 	},
 	help = {
@@ -189,6 +222,7 @@ end
 
 function LobbyChatCommandsService:KnitStart()
 	TextIndicatorService = Knit.GetService("TextIndicatorService")
+	DataService = Knit.GetService("DataService")
 
 	local function bind(player: Player)
 		player.Chatted:Connect(function(message: string)

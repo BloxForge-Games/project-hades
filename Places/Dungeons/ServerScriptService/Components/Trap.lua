@@ -78,6 +78,11 @@ function Trap:_onEntityEntered()
 	if self._onCooldown then
 		return
 	end
+	-- A COMPLETED room's traps are scenery: no spikes, no damage, on the
+	-- way back through a cleared chamber or while looting an arena.
+	if self.Instance:GetAttribute(Attributes.TrapDisabled) == true then
+		return
+	end
 
 	self._onCooldown = true
 

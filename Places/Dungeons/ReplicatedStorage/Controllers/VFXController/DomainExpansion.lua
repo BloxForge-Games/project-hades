@@ -18,12 +18,10 @@ local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicN
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
-local NPCDialogueController
 local CutsceneController
 local VFXService
 
 Knit.OnStart():andThen(function()
-	NPCDialogueController = Knit.GetController("NPCDialogueController")
 	CutsceneController = Knit.GetController("CutsceneController")
 	VFXService = Knit.GetService("VFXService")
 end)
@@ -82,9 +80,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			task.spawn(function()
 				if player == Players.LocalPlayer and not preload then
 					ReplicatedStorage.GameAssets.Sounds.DomainExpansionCast:Play()
-
-					NPCDialogueController:NewDialogue("Domain Expansion...", 2)
 				end
+				-- "Domain Expansion..." / "...Malevolent Shrine!" are
+				-- MagicData.dialogue beats (PlayerDialogueInterface), timed
+				-- to this script's waits.
 			end)
 			task.wait(1)
 			if player == Players.LocalPlayer and not preload then
@@ -186,10 +185,6 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					end
 				end
 			end)
-
-			if player == Players.LocalPlayer and not preload then
-				NPCDialogueController:NewDialogue("...Malevolent Shrine!", 2)
-			end
 
 			task.wait(1)
 

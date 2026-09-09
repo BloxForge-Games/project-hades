@@ -974,8 +974,8 @@ function EventController:_wirePedestal(pedestal: Instance)
 	local rarity = RelicData[slot.relicName] and RelicData[slot.relicName].rarity
 	prompt:SetAttribute("Rarity", rarity)
 	prompt:SetAttribute("Style", promptStyle)
-	prompt:SetAttribute("UserText", ("%d Coins"):format(slot.price))
-	prompt:SetAttribute("UserTextColor", Color3.fromRGB(255, 170, 0))
+	prompt:SetAttribute("UserText", STALL_PRICE_FORMAT:format(slot.price))
+	prompt:SetAttribute("UserTextColor", STALL_PRICE_COLOR)
 	self._pedestalsByPrompt[prompt] = {
 		pedestal = pedestal,
 		roomId = roomId,

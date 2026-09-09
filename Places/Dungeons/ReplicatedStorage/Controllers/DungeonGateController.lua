@@ -514,6 +514,12 @@ function DungeonGateController:KnitStart()
 	end)
 end
 
+-- How long this client's gate slam (OnGateCrossed) tween runs. The local
+-- re-fog (FogOfWarController) starts its beat when the slam lands.
+function DungeonGateController:GetGateSlamSeconds(): number
+	return SLAM_TWEEN_SECONDS
+end
+
 function DungeonGateController:KnitInit() end
 
 return DungeonGateController

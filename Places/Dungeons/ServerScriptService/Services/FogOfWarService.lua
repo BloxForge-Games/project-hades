@@ -43,6 +43,14 @@
 	reach an unrevealed chunk (the gate is shut), and keeping collision
 	means the reveal never drops someone through geometry they were
 	standing on.
+
+	LEAVING A ROOM BEHIND (LOCAL): the reveal is permanent on the server,
+	but once a player is through a gate that sealed behind them (or the
+	encounter intro pulled them into an arena) the rooms behind go dark
+	again on THEIR client only -- LeaveRoomsBehind sends the trail to
+	FogOfWarController, which applies the same hideable rules locally.
+	The rules themselves live in Shared/Functions/Dungeon/fogHideables so
+	the two sides cannot drift.
 ]]
 
 --[ Roblox Services ]--
@@ -53,22 +61,11 @@ local TweenService = game:GetService("TweenService")
 --[ Imports ]--
 
 local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local fogHideables = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.fogHideables)
 
 local DungeonService
 
 --[ Constants ]--
-
--- The structural shell, kept visible in an unrevealed chunk. Matched on
--- DIRECT CHILDREN of the room model (the authored prefab layout), so a
--- Wall's own Decals and Textures ride along with it.
---
--- ExitGate is structural on purpose: hidden, a shut gate reads as an open
--- doorway you inexplicably cannot walk through.
-local STRUCTURE_NAMES: { [string]: boolean } = {
-	Floor = true,
-	Wall = true,
-	ExitGate = true,
-}
 
 -- Reveal fade. Long enough to read as a room lighting up, short enough
 -- that it is over before a player has walked two steps in.
@@ -88,7 +85,12 @@ local ROOM_REVEALED_ATTRIBUTE = "FogRevealed"
 
 local FogOfWarService = Knit.CreateService({
 	Name = "FogOfWarService",
-	Client = {},
+	Client = {
+		-- (to one player, or broadcast) { rooms: {Model}, buildings: {Model},
+		-- delaySeconds: number, afterGateClose: boolean } -- see
+		-- LeaveRoomsBehind.
+		OnRoomsLeftBehind = Knit.CreateSignal(),
+	},
 
 	-- [roomId] = true once revealed. Rebuilt per floor; the guard that
 	-- makes OnRoomEntered's per-player fan-out reveal exactly once.
@@ -97,36 +99,10 @@ local FogOfWarService = Knit.CreateService({
 
 --[ Private ]--
 
--- The numeric property this instance fades on, or nil when it is not a
--- numeric-fade class.
-local function numericProperty(instance: Instance): string?
-	if instance:IsA("BasePart") then
-		return "Transparency"
-	elseif instance:IsA("Decal") then
-		-- Textures are Decals, so this covers both.
-		return "Transparency"
-	elseif instance:IsA("Light") then
-		return "Brightness"
-	elseif instance:IsA("Sound") then
-		return "Volume"
-	end
-	return nil
-end
-
--- True for the flip-at-reveal classes. ParticleEmitter / Beam / Trail /
--- Fire / Smoke / Sparkles all inherit nothing useful in common, so the
--- test is explicit.
-local function isBooleanHidden(instance: Instance): boolean
-	return instance:IsA("ParticleEmitter")
-		or instance:IsA("Beam")
-		or instance:IsA("Trail")
-		or instance:IsA("Fire")
-		or instance:IsA("Smoke")
-		or instance:IsA("Sparkles")
-		or instance:IsA("ProximityPrompt")
-		or instance:IsA("Highlight")
-		or instance:IsA("LayerCollector") -- BillboardGui / SurfaceGui / ScreenGui
-end
+-- The classification (what fades on which property, what flips) is the
+-- shared fogHideables module -- the client re-fog uses the same one.
+local numericProperty = fogHideables.numericProperty
+local isBooleanHidden = fogHideables.isBooleanHidden
 
 -- Hides ONE instance, caching its authored value first. Idempotent: an
 -- instance that already carries a cache attribute is left alone, so a
@@ -138,8 +114,7 @@ local function hideInstance(instance: Instance)
 		if instance:GetAttribute(FOG_NUMBER_ATTRIBUTE) == nil then
 			instance:SetAttribute(FOG_NUMBER_ATTRIBUTE, (instance :: any)[property])
 		end
-		-- Transparency hides at 1; Brightness and Volume hide at 0.
-		(instance :: any)[property] = if property == "Transparency" then 1 else 0
+		(instance :: any)[property] = fogHideables.hiddenValue(property)
 		return
 	end
 
@@ -172,21 +147,10 @@ local function revealInstance(instance: Instance)
 	end
 end
 
--- Every non-structural descendant of a room model, in one flat list. The
--- skip is by DIRECT CHILD name, so a whole Floor / Wall / ExitGate subtree
--- (its Decals, its Textures) is passed over as a unit.
+-- Every non-structural descendant of a room model, in one flat list
+-- (fogHideables owns the structural-shell rule).
 function FogOfWarService:_collectHideables(roomModel: Model): { Instance }
-	local hideables = {}
-	for _, child in roomModel:GetChildren() do
-		if STRUCTURE_NAMES[child.Name] then
-			continue
-		end
-		table.insert(hideables, child)
-		for _, descendant in child:GetDescendants() do
-			table.insert(hideables, descendant)
-		end
-	end
-	return hideables
+	return fogHideables.collectRoomHideables(roomModel)
 end
 
 -- Hides one chunk (and its Treasure branch, which hangs off the same
@@ -257,6 +221,50 @@ end
 -- client reads the room model's attribute instead).
 function FogOfWarService:IsRoomRevealed(roomId: number): boolean
 	return self._revealed[roomId] == true
+end
+
+-- Tells `target` (one player, or everyone when nil) that `rooms` are
+-- behind them for good: their client re-fogs each room's model, its
+-- Treasure branch and its relocated buildings, LOCALLY, `delaySeconds`
+-- later (+ the client's own gate-slam tween when `afterGateClose`). The
+-- client is idempotent per model, so sending the whole trail on every
+-- crossing is fine and self-healing.
+function FogOfWarService:LeaveRoomsBehind(
+	target: Player?,
+	rooms: { any },
+	delaySeconds: number,
+	afterGateClose: boolean
+)
+	local roomModels = {}
+	local buildings = {}
+	for _, room in rooms do
+		if room.model and room.model.Parent then
+			table.insert(roomModels, room.model)
+		end
+		if room.branch and room.branch.model and room.branch.model.Parent then
+			table.insert(roomModels, room.branch.model)
+		end
+		for _, building in room.buildings or {} do
+			if building.Parent then
+				table.insert(buildings, building)
+			end
+		end
+	end
+	if #roomModels == 0 and #buildings == 0 then
+		return
+	end
+
+	local payload = {
+		rooms = roomModels,
+		buildings = buildings,
+		delaySeconds = delaySeconds,
+		afterGateClose = afterGateClose,
+	}
+	if target then
+		self.Client.OnRoomsLeftBehind:Fire(target, payload)
+	else
+		self.Client.OnRoomsLeftBehind:FireAll(payload)
+	end
 end
 
 --[ Lifecycle ]--

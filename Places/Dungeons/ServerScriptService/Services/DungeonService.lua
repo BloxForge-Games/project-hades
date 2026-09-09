@@ -45,6 +45,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 
 local ZombieSpawnService -- resolved in KnitStart
 local EncounterService -- resolved in KnitStart
+local FogOfWarService -- resolved in KnitStart
 local UserNotificationService -- resolved in KnitStart
 local LifeService -- resolved in KnitStart
 local PlayerEventService
@@ -139,6 +140,14 @@ local GATE_CROSS_LATERAL_MARGIN_STUDS = 4
 local GATE_CROSS_POLL_SECONDS = 0.15
 local GATE_OPEN_TWEEN_SECONDS = 0.5
 local GATE_CLOSE_TWEEN_SECONDS = 0.35
+-- LOCAL RE-FOG of the rooms left behind (FogOfWarService:LeaveRoomsBehind
+-- -> FogOfWarController). The beat after the way back shuts:
+--   * gate crossing: this many seconds after the crosser's own gate-slam
+--     tween lands (the client adds its slam duration);
+--   * arena intro: this many seconds after the intro's fade-to-black has
+--     the party inside (fade is 1s, so the rooms go dark at 2s, unseen).
+local LEAVE_BEHIND_DELAY_SECONDS = 1
+local ARENA_LEAVE_BEHIND_DELAY_SECONDS = 2
 local GATE_RISE_EXTRA_STUDS = 2 -- raised height = gate height + this
 local GATE_VISUALS_FADE_SECONDS = 0.3 -- highlight + billboard fade in / fade out
 local GATE_HIGHLIGHT_FILL_TRANSPARENCY = 0.65
@@ -154,10 +163,12 @@ local AUTO_GENERATE_DELAY = 5
 
 local TRAPS_FOLDER_NAME = "Traps"
 local TRAP_SPAWN_CHANCE = 0.75
+-- Components/Trap's tag (not in TagList: the component declares it inline).
+local TRAP_TAG = "Trap"
 -- Same coin flip for the chunk's authored buildings (pillars): each one
 -- spawns with this chance, before the survivors move to Map.Buildings
 -- (_relocateChunkBuildings).
-local BUILDING_SPAWN_CHANCE = 1 -- 1 = every authored pillar spawns (no roll)
+local BUILDING_SPAWN_CHANCE = TRAP_SPAWN_CHANCE
 local AUTO_GENERATE_DIFFICULTY = "Normal"
 
 -- Join landing timeline. The character spawns at the off-map staging spawn, is
@@ -1060,6 +1071,17 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 				-- gate and turns collision on. Everyone still behind keeps
 				-- an open gate on their screen.
 				self.Client.OnGateCrossed:Fire(player, gate, gate.CFrame, GATE_CLOSE_TWEEN_SECONDS)
+				-- ...and, a beat after the slam, everything behind that gate
+				-- goes dark for them (the whole cleared trail, not just this
+				-- segment: idempotent on the client).
+				if FogOfWarService then
+					FogOfWarService:LeaveRoomsBehind(
+						player,
+						self:_roomsUpTo(lastChunk.id),
+						LEAVE_BEHIND_DELAY_SECONDS,
+						true
+					)
+				end
 			else
 				allCrossed = false
 				if desyncedFolder and character.Parent ~= desyncedFolder then
@@ -1330,6 +1352,21 @@ function DungeonService:_areSegmentZombiesCleared(segmentId: number): boolean
 	return true
 end
 
+-- Stamps every Trap model in the room's chunk as disabled: the server Trap
+-- component reads the attribute at proc time and stays quiet. Idempotent;
+-- called when a segment's gate opens and when an arena's encounter falls.
+function DungeonService:_disableRoomTraps(room)
+	local model = room and room.model
+	if not model then
+		return
+	end
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("Model") and CollectionService:HasTag(descendant, TRAP_TAG) then
+			descendant:SetAttribute(Attributes.TrapDisabled, true)
+		end
+	end
+end
+
 -- Finds the last chunk of the given segment.
 function DungeonService:_getSegmentLastChunk(segmentId: number)
 	local dungeon = self._activeDungeon
@@ -1362,6 +1399,15 @@ function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect
 	end
 
 	self._openedSegments[segmentId] = true
+
+	-- The segment is done: its traps go inert (Attributes.TrapDisabled).
+	-- Every chunk of the segment, not just the last -- a player walking
+	-- back through a cleared chamber should not eat spikes.
+	for _, room in self._activeDungeon.rooms do
+		if room.segmentId == segmentId then
+			self:_disableRoomTraps(room)
+		end
+	end
 
 	-- Post-Boss path: dungeon complete, gate opens visually.
 	if lastChunk.roomType == RoomTypes.Boss then
@@ -1474,6 +1520,22 @@ function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect
 		self:_setupGateTrigger(lastChunk.model, lastChunk.id + 1, false)
 	end
 	self.Signals.OnSegmentCleared:Fire(self._activeDungeon, lastChunk)
+end
+
+-- Every mainline room up to and including `roomId` -- the trail behind a
+-- player who just left room `roomId`. For FogOfWarService:LeaveRoomsBehind.
+function DungeonService:_roomsUpTo(roomId: number): { any }
+	local out = {}
+	local dungeon = self._activeDungeon
+	if not dungeon then
+		return out
+	end
+	for _, room in dungeon.rooms do
+		if room.id <= roomId then
+			table.insert(out, room)
+		end
+	end
+	return out
 end
 
 -- The APPROACH gate (the cleared room's ExitGate in front of a miniboss /
@@ -2961,6 +3023,7 @@ function DungeonService:KnitStart()
 	PlayerEventService = Knit.GetService("PlayerEventService")
 	CameraShakeService = Knit.GetService("CameraShakeService")
 	CollisionGroupService = Knit.GetService("CollisionGroupService")
+	FogOfWarService = Knit.GetService("FogOfWarService")
 
 	-- Run loop: the boss's rewards have dropped -> portal + vote (or the
 	-- final-dungeon hook).
@@ -2974,6 +3037,18 @@ function DungeonService:KnitStart()
 	-- behind them is done (see _markApproachGatePassed).
 	EncounterService.OnEncounterIntroStarted:Connect(function(_kind: string, room)
 		self:_markApproachGatePassed(room)
+		-- The whole party is pulled into the arena: everything before it
+		-- goes dark for everyone, once the fade-to-black has them inside.
+		if FogOfWarService and room and room.id then
+			FogOfWarService:LeaveRoomsBehind(nil, self:_roomsUpTo(room.id - 1), ARENA_LEAVE_BEHIND_DELAY_SECONDS, false)
+		end
+	end)
+
+	-- The arena is won: its traps go inert right away, not only when the
+	-- gate opens later (the miniboss gate waits on chests / a countdown,
+	-- the boss gate never opens), so looting the arena is safe.
+	EncounterService.OnEncounterDefeated:Connect(function(_kind: string, room)
+		self:_disableRoomTraps(room)
 	end)
 
 	self.Signals.OnDungeonGenerated:Connect(function()

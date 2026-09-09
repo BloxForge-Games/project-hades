@@ -67,15 +67,13 @@ local BUILDING_UPWARD_KICK = 1
 local BUILDING_SPIN_RANGE = 90 -- angular impulse per axis, scaled by mass
 -- Broken pieces keep their hue and drop to this brightness (same value the
 -- Breakable component uses). Lower = darker.
-local BUILDING_DARKEN_VALUE = 0.2
+local BUILDING_DARKEN_VALUE = 0.35
 -- SUPPORT parts: any Destructable part whose name starts with this (Support,
 -- Support1, ...) holds the building up. Breaking one collapses every other
--- breakable part of that building, lowest first, one every
--- BUILDING_COLLAPSE_STAGGER_SECONDS -- so a pillar shot at the base comes
--- down from the base up instead of leaving its top floating. Non-support
--- parts break alone. Authored per prefab: name the bottom pieces.
+-- breakable part of that building in the SAME frame -- the whole pillar
+-- goes at once instead of leaving its top floating. Non-support parts
+-- break alone. Authored per prefab: name the bottom pieces.
 local BUILDING_SUPPORT_PREFIX = "Support"
-local BUILDING_COLLAPSE_STAGGER_SECONDS = 0.05
 local AURA_DELAY = 1
 -- Grace between an aura being CAST and its first swing. The aura's rig
 -- (Susanoo's armour) streams in and plays its own activation beat, and an
@@ -281,8 +279,8 @@ function VFXService:RegisterHitbox(
 			partsTable = partsTable or {}
 			partsTable[#partsTable + 1] = part
 
-			-- A SUPPORT went: the rest of the building comes down after it
-			-- (its own client cue per piece, on the stagger).
+			-- A SUPPORT went: the rest of the building comes down with it
+			-- (one client cue for the whole batch).
 			if string.sub(part.Name, 1, #BUILDING_SUPPORT_PREFIX) == BUILDING_SUPPORT_PREFIX then
 				self:_collapseBuilding(model, cframe.Position)
 			end
@@ -360,9 +358,9 @@ function VFXService:_breakBuildingPart(part: BasePart, origin: Vector3)
 end
 
 -- A support part broke: every remaining breakable part of `model` comes
--- down too, lowest first, one per BUILDING_COLLAPSE_STAGGER_SECONDS, each
--- flung outward from `origin`. Parts already broken have left the model,
--- so a second support going mid-collapse just finds fewer pieces.
+-- down with it, all in this frame, each flung outward from `origin`, with
+-- ONE client cue for the batch. Parts already broken have left the model,
+-- so a second support going in the same hit just finds fewer pieces.
 function VFXService:_collapseBuilding(model: Model, origin: Vector3)
 	local remaining = {}
 	for _, descendant in model:GetDescendants() do
@@ -373,20 +371,11 @@ function VFXService:_collapseBuilding(model: Model, origin: Vector3)
 	if #remaining == 0 then
 		return
 	end
-	table.sort(remaining, function(a, b)
-		return a.Position.Y < b.Position.Y
-	end)
 
-	task.spawn(function()
-		for _, piece in remaining do
-			task.wait(BUILDING_COLLAPSE_STAGGER_SECONDS)
-			-- Still standing? A concurrent hit may have taken it already.
-			if piece.Parent ~= nil and piece:IsDescendantOf(model) then
-				self:_breakBuildingPart(piece, origin)
-				self.Client.OnBuildingBroken:FireAll({ piece })
-			end
-		end
-	end)
+	for _, piece in remaining do
+		self:_breakBuildingPart(piece, origin)
+	end
+	self.Client.OnBuildingBroken:FireAll(remaining)
 end
 
 function VFXService:CreateHitbox(

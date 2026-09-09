@@ -17,11 +17,9 @@ local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicN
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
-local NPCDialogueController
 local CutsceneController
 
 Knit.OnStart():andThen(function()
-	NPCDialogueController = Knit.GetController("NPCDialogueController")
 	CutsceneController = Knit.GetController("CutsceneController")
 end)
 
@@ -34,20 +32,19 @@ return function(player: Player, preload: boolean?)
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooArmorAnimation")
 	)
 
-	task.spawn(function()
-		if player == Players.LocalPlayer and not preload then
-			NPCDialogueController:NewDialogue("I'll show you my true power.", 1.75)
-		end
-	end)
+	-- The cast line ("I'll show you my true power.") is MagicData.dialogue,
+	-- played by PlayerDialogueInterface off the cast replication.
 
 	susanooAnimation:Play()
-	susanooAnimation:AdjustSpeed(0.5)
+	susanooAnimation:AdjustSpeed(0.3)
 
 	if player == Players.LocalPlayer and not preload then
 		task.defer(function()
-			-- Bars + strong vignette for MagicData.cutscene.duration; the
-			-- "Susanoo" camera path under Cutscenes/ is no longer played.
-			CutsceneController:PlayMagicCutscene(MagicNames["Susanoo Armor"])
+			-- The "Susanoo" camera path (Cutscenes/Susanoo: two waypoints
+			-- pivoted to the caster, GameAssets.CutsceneWaypoints
+			-- .SusanooWaypoints). PlayCutscene brings the bars, the lock,
+			-- the camera bob and the wall hide with it.
+			CutsceneController:PlayCutscene("Susanoo")
 		end)
 
 		ReplicatedStorage.GameAssets.Sounds.SusanooCast:Play()
