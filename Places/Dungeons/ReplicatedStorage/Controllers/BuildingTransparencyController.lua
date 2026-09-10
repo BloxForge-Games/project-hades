@@ -36,7 +36,6 @@ local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
-local getMobOcclusionPoints = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getMobOcclusionPoints)
 
 local camera: Camera = workspace.CurrentCamera
 
@@ -213,11 +212,6 @@ function BuildingTransparencyController:_BuildingProximityFunction(overlapParams
 	end
 	for _, offset in PILLAR_CAST_OFFSETS do
 		table.insert(castPoints, root.Position + offset)
-	end
-	-- Nearby live mobs count too: a pillar hiding a mob fades whole, as it
-	-- would for you.
-	for _, point in getMobOcclusionPoints() do
-		table.insert(castPoints, point)
 	end
 	local now = os.clock()
 	for _, part in camera:GetPartsObscuringTarget(castPoints, self._buildingIgnoreList) do

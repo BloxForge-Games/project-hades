@@ -283,14 +283,15 @@ function CharacterHighlightController:_resolvePlayerHighlight(character: Model, 
 	end
 
 	-- Ramp the invulnerable intensity toward the attribute (1 / 0). NOT
-	-- while a magic cutscene is playing (Susanoo, Domain Expansion): the
-	-- cast's own presentation is the feedback there, and the bars-and-
-	-- vignette frame should not carry a white glow. The glow comes up as
-	-- the cutscene ends and covers the grace tail of the window.
-	local invulnTarget = if character:GetAttribute(Attributes.Invulnerable) == true
-			and character:GetAttribute(Attributes.MagicCutscenePlaying) ~= true
-		then 1
-		else 0
+	-- during ANY cutscene: a cinematic framed on your character should not
+	-- also paint it white. That covers the magic casts (Susanoo, Domain
+	-- Expansion), whose own presentation is the feedback, and the encounter
+	-- intro / landing / event beats, which grant no i-frames but can
+	-- overlap one. The glow comes up as the cutscene ends and covers the
+	-- grace tail of the window.
+	local inCutscene = character:GetAttribute(Attributes.CutscenePlaying) == true
+		or character:GetAttribute(Attributes.MagicCutscenePlaying) == true
+	local invulnTarget = if character:GetAttribute(Attributes.Invulnerable) == true and not inCutscene then 1 else 0
 	local step = deltaTime / INVULN_FADE_DURATION
 	local diff = invulnTarget - (self._playerInvulnIntensity or 0)
 	if math.abs(diff) <= step then

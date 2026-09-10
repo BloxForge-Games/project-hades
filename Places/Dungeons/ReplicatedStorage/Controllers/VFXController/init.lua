@@ -83,8 +83,38 @@ function VFXController:GetRegistry(): { [string]: table }
 	return self._vfxRegistry
 end
 
+-- Runs one effect module for `player`. The single entry point for both
+-- paths: the caster's own immediate run (PlayVFX) and everyone else's
+-- replicated one (OnVFXReplicated).
+function VFXController:_runVFXModule(player: Player, vfxName: string, cframe: CFrame)
+	local moduleName = vfxName:gsub(" ", "")
+	local vfxFunction = self._vfxRegistry[moduleName]
+	if not vfxFunction then
+		warn("[VFXController] No VFX found for name:", moduleName)
+		return
+	end
+	vfxFunction(player, false, cframe)
+end
+
+-- The caster runs their OWN copy of the effect NOW, and skips the copy the
+-- server broadcasts back (see the OnVFXReplicated handler). Before this the
+-- caster waited a full client -> server -> client round trip to see their
+-- own cast animation, cast sound, particles and cutscene -- 0.1-0.2s of
+-- nothing after the button.
+--
+-- Safe because the caster's client was already the only one doing the
+-- authoritative work: every module gates its hitbox requests on
+-- `player == Players.LocalPlayer`, so running it here does exactly what it
+-- did before, just earlier. Mana, cooldown and ownership are still checked
+-- on the server; MagicController mirrors those checks before it gets here,
+-- so a rejected cast (a desync) is the only way to see an effect that did
+-- not land.
 function VFXController:PlayVFX(vfxName: string)
-	VFXService:OnVFXRequested(vfxName, Players.LocalPlayer.Character.HumanoidRootPart.CFrame)
+	local cframe = Players.LocalPlayer.Character.HumanoidRootPart.CFrame
+	task.spawn(function()
+		self:_runVFXModule(Players.LocalPlayer, vfxName, cframe)
+	end)
+	VFXService:OnVFXRequested(vfxName, cframe)
 end
 
 -- Mob ranged-attack projectile dispatch. Called by ZombieController
@@ -118,14 +148,15 @@ function VFXController:KnitStart()
 		end
 	end)
 
+	-- The broadcast reaches everyone, the caster included -- other listeners
+	-- (the cast dialogue strip) need the caster's own cast too -- but the
+	-- caster's effect module already ran locally in PlayVFX, so THIS client
+	-- skips its own cast here rather than playing it twice.
 	VFXService.OnVFXReplicated:Connect(function(player: Player, vfxName: string, cframe: CFrame)
-		vfxName = vfxName:gsub(" ", "")
-
-		if self._vfxRegistry[vfxName] then
-			self._vfxRegistry[vfxName](player, false, cframe)
-		else
-			warn("[VFXController] No VFX found for name:", vfxName)
+		if player == Players.LocalPlayer then
+			return
 		end
+		self:_runVFXModule(player, vfxName, cframe)
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)

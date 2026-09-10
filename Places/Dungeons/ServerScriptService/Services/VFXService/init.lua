@@ -717,6 +717,10 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 		cframe = activePlayer.Character.HumanoidRootPart.CFrame
 	end
 
+	-- EVERYONE, caster included. The caster's VFXController already ran the
+	-- effect module locally at cast time and skips it here, but other
+	-- listeners on this event (the cast dialogue strip) still need the
+	-- caster's own cast to arrive.
 	self.OnVFXReplicated:FireAll(activePlayer, vfxName, cframe)
 end
 

@@ -8,7 +8,6 @@ local packages: Folder = ReplicatedStorage.Submodules.Core.Packages
 local Knit = require(packages.Knit)
 local Janitor = require(packages.Janitor)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local getMobOcclusionPoints = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getMobOcclusionPoints)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 
 -- Parts of a Building-tagged model (pillars, the static map buildings)
@@ -208,12 +207,10 @@ function WallsTransparencyController:_InitOcclusionThread()
 			end
 		end
 
-		-- Cast to the player AND to every live mob nearby: a wall hiding a
-		-- mob fades as if you were standing there, so the through-wall
-		-- highlight is not the only cue. One engine call for all points.
-		local castPoints = getMobOcclusionPoints()
-		table.insert(castPoints, head.Position)
-		local occludedParts = camera:GetPartsObscuringTarget(castPoints, ignore)
+		-- The PLAYER only. Walls covering a mob stay solid (per design): the
+		-- through-wall highlight is the cue for a hidden mob, and fading
+		-- every wall a mob stood behind opened up too much of the room.
+		local occludedParts = camera:GetPartsObscuringTarget({ head.Position }, ignore)
 
 		local currentFrameParts = {}
 		for _, part in ipairs(occludedParts) do

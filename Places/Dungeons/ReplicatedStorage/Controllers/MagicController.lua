@@ -218,6 +218,9 @@ function MagicController:CastMagic(equipSlot: number)
 		AimController:BeginCastLock(MagicData[vfxName].duration)
 	end
 
+	-- Runs the caster's OWN effect module immediately (cast animation, cast
+	-- sound, particles, cutscene) and sends the cast to the server for
+	-- validation + everyone else. See VFXController:PlayVFX.
 	VFXController:PlayVFX(vfxName)
 
 	task.delay(MagicData[vfxName].duration, function()

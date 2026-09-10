@@ -33,6 +33,10 @@ local BOB_SPEED = 0.5
 
 -- A magic entry that opts in (MagicData.cutscene.enabled) without giving
 -- a duration gets this.
+-- How long past a magic cutscene's own length a repeat request for the
+-- SAME magic is treated as the same cast (see PlayMagicCutscene).
+local MAGIC_CUTSCENE_GUARD_EXTRA_SECONDS = 1
+
 local DEFAULT_MAGIC_CUTSCENE_SECONDS = 2
 
 -- Animation names belonging to cutscene abilities (Susanoo, Domain Expansion,
@@ -257,6 +261,23 @@ function CutsceneController:PlayMagicCutscene(magicName: string)
 	if not config or config.enabled ~= true then
 		return
 	end
+
+	-- ONE cutscene per cast. The caster starts this LOCALLY the moment they
+	-- cast (MagicController, so the cinematic is not held for a server
+	-- round trip), and the effect module asks again when the cast
+	-- replicates back -- the second ask must no-op. The guard window is the
+	-- cutscene's own length plus a beat, far below any cutscene magic's
+	-- cooldown, so a legitimate re-cast is never swallowed.
+	local now = os.clock()
+	local guardUntil = self._magicCutsceneGuard and self._magicCutsceneGuard[magicName]
+	local guardWindow = (
+		if typeof(config.duration) == "number" then config.duration else DEFAULT_MAGIC_CUTSCENE_SECONDS
+	) + MAGIC_CUTSCENE_GUARD_EXTRA_SECONDS
+	if guardUntil and now < guardUntil then
+		return
+	end
+	self._magicCutsceneGuard = self._magicCutsceneGuard or {}
+	self._magicCutsceneGuard[magicName] = now + guardWindow
 
 	local character = Players.LocalPlayer.Character
 	if not character then
