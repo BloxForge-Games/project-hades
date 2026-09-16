@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: RelicMachineService.lua
@@ -9,20 +10,28 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local ServerScriptService = game:GetService("ServerScriptService")
 local TweenService = game:GetService("TweenService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
-local DungeonService
 
-local RelicMachineService = Knit.CreateService({
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
+
+local RelicMachineService = {
 	Name = "RelicMachineService",
-	Client = {},
-})
+}
 
 --[ Imports ]--
 
@@ -51,7 +60,7 @@ local RAYCAST_DEPTH = 200 -- max studs to search downward for ground
 -- FLOOR-only ground find (findFloorBelow): a wall / gate / prop top under
 -- the point returns nil, never a Y -- so the machine can never settle up on
 -- a wall where nobody can reach it.
-function RelicMachineService:_findGroundY(originXZ: Vector3): number?
+function RelicMachineService._findGroundY(_self: typeof(RelicMachineService), originXZ: Vector3): number?
 	local hit = findFloorBelow(originXZ.X, originXZ.Z, originXZ.Y + RAYCAST_HEIGHT, RAYCAST_DEPTH)
 	return hit and hit.Y or nil
 end
@@ -83,7 +92,11 @@ end
 --      sitting on top, would still fail the Floor test) and fall back to the
 --      player's own feet, which are on floor by definition.
 -- Returns (position, groundY, floorPart).
-function RelicMachineService:_pickMachineLanding(hrp: BasePart, footprintRadius: number): (Vector3, number, BasePart?)
+function RelicMachineService._pickMachineLanding(
+	self: typeof(RelicMachineService),
+	hrp: BasePart,
+	footprintRadius: number
+): (Vector3, number, BasePart?)
 	local feetY = hrp.Position.Y - (hrp.Size.Y / 2) - 2
 	local _, standingFloor =
 		findFloorBelow(hrp.Position.X, hrp.Position.Z, hrp.Position.Y + RAYCAST_HEIGHT, RAYCAST_DEPTH)
@@ -119,7 +132,13 @@ end
 
 -- Drives the model from `startCFrame` to `endCFrame` via PivotTo so anchored
 -- multi-part assemblies move as one. Stops if the model is gone.
-function RelicMachineService:_animateFall(model: Model, startCFrame: CFrame, endCFrame: CFrame, duration: number)
+function RelicMachineService._animateFall(
+	_self: typeof(RelicMachineService),
+	model: Model,
+	startCFrame: CFrame,
+	endCFrame: CFrame,
+	duration: number
+)
 	local startTime = tick()
 	local connection
 	connection = RunService.Heartbeat:Connect(function()
@@ -146,8 +165,13 @@ end
 -- component reads it to force one ungated relic from each of the run's
 -- two elements, so neither element starts dead. DungeonService passes it
 -- on the first dungeon's landing; every other drop leaves it false.
-function RelicMachineService:DropMachineOnPlayer(player: Player, isRuneMachine: boolean?, isStarter: boolean?)
-	-- Skip dead / spectating players. The two callers in KnitStart iterate
+function RelicMachineService.DropMachineOnPlayer(
+	self: typeof(RelicMachineService),
+	player: Player,
+	isRuneMachine: boolean?,
+	isStarter: boolean?
+)
+	-- Skip dead / spectating players. The two callers in Start iterate
 	-- Players:GetPlayers() raw, so a teammate who died last room would
 	-- otherwise get a vending machine dropped onto their ragdoll's HRP
 	-- (or the previous-life HRP that's still parented). QA saw both
@@ -192,14 +216,15 @@ end
 -- `onLanded` fires once the fall completes, for whatever impact flourish
 -- the model wants. Returns false (having touched nothing) when the drop
 -- cannot be placed, so the caller owns cleanup of its own clone.
-function RelicMachineService:DropModelOnPlayer(
+function RelicMachineService.DropModelOnPlayer(
+	self: typeof(RelicMachineService),
 	player: Player,
 	model: Model,
 	parent: Instance,
 	onLanded: (() -> ())?
 ): boolean
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp or not model.PrimaryPart then
 		return false
 	end
@@ -233,6 +258,11 @@ function RelicMachineService:DropModelOnPlayer(
 	local startCFrame = landingCFrame + Vector3.new(0, DROP_HEIGHT, 0)
 
 	model:PivotTo(startCFrame)
+	-- Replicate the whole machine in one go: the client component reads a
+	-- dozen of its descendants right after the tagged Model appears, and
+	-- with default streaming those can arrive a frame later (the "X is not
+	-- a valid member" crash that left the prompt dead).
+	model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 	model.Parent = parent
 
 	self:_animateFall(model, startCFrame, landingCFrame, FALL_DURATION)
@@ -248,12 +278,12 @@ end
 
 --[ Initializers ]--
 
-function RelicMachineService:KnitStart()
+function RelicMachineService.Start(_self: typeof(RelicMachineService))
 	Players.PlayerRemoving:Connect(function(_player: Player) end)
 
 	-- Drop a vending machine on every player when a Combat segment is cleared.
 	-- Miniboss/other segment types are ignored — opt them in here if desired.
-	DungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, lastChunk)
+	getDungeonService().Signals.OnSegmentCleared:Connect(function(_dungeon, lastChunk)
 		if lastChunk.roomType ~= RoomTypes.Combat then
 			return
 		end
@@ -271,10 +301,6 @@ function RelicMachineService:KnitStart()
 			RelicMachineService:DropMachineOnPlayer(player)
 		end
 	end)
-end
-
-function RelicMachineService:KnitInit()
-	DungeonService = Knit.GetService("DungeonService")
 end
 
 return RelicMachineService

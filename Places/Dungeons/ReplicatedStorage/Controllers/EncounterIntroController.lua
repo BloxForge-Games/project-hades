@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: EncounterIntroController.lua
      Description:
@@ -75,29 +76,30 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ScreenFadeInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.ScreenFadeInterfaceController)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
-local EncounterService
-local ScreenFadeInterfaceController
-local CinematicInterfaceController
-local CutsceneController
 
 --[ Controller ]--
 
-local EncounterIntroController = Knit.CreateController({
+local EncounterIntroController = {
 	Name = "EncounterIntroController",
-})
+	Dependencies = { ScreenFadeInterfaceController, CinematicInterfaceController, CutsceneController } :: { any },
+}
 
 --[ Properties ]--
 
 -- Cached PlayerModule:GetControls() handle. Resolved lazily on first lock to
 -- avoid taking a require dependency on PlayerScripts at controller boot.
-EncounterIntroController._playerControls = nil
+EncounterIntroController._playerControls = nil :: any
 
 --[ Private Functions ]--
 
-function EncounterIntroController:_getHumanoid(): Humanoid?
+function EncounterIntroController._getHumanoid(_self: typeof(EncounterIntroController)): Humanoid?
 	local character = Players.LocalPlayer.Character
 	if not character then
 		return nil
@@ -107,7 +109,7 @@ end
 
 -- Lazy-loads PlayerModule:GetControls(). Returns nil if the module isn't ready
 -- yet (e.g. cinematic fires before PlayerScripts streams in) — callers no-op.
-function EncounterIntroController:_getPlayerControls()
+function EncounterIntroController._getPlayerControls(self: typeof(EncounterIntroController))
 	if self._playerControls then
 		return self._playerControls
 	end
@@ -144,7 +146,7 @@ end
 -- externally owned and skips its own release. CancelActiveAbility's
 -- preserveLock=true is belt-and-suspenders for the case where the cutscene
 -- was already mid-Play when we lock.
-function EncounterIntroController:_lockControls()
+function EncounterIntroController._lockControls(self: typeof(EncounterIntroController))
 	self._stageLocked = true
 	local character = Players.LocalPlayer.Character
 	local humanoid = self:_getHumanoid()
@@ -177,7 +179,7 @@ function EncounterIntroController:_lockControls()
 end
 
 -- Reverses _lockControls. Safe to call from any state.
-function EncounterIntroController:_unlockControls()
+function EncounterIntroController._unlockControls(self: typeof(EncounterIntroController))
 	self._stageLocked = false
 	local character = Players.LocalPlayer.Character
 
@@ -200,12 +202,12 @@ end
 -- checks this: the encounter's teleport is what CLOSES an open event
 -- dialogue, and that teardown must HAND OVER the lock instead of
 -- releasing it — otherwise the player roams the boss intro freely.
-function EncounterIntroController:IsStageLocked(): boolean
+function EncounterIntroController.IsStageLocked(self: typeof(EncounterIntroController)): boolean
 	return self._stageLocked == true
 end
 
 -- Walks the character to an absolute world-space target.
-function EncounterIntroController:_runWalkUp(targetPosition: Vector3)
+function EncounterIntroController._runWalkUp(self: typeof(EncounterIntroController), targetPosition: Vector3)
 	local humanoid = self:_getHumanoid()
 	if not humanoid then
 		return
@@ -215,35 +217,24 @@ end
 
 --[ Lifecycle ]--
 
-function EncounterIntroController:KnitInit()
-	EncounterService = Knit.GetService("EncounterService")
-end
-
-function EncounterIntroController:KnitStart()
-	ScreenFadeInterfaceController = Knit.GetController("ScreenFadeInterfaceController")
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-	CutsceneController = Knit.GetController("CutsceneController")
-
-	EncounterService.EncounterIntroFade:Connect(function(payload: { phase: string, duration: number })
-		if not payload or not ScreenFadeInterfaceController then
+function EncounterIntroController.Start(self: typeof(EncounterIntroController))
+	DungeonNetwork.EncounterIntroFade.On(function(payload: { Phase: string, Duration: number })
+		if not ScreenFadeInterfaceController then
 			return
 		end
-		if payload.phase == "in" then
+		if payload.Phase == "in" then
 			self:_lockControls()
-			ScreenFadeInterfaceController.Signals.FadeIn:Fire(payload.duration)
-		elseif payload.phase == "out" then
-			ScreenFadeInterfaceController.Signals.FadeOut:Fire(payload.duration)
+			ScreenFadeInterfaceController.Signals.FadeIn:Fire(payload.Duration)
+		elseif payload.Phase == "out" then
+			ScreenFadeInterfaceController.Signals.FadeOut:Fire(payload.Duration)
 		end
 	end)
 
-	EncounterService.EncounterIntroWalk:Connect(function(payload: { targetPosition: Vector3 })
-		if not payload or not payload.targetPosition then
-			return
-		end
-		self:_runWalkUp(payload.targetPosition)
+	DungeonNetwork.EncounterIntroWalk.On(function(targetPosition: Vector3)
+		self:_runWalkUp(targetPosition)
 	end)
 
-	EncounterService.EncounterIntroEnd:Connect(function()
+	DungeonNetwork.EncounterIntroEnd.On(function()
 		self:_unlockControls()
 	end)
 
@@ -253,11 +244,11 @@ function EncounterIntroController:KnitStart()
 	-- dead mob via IsometricCameraService directly. _unlockControls on
 	-- EncounterOutroEnd lowers the bars + restores controls once the camera
 	-- has returned to the player.
-	EncounterService.EncounterOutroStart:Connect(function()
+	DungeonNetwork.EncounterOutroStart.On(function()
 		self:_lockControls()
 	end)
 
-	EncounterService.EncounterOutroEnd:Connect(function()
+	DungeonNetwork.EncounterOutroEnd.On(function()
 		self:_unlockControls()
 	end)
 
@@ -266,11 +257,11 @@ function EncounterIntroController:KnitStart()
 	-- controls + cancels in-flight dashes / ability cutscenes, and the server
 	-- pans the camera onto the transforming boss via IsometricCameraService.
 	-- _unlockControls on EncounterPhaseEnd restores everything.
-	EncounterService.EncounterPhaseStart:Connect(function()
+	DungeonNetwork.EncounterPhaseStart.On(function()
 		self:_lockControls()
 	end)
 
-	EncounterService.EncounterPhaseEnd:Connect(function()
+	DungeonNetwork.EncounterPhaseEnd.On(function()
 		self:_unlockControls()
 	end)
 end

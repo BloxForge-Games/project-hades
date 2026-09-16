@@ -1,0 +1,15 @@
+# Toolchain for project-hades, managed by Rokit (replaces aftman.toml).
+# `rokit install` from the repo root installs every pin below; the tools
+# then resolve from any subdirectory. The core submodule carries its own
+# rokit.toml with the same pins plus Wally, since packages are installed
+# from inside it.
+#
+# stylua is pinned to the version the repo is actually formatted with
+# (bfg-core's 2.1.0); the old root pin (0.15.2) had drifted from it.
+
+[tools]
+rojo = "rojo-rbx/rojo@7.5.1"
+selene = "Kampfkarren/selene@0.28.0"
+stylua = "JohnnyMorganz/StyLua@2.1.0"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.69.0"
+blink = "1Axen/blink@0.18.8"

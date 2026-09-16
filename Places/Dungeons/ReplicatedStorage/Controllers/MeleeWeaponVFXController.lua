@@ -1,48 +1,34 @@
+--!strict
 --[[
-     Author(s): 
-     Module: MeleeWeaponVFXController.lua
-     Description:
-]]
+	Module: Controllers/MeleeWeaponVFXController.lua
+	Description:
+	Plays other players' melee swing effects from the server's
+	Combat.MeleeSwingReplicated broadcast; the local player's own swing
+	runs directly from the MeleeWeapon component.
 
---[ Roblox Services ]--
+	A Blitz module with no dependencies.
+]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
---[ Exports & Types & Defaults ]--
-
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local MeleeWeaponVFXData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MeleeWeaponVFXData)
-local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
 
-local MeleeWeaponVFXService
-
-local MeleeWeaponVFXController = Knit.CreateController({
+local MeleeWeaponVFXController = {
 	Name = "MeleeWeaponVFXController",
-	Client = {},
-})
+}
 
---[ Imports ]--
-
---[ Constants ]--
-
---[ Properties ]--
-
---[ Private Functions ]--
-
---[ Public Functions ]--
-
---[ Initializers ]--
-
-function MeleeWeaponVFXController:KnitStart()
-	MeleeWeaponVFXService = Knit.GetService("MeleeWeaponVFXService")
-
-	MeleeWeaponVFXService.OnReplicateFXRequested:Connect(
-		function(character: Model, iteration: number, weaponType: MeleeWeaponTypes.MeleeWeaponTypes)
-			MeleeWeaponVFXData[iteration](character, false, nil, weaponType)
+function MeleeWeaponVFXController.Start(_self: typeof(MeleeWeaponVFXController))
+	Combat.MeleeSwingReplicated.On(function(payload)
+		local character = payload.Character
+		if not character then
+			return
 		end
-	)
+		local play = MeleeWeaponVFXData[payload.Iteration]
+		if play then
+			play(character, false, nil, payload.WeaponType)
+		end
+	end)
 end
-
-function MeleeWeaponVFXController:KnitInit() end
 
 return MeleeWeaponVFXController

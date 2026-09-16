@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: AuraServer/Frostburst.lua
 	Description:
@@ -21,19 +22,21 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+-- RelicService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local relicServiceLazy: any = nil
+local function getRelicService(): any
+	if relicServiceLazy == nil then
+		relicServiceLazy = (require :: any)(ServerScriptService.Services.RelicService)
+	end
+	return relicServiceLazy
+end
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local vfxFade = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxFade)
-
-local TextIndicatorService
-local RelicService
-
-Knit.OnStart():andThen(function()
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	RelicService = Knit.GetService("RelicService")
-end)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -102,7 +105,7 @@ end
 
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = (marker:GetAttribute(EXPIRY_ATTRIBUTE) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
 		if remaining <= 0 then
 			return
 		end
@@ -111,7 +114,7 @@ local function awaitExpiry(marker: Instance)
 end
 
 return function(player: Player, character: Model, duration: number?)
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp or hrp:FindFirstChild(AuraNames.Frostburst) ~= nil then
 		return
 	end
@@ -153,13 +156,9 @@ return function(player: Player, character: Model, duration: number?)
 	end
 
 	task.delay(math.random(1, 15) / 100, function()
-		if TextIndicatorService and character:FindFirstChild("Head") then
-			TextIndicatorService:ShowIndicator(
-				player,
-				character.Head,
-				AuraNames.Frostburst .. "!",
-				Color3.fromRGB(255, 255, 255)
-			)
+		local head = character:FindFirstChild("Head") :: BasePart?
+		if TextIndicatorService and head then
+			TextIndicatorService:ShowIndicator(player, head, AuraNames.Frostburst .. "!", Color3.fromRGB(255, 255, 255))
 		end
 	end)
 
@@ -174,8 +173,8 @@ return function(player: Player, character: Model, duration: number?)
 	local glyph: Model? = nil
 	local glyphFadeTargets: { vfxFade.FadeTarget }? = nil
 	if
-		RelicService
-		and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
+		getRelicService()
+		and (getRelicService():GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
 	then
 		glyph, glyphFadeTargets = spawnGlyph(character, hrp)
 	end

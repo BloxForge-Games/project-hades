@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: LandingController.lua
 	Description:
@@ -13,7 +14,7 @@
 	                    server-cued screen fade — the screen stays up until the
 	                    server has staged the player, so there's no gap.
 	  OnLandingImpact → (broadcast) landing-impact VFX hook. NOT consumed here —
-	                    listen to DungeonService.OnLandingImpact in your own VFX
+	                    listen to DungeonNetwork.LandingImpact in your own VFX
 	                    controller and spawn dust / shake at the landing player.
 	  OnLandingEnd    → restore controls.
 
@@ -35,20 +36,22 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local PreloadInterface = require(ReplicatedStorage.Submodules.Core.Source.Interfaces.PreloadInterface)
+local PreloadController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PreloadController)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local ScreenFadeInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.ScreenFadeInterfaceController)
+local RelicRenderController =
+	require(ReplicatedStorage.Controllers.RelicController.SubControllers.RelicRenderController)
+local WeaponLoadoutController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.WeaponLoadoutController)
+local ToolBarController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ToolBarController)
+local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
-
-local DungeonService
-local PreloadInterface
-local ScreenFadeInterfaceController
-local RelicRenderController
-local WeaponLoadoutController
-local ToolBarController
-local PreloadController
-local PlayerEventController
-local CinematicInterfaceController
-local InterfaceManagerController
 
 --[ Constants ]--
 
@@ -80,13 +83,24 @@ local LANDING_SNAP_TOLERANCE_STUDS = 2
 
 --[ Controller ]--
 
-local LandingController = Knit.CreateController({
+local LandingController = {
 	Name = "LandingController",
-})
+	Dependencies = {
+		InterfaceManagerController,
+		PreloadInterface,
+		PreloadController,
+		CinematicInterfaceController,
+		ScreenFadeInterfaceController,
+		RelicRenderController,
+		WeaponLoadoutController,
+		ToolBarController,
+		PlayerEventController,
+	} :: { any },
+}
 
 -- Cached PlayerModule:GetControls() handle (lazy, same pattern as
 -- EncounterIntroController). Resolved on first lock.
-LandingController._playerControls = nil
+LandingController._playerControls = nil :: any
 -- True once the loading screen has been dismissed (either by the server cue or
 -- the fallback). Guards the fallback from re-hiding an already-gone screen.
 LandingController._revealed = false
@@ -96,7 +110,7 @@ LandingController._transitionFadeActive = false
 
 --[ Private Functions ]--
 
-function LandingController:_getPlayerControls()
+function LandingController._getPlayerControls(self: typeof(LandingController))
 	if self._playerControls then
 		return self._playerControls
 	end
@@ -117,7 +131,7 @@ end
 -- default); `false` = don't touch the bars at all (used for the run-
 -- transition fade-in, where the screen goes black anyway -- the bars come
 -- in on the REVEAL instead, timed to the fade-out).
-function LandingController:_lockControls(barsDelay: (number | boolean)?)
+function LandingController._lockControls(self: typeof(LandingController), barsDelay: (number | boolean)?)
 	local character = Players.LocalPlayer.Character
 
 	local controls = self:_getPlayerControls()
@@ -149,7 +163,7 @@ function LandingController:_lockControls(barsDelay: (number | boolean)?)
 	end
 end
 
-function LandingController:_unlockControls()
+function LandingController._unlockControls(self: typeof(LandingController))
 	local character = Players.LocalPlayer.Character
 
 	local controls = self:_getPlayerControls()
@@ -178,7 +192,7 @@ end
 -- The server's landing teleport is a CFrame write on a root THIS client owns;
 -- OnLandingStart carries the target so the owner can make the authoritative
 -- write itself if anything left it off the spot.
-function LandingController:_snapToLanding(targetCFrame: CFrame?)
+function LandingController._snapToLanding(_self: typeof(LandingController), targetCFrame: CFrame?)
 	if typeof(targetCFrame) ~= "CFrame" then
 		return
 	end
@@ -196,7 +210,7 @@ end
 
 -- Dismisses the loading screen. Idempotent — safe to call from both the server
 -- cue and the fallback.
-function LandingController:_reveal()
+function LandingController._reveal(self: typeof(LandingController))
 	if self._revealed then
 		return
 	end
@@ -208,25 +222,13 @@ end
 
 --[ Lifecycle ]--
 
-function LandingController:KnitInit()
-	DungeonService = Knit.GetService("DungeonService")
-
-	-- KnitInit, not KnitStart: the HUD interfaces mount during their own
-	-- KnitInit and read this scope for their initial state.
-	InterfaceManagerController = Knit.GetController("InterfaceManagerController")
+function LandingController.Init(_self: typeof(LandingController))
+	-- Init, not Start: the HUD interfaces mount during their own
+	-- Init and read this scope for their initial state.
 	InterfaceManagerController:Hide(InterfaceScopes.HUD, LANDING_SOURCE)
 end
 
-function LandingController:KnitStart()
-	PreloadInterface = Knit.GetController("PreloadInterface")
-	PreloadController = Knit.GetController("PreloadController")
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-	ScreenFadeInterfaceController = Knit.GetController("ScreenFadeInterfaceController")
-	RelicRenderController = Knit.GetController("RelicRenderController")
-	WeaponLoadoutController = Knit.GetController("WeaponLoadoutController")
-	ToolBarController = Knit.GetController("ToolBarController")
-	PlayerEventController = Knit.GetController("PlayerEventController")
-
+function LandingController.Start(self: typeof(LandingController))
 	-- Lock from the FIRST character load, not from the landing cue. The
 	-- window between spawn and OnLandingStart (preload + the server's
 	-- staging delays) used to take input: a melee swing's dash-push or a
@@ -241,7 +243,7 @@ function LandingController:KnitStart()
 		end
 	end)
 
-	DungeonService.OnLandingStart:Connect(function(targetCFrame: CFrame?)
+	DungeonNetwork.LandingStart.On(function(targetCFrame: CFrame?)
 		self:_snapToLanding(targetCFrame)
 		if self._transitionFadeActive then
 			-- Dungeon 2 / 3: the screen is black from the run transition; the
@@ -261,19 +263,16 @@ function LandingController:KnitStart()
 	-- map is torn down and rebuilt behind it, then OnLandingStart lands us
 	-- and fades back in. Dead / extracted players don't land, so their fade
 	-- is released on the "out" phase the server sends after generation.
-	DungeonService.OnRunTransition:Connect(function(payload)
-		if typeof(payload) ~= "table" then
-			return
-		end
-		if payload.phase == "in" then
+	DungeonNetwork.RunTransition.On(function(payload: { Phase: string, Duration: number })
+		if payload.Phase == "in" then
 			self._transitionFadeActive = true
 			-- Lock + relic hide only; NO bars here (they'd animate under the
 			-- black and be sitting there at the reveal).
 			self:_lockControls(false)
-			ScreenFadeInterfaceController.Signals.FadeIn:Fire(payload.duration)
+			ScreenFadeInterfaceController.Signals.FadeIn:Fire(payload.Duration)
 			-- Once fully black: swap to the PRIMARY weapon (same as pressing 1)
 			-- so everyone lands in the next dungeon sword-out, unseen.
-			task.delay(payload.duration or 0, function()
+			task.delay(payload.Duration, function()
 				local character = Players.LocalPlayer.Character
 				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 				if not humanoid or humanoid.Health <= 0 then
@@ -285,10 +284,10 @@ function LandingController:KnitStart()
 					ToolBarController.Signals.OnToolActivated:Fire(1)
 				end
 			end)
-		elseif payload.phase == "out" then
+		elseif payload.Phase == "out" then
 			if self._transitionFadeActive then
 				self._transitionFadeActive = false
-				ScreenFadeInterfaceController.Signals.FadeOut:Fire(payload.duration)
+				ScreenFadeInterfaceController.Signals.FadeOut:Fire(payload.Duration)
 				self:_unlockControls()
 			end
 		end
@@ -321,7 +320,7 @@ function LandingController:KnitStart()
 	end
 	Players.LocalPlayer.CharacterAdded:Connect(warmLandingPose)
 
-	DungeonService.OnLandingEnd:Connect(function()
+	DungeonNetwork.LandingEnd.On(function()
 		self:_unlockControls()
 	end)
 

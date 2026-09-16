@@ -1,49 +1,100 @@
 {
-    // See https://go.microsoft.com/fwlink/?LinkId=733558
-    // for the documentation about the tasks.json format
-    "version": "2.0.0",
-    "inputs": [
-        {
-          "id": "projectJsonFile",
-          "description": "The name of the project.json file",
-          "default": "default",
-          "type": "promptString"
-        }
-      ],
+	// See https://go.microsoft.com/fwlink/?LinkId=733558
+	// for the documentation about the tasks.json format
+	"version": "2.0.0",
+	// Every task is written for a POSIX shell (&&, for-loops). PowerShell 5.1
+	// rejects && as a separator, so run them through Git Bash.
+	"options": {
+		"shell": {
+			"executable": "C:/Program Files/Git/bin/bash.exe",
+			"args": ["-c"]
+		}
+	},
 
-    "tasks": [        
-        {
-            "label": "update project-hades submodules",
-            "detail": "Force update all submodules used under the PZ Monorepo",
-            "type": "shell",
-            "command": "git submodule update --remote --force --init --recursive",
-            "group": {
-                "kind": "build"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "presentation": {
-                "reveal": "always",
-                "focus": true
-            }
-        }, 
+	"tasks": [
+		{
+			"label": "rokit install",
+			"detail": "Install the pinned toolchain (rojo, selene, stylua, luau-lsp; wally in bfg-core)",
+			"type": "shell",
+			"command": "rokit install && cd bfg-core && rokit install",
+			"group": { "kind": "build" },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "focus": true }
+		},
 
-        {
-            "label": "build project-hades wally packages",
-            "detail": "Build all MZM Wally packages, these packages are needed to build the project",
-            "type": "shell",
-            "command": "cd Submodules/Core ; wally install",
-            "group": {
-                "kind": "build"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "presentation": {
-                "reveal": "always",
-                "focus": true
-            }
-        },  
-    ]
+		{
+			"label": "update project-hades submodules",
+			"detail": "Force update all submodules used under the PZ Monorepo",
+			"type": "shell",
+			"command": "git submodule update --remote --force --init --recursive",
+			"group": { "kind": "build" },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "focus": true }
+		},
+
+		{
+			"label": "build project-hades wally packages",
+			"detail": "Install bfg-core's Wally packages (Packages/ and ServerPackages/ are not tracked)",
+			"type": "shell",
+			"command": "cd bfg-core ; wally install",
+			"group": { "kind": "build" },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "focus": true }
+		},
+
+		{
+			"label": "sourcemap: dungeons",
+			"detail": "Regenerate sourcemap.json for luau-lsp from the Dungeons place (the default the editor uses)",
+			"type": "shell",
+			"command": "rojo sourcemap dungeons.project.json -o sourcemap.json --include-non-scripts",
+			"group": { "kind": "build", "isDefault": true },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "silent" },
+			"problemMatcher": []
+		},
+
+		{
+			"label": "sourcemap: lobby",
+			"detail": "Regenerate sourcemap.json from the Lobby place, to analyse the Lobby's view of the modules",
+			"type": "shell",
+			"command": "rojo sourcemap lobby.project.json -o sourcemap.json --include-non-scripts",
+			"group": { "kind": "build" },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "silent" },
+			"problemMatcher": []
+		},
+
+		{
+			"label": "blink: compile",
+			"detail": "Regenerate the networking modules from every bfg-core/Network/*.blink (output is committed)",
+			"type": "shell",
+			"command": "cd bfg-core/Network && for f in *.blink; do blink \"${f%.blink}\" -y; done",
+			"group": { "kind": "build" },
+			"options": { "cwd": "${workspaceFolder}", "shell": { "executable": "bash" } },
+			"presentation": { "reveal": "always", "focus": false },
+			"problemMatcher": []
+		},
+
+		{
+			"label": "verify places",
+			"detail": "Static boot check for both places: unresolved registry lookups, broken core requires",
+			"type": "shell",
+			"command": "python tools/verify_places.py",
+			"group": { "kind": "test", "isDefault": true },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "focus": true },
+			"problemMatcher": []
+		},
+
+		{
+			"label": "lint",
+			"detail": "selene + stylua --check over core and both places (the same commands the PR gate runs)",
+			"type": "shell",
+			"command": "cd bfg-core && stylua --syntax Luau --check Source Libraries/IsometricCamera Libraries/ProjectileCast Libraries/UserNotificationSystem && stylua --config-path stylua.toml --check ../Places/Dungeons ../Places/Lobby && selene Source ../Places/Dungeons ../Places/Lobby",
+			"group": { "kind": "test" },
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "focus": true },
+			"problemMatcher": []
+		}
+	]
 }

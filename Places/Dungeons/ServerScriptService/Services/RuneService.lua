@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/RuneService.lua
 	Description:
@@ -29,19 +30,13 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RuneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RuneNames)
 local RuneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneData)
 
-local RuneService = Knit.CreateService({
+local RuneService = {
 	Name = "RuneService",
-	Client = {
-		-- Full registry replication for the owner's UI:
-		-- { [runeName] = { [rarity] = count } }.
-		OnReplicateRunes = Knit.CreateSignal(),
-	},
-})
+}
 
 RuneService.Signals = {
 	OnRunesUpdated = Signal.new(),
@@ -52,7 +47,7 @@ RuneService._runeRegistry = {}
 
 --[ Public API ]--
 
-function RuneService:AddRune(player: Player, runeName: string, rarity: string)
+function RuneService.AddRune(self: typeof(RuneService), player: Player, runeName: string, rarity: string)
 	if not RuneData[runeName] then
 		warn("[RuneService] Unknown rune: " .. tostring(runeName))
 		return
@@ -75,15 +70,14 @@ function RuneService:AddRune(player: Player, runeName: string, rarity: string)
 	tiers[rarity] = (tiers[rarity] or 0) + 1
 
 	self.Signals.OnRunesUpdated:Fire(player)
-	self.Client.OnReplicateRunes:Fire(player, registry)
 end
 
-function RuneService:GetRuneRegistry(player: Player)
+function RuneService.GetRuneRegistry(self: typeof(RuneService), player: Player)
 	return self._runeRegistry[player.UserId] or {}
 end
 
 -- Total copies of one rune (any rarity) — UI convenience.
-function RuneService:GetRuneCount(player: Player, runeName: string): number
+function RuneService.GetRuneCount(self: typeof(RuneService), player: Player, runeName: string): number
 	local tiers = (self._runeRegistry[player.UserId] or {})[runeName]
 	if not tiers then
 		return 0
@@ -97,7 +91,7 @@ end
 
 -- The summed rune magnitudes for one player — see the header. Abyss
 -- doubling applied HERE, once, for every consumer.
-function RuneService:GetRuneSums(player: Player)
+function RuneService.GetRuneSums(self: typeof(RuneService), player: Player)
 	local sums = {
 		damage = 0,
 		health = 0,
@@ -138,7 +132,7 @@ end
 
 --[ Lifecycle ]--
 
-function RuneService:KnitStart()
+function RuneService.Start(self: typeof(RuneService))
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self._runeRegistry[player.UserId] = nil
 	end)

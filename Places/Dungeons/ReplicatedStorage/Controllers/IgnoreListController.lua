@@ -1,63 +1,74 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 
-local IgnoreListService
-
-local IgnoreListController = Knit.CreateController({
+local IgnoreListController = {
 	Name = "IgnoreListController",
-	Client = {},
-})
+}
 
-IgnoreListController.WeaponIgnoreList = {}
-IgnoreListController.BuildingTransparencyIgnoreList = {}
-IgnoreListController.MagicSpellIgnoreList = {}
-IgnoreListController.ProximityRayIgnoreList = {}
-IgnoreListController.ZombieMagicSpellIgnoreList = {}
+-- Blink delivers instance arrays as `{ Instance? }` (an entry that was
+-- destroyed in transit arrives nil); the stored lists keep the `{ Instance }`
+-- shape every raycast / overlap filter consumes.
+IgnoreListController.WeaponIgnoreList = {} :: { Instance }
+IgnoreListController.BuildingTransparencyIgnoreList = {} :: { Instance }
+IgnoreListController.MagicSpellIgnoreList = {} :: { Instance }
+IgnoreListController.ProximityRayIgnoreList = {} :: { Instance }
+IgnoreListController.ZombieMagicSpellIgnoreList = {} :: { Instance }
 
-function IgnoreListController:GetWeaponIgnoreList(): { Instance }
+function IgnoreListController.GetWeaponIgnoreList(self: typeof(IgnoreListController)): { Instance }
 	return table.clone(self.WeaponIgnoreList)
 end
 
-function IgnoreListController:GetBuildingTransparencyIgnoreList(): { Instance }
+function IgnoreListController.GetBuildingTransparencyIgnoreList(self: typeof(IgnoreListController)): { Instance }
 	return table.clone(self.BuildingTransparencyIgnoreList)
 end
 
-function IgnoreListController:GetMagicSpellIgnoreList(): { Instance }
+function IgnoreListController.GetMagicSpellIgnoreList(self: typeof(IgnoreListController)): { Instance }
 	return table.clone(self.MagicSpellIgnoreList)
 end
 
-function IgnoreListController:GetProximityRayIgnoreList(): { Instance }
+function IgnoreListController.GetProximityRayIgnoreList(self: typeof(IgnoreListController)): { Instance }
 	return table.clone(self.ProximityRayIgnoreList)
 end
 
-function IgnoreListController:GetZombieMagicSpellIgnoreList(): { Instance }
+function IgnoreListController.GetZombieMagicSpellIgnoreList(self: typeof(IgnoreListController)): { Instance }
 	return table.clone(self.ZombieMagicSpellIgnoreList)
 end
 
-function IgnoreListController:KnitInit()
-	IgnoreListService = Knit.GetService("IgnoreListService")
-end
+function IgnoreListController.Start(self: typeof(IgnoreListController))
+	RemoteProperty.Client({ changed = DungeonNetwork.WeaponIgnoreListChanged, get = DungeonNetwork.GetWeaponIgnoreList })
+		:Observe(function(ignoreList: { Instance? })
+			self.WeaponIgnoreList = ignoreList :: { Instance }
+		end)
 
-function IgnoreListController:KnitStart()
-	IgnoreListService.WeaponIgnoreList:Observe(function(ignoreList: { Instance })
-		self.WeaponIgnoreList = ignoreList
+	RemoteProperty.Client({
+		changed = DungeonNetwork.BuildingTransparencyIgnoreListChanged,
+		get = DungeonNetwork.GetBuildingTransparencyIgnoreList,
+	}):Observe(function(ignoreList: { Instance? })
+		self.BuildingTransparencyIgnoreList = ignoreList :: { Instance }
 	end)
 
-	IgnoreListService.BuildingTransparencyIgnoreList:Observe(function(ignoreList: { Instance })
-		self.BuildingTransparencyIgnoreList = ignoreList
+	RemoteProperty.Client({
+		changed = DungeonNetwork.MagicSpellIgnoreListChanged,
+		get = DungeonNetwork.GetMagicSpellIgnoreList,
+	}):Observe(function(ignoreList: { Instance? })
+		self.MagicSpellIgnoreList = ignoreList :: { Instance }
 	end)
 
-	IgnoreListService.MagicSpellIgnoreList:Observe(function(ignoreList: { Instance })
-		self.MagicSpellIgnoreList = ignoreList
+	RemoteProperty.Client({
+		changed = DungeonNetwork.ProximityRayIgnoreListChanged,
+		get = DungeonNetwork.GetProximityRayIgnoreList,
+	}):Observe(function(ignoreList: { Instance? })
+		self.ProximityRayIgnoreList = ignoreList :: { Instance }
 	end)
 
-	IgnoreListService.ProximityRayIgnoreList:Observe(function(ignoreList: { Instance })
-		self.ProximityRayIgnoreList = ignoreList
-	end)
-
-	IgnoreListService.ZombieMagicSpellIgnoreList:Observe(function(ignoreList: { Instance })
-		self.ZombieMagicSpellIgnoreList = ignoreList
+	RemoteProperty.Client({
+		changed = DungeonNetwork.ZombieMagicSpellIgnoreListChanged,
+		get = DungeonNetwork.GetZombieMagicSpellIgnoreList,
+	}):Observe(function(ignoreList: { Instance? })
+		self.ZombieMagicSpellIgnoreList = ignoreList :: { Instance }
 	end)
 end
 

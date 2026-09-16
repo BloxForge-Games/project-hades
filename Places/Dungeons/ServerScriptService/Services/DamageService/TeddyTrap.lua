@@ -1,3 +1,4 @@
+--!strict
 -- Teddy Trap (sustain side): heals its owner for LIFESTEAL_FRACTION of
 -- every point of damage they deal. The other two thirds of the relic live
 -- elsewhere:
@@ -16,17 +17,11 @@
 -- the relic's own heal block would swallow the relic's own heal.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-
-local RelicService
-local PlayerStatsService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-	PlayerStatsService = Knit.GetService("PlayerStatsService")
-end)
 
 -- Hardcoded rather than read from the callback: the callback owns the
 -- INCOMING damage multiplier (2.5), the same primary-in-data /

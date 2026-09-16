@@ -1,3 +1,4 @@
+--!strict
 -- Mystical Staff of Cyan (Legendary): two magic-damage halves per the
 -- relic description:
 --   * OWNER passive: +40% Magic Damage on every magic hit.
@@ -16,20 +17,14 @@
 -- additive in the orchestrator's amplifier sum).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local VFXService = require(ServerScriptService.Services.VFXService)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-
-local RelicService
-local VFXService
 
 local OWNER_MAGIC_BONUS = 0.40
 local SIGIL_MAGIC_BONUS = 0.25
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-	VFXService = Knit.GetService("VFXService")
-end)
 
 return function(player: Player, damage: number, isMagic: boolean)
 	if not isMagic then
@@ -43,7 +38,7 @@ return function(player: Player, damage: number, isMagic: boolean)
 	end
 
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if hrp and VFXService and VFXService:IsInSigilZone(hrp.Position) then
 		bonus += damage * SIGIL_MAGIC_BONUS
 	end

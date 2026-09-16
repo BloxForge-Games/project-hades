@@ -1,20 +1,23 @@
+--!strict
+--[[
+	Module: Services/MeleeWeaponService.lua
+	Description:
+	The melee hit signal: the MeleeWeapon component fires OnHitRequested
+	for every part its swing detects, and DamageService turns those into
+	damage.
+
+	A Blitz module with no dependencies.
+]]
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
--- local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Signal = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 
-local MeleeWeaponService = Knit.CreateService({
+local MeleeWeaponService = {
 	Name = "MeleeWeaponService",
-})
 
-MeleeWeaponService.OnHitRequested = Signal.new()
-
-function MeleeWeaponService:KnitStart()
-	-- Being set in DamageService
-	-- self.OnHitRequested:Connect(function(player: Player, characterModel: Model, _: number)
-	-- 	 characterModel:SetAttribute(Attributes.SlainBy, player.Name)
-	-- end)
-end
+	-- (player, characterModel, damage): consumed by DamageService.
+	OnHitRequested = Signal.new() :: Signal.Signal<Player, Model, number>,
+}
 
 return MeleeWeaponService

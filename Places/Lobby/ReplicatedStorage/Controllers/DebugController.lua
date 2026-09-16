@@ -1,3 +1,4 @@
+--!strict
 --[[
 	 Author(s): 
 	 Module: DebugController.lua
@@ -11,13 +12,11 @@ local RunService = game:GetService("RunService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local DebugTools = require(ReplicatedStorage.Submodules.DebugTools)
 
-local DebugController = Knit.CreateController({
+local DebugController = {
 	Name = "DebugController",
-	Client = {},
-})
+}
 
 --[ Imports ]--
 
@@ -31,9 +30,7 @@ local DebugController = Knit.CreateController({
 
 --[ Initializers ]--
 
-function DebugController:KnitStart() end
-
-function DebugController:KnitInit()
+function DebugController.Init(_self: typeof(DebugController))
 	-- Studio-only: the debug HUD never ships to live players.
 	if RunService:IsStudio() then
 		DebugTools:Init()

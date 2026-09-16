@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: ChatCommandsService.lua
 	Description:
@@ -45,18 +46,17 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicMachineService = require(ServerScriptService.Services.RelicMachineService)
+local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local LifeService = require(ServerScriptService.Services.LifeService)
+local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
-
-local RelicMachineService
-local EncounterChestService
-local TextIndicatorService
-local LifeService
-local DataService
-local CoffinEventService
 
 --[ Constants ]--
 
@@ -82,16 +82,30 @@ local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
 
 --[ Service ]--
 
-local ChatCommandsService = Knit.CreateService({
+local ChatCommandsService = {
 	Name = "ChatCommandsService",
-	Client = {},
-})
+	Dependencies = {
+		RelicMachineService,
+		EncounterChestService,
+		TextIndicatorService,
+		LifeService,
+		DataService,
+		CoffinEventService,
+	} :: { any },
+}
 
 --[ Drop targets ]--
 
 -- Each entry performs ONE wave of its thing across every player. Repetition,
 -- staggering and clamping are the /drop handler's job, not the target's.
-local DROP_TARGETS = {
+type DropTarget = {
+	aliases: { string },
+	label: string,
+	drop: () -> (),
+	name: string?,
+}
+
+local DROP_TARGETS: { [string]: DropTarget } = {
 	VendingMachine = {
 		aliases = { "vendingmachine", "vending", "machine", "relicmachine" },
 		label = "vending machine",
@@ -177,7 +191,13 @@ end
 
 --[ Commands ]--
 
-local COMMANDS
+type Command = {
+	usage: string,
+	description: string,
+	handler: (player: Player, args: { string }) -> string?,
+}
+
+local COMMANDS: { [string]: Command }
 COMMANDS = {
 	drop = {
 		usage = "/drop <thing> [count]",
@@ -291,18 +311,19 @@ COMMANDS = {
 
 -- Single permission seam. Open to everyone today; restrict HERE if that
 -- ever changes, so no individual command has to care.
-function ChatCommandsService:_canRun(_player: Player, _commandName: string): boolean
+function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), _player: Player, _commandName: string): boolean
 	return true
 end
 
 -- Echoes command feedback back to the caller. Uses the same floating
 -- indicator the rest of the game uses, so it needs a live character; the
 -- server log always gets it regardless.
-function ChatCommandsService:_reply(player: Player, message: string)
+function ChatCommandsService._reply(_self: typeof(ChatCommandsService), player: Player, message: string)
 	print(("[ChatCommands] %s: %s"):format(player.Name, message))
 
 	local character = player.Character
-	local part = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+	local part = character
+		and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
 	if TextIndicatorService and part then
 		TextIndicatorService:ShowIndicator(player, part, message, FEEDBACK_COLOR, true)
 	end
@@ -326,7 +347,7 @@ local function parse(message: string): (string?, { string })
 	return commandName, tokens
 end
 
-function ChatCommandsService:HandleMessage(player: Player, message: string)
+function ChatCommandsService.HandleMessage(self: typeof(ChatCommandsService), player: Player, message: string)
 	local commandName, args = parse(message)
 	if not commandName then
 		return
@@ -358,14 +379,7 @@ end
 
 --[ Lifecycle ]--
 
-function ChatCommandsService:KnitStart()
-	RelicMachineService = Knit.GetService("RelicMachineService")
-	EncounterChestService = Knit.GetService("EncounterChestService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	LifeService = Knit.GetService("LifeService")
-	DataService = Knit.GetService("DataService")
-	CoffinEventService = Knit.GetService("CoffinEventService")
-
+function ChatCommandsService.Start(self: typeof(ChatCommandsService))
 	local function bind(player: Player)
 		player.Chatted:Connect(function(message: string)
 			self:HandleMessage(player, message)
@@ -377,7 +391,5 @@ function ChatCommandsService:KnitStart()
 		bind(player)
 	end
 end
-
-function ChatCommandsService:KnitInit() end
 
 return ChatCommandsService

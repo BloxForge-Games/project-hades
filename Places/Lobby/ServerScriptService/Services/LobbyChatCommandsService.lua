@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: LobbyChatCommandsService.lua
 	Description:
@@ -36,14 +37,13 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
-
-local TextIndicatorService
-local DataService
 
 --[ Constants ]--
 
@@ -60,10 +60,10 @@ local teleportInFlight = false
 
 --[ Service ]--
 
-local LobbyChatCommandsService = Knit.CreateService({
+local LobbyChatCommandsService = {
 	Name = "LobbyChatCommandsService",
-	Client = {},
-})
+	Dependencies = { TextIndicatorService, DataService } :: { any },
+}
 
 --[ Registry ]--
 
@@ -156,17 +156,22 @@ COMMANDS.dungeons = COMMANDS.tp
 
 -- Single permission seam. Open to everyone today; restrict HERE if that
 -- ever changes, so no individual command has to care.
-function LobbyChatCommandsService:_canRun(_player: Player, _commandName: string): boolean
+function LobbyChatCommandsService._canRun(
+	_self: typeof(LobbyChatCommandsService),
+	_player: Player,
+	_commandName: string
+): boolean
 	return true
 end
 
 -- Echoes command feedback back to the caller: the floating indicator when
 -- there is a live character, the server log always.
-function LobbyChatCommandsService:_reply(player: Player, message: string)
+function LobbyChatCommandsService._reply(_self: typeof(LobbyChatCommandsService), player: Player, message: string)
 	print(("[LobbyChatCommands] %s: %s"):format(player.Name, message))
 
 	local character = player.Character
-	local part = character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+	local part = character
+		and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
 	if TextIndicatorService and part then
 		TextIndicatorService:ShowIndicator(player, part, message, FEEDBACK_COLOR, true)
 	end
@@ -188,7 +193,7 @@ local function parse(message: string): (string?, { string })
 	return commandName, tokens
 end
 
-function LobbyChatCommandsService:HandleMessage(player: Player, message: string)
+function LobbyChatCommandsService.HandleMessage(self: typeof(LobbyChatCommandsService), player: Player, message: string)
 	local commandName, args = parse(message)
 	if not commandName then
 		return
@@ -220,10 +225,7 @@ end
 
 --[ Lifecycle ]--
 
-function LobbyChatCommandsService:KnitStart()
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	DataService = Knit.GetService("DataService")
-
+function LobbyChatCommandsService.Start(self: typeof(LobbyChatCommandsService))
 	local function bind(player: Player)
 		player.Chatted:Connect(function(message: string)
 			self:HandleMessage(player, message)
@@ -235,7 +237,5 @@ function LobbyChatCommandsService:KnitStart()
 		bind(player)
 	end
 end
-
-function LobbyChatCommandsService:KnitInit() end
 
 return LobbyChatCommandsService

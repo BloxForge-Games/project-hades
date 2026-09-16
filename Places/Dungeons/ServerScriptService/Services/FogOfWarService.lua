@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: FogOfWarService.lua
 	Description:
@@ -18,7 +19,7 @@
 	    a tween back to the authored look.
 
 	PARTY-WIDE, SERVER-DRIVEN: reveal is one shared state, not a per-player
-	view — DungeonService advances every cursor on the first crossing, so
+	view — getDungeonService() advances every cursor on the first crossing, so
 	OnRoomEntered is exactly "the party is in this chunk now". The server
 	writes the properties and Roblox replicates the tweens, which also
 	means a late joiner sees the correct state with no catch-up logic.
@@ -57,13 +58,22 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local fogHideables = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.fogHideables)
 
-local DungeonService
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
 
 --[ Constants ]--
 
@@ -83,19 +93,22 @@ local ROOM_REVEALED_ATTRIBUTE = "FogRevealed"
 
 --[ Service ]--
 
-local FogOfWarService = Knit.CreateService({
+-- DungeonService's room record, reached through the lazy getter above:
+-- the fields this side reads.
+type Room = {
+	id: number,
+	model: Model,
+	branch: Room?,
+	buildings: { Model }?,
+}
+
+local FogOfWarService = {
 	Name = "FogOfWarService",
-	Client = {
-		-- (to one player, or broadcast) { rooms: {Model}, buildings: {Model},
-		-- delaySeconds: number, afterGateClose: boolean } -- see
-		-- LeaveRoomsBehind.
-		OnRoomsLeftBehind = Knit.CreateSignal(),
-	},
 
 	-- [roomId] = true once revealed. Rebuilt per floor; the guard that
 	-- makes OnRoomEntered's per-player fan-out reveal exactly once.
-	_revealed = {},
-})
+	_revealed = {} :: { [number]: boolean },
+}
 
 --[ Private ]--
 
@@ -149,13 +162,13 @@ end
 
 -- Every non-structural descendant of a room model, in one flat list
 -- (fogHideables owns the structural-shell rule).
-function FogOfWarService:_collectHideables(roomModel: Model): { Instance }
+function FogOfWarService._collectHideables(_self: typeof(FogOfWarService), roomModel: Model): { Instance }
 	return fogHideables.collectRoomHideables(roomModel)
 end
 
 -- Hides one chunk (and its Treasure branch, which hangs off the same
 -- room and is revealed with it).
-function FogOfWarService:_hideRoom(room)
+function FogOfWarService._hideRoom(self: typeof(FogOfWarService), room: Room?)
 	if not room or not room.model then
 		return
 	end
@@ -165,11 +178,14 @@ function FogOfWarService:_hideRoom(room)
 	end
 	-- Chunk buildings were moved OUT of the model into Map.Buildings by
 	-- DungeonService (room.buildings); they are still this room's.
-	for _, building in room.buildings or {} do
-		if building.Parent then
-			hideInstance(building)
-			for _, descendant in building:GetDescendants() do
-				hideInstance(descendant)
+	local buildings = room.buildings
+	if buildings then
+		for _, building in buildings do
+			if building.Parent then
+				hideInstance(building)
+				for _, descendant in building:GetDescendants() do
+					hideInstance(descendant)
+				end
 			end
 		end
 	end
@@ -183,7 +199,7 @@ end
 -- Reveals one chunk for EVERYONE, once. Safe to call repeatedly — the
 -- `_revealed` latch and the cache-attribute checks both no-op on a second
 -- pass.
-function FogOfWarService:RevealRoom(room)
+function FogOfWarService.RevealRoom(self: typeof(FogOfWarService), room: Room?)
 	if not room or not room.model or self._revealed[room.id] then
 		return
 	end
@@ -194,11 +210,14 @@ function FogOfWarService:RevealRoom(room)
 	for _, instance in room.model:GetDescendants() do
 		revealInstance(instance)
 	end
-	for _, building in room.buildings or {} do
-		if building.Parent then
-			revealInstance(building)
-			for _, descendant in building:GetDescendants() do
-				revealInstance(descendant)
+	local buildings = room.buildings
+	if buildings then
+		for _, building in buildings do
+			if building.Parent then
+				revealInstance(building)
+				for _, descendant in building:GetDescendants() do
+					revealInstance(descendant)
+				end
 			end
 		end
 	end
@@ -219,7 +238,7 @@ end
 
 -- Whether a chunk's contents are live yet. Server-side readers (the
 -- client reads the room model's attribute instead).
-function FogOfWarService:IsRoomRevealed(roomId: number): boolean
+function FogOfWarService.IsRoomRevealed(self: typeof(FogOfWarService), roomId: number): boolean
 	return self._revealed[roomId] == true
 end
 
@@ -229,7 +248,8 @@ end
 -- later (+ the client's own gate-slam tween when `afterGateClose`). The
 -- client is idempotent per model, so sending the whole trail on every
 -- crossing is fine and self-healing.
-function FogOfWarService:LeaveRoomsBehind(
+function FogOfWarService.LeaveRoomsBehind(
+	_self: typeof(FogOfWarService),
 	target: Player?,
 	rooms: { any },
 	delaySeconds: number,
@@ -255,29 +275,25 @@ function FogOfWarService:LeaveRoomsBehind(
 	end
 
 	local payload = {
-		rooms = roomModels,
-		buildings = buildings,
-		delaySeconds = delaySeconds,
-		afterGateClose = afterGateClose,
+		Rooms = roomModels,
+		Buildings = buildings,
+		DelaySeconds = delaySeconds,
+		AfterGateClose = afterGateClose,
 	}
 	if target then
-		self.Client.OnRoomsLeftBehind:Fire(target, payload)
+		DungeonNetwork.RoomsLeftBehind.Fire(target, payload)
 	else
-		self.Client.OnRoomsLeftBehind:FireAll(payload)
+		DungeonNetwork.RoomsLeftBehind.FireAll(payload)
 	end
 end
 
 --[ Lifecycle ]--
 
-function FogOfWarService:KnitInit() end
-
-function FogOfWarService:KnitStart()
-	DungeonService = Knit.GetService("DungeonService")
-
+function FogOfWarService.Start(self: typeof(FogOfWarService))
 	-- Hide the whole floor the moment it exists. The Start room is not in
 	-- `rooms` (it is the dungeon's startModel), so the room players
 	-- actually stand in is never fogged.
-	DungeonService.Signals.OnDungeonGenerated:Connect(function(dungeon)
+	getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
 		table.clear(self._revealed)
 		for _, room in dungeon.rooms do
 			self:_hideRoom(room)
@@ -288,7 +304,7 @@ function FogOfWarService:KnitStart()
 	-- per player for the same chunk — `_revealed` collapses that to one
 	-- reveal. Encounter starts route through SetPlayerRoom too, so a
 	-- Miniboss / Boss arena lights up as its intro begins.
-	DungeonService.Signals.OnRoomEntered:Connect(function(_player: Player, room)
+	getDungeonService().Signals.OnRoomEntered:Connect(function(_player: Player, room)
 		self:RevealRoom(room)
 	end)
 end

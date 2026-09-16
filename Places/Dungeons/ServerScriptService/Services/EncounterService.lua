@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: EncounterService.lua
      Description: Owns the full lifecycle of a "boss-tier" encounter — the
@@ -12,65 +13,88 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local IsometricCameraService = require(ServerScriptService.Submodules.Core.Source.Services.IsometricCameraService)
+local chestService = require(ServerScriptService.Services.EncounterChestService)
+local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
+
+-- DungeonService's room record, reached through the lazy `any` getter
+-- above. A structural mirror of the fields this side reads keeps the
+-- rooms typed without recreating the require cycle.
+type Room = {
+	id: number,
+	model: Model,
+	roomType: string,
+	segmentId: number,
+}
+
 -- "NextDungeon" is the run-loop VOTE: same pad / timers / HUD as an
 -- encounter lobby, but expiry advances the run instead of starting a fight.
 export type EncounterKind = "Miniboss" | "Boss" | "NextDungeon"
-local NEXT_DUNGEON_KIND = "NextDungeon"
+local NEXT_DUNGEON_KIND: "NextDungeon" = "NextDungeon"
 
-local DungeonService -- resolved in KnitStart
-local ZombieSpawnService
-local IsometricCameraService
+-- The two replicated properties' payloads (Network/Dungeon: EncounterData
+-- and EncounterLobbyData). nil = no encounter / no lobby.
+export type EncounterData = {
+	kind: string,
+	name: string,
+	level: number,
+	currentHP: number,
+	maxHP: number,
+}
+export type EncounterLobbyData = {
+	kind: string,
+	label: string,
+	remainingSeconds: number,
+	totalSeconds: number,
+	playersOnPad: number,
+	totalPlayers: number,
+	accelerated: boolean,
+	padPosition: Vector3,
+	readyLabel: string?,
+}
 
-local EncounterService = Knit.CreateService({
+-- PlayPhaseCutscene's options.
+export type PhaseCutsceneOptions = { duration: number?, onCutsceneBeat: (() -> ())? }
+
+local EncounterService = {
 	Name = "EncounterService",
-	Client = {
-		-- Active encounter HUD data. nil when no encounter is active.
-		--   { kind, name, level, currentHP, maxHP }
-		EncounterData = Knit.CreateProperty(nil),
+	Dependencies = { ZombieSpawnService, IsometricCameraService, chestService, EncounterChestService } :: { any },
+}
 
-		-- Pre-fight lobby state. nil when no lobby is active.
-		--   { remainingSeconds, totalSeconds, playersOnPad, totalPlayers,
-		--     accelerated, padPosition, kind }
-		EncounterLobbyData = Knit.CreateProperty(nil),
+-- Active encounter HUD data, nil when no encounter is active (was a replicated
+-- property): { kind, name, level, currentHP, maxHP }
+EncounterService._dataProperty = RemoteProperty.Server({
+	changed = DungeonNetwork.EncounterDataChanged,
+	get = DungeonNetwork.GetEncounterData,
+}, nil :: EncounterData?)
 
-		-- Cinematic intro signals (server drives, clients run local fade /
-		-- control-lock / walk logic). Same payload shapes as the previous
-		-- MinibossIntro* signals on DungeonService.
-		EncounterIntroFade = Knit.CreateSignal(), -- ({ phase = "in"|"out", duration })
-		EncounterIntroWalk = Knit.CreateSignal(), -- ({ targetPosition })
-		EncounterIntroEnd = Knit.CreateSignal(), -- ()
-
-		-- Cinematic OUTRO signals (mob defeated). Unlike the intro there's
-		-- NO screen fade — the camera pans live onto the defeated mob, holds
-		-- for the dramatic beat, then pans back to the player. Start raises
-		-- the cinematic bars + locks controls (reusing the intro's
-		-- _lockControls, which also cancels in-flight dashes / ability
-		-- cutscenes); End lowers the bars + restores controls. The camera
-		-- pan itself rides the same IsometricCameraService.OnCameraTargetChanged
-		-- / OnCameraTargetReset path the intro uses.
-		EncounterOutroStart = Knit.CreateSignal(), -- ()
-		EncounterOutroEnd = Knit.CreateSignal(), -- ()
-
-		-- Boss PHASE-CHANGE cinematic (mid-fight, at HP thresholds). Start
-		-- locks controls + raises bars + cancels dashes / ability cutscenes
-		-- (reuses the intro's _lockControls via the client handler, same as
-		-- the outro); End releases. The server freezes the boss, instakills
-		-- the adds, and sets invulnerability around these (see
-		-- PlayPhaseCutscene); the camera rides IsometricCameraService just
-		-- like the intro/outro.
-		EncounterPhaseStart = Knit.CreateSignal(), -- ()
-		EncounterPhaseEnd = Knit.CreateSignal(), -- ()
-	},
-})
+-- Pre-fight lobby state, nil when no lobby is active (was a replicated
+-- property). CoffinEventService publishes its tally through it too.
+EncounterService._lobbyProperty = RemoteProperty.Server({
+	changed = DungeonNetwork.EncounterLobbyDataChanged,
+	get = DungeonNetwork.GetEncounterLobbyData,
+}, nil :: EncounterLobbyData?)
 
 --[ Constants ]--
 
@@ -205,7 +229,7 @@ EncounterService._cutsceneMob = nil :: Model?
 
 EncounterService._activeEncounter = nil :: {
 	kind: EncounterKind,
-	room: any,
+	room: Room,
 	mob: Model,
 	humanoid: Humanoid,
 	hpConn: RBXScriptConnection?,
@@ -214,7 +238,7 @@ EncounterService._activeEncounter = nil :: {
 -- Active lobby state. nil when no lobby is running.
 EncounterService._activeLobby = nil :: {
 	kind: EncounterKind,
-	room: any,
+	room: Room,
 	gateCFrame: CFrame,
 	padInstance: Instance,
 	padReference: BasePart,
@@ -228,8 +252,8 @@ EncounterService._activeLobby = nil :: {
 
 -- Pulls the mob asset name for a kind from the active dungeon's config.
 -- Returns nil if no dungeon is active or the kind isn't configured.
-function EncounterService:_getMobNameForKind(kind: EncounterKind): string?
-	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+function EncounterService._getMobNameForKind(_self: typeof(EncounterService), kind: EncounterKind): string?
+	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
 	if not dungeon then
 		return nil
 	end
@@ -248,7 +272,7 @@ end
 --[ Helpers: lobby pad ]--
 
 -- Looks up the optional lobby-pad prefab under ServerStorage.GameAssets.
-function EncounterService:_findLobbyPadPrefab(): Model?
+function EncounterService._findLobbyPadPrefab(_self: typeof(EncounterService)): Model?
 	local gameAssets = ServerStorage:FindFirstChild("GameAssets")
 	if not gameAssets then
 		return nil
@@ -275,7 +299,7 @@ end
 -- The gate's Y sits mid-wall, so we drop the pad onto the actual ground rather
 -- than leaving it floating in air. Returns nil if no DungeonRooms surface is
 -- found within RAYCAST_DEPTH studs (caller falls back to the original Y).
-function EncounterService:_findLobbyPadFloorY(xzPosition: Vector3): number?
+function EncounterService._findLobbyPadFloorY(_self: typeof(EncounterService), xzPosition: Vector3): number?
 	local dungeonRooms = workspace.IgnoreInstances:FindFirstChild("Map")
 	dungeonRooms = dungeonRooms and dungeonRooms:FindFirstChild("DungeonRooms")
 	if not dungeonRooms then
@@ -293,7 +317,7 @@ function EncounterService:_findLobbyPadFloorY(xzPosition: Vector3): number?
 	return result and result.Position.Y or nil
 end
 
-function EncounterService:_createLobbyPad(gateCFrame: CFrame): (Instance, BasePart)
+function EncounterService._createLobbyPad(self: typeof(EncounterService), gateCFrame: CFrame): (Instance, BasePart)
 	-- Gate convention in the project's prefabs: LookVector points *out* of the
 	-- arena (toward the player-approach side). The pad goes in the just-cleared
 	-- room so players can step on it without crossing the gate — so +LookVector
@@ -350,7 +374,10 @@ function EncounterService:_createLobbyPad(gateCFrame: CFrame): (Instance, BasePa
 end
 
 -- Counts alive players whose HRP sits within the pad's horizontal radius.
-function EncounterService:_countPlayersOnLobbyPad(padReference: BasePart): (number, number)
+function EncounterService._countPlayersOnLobbyPad(
+	_self: typeof(EncounterService),
+	padReference: BasePart
+): (number, number)
 	local padPos = padReference.Position
 	local onPad = 0
 	local totalAlive = 0
@@ -362,7 +389,7 @@ function EncounterService:_countPlayersOnLobbyPad(padReference: BasePart): (numb
 		end
 		-- Run loop: a player who walked into the ExitPortal is out of the
 		-- count (they're leaving / gone), so the vote can complete without them.
-		if DungeonService and DungeonService:IsPlayerExited(player) then
+		if getDungeonService() and getDungeonService():IsPlayerExited(player) then
 			continue
 		end
 		totalAlive += 1
@@ -379,7 +406,7 @@ function EncounterService:_countPlayersOnLobbyPad(padReference: BasePart): (numb
 end
 
 -- Builds the LocationMarker model above the pad.
-function EncounterService:_createLobbyMarker(padReference: BasePart): Model?
+function EncounterService._createLobbyMarker(_self: typeof(EncounterService), padReference: BasePart): Model?
 	local mapMarkers = workspace.IgnoreInstances:FindFirstChild("MapMarkers")
 	if not mapMarkers then
 		warn("[EncounterService] workspace.IgnoreInstances.MapMarkers missing — lobby marker skipped.")
@@ -416,7 +443,7 @@ end
 --[ Lobby lifecycle ]--
 
 -- Tears down the lobby state. Idempotent.
-function EncounterService:_cleanupLobby()
+function EncounterService._cleanupLobby(self: typeof(EncounterService))
 	local lobby = self._activeLobby
 	if not lobby then
 		return
@@ -431,18 +458,18 @@ function EncounterService:_cleanupLobby()
 		lobby.marker:Destroy()
 	end
 	self._activeLobby = nil
-	self.Client.EncounterLobbyData:Set(nil)
+	self._lobbyProperty:Set(nil)
 end
 
 -- Fires when the displayed countdown hits 0. Tears the lobby down, moves
 -- every player's cursor onto the encounter room (via SetPlayerRoom so the
 -- combat→arena gate stays solid behind them), and hands off to the cinematic.
-function EncounterService:_onLobbyExpired()
+function EncounterService._onLobbyExpired(self: typeof(EncounterService))
 	local lobby = self._activeLobby
 	if not lobby then
 		return
 	end
-	local kind = lobby.kind
+	local kind: EncounterKind = lobby.kind
 	local room = lobby.room
 	local gateCFrame = lobby.gateCFrame
 
@@ -451,15 +478,15 @@ function EncounterService:_onLobbyExpired()
 	-- Run-loop vote: no fight -- hand off to DungeonService for the
 	-- fade / teardown / next-dungeon generation.
 	if kind == NEXT_DUNGEON_KIND then
-		if DungeonService then
-			DungeonService:AdvanceRun()
+		if getDungeonService() then
+			getDungeonService():AdvanceRun()
 		end
 		return
 	end
 
-	if DungeonService then
+	if getDungeonService() then
 		for _, p in Players:GetPlayers() do
-			DungeonService:SetPlayerRoom(p, room.id)
+			getDungeonService():SetPlayerRoom(p, room.id)
 		end
 	end
 
@@ -468,7 +495,12 @@ end
 
 -- Kicks off the pre-fight lobby for `kind` in `room`. Spawns pad + marker,
 -- replicates lobby state, starts the two-parallel-timer ticker.
-function EncounterService:_startLobby(kind: EncounterKind, room, gateCFrame: CFrame)
+function EncounterService._startLobby(
+	self: typeof(EncounterService),
+	kind: EncounterKind,
+	room: Room,
+	gateCFrame: CFrame
+)
 	if not room or not room.model then
 		return
 	end
@@ -493,28 +525,28 @@ function EncounterService:_startLobby(kind: EncounterKind, room, gateCFrame: CFr
 	}
 	self._activeLobby = lobby
 
-	if DungeonService then
-		DungeonService:_destroyNextGateMarker()
+	if getDungeonService() then
+		getDungeonService():_destroyNextGateMarker()
 
 		-- Lobby-trigger celebration: play the DungeonDone particles + Unlock
 		-- sound on the cleared room's exit gate (the gate the players just
 		-- walked up to). Same FX used for normal segment opens, just fired
 		-- here at queue-start instead of at gate-open, and tinted encounter
 		-- purple to visually mark the approach gate.
-		local dungeon = DungeonService:GetActiveDungeon()
+		local dungeon = getDungeonService():GetActiveDungeon()
 
 		-- (Vote lobbies sit IN the boss room; the boss branch already fired
 		-- the dungeon-done effect there, so only encounter lobbies celebrate.)
 		local clearedRoom = kind ~= NEXT_DUNGEON_KIND and dungeon and dungeon.rooms[room.id - 1] or nil
 		if clearedRoom then
-			DungeonService:_emitDungeonDoneEffect(clearedRoom.model, ENCOUNTER_GATE_PARTICLE_COLOR)
+			getDungeonService():_emitDungeonDoneEffect(clearedRoom.model, ENCOUNTER_GATE_PARTICLE_COLOR)
 		end
 	end
 
 	task.delay(0.75, function()
 		-- Initial property push so the HUD renders right away.
 		local _, initialTotalPlayers = self:_countPlayersOnLobbyPad(padReference)
-		self.Client.EncounterLobbyData:Set({
+		local initialData: EncounterLobbyData = {
 			kind = kind,
 			label = self:_lobbyLabel(kind),
 			remainingSeconds = ENCOUNTER_LOBBY_TIMER_DURATION,
@@ -523,7 +555,8 @@ function EncounterService:_startLobby(kind: EncounterKind, room, gateCFrame: CFr
 			totalPlayers = initialTotalPlayers,
 			accelerated = false,
 			padPosition = padReference.Position,
-		})
+		}
+		self._lobbyProperty:Set(initialData)
 
 		-- Ticker. Two parallel timers — normal always ticks; fast only ticks while
 		-- everyone's on the pad and resets the moment anyone steps off. Lobby
@@ -565,7 +598,7 @@ function EncounterService:_startLobby(kind: EncounterKind, room, gateCFrame: CFr
 					accelerated = false
 				end
 
-				self.Client.EncounterLobbyData:Set({
+				local tickData: EncounterLobbyData = {
 					kind = kind,
 					label = self:_lobbyLabel(kind),
 					remainingSeconds = displayedRemaining,
@@ -574,7 +607,8 @@ function EncounterService:_startLobby(kind: EncounterKind, room, gateCFrame: CFr
 					totalPlayers = totalAlive,
 					accelerated = accelerated,
 					padPosition = padReference.Position,
-				})
+				}
+				self._lobbyProperty:Set(tickData)
 
 				if displayedRemaining <= 0 then
 					self:_onLobbyExpired()
@@ -590,7 +624,7 @@ end
 -- Runs the full cinematic (fade → teleport → walk → camera pan → reveal HP →
 -- camera back → controls released → waves start), then wires the defeat hook.
 -- Identical flow for Miniboss and Boss; only the mob name differs.
-function EncounterService:IsCutsceneActive(): boolean
+function EncounterService.IsCutsceneActive(self: typeof(EncounterService)): boolean
 	return self._cutsceneDepth > 0
 end
 
@@ -604,7 +638,7 @@ local function setCharactersInvulnerable(invulnerable: boolean)
 end
 
 -- Opens a cutscene window: players (and `mob`, if given) become invulnerable.
-function EncounterService:_beginCutscene(mob: Model?)
+function EncounterService._beginCutscene(self: typeof(EncounterService), mob: Model?)
 	self._cutsceneDepth += 1
 	setCharactersInvulnerable(true)
 	if mob then
@@ -614,7 +648,7 @@ function EncounterService:_beginCutscene(mob: Model?)
 end
 
 -- A mob that spawns INSIDE an already-open window (the intro) joins it.
-function EncounterService:_addCutsceneMob(mob: Model?)
+function EncounterService._addCutsceneMob(self: typeof(EncounterService), mob: Model?)
 	if not mob or self._cutsceneDepth <= 0 then
 		return
 	end
@@ -623,7 +657,7 @@ function EncounterService:_addCutsceneMob(mob: Model?)
 end
 
 -- Closes a window; the LAST close releases everyone.
-function EncounterService:_endCutscene()
+function EncounterService._endCutscene(self: typeof(EncounterService))
 	self._cutsceneDepth = math.max(0, self._cutsceneDepth - 1)
 	if self._cutsceneDepth > 0 then
 		return
@@ -636,7 +670,12 @@ function EncounterService:_endCutscene()
 	end
 end
 
-function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFrame)
+function EncounterService._startFight(
+	self: typeof(EncounterService),
+	kind: EncounterKind,
+	room: Room,
+	gateCFrame: CFrame
+)
 	if not room or not room.model or not ZombieSpawnService then
 		return
 	end
@@ -647,8 +686,8 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		return
 	end
 
-	if DungeonService then
-		DungeonService:_destroyNextGateMarker()
+	if getDungeonService() then
+		getDungeonService():_destroyNextGateMarker()
 	end
 
 	-- Gate convention in the project's prefabs: gateCFrame.LookVector points
@@ -671,9 +710,9 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		self.OnEncounterIntroStarted:Fire(kind, room)
 
 		-- Phase 1: fade clients to black.
-		self.Client.EncounterIntroFade:FireAll({
-			phase = "in",
-			duration = ENCOUNTER_INTRO_FADE_DURATION,
+		DungeonNetwork.EncounterIntroFade.FireAll({
+			Phase = "in",
+			Duration = ENCOUNTER_INTRO_FADE_DURATION,
 		})
 
 		task.wait(ENCOUNTER_INTRO_FADE_DURATION)
@@ -748,11 +787,11 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		if not mob then
 			warn(("[EncounterService] Failed to spawn %s '%s' in room %s"):format(kind, mobName, room.model.Name))
 
-			self.Client.EncounterIntroFade:FireAll({ phase = "out", duration = ENCOUNTER_INTRO_FADE_DURATION })
-			self.Client.EncounterIntroEnd:FireAll()
+			DungeonNetwork.EncounterIntroFade.FireAll({ Phase = "out", Duration = ENCOUNTER_INTRO_FADE_DURATION })
+			DungeonNetwork.EncounterIntroEnd.FireAll()
 			self:_endCutscene()
-			if DungeonService then
-				DungeonService:_updateNextGateMarker()
+			if getDungeonService() then
+				getDungeonService():_updateNextGateMarker()
 			end
 			return
 		end
@@ -761,8 +800,8 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		if not humanoid then
 			warn(("[EncounterService] %s '%s' has no Humanoid"):format(kind, mobName))
 
-			self.Client.EncounterIntroFade:FireAll({ phase = "out", duration = ENCOUNTER_INTRO_FADE_DURATION })
-			self.Client.EncounterIntroEnd:FireAll()
+			DungeonNetwork.EncounterIntroFade.FireAll({ Phase = "out", Duration = ENCOUNTER_INTRO_FADE_DURATION })
+			DungeonNetwork.EncounterIntroEnd.FireAll()
 			self:_endCutscene()
 			return
 		end
@@ -779,9 +818,9 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		self.OnEncounterStarted:Fire(kind, room, mob)
 
 		-- Phase 3: fade back from black.
-		self.Client.EncounterIntroFade:FireAll({
-			phase = "out",
-			duration = ENCOUNTER_INTRO_FADE_DURATION,
+		DungeonNetwork.EncounterIntroFade.FireAll({
+			Phase = "out",
+			Duration = ENCOUNTER_INTRO_FADE_DURATION,
 		})
 		task.wait(ENCOUNTER_INTRO_FADE_DURATION)
 
@@ -795,14 +834,15 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		-- else's slot would drag them sideways, and a player who never
 		-- arrived (dead) has no walk to run.
 		for player, arrivalPosition in arrivalPositions do
-			self.Client.EncounterIntroWalk:Fire(player, {
-				targetPosition = arrivalPosition + (walkDirection * ENCOUNTER_INTRO_WALK_UP_STUDS),
-			})
+			DungeonNetwork.EncounterIntroWalk.Fire(
+				player,
+				arrivalPosition + (walkDirection * ENCOUNTER_INTRO_WALK_UP_STUDS)
+			)
 		end
 		task.wait(ENCOUNTER_INTRO_WALK_UP_DURATION)
 
 		-- Phase 5: pan the camera onto the mob.
-		local cameraTarget = mob:WaitForChild("HumanoidRootPart")
+		local cameraTarget = mob:WaitForChild("HumanoidRootPart") :: BasePart
 		if cameraTarget and IsometricCameraService then
 			IsometricCameraService.OnCameraTargetChanged:Fire(nil, cameraTarget, true)
 		end
@@ -812,15 +852,16 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		-- end of the cinematic still flows; the property is only Set later
 		-- (Phase 8) to delay the HP bar reveal until the camera returns.
 		local encounter = self._activeEncounter
-		local hpConn
+		local hpConn: RBXScriptConnection?
 		hpConn = humanoid.HealthChanged:Connect(function(newHealth)
-			self.Client.EncounterData:Set({
+			local healthData: EncounterData = {
 				kind = kind,
 				name = mobName,
 				level = ENCOUNTER_LEVEL_PLACEHOLDER,
 				currentHP = newHealth,
 				maxHP = humanoid.MaxHealth,
-			})
+			}
+			self._dataProperty:Set(healthData)
 		end)
 		if encounter then
 			encounter.hpConn = hpConn
@@ -847,17 +888,18 @@ function EncounterService:_startFight(kind: EncounterKind, room, gateCFrame: CFr
 		-- relying on the HealthChanged hook, which only fires on damage) so the
 		-- bar always reveals at the same beat regardless of whether the mob
 		-- has been hit during the cinematic.
-		self.Client.EncounterData:Set({
+		local revealData: EncounterData = {
 			kind = kind,
 			name = mobName,
 			level = ENCOUNTER_LEVEL_PLACEHOLDER,
 			currentHP = humanoid.Health,
 			maxHP = humanoid.MaxHealth,
-		})
+		}
+		self._dataProperty:Set(revealData)
 
 		-- Phase 9: end the cinematic. Controls released, bars lowered, and
 		-- the invulnerability window closes -- the fight is live.
-		self.Client.EncounterIntroEnd:FireAll()
+		DungeonNetwork.EncounterIntroEnd.FireAll()
 		self:_endCutscene()
 
 		-- Server-side signal so MusicService can ramp the encounter
@@ -883,7 +925,12 @@ end
 -- in the dead-zombie folder but its HumanoidRootPart still exists, which is all
 -- the camera needs as an origin part. When the cinematic finishes it releases
 -- the held rewards (coins + gear + vending machine) via _dropEncounterRewards.
-function EncounterService:_playOutroCinematic(kind: EncounterKind, room, mob: Model?)
+function EncounterService._playOutroCinematic(
+	self: typeof(EncounterService),
+	kind: EncounterKind,
+	room: Room,
+	mob: Model?
+)
 	-- Snapshot the last-room check NOW, synchronously at death time, while the
 	-- dungeon is still active. The boss (last) room tears the dungeon down on
 	-- defeat (lobby teleport), so GetActiveDungeon() may be nil by the time the
@@ -897,13 +944,13 @@ function EncounterService:_playOutroCinematic(kind: EncounterKind, room, mob: Mo
 		-- Lock controls + raise cinematic bars + cancel dashes / ability
 		-- cutscenes (handled client-side by EncounterIntroController:_lockControls
 		-- via the EncounterOutroStart handler).
-		self.Client.EncounterOutroStart:FireAll()
+		DungeonNetwork.EncounterOutroStart.FireAll()
 
 		-- Pan the camera onto the defeated mob. Same service path the intro
 		-- uses. Skipped gracefully if the HRP is gone (mob fully cleaned up
 		-- before this ran) — the bars + lock still play out so the timing
 		-- stays consistent for every client.
-		local cameraTarget = mob and mob:FindFirstChild("HumanoidRootPart")
+		local cameraTarget = mob and mob:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 		if cameraTarget and IsometricCameraService then
 			task.wait(CUTSCENE_CAMERA_DELAY)
@@ -923,7 +970,7 @@ function EncounterService:_playOutroCinematic(kind: EncounterKind, room, mob: Mo
 		task.wait(ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION)
 
 		-- Release controls + lower the cinematic bars + close the window.
-		self.Client.EncounterOutroEnd:FireAll()
+		DungeonNetwork.EncounterOutroEnd.FireAll()
 		self:_endCutscene()
 
 		-- Outro fully done → release the held rewards (coins + gear via the
@@ -938,7 +985,7 @@ end
 -- skipDungeonDoneEffect=true: _onMobDefeated already emitted the effect
 -- directly for instant feedback on the kill. Without this, the post-Boss
 -- / normal path re-emits 0.5s later and doubles the celebration.
-function EncounterService:_openEncounterGate(room)
+function EncounterService._openEncounterGate(_self: typeof(EncounterService), room: Room?)
 	-- THE funnel for every way this gate opens, and the one place the
 	-- "is this room still real" question can be asked once.
 	--
@@ -961,17 +1008,16 @@ function EncounterService:_openEncounterGate(room)
 	-- ACTIVE dungeon is exact: a stale room can never match, and a live
 	-- one always does. Cheaper and stricter than comparing ids, which are
 	-- reused floor to floor.
-	if not DungeonService or not room then
+	if not getDungeonService() or not room then
 		return
 	end
-	local dungeon = DungeonService:GetActiveDungeon()
+	local dungeon = getDungeonService():GetActiveDungeon()
 	local roomsById = dungeon and dungeon.roomsById
 	if not roomsById or roomsById[room.id] ~= room then
 		return
 	end
 
-	local chestService = Knit.GetService("EncounterChestService")
-	DungeonService:OpenSegmentGate(room.segmentId, true, {
+	getDungeonService():OpenSegmentGate(room.segmentId, true, {
 		seconds = ENCOUNTER_GATE_WAIT_SECONDS,
 		openDelaySeconds = ENCOUNTER_GATE_OPEN_DELAY_SECONDS,
 		-- Early open: every living player has opened their chest.
@@ -990,7 +1036,13 @@ end
 -- The chest drops on EVERY encounter including the run's last, unlike the
 -- machine it replaces: its coins still bank on extraction, so `isLastRoom`
 -- no longer gates anything here.
-function EncounterService:_dropEncounterRewards(kind: EncounterKind, room, mob: Model?, isLastRoom: boolean)
+function EncounterService._dropEncounterRewards(
+	self: typeof(EncounterService),
+	kind: EncounterKind,
+	room: Room,
+	mob: Model?,
+	isLastRoom: boolean
+)
 	-- Still fired: other listeners hang off this beat. MobBase no longer
 	-- drops anything for an encounter mob — that loot is the chest's.
 	self.OnEncounterOutroFinished:Fire(kind, room, mob)
@@ -998,7 +1050,6 @@ function EncounterService:_dropEncounterRewards(kind: EncounterKind, room, mob: 
 	task.wait(CHEST_DROP_DELAY_SECONDS)
 
 	local enemyType = if kind == ROOM_TYPES.Boss then EnemyTypes.Boss else EnemyTypes.Miniboss
-	local chestService = Knit.GetService("EncounterChestService")
 	if chestService then
 		-- onAllOpened still funnels into _openEncounterGate (idempotent):
 		-- for the Boss it is the "everyone opened" early edge of the timer
@@ -1036,8 +1087,8 @@ end
 -- main-path room — roomsList is built in sequence order, so the last entry is
 -- the sequence's final room). Gates the vending-machine drop off the
 -- dungeon-ending encounter.
-function EncounterService:_isLastRoomInSequence(room): boolean
-	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+function EncounterService._isLastRoomInSequence(_self: typeof(EncounterService), room: Room): boolean
+	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
 	if not dungeon or not dungeon.rooms or not room then
 		return false
 	end
@@ -1045,7 +1096,7 @@ function EncounterService:_isLastRoomInSequence(room): boolean
 	return lastRoom ~= nil and lastRoom.id == room.id
 end
 
-function EncounterService:_onMobDefeated(kind: EncounterKind, room)
+function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: EncounterKind, room: Room)
 	if not room or not ZombieSpawnService then
 		return
 	end
@@ -1058,11 +1109,11 @@ function EncounterService:_onMobDefeated(kind: EncounterKind, room)
 	ZombieSpawnService:StopMinibossWaves(room)
 	ZombieSpawnService:DespawnZombiesInRoom(room)
 
-	self.Client.EncounterData:Set(nil)
+	self._dataProperty:Set(nil)
 
-	if DungeonService then
-		DungeonService:_emitDungeonDoneEffect(room.model)
-		DungeonService:_updateNextGateMarker()
+	if getDungeonService() then
+		getDungeonService():_emitDungeonDoneEffect(room.model)
+		getDungeonService():_updateNextGateMarker()
 
 		-- The gate NO LONGER opens on the kill. It opens once every player
 		-- has opened their reward chest (wired in _dropEncounterRewards),
@@ -1112,14 +1163,14 @@ end
 -- hold-on-boss beat (defaults to ENCOUNTER_PHASE_CUTSCENE_DURATION).
 -- `onCutsceneBeat` fires while the camera holds on the boss — that's where the
 -- boss injects its new attacks + VFX / anim / HP.
-function EncounterService:PlayPhaseCutscene(mob: Model, opts: { duration: number?, onCutsceneBeat: (() -> ())? }?)
-	opts = opts or {}
-	local duration = opts.duration or ENCOUNTER_PHASE_CUTSCENE_DURATION
+function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob: Model, opts: PhaseCutsceneOptions?)
+	local options: PhaseCutsceneOptions = opts or {}
+	local duration = options.duration or ENCOUNTER_PHASE_CUTSCENE_DURATION
 	local room = self._activeEncounter and self._activeEncounter.room
 	local humanoid = mob:FindFirstChildOfClass("Humanoid")
 
 	-- Lock + raise bars + cancel dashes / ability cutscenes on every client.
-	self.Client.EncounterPhaseStart:FireAll()
+	DungeonNetwork.EncounterPhaseStart.FireAll()
 	self:_beginCutscene(mob)
 
 	-- Players invulnerable for the cutscene (controls are locked anyway; this
@@ -1140,7 +1191,9 @@ function EncounterService:PlayPhaseCutscene(mob: Model, opts: { duration: number
 	if humanoid then
 		humanoid.WalkSpeed = 0
 		humanoid.AutoRotate = false
-		for _, track in humanoid:GetPlayingAnimationTracks() do
+		-- Humanoid:GetPlayingAnimationTracks is deprecated (Animator owns it
+		-- now) and missing from the type definitions; the call still works.
+		for _, track in (humanoid :: any):GetPlayingAnimationTracks() do
 			track:Stop()
 		end
 	end
@@ -1154,7 +1207,7 @@ function EncounterService:PlayPhaseCutscene(mob: Model, opts: { duration: number
 	end
 
 	-- Pan the camera onto the boss.
-	local cameraTarget = mob:FindFirstChild("HumanoidRootPart")
+	local cameraTarget = mob:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 	task.wait(CUTSCENE_CAMERA_DELAY)
 
@@ -1165,8 +1218,11 @@ function EncounterService:PlayPhaseCutscene(mob: Model, opts: { duration: number
 	task.wait(ENCOUNTER_PHASE_CAMERA_TWEEN_DURATION)
 
 	-- The beat: apply the phase's mechanical change while the camera holds.
-	if opts.onCutsceneBeat then
-		local ok, err = pcall(opts.onCutsceneBeat)
+	local onCutsceneBeat = options.onCutsceneBeat
+	if onCutsceneBeat then
+		-- The beat returns nothing; pcall's (ok, err) pair needs the
+		-- variadic return to type.
+		local ok, err = pcall(onCutsceneBeat :: () -> ...any)
 		if not ok then
 			warn(("[EncounterService] Phase cutscene beat callback errored: %s"):format(tostring(err)))
 		end
@@ -1194,7 +1250,7 @@ function EncounterService:PlayPhaseCutscene(mob: Model, opts: { duration: number
 		end
 	end
 	self:_endCutscene()
-	self.Client.EncounterPhaseEnd:FireAll()
+	DungeonNetwork.EncounterPhaseEnd.FireAll()
 
 	-- Resume the wave spawner for the (harder) new phase.
 	if room and ZombieSpawnService then
@@ -1208,7 +1264,7 @@ end
 -- _onMobDefeated.
 -- HUD title for a lobby kind ("Miniboss" -> "- Miniboss Room -" is built
 -- client-side from `label`).
-function EncounterService:_lobbyLabel(kind: string): string
+function EncounterService._lobbyLabel(_self: typeof(EncounterService), kind: string): string
 	if kind == NEXT_DUNGEON_KIND then
 		return "Next Dungeon"
 	end
@@ -1220,11 +1276,16 @@ end
 -- descend; expiry (30s, or 3s once everyone remaining is on) ->
 -- DungeonService:AdvanceRun. Players who take the ExitPortal are excluded
 -- from the required count.
-function EncounterService:StartNextDungeonVote(room, gateCFrame: CFrame)
+function EncounterService.StartNextDungeonVote(self: typeof(EncounterService), room: Room, gateCFrame: CFrame)
 	self:_startLobby(NEXT_DUNGEON_KIND, room, gateCFrame)
 end
 
-function EncounterService:StartEncounter(kind: EncounterKind, room, gateCFrame: CFrame)
+function EncounterService.StartEncounter(
+	self: typeof(EncounterService),
+	kind: EncounterKind,
+	room: Room,
+	gateCFrame: CFrame
+)
 	if kind ~= ROOM_TYPES.Miniboss and kind ~= ROOM_TYPES.Boss then
 		warn(("[EncounterService] Unknown encounter kind: %s"):format(tostring(kind)))
 		return
@@ -1235,7 +1296,7 @@ end
 -- Tear down any in-flight lobby + clear the encounter HUD. Called by
 -- DungeonService when the dungeon regenerates so a mid-encounter regen
 -- doesn't leave a phantom pad / HUD.
-function EncounterService:CleanupAll()
+function EncounterService.CleanupAll(self: typeof(EncounterService))
 	-- Invalidate everything the last floor scheduled (see _floorGeneration).
 	self._floorGeneration += 1
 	self:_cleanupLobby()
@@ -1243,17 +1304,9 @@ function EncounterService:CleanupAll()
 		self._activeEncounter.hpConn:Disconnect()
 	end
 	self._activeEncounter = nil
-	self.Client.EncounterData:Set(nil)
+	self._dataProperty:Set(nil)
 end
 
 --[ Initializers ]--
-
-function EncounterService:KnitInit() end
-
-function EncounterService:KnitStart()
-	DungeonService = Knit.GetService("DungeonService")
-	ZombieSpawnService = Knit.GetService("ZombieSpawnService")
-	IsometricCameraService = Knit.GetService("IsometricCameraService")
-end
 
 return EncounterService

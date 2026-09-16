@@ -1,30 +1,31 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local groundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.groundFracture)
 
-local VFXService
-
 local CASTING_HUMANOID_WALK_SPEED = 2
 
-Knit.OnStart():andThen(function()
-	VFXService = Knit.GetService("VFXService")
-end)
+-- The Roblox type definitions no longer allow indexing the root part off
+-- the character; the cast keeps a missing one erroring where the old index did.
+local function getRootPart(character: Model): BasePart
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart
+end
 
 return function(player: Player, preload: boolean, cframe: CFrame)
-	local character = player.Character
+	local character = player.Character :: Model
 
-	character.Humanoid.WalkSpeed = CASTING_HUMANOID_WALK_SPEED
+	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = CASTING_HUMANOID_WALK_SPEED
 
-	local fireBlastAnimation = character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator"):LoadAnimation(
+	local fireBlastAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("HollowPurpleAnimation")
 	)
 
@@ -57,7 +58,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		-- heard no matter where the off-screen preload cast is placed.
 		if not preload then
 			local hollowPurpleMergeSound = ReplicatedStorage.GameAssets.Sounds.HollowPurpleMerge:Clone()
-			hollowPurpleMergeSound.Parent = character.HumanoidRootPart
+			hollowPurpleMergeSound.Parent = getRootPart(character)
 			hollowPurpleMergeSound.TimePosition = 0.1
 			hollowPurpleMergeSound:Play()
 			Debris:AddItem(hollowPurpleMergeSound, 5)
@@ -71,7 +72,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 		task.delay(0.5, function()
 			local chargedFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Hollow Purple"]].ChargeFX.Attachment:Clone()
-			chargedFX.Parent = character["Right Arm"]
+			chargedFX.Parent = character:FindFirstChild("Right Arm")
 
 			task.delay(0.5, function()
 				for _, v in pairs(chargedFX:GetDescendants()) do
@@ -104,7 +105,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 		-- SERVER HIT VALIDATION
 		if player == Players.LocalPlayer and not preload then
-			VFXService:OnVFXSweepHitboxRequested(player, MagicNames["Hollow Purple"], origin)
+			Magic.SweepHitboxRequested.Fire({ MagicName = MagicNames["Hollow Purple"], CFrame = origin })
 		end
 
 		task.delay(0.1, function()
@@ -123,12 +124,12 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			-- Silent on the preload pass, same reason as the merge sound above.
 			if not preload then
 				local hollowPurpleBlast1Sound = ReplicatedStorage.GameAssets.Sounds.HollowPurpleBlast1:Clone()
-				hollowPurpleBlast1Sound.Parent = character.HumanoidRootPart
+				hollowPurpleBlast1Sound.Parent = getRootPart(character)
 				hollowPurpleBlast1Sound:Play()
 				Debris:AddItem(hollowPurpleBlast1Sound, 5)
 
 				local hollowPurpleBlast2Sound = ReplicatedStorage.GameAssets.Sounds.HollowPurpleBlast2:Clone()
-				hollowPurpleBlast2Sound.Parent = character.HumanoidRootPart
+				hollowPurpleBlast2Sound.Parent = getRootPart(character)
 				hollowPurpleBlast2Sound:Play()
 				Debris:AddItem(hollowPurpleBlast2Sound, 5)
 			end

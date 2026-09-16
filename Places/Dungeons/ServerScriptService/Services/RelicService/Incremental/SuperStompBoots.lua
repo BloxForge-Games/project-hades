@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/RelicService/Incremental/SuperStompBoots.lua
 	Description:
@@ -8,7 +9,7 @@
 
 	Damage math:
 	    base = 25 × PlayerLevel             (relic data callback × profile.Level)
-	    routed through DamageService:TakeDamage with
+	    routed through getDamageService():TakeDamage with
 	    isMagic=false, isMelee=true so weapon-damage amplifiers
 	    compose (Linked Sword, Berserker's Claymore, Red Hyperlaser
 	    Gun, Murder Knife, Phoenix Bow, Attack Doge, Teddy Bloxpin's
@@ -17,13 +18,32 @@
 	Was previously direct `humanoid:TakeDamage(MaxHealth × fraction)`
 	which bypassed the whole pipeline.
 
-	VFX hook unchanged: fires `OnSuperStompBoots:FireAll(caster,
+	VFX hook unchanged: fires `RelicNetwork.SuperStomp.FireAll({ caster,
 	landingPosition, radius, baseDamage)` AFTER damage application.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+-- DamageService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local damageServiceLazy: any = nil
+local function getDamageService(): any
+	if damageServiceLazy == nil then
+		damageServiceLazy = (require :: any)(ServerScriptService.Services.DamageService)
+	end
+	return damageServiceLazy
+end
+-- StatusConditionService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local statusConditionServiceLazy: any = nil
+local function getStatusConditionService(): any
+	if statusConditionServiceLazy == nil then
+		statusConditionServiceLazy = (require :: any)(ServerScriptService.Services.StatusConditionService)
+	end
+	return statusConditionServiceLazy
+end
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 -- Shared helper that reads the PlayerLevel attribute (ExperienceService
 -- mirrors profile.Level onto it). Replaces the prior inline DataService
 -- lookup so the value matches everywhere — including the relic UI's
@@ -35,6 +55,15 @@ local STOMP_RADIUS = 10 -- studs; tune via this constant
 local SuperStompBoots = {}
 SuperStompBoots.__index = SuperStompBoots
 
+type SuperStompBootsFields = {
+	_player: Player,
+	_damagePerLevel: number,
+	_landingPosition: Vector3,
+	_relicService: any,
+	_ignoreListService: any,
+	_damageIndicatorService: any,
+}
+
 function SuperStompBoots.new(
 	player: Player,
 	damagePerLevel: number,
@@ -43,7 +72,7 @@ function SuperStompBoots.new(
 	ignoreListService: any,
 	damageIndicatorService: any
 )
-	local self = setmetatable({}, SuperStompBoots)
+	local self = setmetatable({} :: SuperStompBootsFields, SuperStompBoots)
 
 	self._player = player
 	self._damagePerLevel = damagePerLevel
@@ -55,7 +84,7 @@ function SuperStompBoots.new(
 	return self
 end
 
-function SuperStompBoots:InvokeStomp()
+function SuperStompBoots.InvokeStomp(self: SuperStompBootsFields)
 	local character = self._player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
@@ -66,8 +95,6 @@ function SuperStompBoots:InvokeStomp()
 	-- Player level → base damage. Reads the PlayerLevel attribute via
 	-- the shared helper; falls back to the profile on the server side
 	-- if the attribute hasn't been stamped yet (rare init race).
-	local DamageService = Knit.GetService("DamageService")
-	local StatusConditionService = Knit.GetService("StatusConditionService")
 	local level = getPlayerLevel(self._player)
 	local baseDamage = self._damagePerLevel * level
 
@@ -101,7 +128,7 @@ function SuperStompBoots:InvokeStomp()
 		-- procs Berserker's Claymore), but it's a relic proc rather than a
 		-- weapon swing, so it deals damage without staggering. Flip that last
 		-- argument to false if stomps should knock weak mobs around.
-		DamageService:TakeDamage(self._player, mobHumanoid, baseDamage, false, false, true, true)
+		getDamageService():TakeDamage(self._player, mobHumanoid, baseDamage, false, false, true, true)
 
 		-- TakeDamage does NOT roll the status applier tables — the hit
 		-- paths own that (melee/projectile → weapon hub, onHitboxDamage
@@ -109,7 +136,7 @@ function SuperStompBoots:InvokeStomp()
 		-- weapon hub here per mob (the stomp is weapon-flavored:
 		-- isMagic=false, isMelee=true), matching how GhostDragon calls
 		-- the magic hub for its aura ticks.
-		StatusConditionService:ApplyWeaponOnHitStatuses(self._player, nil, model, false)
+		getStatusConditionService():ApplyWeaponOnHitStatuses(self._player, nil, model, false)
 	end
 
 	-- Client replication hook for VFX. Fires AFTER damage application
@@ -117,7 +144,12 @@ function SuperStompBoots:InvokeStomp()
 	-- FireAll (rather than FireFor caster) so other clients see the
 	-- stomp on the caster too — consistent with how OnFireworksEffectActivated
 	-- and OnVolleyballEffectActivated broadcast.
-	self._relicService.Client.OnSuperStompBoots:FireAll(self._player, self._landingPosition, STOMP_RADIUS, baseDamage)
+	RelicNetwork.SuperStomp.FireAll({
+		Caster = self._player,
+		LandingPosition = self._landingPosition,
+		Radius = STOMP_RADIUS,
+		BaseDamage = baseDamage,
+	})
 end
 
 return SuperStompBoots

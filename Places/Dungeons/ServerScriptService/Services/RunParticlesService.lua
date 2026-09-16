@@ -1,37 +1,56 @@
+--!strict
+--[[
+	Module: Services/RunParticlesService.lua
+	Description:
+	The sprint smoke under a running character: the client asks for the
+	part once (RunParticlesCreate) and toggles its emitter with its own
+	speed (RunParticlesToggle); the server owns the part so everyone sees it.
+
+	A Blitz module. WeldConstraintService is
+	required directly and used in Start.
+]]
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local WeldConstraintService
+local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
+local WeldConstraintService = require(ServerScriptService.Submodules.Core.Source.Services.WeldConstraintService)
 
 local SPRINT_PART_NAME = "SprintSmoke"
 
-local RunParticlesService = Knit.CreateService({
+local RunParticlesService = {
 	Name = "RunParticlesService",
-	Client = { CreateRunParticles = Knit.CreateSignal(), ToggleRunParticles = Knit.CreateSignal() },
-})
+	Dependencies = { WeldConstraintService } :: { any },
+}
 
-function RunParticlesService:KnitInit()
-	WeldConstraintService = Knit.GetService("WeldConstraintService")
-end
-
-function RunParticlesService:KnitStart()
-	self.Client.CreateRunParticles:Connect(function(player: Player)
+function RunParticlesService.Start(_self: typeof(RunParticlesService))
+	PlayerNetwork.RunParticlesCreate.On(function(player: Player)
 		local character = player.Character
+		if not character then
+			return
+		end
+		local rootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if not rootPart then
+			return
+		end
 
 		if character:FindFirstChild(SPRINT_PART_NAME) == nil then
-			local smokeClone: Part = game.ReplicatedStorage.GameAssets.Particles[SPRINT_PART_NAME]:Clone()
+			local template = ReplicatedStorage.GameAssets.Particles:FindFirstChild(SPRINT_PART_NAME) :: BasePart
+			local smokeClone = template:Clone()
 			smokeClone.Anchored = false
-			smokeClone.CFrame = character.HumanoidRootPart.CFrame * CFrame.new(0, -2.5, 0)
+			smokeClone.CFrame = rootPart.CFrame * CFrame.new(0, -2.5, 0)
 			smokeClone.Parent = character
 
-			WeldConstraintService:CreateWeldConstraint(smokeClone, character.HumanoidRootPart)
+			WeldConstraintService:CreateWeldConstraint(smokeClone, rootPart)
 		end
 	end)
 
-	self.Client.ToggleRunParticles:Connect(function(player: Player, enabled: boolean)
-		if player.Character:FindFirstChild(SPRINT_PART_NAME) then
-			player.Character:FindFirstChild(SPRINT_PART_NAME)["SprintParticles"].Enabled = enabled
+	PlayerNetwork.RunParticlesToggle.On(function(player: Player, enabled: boolean)
+		local character = player.Character
+		local smoke = character and character:FindFirstChild(SPRINT_PART_NAME)
+		local particles = smoke and smoke:FindFirstChild("SprintParticles") :: ParticleEmitter?
+		if particles then
+			particles.Enabled = enabled
 		end
 	end)
 end

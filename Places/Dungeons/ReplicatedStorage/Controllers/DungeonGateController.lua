@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: DungeonGateController.lua
 	Description:
@@ -46,23 +47,33 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local vfxFade = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxFade)
 
-local DungeonService
-local CameraShakeController
-
 --[ Controller ]--
 
-local DungeonGateController = Knit.CreateController({
+local DungeonGateController = {
 	Name = "DungeonGateController",
-})
+	Dependencies = { CameraShakeController } :: { any },
+}
+
+-- One gate's attached VFX rig (see _attachGateVFX).
+type GateVFXRecord = {
+	rig: BasePart,
+	targets: { vfxFade.FadeTarget },
+	emitters: { ParticleEmitter },
+	sound: Sound?,
+	authoredVolume: number,
+	revealed: boolean,
+	faded: boolean,
+}
 
 -- [gate BasePart] = { rig, targets (vfxFade), sound, faded }
-DungeonGateController._gateVFX = {}
+DungeonGateController._gateVFX = {} :: { [Instance]: GateVFXRecord }
 DungeonGateController._warnedMissingGateVFX = false
 
 --[ Private ]--
@@ -116,7 +127,11 @@ end
 
 local function endOcclusionIgnore(gate: BasePart)
 	local count = math.max((occlusionIgnoreCounts[gate] or 1) - 1, 0)
-	occlusionIgnoreCounts[gate] = if count > 0 then count else nil
+	if count > 0 then
+		occlusionIgnoreCounts[gate] = count
+	else
+		occlusionIgnoreCounts[gate] = nil
+	end
 	if count == 0 and gate.Parent then
 		gate:SetAttribute(Attributes.OcclusionFadeIgnore, nil)
 	end
@@ -235,7 +250,7 @@ end
 -- fit), parented UNDER the gate so it dies with the gate and the dungeon.
 -- Anchored -- an anchored child does not follow a CFrame tween on its
 -- parent, so the rise / slam handlers below move it explicitly.
-function DungeonGateController:_attachGateVFX(gate: Instance)
+function DungeonGateController._attachGateVFX(self: typeof(DungeonGateController), gate: Instance)
 	if self._gateVFX[gate] or not gate:IsA("BasePart") then
 		return
 	end
@@ -262,7 +277,7 @@ function DungeonGateController:_attachGateVFX(gate: Instance)
 	-- The ambience is authored on the part (not Playing by default) and
 	-- runs the whole time the gate is locked and visible: started, looped,
 	-- by the reveal below. The open fade tweens it to silence.
-	local sound = rig:FindFirstChild(GATE_VFX_SOUND_NAME)
+	local sound = rig:FindFirstChild(GATE_VFX_SOUND_NAME) :: Sound?
 	if not (sound and sound:IsA("Sound")) then
 		sound = nil
 	end
@@ -270,7 +285,7 @@ function DungeonGateController:_attachGateVFX(gate: Instance)
 	-- Emitters authored ON are switched off until the reveal (a faded
 	-- emitter still spawns invisible particles); remembered so the reveal
 	-- can switch exactly those back on.
-	local emitters = {}
+	local emitters: { ParticleEmitter } = {}
 	for _, descendant in rig:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") and descendant.Enabled then
 			descendant.Enabled = false
@@ -278,7 +293,7 @@ function DungeonGateController:_attachGateVFX(gate: Instance)
 		end
 	end
 
-	local record = {
+	local record: GateVFXRecord = {
 		rig = rig,
 		targets = vfxFade.capture(rig),
 		emitters = emitters,
@@ -318,7 +333,7 @@ end
 
 -- The room was entered: fade particles / beams / lights and the ambience
 -- in together, once. A gate whose door already opened stays hidden.
-function DungeonGateController:_revealGateVFX(gate: BasePart)
+function DungeonGateController._revealGateVFX(self: typeof(DungeonGateController), gate: BasePart)
 	local record = self._gateVFX[gate]
 	if not record or record.revealed or record.faded then
 		return
@@ -343,7 +358,7 @@ function DungeonGateController:_revealGateVFX(gate: BasePart)
 end
 
 -- Fades particles / beams / lights and the ambience out together, once.
-function DungeonGateController:_fadeGateVFX(gate: BasePart)
+function DungeonGateController._fadeGateVFX(self: typeof(DungeonGateController), gate: BasePart)
 	local record = self._gateVFX[gate]
 	if not record or record.faded then
 		return
@@ -368,7 +383,7 @@ function DungeonGateController:_fadeGateVFX(gate: BasePart)
 	end)
 end
 
-function DungeonGateController:_detachGateVFX(gate: Instance)
+function DungeonGateController._detachGateVFX(self: typeof(DungeonGateController), gate: Instance)
 	local record = self._gateVFX[gate]
 	if not record then
 		return
@@ -381,7 +396,7 @@ end
 
 -- OnGateOpened: rise with the gate (same tween) and, the FIRST time only,
 -- fade particles / beams / lights and the ambience out together.
-function DungeonGateController:_openGateVFX(gate: BasePart, riseStuds: number)
+function DungeonGateController._openGateVFX(self: typeof(DungeonGateController), gate: BasePart, riseStuds: number)
 	local record = self._gateVFX[gate]
 	if not record then
 		return
@@ -398,7 +413,7 @@ end
 
 -- OnGateCrossed: drop back into the doorway with the gate. Stays faded --
 -- the room is done; the chains never return.
-function DungeonGateController:_dropGateVFX(gate: BasePart, originalCFrame: CFrame)
+function DungeonGateController._dropGateVFX(self: typeof(DungeonGateController), gate: BasePart, originalCFrame: CFrame)
 	local record = self._gateVFX[gate]
 	if not record then
 		return
@@ -410,10 +425,7 @@ function DungeonGateController:_dropGateVFX(gate: BasePart, originalCFrame: CFra
 	):Play()
 end
 
-function DungeonGateController:KnitStart()
-	DungeonService = Knit.GetService("DungeonService")
-	CameraShakeController = Knit.GetController("CameraShakeController")
-
+function DungeonGateController.Start(self: typeof(DungeonGateController))
 	-- Locked-gate dressing. Tags replicate with the instance, so this covers
 	-- gates that already exist on join and every regeneration.
 	for _, gate in CollectionService:GetTagged(TagList.LockedExitGate) do
@@ -428,7 +440,7 @@ function DungeonGateController:KnitStart()
 
 	-- Boss-room ExitPortal surfacing: same open sound as a gate, played on
 	-- the portal (its PrimaryPart / first BasePart) so it's positional.
-	DungeonService.OnExitPortalRising:Connect(function(portal: Model)
+	DungeonNetwork.ExitPortalRising.On(function(portal: Model?)
 		if not portal or not portal.Parent then
 			return
 		end
@@ -444,7 +456,8 @@ function DungeonGateController:KnitStart()
 		playGateSound(anchor, GATE_OPEN_SOUND_ID)
 	end)
 
-	DungeonService.OnGateOpened:Connect(function(gate: BasePart, riseStuds: number)
+	DungeonNetwork.GateOpened.On(function(payload: { Gate: BasePart?, RiseStuds: number, TweenSeconds: number })
+		local gate, riseStuds = payload.Gate, payload.RiseStuds
 		if not gate or not gate.Parent then
 			return
 		end
@@ -478,7 +491,8 @@ function DungeonGateController:KnitStart()
 		self:_openGateVFX(gate, riseStuds)
 	end)
 
-	DungeonService.OnGateCrossed:Connect(function(gate: BasePart, originalCFrame: CFrame)
+	DungeonNetwork.GateCrossed.On(function(payload: { Gate: BasePart?, OriginalCFrame: CFrame, TweenSeconds: number })
+		local gate, originalCFrame = payload.Gate, payload.OriginalCFrame
 		if not gate or not gate.Parent then
 			return
 		end
@@ -516,10 +530,8 @@ end
 
 -- How long this client's gate slam (OnGateCrossed) tween runs. The local
 -- re-fog (FogOfWarController) starts its beat when the slam lands.
-function DungeonGateController:GetGateSlamSeconds(): number
+function DungeonGateController.GetGateSlamSeconds(_self: typeof(DungeonGateController)): number
 	return SLAM_TWEEN_SECONDS
 end
-
-function DungeonGateController:KnitInit() end
 
 return DungeonGateController

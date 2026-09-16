@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: RelicController.lua
 ]]
@@ -6,10 +7,12 @@ local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local QuadraticBezierController = require(ReplicatedStorage.Controllers.QuadraticBezierController)
+local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local SignalTypes = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 
 -- Relic effects
 local Volleyball = require(script.Volleyball)
@@ -19,23 +22,21 @@ local LightningStrike = require(script.LightningStrike)
 local Jail = require(script.Jail)
 local Fireworks = require(script.Fireworks)
 
-local RelicService
-local QuadraticBezierController
-
-local RelicController = Knit.CreateController({
+local RelicController = {
 	Name = "RelicController",
-	Client = {},
+	Dependencies = { QuadraticBezierController } :: { any },
 
-	_relicRegistry = {},
-	_clientRenderedRelics = {}, -- [userId] = { parts = {}, count = number, visible = bool }
-})
-
-RelicController.Signals = {
-	OnRelicCollected = Signal.new() :: (relicName: RelicNames.RelicNames) -> (),
-	OnRelicsUpdated = Signal.new() :: () -> (),
+	_relicRegistry = {} :: { [string]: any },
+	_clientRenderedRelics = {}, -- [userId] = { parts = {}, count = number, visible = bool },
 }
 
-function RelicController:GetRelicEffect(player: Player, relicName: RelicNames.RelicNames)
+RelicController.Signals = {
+	OnRelicCollected = Signal.new() :: SignalTypes.Signal<RelicNames.RelicNames>,
+	-- (userId: number, registry: { [relicName]: count }?, list: { RelicNames })
+	OnRelicsUpdated = Signal.new() :: SignalTypes.Signal<number, any, any>,
+}
+
+function RelicController.GetRelicEffect(self: typeof(RelicController), player: Player, relicName: RelicNames.RelicNames)
 	if
 		self._relicRegistry[tostring(player.UserId)]
 		and self._relicRegistry[tostring(player.UserId)][relicName]
@@ -45,20 +46,14 @@ function RelicController:GetRelicEffect(player: Player, relicName: RelicNames.Re
 	end
 end
 
-function RelicController:GetRelicsFromUserId(userId: number)
+function RelicController.GetRelicsFromUserId(self: typeof(RelicController), userId: number)
 	return self._relicRegistry[tostring(userId)] or nil
 end
 
-function RelicController:KnitStart()
-	RelicService = Knit.GetService("RelicService")
-	QuadraticBezierController = Knit.GetController("QuadraticBezierController")
-
-	RelicService.OnReplicateRelics:Connect(
-		function(
-			playerId: number,
-			relicRegistry: { [RelicNames.RelicNames]: number },
-			relicsList: { RelicNames.RelicNames }
-		)
+function RelicController.Start(self: typeof(RelicController))
+	RelicNetwork.RelicsReplicated.On(
+		function(payload: { UserId: number, Registry: { [any]: any }, List: { [any]: any } })
+			local playerId, relicRegistry, relicsList = payload.UserId, payload.Registry, payload.List
 			self._relicRegistry = relicRegistry
 
 			if playerId == Players.LocalPlayer.UserId then
@@ -71,14 +66,25 @@ function RelicController:KnitStart()
 		end
 	)
 
-	RelicService.OnFireworksEffectActivated:Connect(
-		function(player: Player, targetCharacter: Model, startTime: number, duration: number)
-			Fireworks.new(player.Character, targetCharacter, duration, startTime, QuadraticBezierController)
+	RelicNetwork.FireworksEffect.On(
+		function(payload: { Caster: Player?, Target: Model?, StartTime: number, Duration: number })
+			local player, targetCharacter, startTime, duration =
+				payload.Caster, payload.Target, payload.StartTime, payload.Duration
+			if not player or not targetCharacter then
+				return
+			end
+			-- Fireworks indexes the character's HumanoidRootPart when played,
+			-- so a caster with no character has always errored; the cast
+			-- keeps that behaviour.
+			Fireworks.new(player.Character :: Model, targetCharacter, duration, startTime, QuadraticBezierController)
 				:PlayEffect()
 		end
 	)
 
-	RelicService.OnJailEffectActivated:Connect(function(targetCharacter: Model)
+	RelicNetwork.JailEffect.On(function(targetCharacter: Model?)
+		if not targetCharacter then
+			return
+		end
 		Jail.new(targetCharacter):PlayEffect()
 	end)
 
@@ -87,39 +93,44 @@ function RelicController:KnitStart()
 	-- Fuse Bomb's bombs both ride it — the payload's relicName picks the
 	-- model (older payloads omit it; default to the pumpkin). The real
 	-- damage hitbox is fired server-side on the same clock.
-	RelicService.OnPumpkinEffectActivated:Connect(
-		function(
-			position: Vector3,
-			targetPosition: Vector3,
-			startTime: number,
-			duration: number,
-			_magicName: string?,
-			relicName: string?
-		)
-			ThrownRelic.new(
-				relicName or RelicNames["Trick Or Trap"],
-				position,
-				targetPosition,
-				startTime,
-				duration,
-				QuadraticBezierController
-			):PlayEffect()
-		end
-	)
+	RelicNetwork.ThrownRelicLaunched.On(function(payload: {
+		Position: Vector3,
+		TargetPosition: Vector3,
+		StartTime: number,
+		Duration: number,
+		MagicName: string?,
+		RelicName: string?,
+	})
+		local position, targetPosition, startTime, duration, relicName =
+			payload.Position, payload.TargetPosition, payload.StartTime, payload.Duration, payload.RelicName
+		ThrownRelic.new(
+			relicName or RelicNames["Trick Or Trap"],
+			position,
+			targetPosition,
+			startTime,
+			duration,
+			QuadraticBezierController
+		):PlayEffect()
+	end)
 
 	-- `scale` is 1 for a normal Shatter. (The 2x Staff of Azure Ever Ice
 	-- variant was cut in the 2026-09 pass; the parameter stays so a future
 	-- variant needs no signal change.)
-	RelicService.OnShatterActivated:Connect(function(position: Vector3, scale: number?)
-		Shatter.new(position, scale):PlayEffect()
+	RelicNetwork.ShatterEffect.On(function(payload: { Position: Vector3, Scale: number })
+		Shatter.new(payload.Position, payload.Scale):PlayEffect()
 	end)
 
-	RelicService.OnLightningStrikeActivated:Connect(function(position: Vector3)
+	RelicNetwork.LightningStrikeEffect.On(function(position: Vector3)
 		LightningStrike.new(position):PlayEffect()
 	end)
 
-	RelicService.OnVolleyballEffectActivated:Connect(
-		function(character: Model, targetCharacter: Model, startTime: number, duration: number)
+	RelicNetwork.VolleyballEffect.On(
+		function(payload: { Character: Model?, Target: Model?, StartTime: number, Duration: number })
+			local character, targetCharacter, startTime, duration =
+				payload.Character, payload.Target, payload.StartTime, payload.Duration
+			if not character or not targetCharacter then
+				return
+			end
 			Volleyball.new(character, targetCharacter, duration, startTime, QuadraticBezierController):PlayEffect()
 		end
 	)
@@ -131,23 +142,25 @@ function RelicController:KnitStart()
 	--   landingPosition : Vector3 where the dodge ended
 	--   radius          : number  (AOE radius, in studs)
 	--   baseDamage      : number  (pre-variance, pre-rounding)
-	RelicService.OnSuperStompBoots:Connect(function(_caster: Player, landingPosition: Vector3)
-		local superStompBootsVFX = ReplicatedStorage.GameAssets.VFX["Super Stomp Boots"]["Super Stomp Boots"]:Clone()
-		superStompBootsVFX:PivotTo(CFrame.new(landingPosition))
-		superStompBootsVFX.Parent = workspace.IgnoreInstances.MagicSpells
+	RelicNetwork.SuperStomp.On(
+		function(payload: { Caster: Player?, LandingPosition: Vector3, Radius: number, BaseDamage: number })
+			local landingPosition = payload.LandingPosition
+			local superStompBootsVFX =
+				ReplicatedStorage.GameAssets.VFX["Super Stomp Boots"]["Super Stomp Boots"]:Clone()
+			superStompBootsVFX:PivotTo(CFrame.new(landingPosition))
+			superStompBootsVFX.Parent = workspace.IgnoreInstances.MagicSpells
 
-		for _, particle in superStompBootsVFX.Part.Attachment:GetChildren() do
-			if particle:IsA("ParticleEmitter") then
-				particle:Emit(25)
+			for _, particle in superStompBootsVFX.Part.Attachment:GetChildren() do
+				if particle:IsA("ParticleEmitter") then
+					particle:Emit(25)
+				end
 			end
+
+			superStompBootsVFX.Part.Stomp:Play()
+
+			Debris:AddItem(superStompBootsVFX, 5)
 		end
-
-		superStompBootsVFX.Part.Stomp:Play()
-
-		Debris:AddItem(superStompBootsVFX, 5)
-	end)
+	)
 end
-
-Knit.AddControllers(script.SubControllers)
 
 return RelicController

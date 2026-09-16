@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/PlayerVitalsBillboardService.lua
 	Description:
@@ -20,19 +21,18 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 
 local BILLBOARD_TEMPLATE_NAMES = { "HealthBillboardGui", "ManaBillboardGui" }
 
-local PlayerEventService
-
-local PlayerVitalsBillboardService = Knit.CreateService({
+local PlayerVitalsBillboardService = {
 	Name = "PlayerVitalsBillboardService",
-	Client = {},
-})
+	Dependencies = { PlayerEventService } :: { any },
+}
 
-function PlayerVitalsBillboardService:_attach(character: Model)
+function PlayerVitalsBillboardService._attach(_self: typeof(PlayerVitalsBillboardService), character: Model)
 	local hrp = character:WaitForChild("HumanoidRootPart", 10)
 	if not hrp then
 		return
@@ -55,9 +55,7 @@ function PlayerVitalsBillboardService:_attach(character: Model)
 	end
 end
 
-function PlayerVitalsBillboardService:KnitStart()
-	PlayerEventService = Knit.GetService("PlayerEventService")
-
+function PlayerVitalsBillboardService.Start(self: typeof(PlayerVitalsBillboardService))
 	PlayerEventService.OnCharacterAdded:Connect(function(_player: Player, character: Model)
 		task.spawn(function()
 			self:_attach(character)

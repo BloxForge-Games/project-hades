@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: RelicRenderController.lua
@@ -15,27 +16,33 @@ local CollectionService = game:GetService("CollectionService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local InCombatController = require(ReplicatedStorage.Controllers.InCombatController)
+local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 
-local RelicService
-local InCombatController
+-- GearDropsRenderController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local gearDropsRenderControllerLazy: any = nil
+local function getGearDropsRenderController(): any
+	if gearDropsRenderControllerLazy == nil then
+		gearDropsRenderControllerLazy = (require :: any)(ReplicatedStorage.Controllers.GearDropsRenderController)
+	end
+	return gearDropsRenderControllerLazy
+end
 
--- Cross-controller reference. Resolved in KnitStart. Used to mirror the
+-- Cross-controller reference. Resolved in Start. Used to mirror the
 -- relic hover state into the gear-drop system: hovering a relic dims
 -- every gear drop the local player owns, hovering a gear drop dims
 -- every relic. Net effect: only ONE pickup-class thing is ever
 -- highlighted at a time.
-local GearDropsRenderController
 
-local RelicRenderController = Knit.CreateController({
+local RelicRenderController = {
 	Name = "RelicRenderController",
-	Client = {},
-})
+	Dependencies = { InCombatController } :: { any },
+}
 
 --[ Imports ]--
 
@@ -57,11 +64,42 @@ local PARTICLE_RESTORED_BRIGHTNESS_LAYER = 4
 local PARTICLE_RESTORED_BRIGHTNESS_SPARK = 4
 local PARTICLE_RESTORED_BRIGHTNESS_SHINE = 1
 
+--[ Types ]--
+
+-- Per-model orbit state: the radius eases out from the spawn point, and
+-- the bob terms (all 0 today) add a vertical wobble on top.
+type SpiralState = {
+	currentRadius: number,
+	targetRadius: number,
+	bobAmplitude: number,
+	bobFrequency: number,
+	bobPhase: number,
+}
+
+type SpinState = {
+	spin: Vector3,
+	rotation: CFrame,
+}
+
+type RenderedRelicPart = {
+	part: Model,
+	count: number,
+}
+
+-- One orbiting set per player: relic name -> model, plus the running
+-- total that spaces the orbit and the last-applied visibility flags.
+type RenderedRelicEntry = {
+	parts: { [string]: RenderedRelicPart },
+	count: number,
+	visible: boolean,
+	hiddenAll: boolean?,
+}
+
 --[ Properties ]--
 
 RelicRenderController._orbitClock = 0
-RelicRenderController._radiusSpiralState = {}
-RelicRenderController._localSpinState = {}
+RelicRenderController._radiusSpiralState = {} :: { [Model]: SpiralState }
+RelicRenderController._localSpinState = {} :: { [Model]: SpinState }
 RelicRenderController._combatOverride = false
 -- True from the run-transition / landing start until the landing cutscene
 -- releases: EVERY orbiting relic on this screen (all players') is fully
@@ -74,13 +112,14 @@ RelicRenderController._cutsceneHidden = false
 RelicRenderController._promptOverride = false
 RelicRenderController._defaultVisible = true
 RelicRenderController._relicHighlight = Instance.new("Highlight")
-RelicRenderController._clientRenderedRelics = {}
-RelicRenderController._relics = {}
-RelicRenderController._machines = {}
+RelicRenderController._clientRenderedRelics = {} :: { [number]: RenderedRelicEntry }
+RelicRenderController._relics = {} :: { [Instance]: true }
+RelicRenderController._machines = {} :: { [Instance]: true }
+RelicRenderController._relicRegistry = nil :: { [any]: any }?
 
 --[ Private Functions ]--
 
-function RelicRenderController:_renderRelics(dt: number)
+function RelicRenderController._renderRelics(self: typeof(RelicRenderController), dt: number)
 	self._orbitClock += dt * 0.35
 
 	local visible = self:ComputeVisibility()
@@ -119,7 +158,13 @@ function RelicRenderController:_renderRelics(dt: number)
 			i += 1
 
 			if not self._radiusSpiralState[model] then
-				self._radiusSpiralState[model] = { currentRadius = 0, targetRadius = 6.5 }
+				self._radiusSpiralState[model] = {
+					currentRadius = 0,
+					targetRadius = 6.5,
+					bobAmplitude = 0,
+					bobFrequency = 0,
+					bobPhase = 0,
+				}
 			end
 
 			local s = self._radiusSpiralState[model]
@@ -130,12 +175,6 @@ function RelicRenderController:_renderRelics(dt: number)
 
 			local x = math.cos(angle) * radius
 			local z = math.sin(angle) * radius
-
-			if not s.bobAmplitude then
-				s.bobAmplitude = 0
-				s.bobFrequency = 0
-				s.bobPhase = 0
-			end
 
 			local bob = math.sin(self._orbitClock * s.bobFrequency + s.bobPhase) * s.bobAmplitude
 			local worldPos = center + Vector3.new(x, bob, z)
@@ -158,7 +197,12 @@ end
 
 --[ Public Functions ]--
 
-function RelicRenderController:ApplyVisibility(entry: { parts: { part: Model } }, visible: boolean, isDead: boolean)
+function RelicRenderController.ApplyVisibility(
+	_self: typeof(RelicRenderController),
+	entry: RenderedRelicEntry,
+	visible: boolean,
+	isDead: boolean
+)
 	for _, data in pairs(entry.parts) do
 		local model = data.part
 
@@ -188,7 +232,7 @@ function RelicRenderController:ApplyVisibility(entry: { parts: { part: Model } }
 			local attachment = model.PrimaryPart:FindFirstChild("RelicParticleAttachment")
 			if attachment then
 				local brightnessInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-				local targets = {
+				local targets: { [string]: number } = {
 					Layer = isDead and 0 or (visible and 4 or 0.05),
 					Spark = isDead and 0 or (visible and 4 or 0.05),
 					Shine = isDead and 0 or (visible and 1 or 0.05),
@@ -204,7 +248,7 @@ function RelicRenderController:ApplyVisibility(entry: { parts: { part: Model } }
 	end
 end
 
-function RelicRenderController:ComputeVisibility()
+function RelicRenderController.ComputeVisibility(self: typeof(RelicRenderController))
 	if self._combatOverride then
 		return false
 	end
@@ -218,15 +262,15 @@ end
 
 -- Landing hide (LandingController): true hides every relic model + particle
 -- on this client for the fall; false tweens them all back in.
-function RelicRenderController:SetLandingHidden(hidden: boolean)
+function RelicRenderController.SetLandingHidden(self: typeof(RelicRenderController), hidden: boolean)
 	self._landingHidden = hidden
 end
 
-function RelicRenderController:SetCombatState(inCombat: boolean)
+function RelicRenderController.SetCombatState(self: typeof(RelicRenderController), inCombat: boolean)
 	self._combatOverride = inCombat
 end
 
-function RelicRenderController:SetPromptState(active: boolean)
+function RelicRenderController.SetPromptState(self: typeof(RelicRenderController), active: boolean)
 	self._promptOverride = active
 end
 
@@ -247,7 +291,7 @@ end
 -- (VendingMachineName / NameText / VendingMachineText, see
 -- Components/EncounterChest), so its text dims here too. Only the text:
 -- the chest meshes stay put (an opened chest is scenery, not a pickup).
-function RelicRenderController:_setOwnedMachinesDimmed(dim: boolean)
+function RelicRenderController._setOwnedMachinesDimmed(self: typeof(RelicRenderController), dim: boolean)
 	local modelTransparency = dim and 0.5 or 0
 	local textTransparency = dim and VENDING_MACHINE_TRANSPARENCY or 0
 	local tweenInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
@@ -272,7 +316,12 @@ end
 -- The NameText / VendingMachineText pair (and their strokes) of a
 -- machine-style billboard under `model.PrimaryPart`. Guarded: the chest's
 -- billboard replicates progressively and can be missing for a frame.
-function RelicRenderController:_tweenMachineBillboardText(model: Model, tweenInfo: TweenInfo, transparency: number)
+function RelicRenderController._tweenMachineBillboardText(
+	_self: typeof(RelicRenderController),
+	model: Model,
+	tweenInfo: TweenInfo,
+	transparency: number
+)
 	local primary = model.PrimaryPart
 	local billboard = primary and primary:FindFirstChild("VendingMachineName")
 	local nameFrame = billboard and billboard:FindFirstChild("Frame")
@@ -298,16 +347,24 @@ end
 -- pedestals use this: their clones are not tagged Relic (that would
 -- mount the pickup component), so the inline handlers never see them.
 -- The hovered thing's own highlight/scale stays the CALLER's job.
-function RelicRenderController:SetExternalRelicHover(active: boolean, skipModel: Model?)
+function RelicRenderController.SetExternalRelicHover(
+	self: typeof(RelicRenderController),
+	active: boolean,
+	skipModel: Model?
+)
 	self:SetPromptState(active)
 	self:_setOwnedMachinesDimmed(active)
 	self:_applyGroundRelicsDim(skipModel, active)
-	if GearDropsRenderController then
-		GearDropsRenderController:SetExternalHover(active)
+	if getGearDropsRenderController() then
+		getGearDropsRenderController():SetExternalHover(active)
 	end
 end
 
-function RelicRenderController:_applyGroundRelicsDim(skipModel: Model?, dim: boolean)
+function RelicRenderController._applyGroundRelicsDim(
+	_self: typeof(RelicRenderController),
+	skipModel: Model?,
+	dim: boolean
+)
 	local targetTransparency = dim and TOGGLE_TRANSPARENCY or 0
 	local textTransparency = dim and TOGGLE_TEXT_TRANSPARENCY or 0
 	local layerBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_LAYER
@@ -427,7 +484,7 @@ end
 -- Symmetric counterpart: RelicRenderController calls
 -- `GearDropsRenderController:SetExternalHover(...)` from its own
 -- PromptShown / PromptHidden handlers below.
-function RelicRenderController:SetExternalHover(active: boolean)
+function RelicRenderController.SetExternalHover(self: typeof(RelicRenderController), active: boolean)
 	self:SetPromptState(active)
 	self:_applyGroundRelicsDim(nil :: any, active)
 	-- Machines too, so a gear hover reads exactly like a relic hover from
@@ -439,7 +496,7 @@ end
 
 -- Mirror the local character's CutscenePlaying into _cutsceneHidden, on
 -- every character (re-bound per respawn).
-function RelicRenderController:_watchViewerCutscene()
+function RelicRenderController._watchViewerCutscene(self: typeof(RelicRenderController))
 	local function bind(character: Model)
 		local function refresh()
 			self._cutsceneHidden = character:GetAttribute(Attributes.CutscenePlaying) == true
@@ -453,14 +510,11 @@ function RelicRenderController:_watchViewerCutscene()
 	Players.LocalPlayer.CharacterAdded:Connect(bind)
 end
 
-function RelicRenderController:KnitStart()
+function RelicRenderController.Start(self: typeof(RelicRenderController))
 	self:_watchViewerCutscene()
-	RelicService = Knit.GetService("RelicService")
-	InCombatController = Knit.GetController("InCombatController")
-	-- Cross-controller resolve for the unified hover state. Knit guarantees
-	-- all controllers are constructed before KnitStart runs, so this is
+	-- Cross-controller resolve for the unified hover state. The Blitz
+	-- requires every controller before any Start runs, so this is
 	-- always non-nil here. Used in PromptShown / PromptHidden below.
-	GearDropsRenderController = Knit.GetController("GearDropsRenderController")
 
 	self._relicHighlight.Name = "RelicHighlight"
 	self._relicHighlight.FillColor = Color3.fromRGB(255, 255, 255)
@@ -497,8 +551,9 @@ function RelicRenderController:KnitStart()
 		self:_renderRelics(...)
 	end)
 
-	RelicService.OnReplicateRelics:Connect(
-		function(_: number, relicRegistry: { [RelicNames.RelicNames]: number }, _: { RelicNames.RelicNames })
+	RelicNetwork.RelicsReplicated.On(
+		function(payload: { UserId: number, Registry: { [any]: any }, List: { [any]: any } })
+			local relicRegistry = payload.Registry
 			self._relicRegistry = relicRegistry
 
 			-- Remove players that no longer exist in registry
@@ -556,15 +611,16 @@ function RelicRenderController:KnitStart()
 						continue
 					end
 
-					local model = template:Clone()
-					model.PrimaryPart.Anchored = true
+					local model = template:Clone() :: Model
+					local primaryPart = model.PrimaryPart :: BasePart
+					primaryPart.Anchored = true
 					-- Enforce PrimaryPart invisibility — anchor / adornee
 					-- part, must never render. Templates SHOULD author
 					-- it at Transparency=1, but a missed authoring
 					-- shows up as an orange box around the orbiting
 					-- relic. Mirrors the same enforcement in
 					-- Client/Components/Relic.lua :Start.
-					model.PrimaryPart.Transparency = 1
+					primaryPart.Transparency = 1
 					model:AddTag("FloatingRelic")
 
 					entry.parts[relicName] = {
@@ -607,14 +663,17 @@ function RelicRenderController:KnitStart()
 		if model and (model:HasTag("Relic") or model:HasTag("Rune")) then
 			self:SetPromptState(true)
 
-			relicHighlight.Adornee = model.Handle
-			relicHighlight.Parent = model.Handle
+			local handle = assert(model:FindFirstChild("Handle"), "Relic model has no Handle")
+			relicHighlight.Adornee = handle
+			relicHighlight.Parent = handle
 
-			if model and model.PrimaryPart and model.PrimaryPart:FindFirstChild("RelicName") then
-				model.PrimaryPart.RelicName.Enabled = false
+			local primaryPart = model.PrimaryPart
+			local relicName = if primaryPart then primaryPart:FindFirstChild("RelicName") :: BillboardGui? else nil
+			if relicName then
+				relicName.Enabled = false
 
 				TweenService:Create(
-					model.RelicScale,
+					model:FindFirstChild("RelicScale") :: NumberValue,
 					TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 					{ Value = 2 }
 				):Play()
@@ -636,8 +695,8 @@ function RelicRenderController:KnitStart()
 			-- Cross-system: notify the gear-drop side so all owned
 			-- gear drops dim in lockstep. Unified hover state means
 			-- only ONE pickup-class thing is highlighted at a time.
-			if GearDropsRenderController then
-				GearDropsRenderController:SetExternalHover(true)
+			if getGearDropsRenderController() then
+				getGearDropsRenderController():SetExternalHover(true)
 			end
 		end
 	end)
@@ -656,11 +715,13 @@ function RelicRenderController:KnitStart()
 			-- the label back would float a name over a relic that is fading
 			-- out from under it.
 			local collected = model:GetAttribute(Attributes.Collected) == true
-			if not collected and model.PrimaryPart and model.PrimaryPart:FindFirstChild("RelicName") then
-				model.PrimaryPart.RelicName.Enabled = true
+			local primaryPart = model.PrimaryPart
+			local relicName = if primaryPart then primaryPart:FindFirstChild("RelicName") :: BillboardGui? else nil
+			if not collected and relicName then
+				relicName.Enabled = true
 
 				TweenService:Create(
-					model.RelicScale,
+					model:FindFirstChild("RelicScale") :: NumberValue,
 					TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 					{ Value = 1.5 }
 				):Play()
@@ -677,13 +738,11 @@ function RelicRenderController:KnitStart()
 			self:_applyGroundRelicsDim(nil :: any, false)
 
 			-- Cross-system: restore the gear-drop side.
-			if GearDropsRenderController then
-				GearDropsRenderController:SetExternalHover(false)
+			if getGearDropsRenderController() then
+				getGearDropsRenderController():SetExternalHover(false)
 			end
 		end
 	end)
 end
-
-function RelicRenderController:KnitInit() end
 
 return RelicRenderController

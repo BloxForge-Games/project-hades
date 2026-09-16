@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: DamageService.lua
 	Description:
@@ -28,10 +29,23 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local ShieldService = require(ServerScriptService.Services.ShieldService)
+local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local RagdollService = require(ServerScriptService.Services.RagdollService)
+local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local LifeService = require(ServerScriptService.Services.LifeService)
+local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
+local AuraService = require(ServerScriptService.Services.AuraService)
+local MagicService = require(ServerScriptService.Services.MagicService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
@@ -56,23 +70,40 @@ end
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
 local rollDamageVariance = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Damage.rollDamageVariance)
 
-local DamageIndicatorService
-local ShieldService
-local RelicService
-local StatusConditionService
-local PlayerStatsService
-local TextIndicatorService
-local PlayerEventService
-local RagdollService
-local LifeService
-local ArmorSetBonusService
-local AuraService
-local MagicService
-
-local DamageService = Knit.CreateService({
+local DamageService = {
 	Name = "DamageService",
-	Client = {},
-})
+	Dependencies = {
+		PlayerEventService,
+		DamageIndicatorService,
+		TextIndicatorService,
+		RagdollService,
+		ArmorSetBonusService,
+	} :: { any },
+
+	_onHitRegistry = {} :: { [number]: number },
+	_onDamageModules = {} :: { [string]: any },
+	-- Lightning Horn / Shuriken fan-out latches: [userId] = os.clock() of the last proc.
+	_lightningStrikeLast = {} :: { [number]: number },
+	_shurikenLastRefund = {} :: { [number]: number },
+	-- Last FINAL (post-amplifier, post-crit) damage this player dealt, and to whom.
+	_lastHitDamage = {} :: { [number]: { model: Instance?, amount: number, t: number } },
+	-- Rolling per-player log of damage that actually reached HEALTH (post
+	-- shield / post-mitigation) — Astral Cloak's dodge heal consumes it.
+	_recentDamageTaken = {} :: { [number]: { { t: number, amount: number } } },
+}
+
+-- StatusConditionService requires this module at load (its DoT ticks land
+-- through TakeDamage), so this side reaches it lazily: required on first
+-- use, once both modules exist.
+local statusConditionService: any = nil
+local function getStatusConditionService(): any
+	if statusConditionService == nil then
+		-- A require inside a function is opaque to the analyzer, so the
+		-- table is `any` here.
+		statusConditionService = (require :: any)(ServerScriptService.Services.StatusConditionService)
+	end
+	return statusConditionService
+end
 
 --[ Constants ]--
 
@@ -87,9 +118,9 @@ local MAGIC_COLOR3 = DamageIndicatorColors.Magic
 local WEAPON_COLOR3 = DamageIndicatorColors.Weapon
 local RAGDOLL_VELOCITY = 25
 
--- Status attributes stamped on mob models by StatusConditionService.
+-- Status attributes stamped on mob models by getStatusConditionService().
 -- Direct reads are fine for single statuses; the FAMILY questions ("is it
--- burning / poisoned / shocked") must go through StatusConditionService's
+-- burning / poisoned / shocked") must go through getStatusConditionService()'s
 -- IsBurning / IsPoisoned / IsShocked — the upgraded variants (Black Flame,
 -- Noxious Venom, Coil Shocked) stamp their own attributes.
 local STATUS_ATTRIBUTE_PREFIX = "Status"
@@ -153,23 +184,6 @@ local PROJECTILE_RESISTANCE_SCALAR = 0.25
 
 -- Phoenix / Katana health gates.
 
---[ Properties ]--
-
-DamageService._onHitRegistry = {}
-DamageService._onDamageModules = {}
-
--- Lightning Horn fan-out latch: [userId] = os.clock() of the last strike.
-DamageService._lightningStrikeLast = {}
-DamageService._shurikenLastRefund = {}
-
--- Last FINAL (post-amplifier, post-crit) damage this player dealt, and to
--- whom. [userId] = { model, amount, t }.
-DamageService._lastHitDamage = {}
-
--- Rolling per-player log of damage that actually reached HEALTH (post
--- shield / post-mitigation) — Astral Cloak's dodge heal consumes it.
-DamageService._recentDamageTaken = {}
-
 --[ Public Functions ]--
 
 -- `fixedDamage` means the caller has already decided the exact number
@@ -181,7 +195,8 @@ DamageService._recentDamageTaken = {}
 --
 -- The shield pool still spends against it. A shield is a resource being
 -- consumed, not a modifier scaling the hit, so it stays in play.
-function DamageService:PlayerTakeDamage(
+function DamageService.PlayerTakeDamage(
+	self: typeof(DamageService),
 	player: Player,
 	model: Model,
 	damage: number,
@@ -189,7 +204,7 @@ function DamageService:PlayerTakeDamage(
 	fixedDamage: boolean?
 )
 	local character = player.Character
-	local humanoid = character and character:FindFirstChild("Humanoid")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if not character or not humanoid then
 		warn("[DamageService] Player or humanoid not found for player:", player.Name)
@@ -203,7 +218,10 @@ function DamageService:PlayerTakeDamage(
 	end
 
 	if character:GetAttribute(Attributes.Invulnerable) == true then
-		TextIndicatorService:ShowIndicator(player, character.Head, "Invulnerable!")
+		local head = character:FindFirstChild("Head")
+		if head and head:IsA("BasePart") then
+			TextIndicatorService:ShowIndicator(player, head, "Invulnerable!")
+		end
 		return
 	end
 
@@ -235,7 +253,7 @@ function DamageService:PlayerTakeDamage(
 	-- capped — per-player state the attribute can't express, so this reads
 	-- the service (1 when unpoisoned).
 	if model then
-		damage = damage * StatusConditionService:GetPoisonWeakenMultiplier(model)
+		damage = damage * getStatusConditionService():GetPoisonWeakenMultiplier(model)
 	end
 
 	-- Slateskin Potion (Cursed): +50% Damage Reduction, unconditional (the
@@ -291,32 +309,32 @@ function DamageService:PlayerTakeDamage(
 	-- Shield pool spends LAST, against the fully mitigated number.
 	damage = ShieldService:AbsorbShieldDamage(player, damage)
 
-	local zombieHit = character:FindFirstChild("HumanoidRootPart"):FindFirstChild("ZombieHit")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if rootPart and rootPart:IsA("BasePart") then
+		local zombieHit: Sound = (rootPart:FindFirstChild("ZombieHit") :: Sound?)
+			or ReplicatedStorage.GameAssets.Sounds.ZombieHit:Clone()
+		if zombieHit.Parent ~= rootPart then
+			zombieHit.Parent = rootPart
+		end
+		zombieHit.TimePosition = 0.2
+		zombieHit:Play()
 
-	if zombieHit == nil then
-		zombieHit = ReplicatedStorage.GameAssets.Sounds.ZombieHit:Clone()
-		zombieHit.Parent = character.HumanoidRootPart
-	end
-
-	zombieHit.TimePosition = 0.2
-	zombieHit:Play()
-
-	local hitVFX = character:FindFirstChild("HumanoidRootPart"):FindFirstChild("HitFX")
-
-	if hitVFX == nil then
-		hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
-		hitVFX.Parent = character.HumanoidRootPart
-	end
-
-	for _, particle in pairs(hitVFX:GetChildren()) do
-		if not particle:IsA("ParticleEmitter") then
-			continue
+		local hitVFX: Instance = rootPart:FindFirstChild("HitFX")
+			or ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
+		if hitVFX.Parent ~= rootPart then
+			hitVFX.Parent = rootPart
 		end
 
-		if particle.Name == "Hit" then
-			particle:Emit(2)
-		else
-			particle:Emit(6)
+		for _, particle in hitVFX:GetChildren() do
+			if not particle:IsA("ParticleEmitter") then
+				continue
+			end
+
+			if particle.Name == "Hit" then
+				particle:Emit(2)
+			else
+				particle:Emit(6)
+			end
 		end
 	end
 
@@ -328,20 +346,31 @@ function DamageService:PlayerTakeDamage(
 
 	-- Dragon Lantern's coin tax — health damage only.
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon Lantern"]) > 0 then
-		local RunEscrowService = Knit.GetService("RunEscrowService")
 		RunEscrowService:TaxCoins(player, DRAGON_LANTERN_COIN_TAX)
 	end
 
-	if canRagdoll and character.RagdollTrigger.Value == false then
+	local ragdollTrigger = character:FindFirstChild("RagdollTrigger")
+	local characterRoot = character:FindFirstChild("HumanoidRootPart")
+	local attackerRoot = model and model:FindFirstChild("HumanoidRootPart")
+	if
+		canRagdoll
+		and ragdollTrigger
+		and ragdollTrigger:IsA("BoolValue")
+		and ragdollTrigger.Value == false
+		and characterRoot
+		and characterRoot:IsA("BasePart")
+		and attackerRoot
+		and attackerRoot:IsA("BasePart")
+	then
 		if character:GetAttribute(Attributes.SuperArmor) == false then
 			RagdollService:Ragdoll(character)
 
-			local direction = (model.HumanoidRootPart.Position - character.HumanoidRootPart.Position).Unit
+			local direction = (attackerRoot.Position - characterRoot.Position).Unit
 
 			local bodyVelocity = Instance.new("BodyVelocity")
 			bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 			bodyVelocity.Velocity = -(direction * RAGDOLL_VELOCITY) + Vector3.new(0, RAGDOLL_VELOCITY, 0)
-			bodyVelocity.Parent = character.HumanoidRootPart
+			bodyVelocity.Parent = characterRoot
 
 			Debris:AddItem(bodyVelocity, 0.15)
 
@@ -371,7 +400,7 @@ end
 -- ConsumeRecentDamageTaken sums the trailing window THEN CLEARS the log.
 local RECENT_DAMAGE_KEEP_SECONDS = 5 -- write-time prune ceiling
 
-function DamageService:_recordDamageTaken(player: Player, amount: number)
+function DamageService._recordDamageTaken(self: typeof(DamageService), player: Player, amount: number)
 	if amount <= 0 then
 		return
 	end
@@ -394,7 +423,11 @@ end
 
 -- Sum of damage taken in the trailing `windowSeconds`, then the whole log
 -- is cleared (consume-on-use).
-function DamageService:ConsumeRecentDamageTaken(player: Player, windowSeconds: number): number
+function DamageService.ConsumeRecentDamageTaken(
+	self: typeof(DamageService),
+	player: Player,
+	windowSeconds: number
+): number
 	local log = self._recentDamageTaken[player.UserId]
 	if not log then
 		return 0
@@ -416,7 +449,7 @@ end
 -- at/below EXECUTE_THRESHOLD. Minibosses and bosses can never be executed.
 -- PUBLIC on purpose: bypass damage paths (Volleyball's delayed spike) call
 -- it directly, passing no `wasCrit`, and therefore never execute.
-function DamageService:TryExecute(player: Player, humanoid: Humanoid, wasCrit: boolean?)
+function DamageService.TryExecute(_self: typeof(DamageService), player: Player, humanoid: Humanoid, wasCrit: boolean?)
 	if not wasCrit then
 		return
 	end
@@ -447,7 +480,7 @@ function DamageService:TryExecute(player: Player, humanoid: Humanoid, wasCrit: b
 	model:SetAttribute("BanHammerExecuted", true)
 
 	local indicatorPart = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart")
-	if indicatorPart then
+	if indicatorPart and indicatorPart:IsA("BasePart") then
 		TextIndicatorService:ShowIndicator(player, indicatorPart, "Banned!", Color3.fromRGB(255, 85, 85), true)
 	end
 
@@ -457,7 +490,13 @@ end
 -- Post-damage hub — runs after EVERY damage application inside TakeDamage.
 -- `isRelicSourced` blocks the Lightning Strike from re-triggering off
 -- relic damage — a strike's own crits can never chain another strike.
-function DamageService:_postDamage(player: Player, humanoid: Humanoid, wasCrit: boolean?, isRelicSourced: boolean?)
+function DamageService._postDamage(
+	self: typeof(DamageService),
+	player: Player,
+	humanoid: Humanoid,
+	wasCrit: boolean?,
+	isRelicSourced: boolean?
+)
 	self:TryExecute(player, humanoid, wasCrit)
 
 	-- Lightning Orb rolls on EVERY hit now, not just crits — `wasCrit` only
@@ -475,7 +514,7 @@ end
 -- Stamps the FINAL damage of the hit that just landed. Every direct-hit
 -- path (crit, resisted, plain) ends here, so it is also where Teddy Trap's
 -- lifesteal reads the amount that actually landed.
-function DamageService:_recordLastHit(player: Player, humanoid: Humanoid, amount: number)
+function DamageService._recordLastHit(self: typeof(DamageService), player: Player, humanoid: Humanoid, amount: number)
 	if not player or amount <= 0 then
 		return
 	end
@@ -489,9 +528,9 @@ end
 
 -- The final damage `player` last dealt to `targetModel`, or 0 if their most
 -- recent hit was on something else or is too old to trust.
-function DamageService:GetLastHitDamage(player: Player, targetModel: Model): number
+function DamageService.GetLastHitDamage(self: typeof(DamageService), player: Player, targetModel: Model): number
 	local record = self._lastHitDamage[player.UserId]
-	if not record or record.model ~= targetModel then
+	if not record or record.model ~= (targetModel :: Instance) then
 		return 0
 	end
 	if (os.clock() - record.t) > LAST_HIT_VALID_SECONDS then
@@ -508,7 +547,7 @@ end
 -- Routed through SetAura, so the Abyss lockout and duration bonuses apply
 -- for free.
 
-function DamageService:_tryLightningOrbStormcharge(player: Player, wasCrit: boolean?)
+function DamageService._tryLightningOrbStormcharge(_self: typeof(DamageService), player: Player, wasCrit: boolean?)
 	if not AuraService or RelicService:GetSpecificRelicRegistry(player, RelicNames["Lightning Orb"]) <= 0 then
 		return
 	end
@@ -530,13 +569,13 @@ end
 -- enemy inside. The fan-out latch collapses an AoE crit into ONE strike,
 -- and _postDamage's isRelicSourced gate stops a strike's own crits from
 -- chaining another.
-function DamageService:_tryLightningHornStrike(player: Player, humanoid: Humanoid)
+function DamageService._tryLightningHornStrike(self: typeof(DamageService), player: Player, humanoid: Humanoid)
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Lightning Horn of the Heavens"]) <= 0 then
 		return
 	end
 
 	local targetModel = humanoid.Parent
-	if not targetModel or not StatusConditionService or not StatusConditionService:IsShocked(targetModel) then
+	if not targetModel or not getStatusConditionService() or not getStatusConditionService():IsShocked(targetModel) then
 		return
 	end
 
@@ -549,7 +588,7 @@ function DamageService:_tryLightningHornStrike(player: Player, humanoid: Humanoi
 	end
 
 	local hrp = targetModel:FindFirstChild("HumanoidRootPart")
-	if not hrp then
+	if not hrp or not hrp:IsA("BasePart") then
 		return
 	end
 
@@ -577,9 +616,7 @@ function DamageService:_tryLightningHornStrike(player: Player, humanoid: Humanoi
 	local hit = workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), raycastParams)
 	local strikePosition = hit and hit.Position or hrp.Position
 
-	if RelicService.Client and RelicService.Client.OnLightningStrikeActivated then
-		RelicService.Client.OnLightningStrikeActivated:FireAll(strikePosition)
-	end
+	RelicNetwork.LightningStrikeEffect.FireAll(strikePosition)
 
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Include
@@ -602,15 +639,15 @@ function DamageService:_tryLightningHornStrike(player: Player, humanoid: Humanoi
 		-- isMagic = false: the strike rides the untyped relic lane; a
 		-- magic flag would wrongly pick up Painted's magic vulnerability.
 		self:TakeDamage(player, targetHumanoid, strikeDamage, false, false, nil, true)
-		if StatusConditionService then
-			StatusConditionService:ApplyMagicOnHitStatuses(player, model)
+		if getStatusConditionService() then
+			getStatusConditionService():ApplyMagicOnHitStatuses(player, model)
 		end
 	end
 end
 
 -- Shuriken of the Crescent Moon: refund 1% of Maximum Mana on a critical
 -- ATTACK. Latched so one AoE crit refunds once.
-function DamageService:_tryShurikenManaRefund(player: Player)
+function DamageService._tryShurikenManaRefund(self: typeof(DamageService), player: Player)
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Shuriken of the Crescent Moon"]) <= 0 then
 		return
 	end
@@ -640,7 +677,8 @@ end
 --                + Dragon's Flame Sword (+0.35 vs Burning)
 --                + Lightning Bolt Sword (+0.30 vs Shocked)
 -- `targetModel` is optional — target-conditional rows skip without one.
-function DamageService:GetCritParameters(
+function DamageService.GetCritParameters(
+	_self: typeof(DamageService),
 	player: Player,
 	isMagic: boolean?,
 	_isMelee: boolean?,
@@ -649,7 +687,7 @@ function DamageService:GetCritParameters(
 	local critChance = DEFAULT_CRITICAL_CHANCE
 
 	-- Critical Hit Chance runes (attribute already Abyss-doubled).
-	critChance += player:GetAttribute(RUNE_CRIT_CHANCE_ATTRIBUTE) or 0
+	critChance += ((player:GetAttribute(RUNE_CRIT_CHANCE_ATTRIBUTE) :: number?) or 0)
 
 	-- Greater Shrine "Precision". Pooled as a fraction like every other
 	-- blessing; crit CHANCE is in points here, so x100.
@@ -697,9 +735,7 @@ function DamageService:GetCritParameters(
 		critChance += RelicService:GetRelicEffect(player, RelicNames["Sparkle Time Hoverboard"]) or 0
 	end
 
-	local targetShocked = targetModel ~= nil
-		and StatusConditionService ~= nil
-		and StatusConditionService:IsShocked(targetModel)
+	local targetShocked = targetModel ~= nil and getStatusConditionService():IsShocked(targetModel)
 
 	-- Throwing Bolts vs Shocked targets (callback = percentage points).
 	-- This slot used to be Ninja Whip's; the 2026-08 pass turned Ninja Whip
@@ -711,7 +747,7 @@ function DamageService:GetCritParameters(
 	local critMultiplier = DEFAULT_CRITICAL_MULTIPLIER
 
 	-- Critical Damage runes (attribute already Abyss-doubled).
-	critMultiplier += player:GetAttribute(RUNE_CRIT_DAMAGE_ATTRIBUTE) or 0
+	critMultiplier += ((player:GetAttribute(RUNE_CRIT_DAMAGE_ATTRIBUTE) :: number?) or 0)
 
 	-- Greater Shrine "Ferocity". Crit DAMAGE is already a fraction, so
 	-- the pooled value adds as-is.
@@ -737,8 +773,8 @@ function DamageService:GetCritParameters(
 	-- Black Flame counts).
 	if
 		targetModel
-		and StatusConditionService
-		and StatusConditionService:IsBurning(targetModel)
+		and getStatusConditionService()
+		and getStatusConditionService():IsBurning(targetModel)
 		and RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon's Flame Sword"]) > 0
 	then
 		critMultiplier += RelicService:GetRelicEffect(player, RelicNames["Dragon's Flame Sword"]) or 0
@@ -760,10 +796,11 @@ end
 -- `skipTyped` = the untyped relic lane: rows whose card names Weapon
 -- or Magic damage are excluded (magic-gated rows are already out via
 -- isMagic = false; weapon-gated rows need the explicit skip).
-function DamageService:_sumTargetConditionalBonuses(
+function DamageService._sumTargetConditionalBonuses(
+	_self: typeof(DamageService),
 	player: Player,
 	targetModel: Model,
-	isMagic: boolean,
+	isMagic: boolean?,
 	skipTyped: boolean?
 ): number
 	local bonus = 0
@@ -771,8 +808,8 @@ function DamageService:_sumTargetConditionalBonuses(
 	local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
 	local healthFraction = if humanoid and humanoid.MaxHealth > 0 then humanoid.Health / humanoid.MaxHealth else 1
 
-	local isBurning = StatusConditionService ~= nil and StatusConditionService:IsBurning(targetModel)
-	local isPoisoned = StatusConditionService ~= nil and StatusConditionService:IsPoisoned(targetModel)
+	local isBurning = getStatusConditionService() ~= nil and getStatusConditionService():IsBurning(targetModel)
+	local isPoisoned = getStatusConditionService() ~= nil and getStatusConditionService():IsPoisoned(targetModel)
 	local isChilled = targetModel:GetAttribute(STATUS_ATTRIBUTE_PREFIX .. StatusConditions.Chill) == true
 
 	-- Blaze payoffs (burning family — Black Flame counts).
@@ -806,8 +843,11 @@ function DamageService:_sumTargetConditionalBonuses(
 	-- clamped to the weaken cap by the service. Its OTHER half (+10% on
 	-- the owner's own Poison) is a relicModifier in StatusConditionData,
 	-- so a solo player's own Poison feeds this loop on its own.
-	if StatusConditionService and RelicService:GetSpecificRelicRegistry(player, RelicNames["Foul Poison Fowl"]) > 0 then
-		bonus += StatusConditionService:GetPoisonWeakenFraction(targetModel)
+	if
+		getStatusConditionService()
+		and RelicService:GetSpecificRelicRegistry(player, RelicNames["Foul Poison Fowl"]) > 0
+	then
+		bonus += getStatusConditionService():GetPoisonWeakenFraction(targetModel)
 	end
 
 	-- Mechatronic Spider: pays on every enemy, more on a Poisoned one.
@@ -846,7 +886,10 @@ function DamageService:_sumTargetConditionalBonuses(
 	-- counts as its own status.
 	local statusCount = 0
 	for _, status in StatusConditions do
-		if status ~= StatusConditions.None and targetModel:GetAttribute(STATUS_ATTRIBUTE_PREFIX .. status) == true then
+		if
+			status ~= StatusConditions.None
+			and targetModel:GetAttribute(STATUS_ATTRIBUTE_PREFIX .. (status :: string)) == true
+		then
 			statusCount += 1
 		end
 	end
@@ -891,7 +934,12 @@ end
 -- The multiplicative TARGET-VULNERABILITY factor: what the mob's statuses
 -- make it take extra, additively composed (+10% Shock +10% Coil Shocked
 -- +5% Throwing Bolts = x1.25, never compounding).
-function DamageService:_targetVulnerabilityMultiplier(player: Player, targetModel: Model, isMagic: boolean): number
+function DamageService._targetVulnerabilityMultiplier(
+	_self: typeof(DamageService),
+	player: Player,
+	targetModel: Model,
+	isMagic: boolean?
+): number
 	local vulnerability = 0
 
 	local shockConfig = StatusConditionData[StatusConditions.Shock]
@@ -919,8 +967,8 @@ function DamageService:_targetVulnerabilityMultiplier(player: Player, targetMode
 		if
 			not paintConfig.applierOnly
 			or (
-				StatusConditionService
-				and StatusConditionService:GetStatusSourcePlayer(targetModel, StatusConditions.Paint) == player
+				getStatusConditionService()
+				and getStatusConditionService():GetStatusSourcePlayer(targetModel, StatusConditions.Paint) == player
 			)
 		then
 			multiplier *= paintConfig.incomingMagicDamageMultiplier or 1
@@ -930,7 +978,8 @@ function DamageService:_targetVulnerabilityMultiplier(player: Player, targetMode
 	return multiplier
 end
 
-function DamageService:TakeDamage(
+function DamageService.TakeDamage(
+	self: typeof(DamageService),
 	player: Player,
 	humanoid: Humanoid,
 	damage: number,
@@ -952,22 +1001,26 @@ function DamageService:TakeDamage(
 	if humanoid.Health <= 0 then
 		return
 	end
+	local targetModel = humanoid.Parent
+	if not targetModel or not targetModel:IsA("Model") then
+		return
+	end
 	-- Cutscene / scripted invulnerability: NO damage of any kind lands.
-	if humanoid.Parent and humanoid.Parent:GetAttribute(Attributes.Invulnerable) == true then
+	if targetModel:GetAttribute(Attributes.Invulnerable) == true then
 		return
 	end
 
-	humanoid.Parent:SetAttribute(Attributes.SlainBy, player.Name)
+	targetModel:SetAttribute(Attributes.SlainBy, player.Name)
 
 	-- Status condition damage (DoT) bypasses the whole pipeline: no
 	-- amplifiers, no crit, no appliers, no hit sparks.
 	if isStatusConditionDamage then
 		if showHitVFX then
-			DamageIndicatorService:ShowIndicator(player, humanoid.Parent, damage, false, indicatorColor, nil, nil, true)
+			DamageIndicatorService:ShowIndicator(player, targetModel, damage, false, indicatorColor, nil, nil, true)
 		else
 			DamageIndicatorService:ShowIndicatorNoHitVFX(
 				player,
-				humanoid.Parent,
+				targetModel,
 				damage,
 				false,
 				indicatorColor,
@@ -986,6 +1039,7 @@ function DamageService:TakeDamage(
 	-- ±10% per-hit variance, centralized so every caller gets it and the
 	-- relic modules read the post-variance damage.
 	damage = rollDamageVariance(damage)
+	local relicSourced: boolean = isRelicSourced == true
 
 	self._onHitRegistry[player.UserId] += 1
 	isMelee = isMelee or false
@@ -1063,8 +1117,7 @@ function DamageService:TakeDamage(
 		totalDamage += ArmorSetBonusService:GetWeaponDamageAmplifier(player, damage, isMagic)
 	end
 
-	local targetModel = humanoid.Parent
-	if targetModel then
+	do
 		-- Target-conditional relic bonuses join the SAME additive pool.
 		totalDamage += damage * self:_sumTargetConditionalBonuses(player, targetModel, isMagic, untypedOnly)
 
@@ -1088,7 +1141,7 @@ function DamageService:TakeDamage(
 	-- RUNE FACTOR: multiplies over the whole relic-amplified number (see
 	-- the header formula). PlayerStatsService stamps the attribute with
 	-- Rune sums arrive final; the Abyss no longer touches them.
-	totalDamage *= 1 + (player:GetAttribute(RUNE_DAMAGE_ATTRIBUTE) or 0)
+	totalDamage *= 1 + ((player:GetAttribute(RUNE_DAMAGE_ATTRIBUTE) :: number?) or 0)
 
 	-- Greater Shrine "Power": one multiplier over the whole number, on
 	-- EVERY lane -- weapon, magic and relic bursts alike (it sits after
@@ -1100,7 +1153,7 @@ function DamageService:TakeDamage(
 		critChance = -1 -- relic bursts never crit on the untyped lane
 	end
 
-	local mobName = humanoid.Parent.Name
+	local mobName = targetModel.Name
 	local isProjectileResistant = ZombieData[mobName] and ZombieData[mobName].isProjectileResistant or false
 	local isMagicResistant = ZombieData[mobName] and ZombieData[mobName].isMagicResistant or false
 
@@ -1126,7 +1179,10 @@ function DamageService:TakeDamage(
 		elseif isMagic then MAGIC_COLOR3
 		elseif not isRelicSourced then WEAPON_COLOR3
 		else nil
-	local resistKind: string? = if isMagicResistedHit then "Magic" elseif isResistedHit then "Projectile" else nil
+	local resistKind: ("Magic" | "Projectile")? = if isMagicResistedHit
+		then "Magic"
+		elseif isResistedHit then "Projectile"
+		else nil
 
 	-- A gun shot draws its own BulletImpact where the bullet landed, so the
 	-- generic HitFX sparks are dropped for it: two bursts on one hit read
@@ -1145,7 +1201,7 @@ function DamageService:TakeDamage(
 		critical: boolean,
 		color: Color3?,
 		melee: boolean?,
-		resist: string?
+		resist: ("Magic" | "Projectile")?
 	)
 		local sparks = if isGunShot then false else nil
 		DamageIndicatorService:ShowIndicator(
@@ -1166,7 +1222,7 @@ function DamageService:TakeDamage(
 			local combinedDamage = math.round(totalDamage * critMultiplier)
 			showIndicator(
 				player,
-				humanoid.Parent,
+				targetModel,
 				math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR),
 				true,
 				hitColor,
@@ -1176,13 +1232,13 @@ function DamageService:TakeDamage(
 
 			humanoid:TakeDamage(math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
 			self:_recordLastHit(player, humanoid, math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
-			self:_postDamage(player, humanoid, true, isRelicSourced)
+			self:_postDamage(player, humanoid, true, relicSourced)
 			return
 		end
 
 		showIndicator(
 			player,
-			humanoid.Parent,
+			targetModel,
 			math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR),
 			false,
 			hitColor,
@@ -1191,44 +1247,31 @@ function DamageService:TakeDamage(
 		)
 		humanoid:TakeDamage(math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
 		self:_recordLastHit(player, humanoid, math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
-		self:_postDamage(player, humanoid, false, isRelicSourced)
+		self:_postDamage(player, humanoid, false, relicSourced)
 	else
 		if math.random() * 100 <= critChance then
 			local combinedDamage = math.round(totalDamage * critMultiplier)
 
-			showIndicator(player, humanoid.Parent, combinedDamage, true, hitColor, isMelee)
+			showIndicator(player, targetModel, combinedDamage, true, hitColor, isMelee)
 			humanoid:TakeDamage(combinedDamage)
 			self:_recordLastHit(player, humanoid, combinedDamage)
-			self:_postDamage(player, humanoid, true, isRelicSourced)
+			self:_postDamage(player, humanoid, true, relicSourced)
 			return
 		end
 
-		showIndicator(player, humanoid.Parent, math.round(totalDamage), false, hitColor, isMelee)
+		showIndicator(player, targetModel, math.round(totalDamage), false, hitColor, isMelee)
 
 		humanoid:TakeDamage(math.round(totalDamage))
 		self:_recordLastHit(player, humanoid, math.round(totalDamage))
-		self:_postDamage(player, humanoid, false, isRelicSourced)
+		self:_postDamage(player, humanoid, false, relicSourced)
 	end
 end
 
 --[ Initializers ]--
 
-function DamageService:KnitStart()
-	RelicService = Knit.GetService("RelicService")
-	PlayerStatsService = Knit.GetService("PlayerStatsService")
-	StatusConditionService = Knit.GetService("StatusConditionService")
-	ShieldService = Knit.GetService("ShieldService")
-	DamageIndicatorService = Knit.GetService("DamageIndicatorService")
-	PlayerEventService = Knit.GetService("PlayerEventService")
-	RagdollService = Knit.GetService("RagdollService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	LifeService = Knit.GetService("LifeService")
-	ArmorSetBonusService = Knit.GetService("ArmorSetBonusService")
-	AuraService = Knit.GetService("AuraService")
-	MagicService = Knit.GetService("MagicService")
-
+function DamageService.Start(self: typeof(DamageService))
 	for _, damageModule in (script:GetChildren()) do
-		self._onDamageModules[damageModule.Name] = require(damageModule)
+		self._onDamageModules[damageModule.Name] = (require :: any)(damageModule)
 	end
 
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)

@@ -109,9 +109,9 @@ local SUBTITLE_WIGGLE_ROT = false
 -- `text` wrapped in HyperText's looping wiggle, with the given shape.
 local function wiggle(text: string, amp: number, freq: number, offset: number, rot: boolean): string
 	return ("<anim=wiggle loop=true amp=%s freq=%s offset=%s rot=%s>%s</anim>"):format(
-		amp,
-		freq,
-		offset,
+		tostring(amp),
+		tostring(freq),
+		tostring(offset),
 		tostring(rot),
 		text
 	)

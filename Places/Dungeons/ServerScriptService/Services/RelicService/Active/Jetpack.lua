@@ -1,35 +1,31 @@
+--!strict
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local WeldConstraintService = require(ServerScriptService.Submodules.Core.Source.Services.WeldConstraintService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
-local RelicService
-local WeldConstraintService
-local TextIndicatorService
-local InvulnerabilityService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-	WeldConstraintService = Knit.GetService("WeldConstraintService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	InvulnerabilityService = Knit.GetService("InvulnerabilityService")
-end)
 
 local Jetpack = {}
 Jetpack.__index = Jetpack
 
-function Jetpack.new(player: Player)
-	local self = setmetatable({}, Jetpack)
+type Fields = { _player: Player }
+export type Jetpack = typeof(setmetatable({} :: Fields, Jetpack))
+
+function Jetpack.new(player: Player): Jetpack
+	local self = setmetatable({} :: Fields, Jetpack)
 	self._player = player
 
 	return self
 end
 
-function Jetpack:Invoke()
+function Jetpack.Invoke(self: Jetpack)
 	local character = self._player.Character
 
 	if not character or character:FindFirstChild(RelicNames["Experimental Jetpack"]) then
@@ -50,8 +46,9 @@ function Jetpack:Invoke()
 
 	character:SetAttribute(Attributes.JetpackOnCooldown, true)
 
-	if character:FindFirstChild("DodgeIndicator") then
-		character:FindFirstChild("DodgeIndicator"):Destroy()
+	local dodgeIndicator = character:FindFirstChild("DodgeIndicator")
+	if dodgeIndicator then
+		dodgeIndicator:Destroy()
 	end
 
 	-- Invulnerability + highlight lifecycle is owned by InvulnerabilityService
@@ -60,7 +57,7 @@ function Jetpack:Invoke()
 	-- length so the i-frames lift exactly when the jetpack does.
 	InvulnerabilityService:ApplyTo(
 		character,
-		RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"])
+		RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"]) :: number
 	)
 
 	local jetpackClone = ReplicatedStorage.GameAssets.Relics.Actives[RelicNames["Experimental Jetpack"]]:Clone()
@@ -90,7 +87,7 @@ function Jetpack:Invoke()
 
 	TweenService:Create(jetpackClone.Handle, TweenInfo.new(1), { Transparency = 0 }):Play()
 
-	WeldConstraintService:CreateWeldConstraint(jetpackClone.Handle, character.Torso)
+	WeldConstraintService:CreateWeldConstraint(jetpackClone.Handle, character:FindFirstChild("Torso") :: BasePart)
 
 	-- Effective base comes from RelicService's server-side helper
 	-- (baseline + Speed Coil/Astral Cloak callbacks + the WalkSpeedBonus
@@ -103,7 +100,11 @@ function Jetpack:Invoke()
 
 	character:SetAttribute(Attributes.OnJetpack, true)
 
-	TextIndicatorService:ShowIndicator(self._player, character.Head, "Experimental Jetpack!")
+	TextIndicatorService:ShowIndicator(
+		self._player,
+		character:FindFirstChild("Head") :: BasePart,
+		"Experimental Jetpack!"
+	)
 
 	task.delay(RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"]), function()
 		character:SetAttribute(Attributes.JetpackOnCooldown, false)

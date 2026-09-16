@@ -1,6 +1,34 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+-- DamageService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local damageServiceLazy: any = nil
+local function getDamageService(): any
+	if damageServiceLazy == nil then
+		damageServiceLazy = (require :: any)(ServerScriptService.Services.DamageService)
+	end
+	return damageServiceLazy
+end
+-- RelicService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local relicServiceLazy: any = nil
+local function getRelicService(): any
+	if relicServiceLazy == nil then
+		relicServiceLazy = (require :: any)(ServerScriptService.Services.RelicService)
+	end
+	return relicServiceLazy
+end
+-- StatusConditionService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local statusConditionServiceLazy: any = nil
+local function getStatusConditionService(): any
+	if statusConditionServiceLazy == nil then
+		statusConditionServiceLazy = (require :: any)(ServerScriptService.Services.StatusConditionService)
+	end
+	return statusConditionServiceLazy
+end
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -8,20 +36,18 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 
-local DamageService
-local StatusConditionService
-local RelicService
-
-Knit.OnStart():andThen(function()
-	DamageService = Knit.GetService("DamageService")
-	RelicService = Knit.GetService("RelicService")
-	StatusConditionService = Knit.GetService("StatusConditionService")
-end)
-
 local HITBOX_SIZE_MULTIPLIER = 1.25
 
 local GhostDragon = {}
 GhostDragon.__index = GhostDragon
+
+type GhostDragonFields = {
+	_player: Player,
+	_ghostDragonCount: number,
+	_relicService: any,
+	_vfxService: any,
+	_ignoreListService: any,
+}
 
 function GhostDragon.new(
 	player: Player,
@@ -30,7 +56,7 @@ function GhostDragon.new(
 	vfxService: any,
 	ignoreListService: any
 )
-	local self = setmetatable({}, GhostDragon)
+	local self = setmetatable({} :: GhostDragonFields, GhostDragon)
 
 	self._player = player
 	self._ghostDragonCount = ghostDragonCount
@@ -54,10 +80,10 @@ end
 --
 -- Statuses still apply -- the applier hub is called separately below, so
 -- it is unaffected by the damage bypass.
-function GhostDragon:InvokeGhostDragon()
+function GhostDragon.InvokeGhostDragon(self: GhostDragonFields)
 	local character = self._player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then
+	if not character or not humanoid then
 		return
 	end
 	-- Skip the tick while the player is dead/spectating. LifeService keeps
@@ -74,31 +100,31 @@ function GhostDragon:InvokeGhostDragon()
 	-- RelicData). The bonus-max-health amp came off in the 2026-08 pass:
 	-- the card is a flat level scale now, matching every other per-level
 	-- relic. Rounded because the raw-damage path applies this verbatim.
-	local ratePerLevel = RelicService:GetRelicEffect(self._player, RelicNames["Ghost Dragon"]) or 10
+	local ratePerLevel = getRelicService():GetRelicEffect(self._player, RelicNames["Ghost Dragon"]) or 10
 	local baseDamage = math.round(ratePerLevel * getPlayerLevel(self._player))
 
 	self._vfxService:CreateHitbox(
 		MagicNames["Ghost Dragon"],
 		self._player,
-		character.HumanoidRootPart.CFrame,
+		(character:FindFirstChild("HumanoidRootPart") :: BasePart).CFrame,
 		TagList.Zombie,
 		self._ignoreListService:GetWeaponIgnoreList(),
 		function(model: Model)
-			local mobHumanoid = model:FindFirstChild("Humanoid")
+			local mobHumanoid = model:FindFirstChild("Humanoid") :: Humanoid?
 			if not mobHumanoid or mobHumanoid.Health <= 0 then
 				return
 			end
 
 			-- UNTYPED relic lane: amplified by unqualified Damage bonuses
 			-- (was the raw path with a magic flag — neither was right).
-			DamageService:TakeDamage(self._player, mobHumanoid, baseDamage, false, false, false, true, true)
+			getDamageService():TakeDamage(self._player, mobHumanoid, baseDamage, false, false, false, true, true)
 
 			-- Ghost Dragon damage IS relic magic damage, so each aura tick
 			-- rolls the magic-hit applier hub per mob (the status Epics'
 			-- "+10% on all damage" rows and the magic-side Rares). Status
 			-- DoT ticks never route through the hubs — only real damage
 			-- events like this one.
-			StatusConditionService:ApplyMagicOnHitStatuses(self._player, model)
+			getStatusConditionService():ApplyMagicOnHitStatuses(self._player, model)
 		end,
 		MagicData[MagicNames["Ghost Dragon"]].hitboxSize.X * HITBOX_SIZE_MULTIPLIER
 	)

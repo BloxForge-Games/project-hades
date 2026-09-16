@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: InCombatController.lua
@@ -13,15 +14,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 
-local InCombatController = Knit.CreateController({
+local InCombatController = {
 	Name = "InCombatController",
-	Client = {},
-})
+}
 
 InCombatController.Signals = {
 	InCombatStatusChanged = Signal.new(),
@@ -41,7 +40,7 @@ local STARTUP_DELAY = 10
 -- Delegates to the SHARED proximity check so the server's mana-regen gate
 -- (MagicService._isPlayerInCombat) and this visual state can never drift
 -- apart on radius or on what counts as a live zombie.
-function InCombatController:_isNearLivingZombie(playerPosition: Vector3): boolean
+function InCombatController._isNearLivingZombie(_self: typeof(InCombatController), playerPosition: Vector3): boolean
 	return combatProximity.isNearLivingZombie(playerPosition)
 end
 
@@ -49,9 +48,7 @@ end
 
 --[ Initializers ]--
 
-function InCombatController:KnitInit() end
-
-function InCombatController:KnitStart()
+function InCombatController.Start(self: typeof(InCombatController))
 	task.spawn(function()
 		task.wait(STARTUP_DELAY)
 

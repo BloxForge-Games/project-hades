@@ -1,3 +1,4 @@
+--!strict
 -- Volleyball: now does TWO things on ranged weapon attacks.
 --   1) Always-on +25 damage bonus (immediate, returned as a number
 --      so the orchestrator's totalDamage sum picks it up alongside
@@ -16,14 +17,14 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ServerScriptService = game:GetService("ServerScriptService")
+local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
+local DamageService = require(script.Parent)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
-local RelicService
-local DamageIndicatorService
-local ArmorSetBonusService
-local DamageService
 
 local VOLLEY_BALL_DESYNC_DELAY = 0.5
 local SPIKE_INTERVAL = 3
@@ -42,13 +43,6 @@ local rangedHitCounts: { [number]: number } = {}
 
 Players.PlayerRemoving:Connect(function(player: Player)
 	rangedHitCounts[player.UserId] = nil
-end)
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-	DamageIndicatorService = Knit.GetService("DamageIndicatorService")
-	ArmorSetBonusService = Knit.GetService("ArmorSetBonusService")
-	DamageService = Knit.GetService("DamageService")
 end)
 
 return function(
@@ -93,21 +87,21 @@ return function(
 		-- when the set isn't active.
 		spikeDamage += math.round(ArmorSetBonusService:GetWeaponDamageAmplifier(player, spikeDamage, false))
 
-		RelicService.Client.OnVolleyballEffectActivated:FireAll(
-			player.Character,
-			humanoid.Parent,
-			workspace:GetServerTimeNow(),
-			0.5
-		)
+		RelicNetwork.VolleyballEffect.FireAll({
+			Character = player.Character,
+			Target = humanoid.Parent :: Model?,
+			StartTime = workspace:GetServerTimeNow(),
+			Duration = 0.5,
+		})
 
 		task.delay(VOLLEY_BALL_DESYNC_DELAY, function()
 			-- Re-check liveness — the original hit may have already
 			-- brought the mob to 0 HP, in which case the spike is a
 			-- no-op (don't show the indicator either).
-			if humanoid.Health <= 0 or humanoid.Parent:GetAttribute(Attributes.Invulnerable) == true then
+			if humanoid.Health <= 0 or (humanoid.Parent :: Instance):GetAttribute(Attributes.Invulnerable) == true then
 				return
 			end
-			DamageIndicatorService:ShowIndicator(player, humanoid.Parent, spikeDamage, false)
+			DamageIndicatorService:ShowIndicator(player, humanoid.Parent :: Model, spikeDamage, false)
 			humanoid:TakeDamage(spikeDamage)
 
 			-- Direct-damage path (bypasses TakeDamage's exits). Kept wired to

@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): ryanisawesome25
      Module: RelicMachine.luau
@@ -15,32 +16,26 @@ local TweenService = game:GetService("TweenService")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
+local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
-
-local CameraShakeController
-local ScreenSizeController
-
-Knit.OnStart()
-	:andThen(function()
-		CameraShakeController = Knit.GetController("CameraShakeController")
-		ScreenSizeController = Knit.GetController("ScreenSizeController")
-	end)
-	:catch(warn)
 
 --[ Component Root ]--
 
 local RelicMachine = Component.new({
 	Tag = "RelicMachine",
-	Extensions = { CommAdder },
 })
 
 --[ Constants ]--
 
 local TRANSPARENCY = 0.85
+
+-- How long Construct waits for a streamed-in descendant before giving up.
+local STREAM_WAIT_SECONDS = 10
 
 -- The landing thud only shakes cameras of players standing near the drop
 -- point. Local-only, like the rest of this component's landing FX.
@@ -55,20 +50,30 @@ local LANDING_SHAKE_RANGE_STUDS = 25
 --[ Initializers ]--
 
 function RelicMachine:Construct()
-	-- DIAGNOSTIC (nil-PrimaryPart crash): print WHERE the tagged model
-	-- lives before the index below throws, so the offending copy is
-	-- identifiable in the output.
-	if not self.Instance.PrimaryPart then
-		warn(
-			"[RelicMachine] Construct with nil PrimaryPart — parent: "
-				.. tostring(self.Instance.Parent)
-				.. " | full path: "
-				.. self.Instance:GetFullName()
-		)
+	-- The parts can stream in after the tagged Model does; wait for them
+	-- (this was the old nil-PrimaryPart crash).
+	local primaryPart = waitForPrimaryPart(self.Instance)
+	assert(primaryPart, "[RelicMachine] PrimaryPart never replicated for " .. self.Instance:GetFullName())
+	-- Start reads all of these directly. The server spawns the machine
+	-- atomic, so they normally arrive with the Model; the waits cover an
+	-- asset that is not, and turn a random "not a valid member" crash (dead
+	-- prompt, no landing) into a clear timeout.
+	local function need(parent: Instance, name: string): Instance
+		local child = parent:WaitForChild(name, STREAM_WAIT_SECONDS)
+		assert(child, ("[RelicMachine] %s never replicated under %s"):format(name, parent:GetFullName()))
+		return child
 	end
-
-	self._proximityPrompt = self.Instance.PrimaryPart.Attachment:WaitForChild("ProximityPrompt")
-	self._onPromptTriggered = self._comm:GetSignal("OnPromptTriggered")
+	need(self.Instance, "Model")
+	local attachment = need(primaryPart, "Attachment")
+	need(attachment, "PointLight")
+	need(attachment, "Shine")
+	need(need(primaryPart, "Attachment1"), "ParticleEmitter")
+	need(primaryPart, "VendingMachineName")
+	need(primaryPart, "Layer")
+	need(primaryPart, "Spark")
+	need(primaryPart, "LandParticle")
+	need(primaryPart, "Landing")
+	self._proximityPrompt = need(attachment, "ProximityPrompt")
 	self._ownerId = self.Instance:GetAttribute(Attributes.OwnerId)
 	self._numberValue = Instance.new("NumberValue")
 	self._numberValue.Value = 1
@@ -186,7 +191,10 @@ function RelicMachine:Start()
 				{ Value = 1 }
 			):Play()
 
-			self._onPromptTriggered:Fire(self.Instance.PrimaryPart.CFrame)
+			DungeonNetwork.RelicMachinePromptTriggered.Fire({
+				Machine = self.Instance,
+				CFrame = self.Instance.PrimaryPart.CFrame,
+			})
 		end
 	end)
 end

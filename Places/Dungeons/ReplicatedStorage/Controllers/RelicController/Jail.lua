@@ -61,7 +61,7 @@ end
 -- 	end)
 -- end
 
-local function EaseOutCubic(t: number): number
+local function easeOutCubic(t: number): number
 	return 1 - math.pow(1 - t, 3)
 end
 
@@ -104,7 +104,7 @@ function Jail:PlayEffect()
 		local now = workspace:GetServerTimeNow()
 
 		local rawAlpha = math.clamp((now - startTime) / duration, 0, 1)
-		local eased = EaseOutCubic(rawAlpha)
+		local eased = easeOutCubic(rawAlpha)
 
 		local currentPos = hrp.Position
 

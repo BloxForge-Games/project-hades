@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: MeleeWeaponVFXService.lua
@@ -6,20 +7,15 @@
 
 --[ Roblox Services ]--
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
+local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 
-local MeleeWeaponVFXService = Knit.CreateService({
+local MeleeWeaponVFXService = {
 	Name = "MeleeWeaponVFXService",
-	Client = {
-		OnFXRequested = Knit.CreateSignal(),
-		OnReplicateFXRequested = Knit.CreateSignal(),
-	},
-})
+}
 
 --[ Imports ]--
 
@@ -33,12 +29,20 @@ local MeleeWeaponVFXService = Knit.CreateService({
 
 --[ Initializers ]--
 
-function MeleeWeaponVFXService:KnitStart()
-	self.Client.OnFXRequested:Connect(
-		function(player: Player, character: Model, iteration: number, weaponType: MeleeWeaponTypes.MeleeWeaponTypes)
-			self.Client.OnReplicateFXRequested:FireExcept(player, character, iteration, weaponType)
+function MeleeWeaponVFXService.Start(_self: typeof(MeleeWeaponVFXService))
+	-- Relay a swing to every OTHER client. The character is the sender's
+	-- own, taken from the server -- never from the packet.
+	Combat.MeleeSwing.On(function(player: Player, payload)
+		local character = player.Character
+		if not character then
+			return
 		end
-	)
+		Combat.MeleeSwingReplicated.FireExcept(player, {
+			Character = character,
+			Iteration = payload.Iteration,
+			WeaponType = payload.WeaponType,
+		})
+	end)
 end
 
 return MeleeWeaponVFXService

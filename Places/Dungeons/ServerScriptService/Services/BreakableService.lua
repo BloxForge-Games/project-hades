@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: BreakableService.lua
@@ -6,18 +7,14 @@
 
 --[ Roblox Services ]--
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local BreakableService = Knit.CreateService({
+local BreakableService = {
 	Name = "BreakableService",
-	Client = {
-		OnBreakableDamaged = Knit.CreateSignal(),
-	},
-})
+
+	-- Its one remote (OnBreakableDamaged) is Combat.BreakableDamaged now,
+	-- fired by the Breakable component directly.,
+}
 
 --[ Imports ]--
 

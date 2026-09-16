@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: GearDropService.lua
 	Description:
@@ -11,10 +12,10 @@ local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local RunService = game:GetService("RunService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
@@ -27,7 +28,15 @@ local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRa
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
 
-local DungeonService
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
 
 --[ Constants ]--
 
@@ -139,17 +148,16 @@ local ATTR_FROM_CHEST = "ChestDrop"
 
 --[ Service ]--
 
-local GearDropService = Knit.CreateService({
+local GearDropService = {
 	Name = "GearDropService",
-	Client = {},
-})
+}
 
 --[ Private helpers ]--
 
 -- Lazily ensures the GearDrops folder exists under
 -- workspace.IgnoreInstances. Falls back to workspace if IgnoreInstances
 -- isn't present (e.g., booting on a partial map).
-function GearDropService:_ensureDropFolder(): Folder
+function GearDropService._ensureDropFolder(_self: typeof(GearDropService)): Folder
 	local ignore = workspace:FindFirstChild("IgnoreInstances")
 	if not ignore then
 		ignore = workspace
@@ -166,11 +174,11 @@ end
 -- Returns the active dungeon's full `dungeonDrops` config (with .pool
 -- and .perEnemyType sub-tables), or nil if no dungeon is active OR the
 -- difficulty doesn't have one defined.
-function GearDropService:_getActiveDropConfig()
-	if not DungeonService then
+function GearDropService._getActiveDropConfig(_self: typeof(GearDropService))
+	if not getDungeonService() then
 		return nil
 	end
-	local active = DungeonService:GetActiveDungeon()
+	local active = getDungeonService():GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -183,11 +191,11 @@ end
 -- dungeon is active OR the difficulty config doesn't define one.
 -- Shape: { [ItemRarity.Common] = N, [ItemRarity.Uncommon] = N, ... }
 -- See DungeonData[id].difficulties[diff].rarityWeights for authoring.
-function GearDropService:_getActiveRarityWeights()
-	if not DungeonService then
+function GearDropService._getActiveRarityWeights(_self: typeof(GearDropService))
+	if not getDungeonService() then
 		return nil
 	end
-	local active = DungeonService:GetActiveDungeon()
+	local active = getDungeonService():GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -200,11 +208,11 @@ end
 -- dungeon is active OR the difficulty config doesn't define one.
 -- Shape: `{ min = N, max = N }` (named keys, matches DungeonData
 -- authoring convention).
-function GearDropService:_getActiveLevelRange()
-	if not DungeonService then
+function GearDropService._getActiveLevelRange(_self: typeof(GearDropService))
+	if not getDungeonService() then
 		return nil
 	end
-	local active = DungeonService:GetActiveDungeon()
+	local active = getDungeonService():GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -218,7 +226,7 @@ end
 -- available (ad-hoc test calls, malformed config). The level stamped
 -- on ATTR_LEVEL drives both the displayed prompt text ("Lvl. N Name")
 -- and the persisted inventory entry's `level` field on pickup.
-function GearDropService:_rollGearLevel(): number
+function GearDropService._rollGearLevel(self: typeof(GearDropService)): number
 	local range = self:_getActiveLevelRange()
 	if not range or not range.min or not range.max then
 		return DEFAULT_GEAR_LEVEL
@@ -235,7 +243,7 @@ local DEFAULT_DROP_CONFIG = {
 
 -- Returns the perEnemyType entry for the given enemyType, or the
 -- default if missing. perEnemyType from DungeonData wins when present.
-function GearDropService:_resolveEnemyDropConfig(dropConfig, enemyType: string?)
+function GearDropService._resolveEnemyDropConfig(_self: typeof(GearDropService), dropConfig, enemyType: string?)
 	if enemyType and dropConfig and dropConfig.perEnemyType then
 		local cfg = dropConfig.perEnemyType[enemyType]
 		if cfg then
@@ -253,7 +261,10 @@ end
 -- Weighted random pick from a pool. Returns the picked entry, or nil
 -- for an empty / zero-weight pool. Sum-normalized on every call (cheap;
 -- pools are < 10 entries).
-function GearDropService:_rollFromPool(pool): { name: string, type: string, weight: number }?
+function GearDropService._rollFromPool(
+	_self: typeof(GearDropService),
+	pool: { { name: string, type: string, weight: number } }?
+): { name: string, type: string, weight: number }?
 	if not pool or #pool == 0 then
 		return nil
 	end
@@ -283,7 +294,7 @@ end
 -- ("Enforcer Helmet" / "Enforcer Chestplate" / "Enforcer Greaves")
 -- and the corresponding ArmorPieceData entry holds setName + slot
 -- needed to resolve the asset folder later.
-function GearDropService:_getGearData(gearName: string, gearType: string)
+function GearDropService._getGearData(_self: typeof(GearDropService), gearName: string, gearType: string)
 	if gearType == GearTypes.Weapon then
 		return WeaponData[gearName]
 	elseif gearType == GearTypes.Armor then
@@ -317,7 +328,7 @@ end
 -- landed on). Re-rolls the scatter up to LANDING_ATTEMPTS times, then tries
 -- straight under the origin (the mob was standing on floor), then falls
 -- back to the origin height so the drop still spawns somewhere.
-function GearDropService:_pickLandingPosition(origin: Vector3): Vector3
+function GearDropService._pickLandingPosition(_self: typeof(GearDropService), origin: Vector3): Vector3
 	local fromY = origin.Y + LANDING_RAYCAST_UP
 	for _ = 1, LANDING_ATTEMPTS do
 		local landingX = origin.X + math.random(-LANDING_XZ_SCATTER, LANDING_XZ_SCATTER)
@@ -341,7 +352,7 @@ end
 
 -- Resolves the asset folder for a given gear type. Weapons live under
 -- GameAssets.Weapons (Accessories); armor under GameAssets.Armor (Models).
-function GearDropService:_resolveAssetFolder(gearType: string): Folder?
+function GearDropService._resolveAssetFolder(_self: typeof(GearDropService), gearType: string): Folder?
 	local assets = ReplicatedStorage:FindFirstChild("GameAssets")
 	if not assets then
 		return nil
@@ -370,7 +381,7 @@ end
 --       Return as-is.
 --
 --   * Anything else: warn + destroy + nil.
-function GearDropService:_normalizeGearVisual(gearInstance: Instance): Model?
+function GearDropService._normalizeGearVisual(_self: typeof(GearDropService), gearInstance: Instance): Model?
 	if gearInstance:IsA("Model") then
 		-- Weapons are Models now (converted from Accessory). A weapon Model
 		-- holds an inner visible "Model" child (the meshes) + a "Handle"
@@ -451,7 +462,7 @@ end
 -- Builds the invisible carrier Part. The gear is welded to this; the
 -- client component CFrames this part directly to drive bezier + bob.
 -- Anchored=true so physics doesn't run; the component drives CFrame.
-function GearDropService:_buildCarrierPart(landingPosition: Vector3): BasePart
+function GearDropService._buildCarrierPart(_self: typeof(GearDropService), landingPosition: Vector3): BasePart
 	local carrier = Instance.new("Part")
 	carrier.Name = "Carrier"
 	carrier.Size = CARRIER_SIZE
@@ -468,7 +479,7 @@ end
 -- Positions the gear Model at the carrier's CFrame before welding so
 -- the relative offset is "carrier at gear-root." After welding, this
 -- offset is locked in — moving carrier moves the whole gear rigidly.
-function GearDropService:_pivotGearToCarrier(visualModel: Model, carrier: BasePart)
+function GearDropService._pivotGearToCarrier(_self: typeof(GearDropService), visualModel: Model, carrier: BasePart)
 	if visualModel.PrimaryPart then
 		visualModel:PivotTo(carrier.CFrame)
 		return
@@ -521,7 +532,11 @@ end
 --     box center ends up at T * pivotToCenter
 --   We want T * pivotToCenter = carrier.CFrame, so:
 --     T = carrier.CFrame * pivotToCenter:Inverse()
-function GearDropService:_pivotGearCenteredOnCarrier(visualModel: Model, carrier: BasePart)
+function GearDropService._pivotGearCenteredOnCarrier(
+	self: typeof(GearDropService),
+	visualModel: Model,
+	carrier: BasePart
+)
 	if not visualModel.PrimaryPart then
 		-- No PrimaryPart → no defined pivot to offset from. Fall
 		-- through to the existing PrimaryPart-less translation path
@@ -538,7 +553,7 @@ end
 -- Sets Anchored=false on each (welds can't hold anchored parts in a
 -- moving assembly). The carrier itself stays anchored — the component
 -- drives its CFrame directly.
-function GearDropService:_weldGearToCarrier(gearInstance: Instance, carrier: BasePart)
+function GearDropService._weldGearToCarrier(_self: typeof(GearDropService), gearInstance: Instance, carrier: BasePart)
 	for _, descendant in gearInstance:GetDescendants() do
 		if descendant:IsA("BasePart") then
 			descendant.Anchored = false
@@ -572,7 +587,7 @@ end
 -- proportion to (1 - idleScale). Net result: armor sits a touch
 -- higher than LANDING_Y_ABOVE_GROUND after it's scaled to 0.75,
 -- never clips into the floor.
-function GearDropService:_snapModelBottomToHeight(model: Model, desiredBottomY: number)
+function GearDropService._snapModelBottomToHeight(_self: typeof(GearDropService), model: Model, desiredBottomY: number)
 	local bbCFrame, bbSize = model:GetBoundingBox()
 	local currentBottomY = bbCFrame.Position.Y - (bbSize.Y / 2)
 	local liftY = desiredBottomY - currentBottomY
@@ -584,7 +599,7 @@ end
 -- Clones the rarity-matched particle attachment from GameAssets.Particles
 -- and parents it to the carrier. Warns + no-ops on missing folder /
 -- prefab / mapping — the drop still works, just without VFX.
-function GearDropService:_attachRarityParticles(carrier: BasePart, rarity: string)
+function GearDropService._attachRarityParticles(_self: typeof(GearDropService), carrier: BasePart, rarity: string)
 	local particleName = RARITY_TO_PARTICLE[rarity]
 	if not particleName then
 		warn(("[GearDropService] No particle mapping for rarity '%s'"):format(tostring(rarity)))
@@ -614,7 +629,11 @@ end
 -- Collected = one-shot burst, recolored per rarity, :Emit()ed by the
 -- client component on Triggered. DropAttachment = ambient stream while
 -- the drop sits on the floor; not recolored.
-function GearDropService:_attachPickupBurstAttachments(carrier: BasePart, rarity: string)
+function GearDropService._attachPickupBurstAttachments(
+	_self: typeof(GearDropService),
+	carrier: BasePart,
+	rarity: string
+)
 	local assets = ReplicatedStorage:FindFirstChild("GameAssets")
 	local particlesFolder = assets and assets:FindFirstChild("Particles")
 	if not particlesFolder then
@@ -648,7 +667,13 @@ end
 -- the drop's name + rarity. NameText format matches the client
 -- ProximityPrompt's ActionText ("Lvl. N Name"). The client component
 -- adjusts text sizes for mobile in its Construct.
-function GearDropService:_attachBillboardGui(_carrier: BasePart, _gearName: string, _level: number, _rarity: string)
+function GearDropService._attachBillboardGui(
+	_self: typeof(GearDropService),
+	_carrier: BasePart,
+	_gearName: string,
+	_level: number,
+	_rarity: string
+)
 	-- local assets = ReplicatedStorage:FindFirstChild("GameAssets")
 	-- local billboardsFolder = assets and assets:FindFirstChild("BillboardGuis")
 	-- local template = billboardsFolder and billboardsFolder:FindFirstChild(BILLBOARD_NAME)
@@ -670,7 +695,8 @@ end
 -- returned model is parented under workspace.IgnoreInstances.GearDrops
 -- and tagged, which auto-attaches the server + client GearDrop
 -- components.
-function GearDropService:_buildDropModel(
+function GearDropService._buildDropModel(
+	self: typeof(GearDropService),
 	uuid: string,
 	gearName: string,
 	gearType: string,
@@ -731,7 +757,7 @@ function GearDropService:_buildDropModel(
 		end
 	end
 
-	local clonedPrefab = prefab:Clone()
+	local clonedPrefab = (prefab :: Instance):Clone()
 	local visualModel = self:_normalizeGearVisual(clonedPrefab)
 	if not visualModel then
 		return nil
@@ -828,7 +854,8 @@ function GearDropService:_buildDropModel(
 	return model
 end
 
-function GearDropService:_fireSingleDrop(
+function GearDropService._fireSingleDrop(
+	self: typeof(GearDropService),
 	player: Player,
 	originPosition: Vector3,
 	entry: { name: string, type: string, weight: number },
@@ -863,7 +890,7 @@ function GearDropService:_fireSingleDrop(
 		rarity = gearData.rarity
 	else
 		local weights = self:_getActiveRarityWeights()
-		rarity = rollItemRarity(weights, ItemRarity.Common)
+		rarity = rollItemRarity(weights or {}, ItemRarity.Common)
 	end
 	local description = (gearData and gearData.description) or ""
 	local uuid = HttpService:GenerateGUID(false)
@@ -903,7 +930,8 @@ end
 
 --[ Public API ]--
 
-function GearDropService:DropGear(
+function GearDropService.DropGear(
+	self: typeof(GearDropService),
 	player: Player,
 	originPosition: Vector3,
 	enemyType: string?,
@@ -1003,12 +1031,12 @@ GearDropService._preservedEntries = {} :: { [string]: { [string]: any } }
 -- The entry a player dropped under this uuid, if any. Does NOT consume
 -- it: the pickup can still be refused by the run item cap, and the drop
 -- has to stay on the floor intact when it is.
-function GearDropService:GetPreservedEntry(uuid: string): { [string]: any }?
+function GearDropService.GetPreservedEntry(self: typeof(GearDropService), uuid: string): { [string]: any }?
 	return self._preservedEntries[uuid]
 end
 
 -- Called once a preserved entry has actually been granted.
-function GearDropService:ReleasePreservedEntry(uuid: string)
+function GearDropService.ReleasePreservedEntry(self: typeof(GearDropService), uuid: string)
 	self._preservedEntries[uuid] = nil
 end
 
@@ -1024,7 +1052,8 @@ end
 --
 -- Returns false having spawned nothing when the model cannot be built,
 -- so the caller can put the item back in the escrow.
-function GearDropService:DropExistingGear(
+function GearDropService.DropExistingGear(
+	self: typeof(GearDropService),
 	player: Player,
 	originPosition: Vector3,
 	escrowItem: { [string]: any }
@@ -1104,8 +1133,7 @@ end
 
 --[ Lifecycle ]--
 
-function GearDropService:KnitInit()
-	DungeonService = Knit.GetService("DungeonService")
+function GearDropService.Init(_self: typeof(GearDropService))
 	-- RelicService is read inside the rarity roll for Pinata's
 	-- "Rare-or-higher floor on weapon / armor drops" effect.
 end

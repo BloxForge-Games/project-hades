@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/RunEscrowService.lua
 	Description:
@@ -25,7 +26,7 @@
 	    upgrades. You fight with what you brought in.
 	  * Run coins are pure cargo (nothing spends them mid-run).
 
-	Replication: Client.EscrowData is per-player (SetFor) —
+	Replication: EscrowData is per-player (SetFor) —
 	  { items = { { gearType, armorSlot?, item = <inventory entry> } },
 	    coins = number }
 	RunInventoryInterfaceController renders straight from it.
@@ -33,26 +34,42 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local CurrencyService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
+local LifeService = require(ServerScriptService.Services.LifeService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local GearDropService = require(ServerScriptService.Services.GearDropService)
+local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
-local DataService
-local CurrencyService
-local LifeService
-local TextIndicatorService
-local GearDropService
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
 
-local RunEscrowService = Knit.CreateService({
+local RunEscrowService = {
 	Name = "RunEscrowService",
-	Client = {
-		-- Per-player escrow snapshot (SetFor) — see module header.
-		EscrowData = Knit.CreateProperty({ items = {}, coins = 0 }),
-	},
-})
+	Dependencies = { DataService, CurrencyService, LifeService, TextIndicatorService, GearDropService } :: { any },
+}
+
+-- Per-player escrow snapshot (SetFor; was a replicated property), see
+-- the module header.
+RunEscrowService._escrowProperty = RemoteProperty.Server({
+	changed = PlayerNetwork.EscrowDataChanged,
+	get = PlayerNetwork.GetEscrowData,
+}, { items = {}, coins = 0 })
 
 --[ Constants ]--
 
@@ -63,9 +80,12 @@ local MAX_RUN_ITEMS = 15
 
 --[ Properties ]--
 
+-- One carried drop; `item` is the fully-built inventory entry.
+type EscrowItem = { gearType: string, armorSlot: string?, item: { [string]: any } }
+
 RunEscrowService._escrow = {} :: {
 	[number]: {
-		items: { { gearType: string, armorSlot: string?, item: { [string]: any } } },
+		items: { EscrowItem },
 		coins: number,
 	},
 }
@@ -76,7 +96,7 @@ RunEscrowService._escrow = {} :: {
 -- _replicate). Keep in step with RelicData's RUN_COINS_ATTRIBUTE.
 local RUN_COINS_ATTRIBUTE = "RunCoins"
 
-function RunEscrowService:_getOrCreate(player: Player)
+function RunEscrowService._getOrCreate(self: typeof(RunEscrowService), player: Player)
 	local entry = self._escrow[player.UserId]
 	if not entry then
 		entry = { items = {}, coins = 0 }
@@ -85,17 +105,17 @@ function RunEscrowService:_getOrCreate(player: Player)
 	return entry
 end
 
-function RunEscrowService:_replicate(player: Player)
+function RunEscrowService._replicate(self: typeof(RunEscrowService), player: Player)
 	local entry = self:_getOrCreate(player)
-	self.Client.EscrowData:SetFor(player, {
+	self._escrowProperty:SetFor(player, {
 		items = entry.items,
 		coins = entry.coins,
 	})
 
 	-- Same coin count, mirrored onto an ATTRIBUTE. The Comm property above is
 	-- what the run UI reads; this exists because relic
-	-- runtimeDescriptionCallbacks run on the CLIENT, where no Knit service is
-	-- reachable, and attributes replicate on their own — the same reason
+	-- runtimeDescriptionCallbacks run on the CLIENT, where no server service
+	-- is reachable, and attributes replicate on their own — the same reason
 	-- PlayerStatsService stamps BonusHealthPercent. Pot O' Gold Sword reads it
 	-- to show its live damage bonus. Every coin change already funnels through
 	-- _replicate, so the number can't go stale.
@@ -110,7 +130,11 @@ end
 -- the fully-built inventory entry (GearDrop:_buildInventoryEntry shape)
 -- — banking inserts it into the profile verbatim, so the stats the
 -- player saw during the run are exactly what they keep.
-function RunEscrowService:AddItem(player: Player, escrowItem: { [string]: any }): boolean
+function RunEscrowService.AddItem(
+	self: typeof(RunEscrowService),
+	player: Player,
+	escrowItem: { [string]: any }
+): boolean
 	local entry = self:_getOrCreate(player)
 
 	if #entry.items >= MAX_RUN_ITEMS then
@@ -118,7 +142,7 @@ function RunEscrowService:AddItem(player: Player, escrowItem: { [string]: any })
 		if TextIndicatorService and character then
 			TextIndicatorService:ShowIndicator(
 				player,
-				character:FindFirstChild("Head") or character.PrimaryPart,
+				((character:FindFirstChild("Head") :: BasePart?) or character.PrimaryPart) :: BasePart,
 				"Run inventory full!",
 				Color3.fromRGB(255, 90, 90),
 				true
@@ -133,13 +157,13 @@ function RunEscrowService:AddItem(player: Player, escrowItem: { [string]: any })
 	-- above never reads as a gain. Monotonic: banking the escrow or
 	-- dropping an item leaves it alone, because it answers "something was
 	-- just picked up", not "how much is being carried".
-	player:SetAttribute(Attributes.GearGained, (player:GetAttribute(Attributes.GearGained) or 0) + 1)
+	player:SetAttribute(Attributes.GearGained, ((player:GetAttribute(Attributes.GearGained) or 0) :: number) + 1)
 	return true
 end
 
 -- Credits run coins (post-multiplier value from DropService's credit
 -- path). Cargo only — nothing spends these mid-run.
-function RunEscrowService:AddCoins(player: Player, amount: number)
+function RunEscrowService.AddCoins(self: typeof(RunEscrowService), player: Player, amount: number)
 	local entry = self:_getOrCreate(player)
 	entry.coins += amount
 	self:_replicate(player)
@@ -148,7 +172,7 @@ end
 -- Dragon Lantern's drawback: strips `fraction` of the player's UNBANKED
 -- run coins (rounded down). Banked profile coins are never touched --
 -- the tax rides the same risk model as the rest of the escrow.
-function RunEscrowService:TaxCoins(player: Player, fraction: number)
+function RunEscrowService.TaxCoins(self: typeof(RunEscrowService), player: Player, fraction: number)
 	local entry = self._escrow[player.UserId]
 	if not entry or entry.coins <= 0 then
 		return
@@ -161,14 +185,14 @@ function RunEscrowService:TaxCoins(player: Player, fraction: number)
 	self:_replicate(player)
 end
 
-function RunEscrowService:GetItemCount(player: Player): number
+function RunEscrowService.GetItemCount(self: typeof(RunEscrowService), player: Player): number
 	return #self:_getOrCreate(player).items
 end
 
 -- Debits run coins if the balance covers it; false (and no change)
 -- otherwise. The Merchant's buy path is the only spender today — run
 -- coins were cargo-only before Event rooms existed.
-function RunEscrowService:SpendCoins(player: Player, amount: number): boolean
+function RunEscrowService.SpendCoins(self: typeof(RunEscrowService), player: Player, amount: number): boolean
 	local entry = self:_getOrCreate(player)
 	if amount <= 0 or entry.coins < amount then
 		return false
@@ -178,7 +202,7 @@ function RunEscrowService:SpendCoins(player: Player, amount: number): boolean
 	return true
 end
 
-function RunEscrowService:GetCoins(player: Player): number
+function RunEscrowService.GetCoins(self: typeof(RunEscrowService), player: Player): number
 	return self:_getOrCreate(player).coins
 end
 
@@ -187,7 +211,7 @@ end
 -- Inventory.Gear[<slot>] sub-array), coins through CurrencyService. One
 -- SetProfileValue write at the end so OnPlayerDataUpdated listeners
 -- (loadout refresh, hotbar UI) see the whole bank as a single update.
-function RunEscrowService:BankAll(player: Player)
+function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player)
 	local entry = self._escrow[player.UserId]
 	if not entry or (#entry.items == 0 and entry.coins == 0) then
 		return
@@ -253,9 +277,8 @@ end
 -- discarded on death, and a corpse shouldn't be able to claim.
 --
 -- Until the portal exists, drive it from the command bar:
---   game:GetService("ServerScriptService")  -- (via Knit)
---   Knit.GetService("RunEscrowService"):ClaimRewards(game.Players.SomeUser)
-function RunEscrowService:ClaimRewards(player: Player): boolean
+--   require(game.ServerScriptService.Services.RunEscrowService):ClaimRewards(game.Players.SomeUser)
+function RunEscrowService.ClaimRewards(self: typeof(RunEscrowService), player: Player): boolean
 	if LifeService and LifeService:IsDeathState(player) then
 		return false
 	end
@@ -271,9 +294,9 @@ end
 
 -- Discards the whole escrow — a party WIPE, or disconnect mid-run. The
 -- Spire keeps what you carried. A single death does NOT land here (see
--- KnitStart): a revive would otherwise bring the player back with
+-- Start): a revive would otherwise bring the player back with
 -- nothing to show for the run so far.
-function RunEscrowService:Discard(player: Player, reason: string?)
+function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player, reason: string?)
 	local entry = self._escrow[player.UserId]
 	if not entry or (#entry.items == 0 and entry.coins == 0) then
 		return
@@ -300,13 +323,14 @@ end
 --
 -- The escrow write happens FIRST so a duplicate request cannot drop the
 -- same item twice, and is undone if the drop fails to spawn.
-function RunEscrowService.Client:DropItem(player: Player, uuid: string): boolean
+-- PlayerNetwork.DropRunItem handler (was a client-callable method).
+function RunEscrowService._onDropItem(_self: typeof(RunEscrowService), player: Player, uuid: string): boolean
 	if typeof(uuid) ~= "string" or uuid == "" then
 		return false
 	end
 
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp or not GearDropService then
 		return false
 	end
@@ -323,7 +347,7 @@ function RunEscrowService.Client:DropItem(player: Player, uuid: string): boolean
 		return false
 	end
 
-	local dropped = table.remove(entry.items, index)
+	local dropped = table.remove(entry.items, index) :: EscrowItem
 	RunEscrowService:_replicate(player)
 
 	if not GearDropService:DropExistingGear(player, hrp.Position, dropped) then
@@ -338,12 +362,10 @@ end
 
 --[ Lifecycle ]--
 
-function RunEscrowService:KnitStart()
-	DataService = Knit.GetService("DataService")
-	CurrencyService = Knit.GetService("CurrencyService")
-	LifeService = Knit.GetService("LifeService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	GearDropService = Knit.GetService("GearDropService")
+function RunEscrowService.Start(self: typeof(RunEscrowService))
+	PlayerNetwork.DropRunItem.On(function(player: Player, uuid: string): boolean
+		return self:_onDropItem(player, uuid)
+	end)
 
 	-- DISCARD only on a WIPE: every player down, the run over, the lobby
 	-- teleport following. A single death KEEPS the escrow — a teammate
@@ -368,7 +390,7 @@ function RunEscrowService:KnitStart()
 	-- OnPlayerExtracted BEFORE issuing the lobby teleport, so the escrow is
 	-- still fully present here) -- the run's winnings stay on screen, and
 	-- stay at risk, until then.
-	Knit.GetService("DungeonService").Signals.OnPlayerExtracted:Connect(function(player: Player)
+	getDungeonService().Signals.OnPlayerExtracted:Connect(function(player: Player)
 		self:ClaimRewards(player)
 	end)
 

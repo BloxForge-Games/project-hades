@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Client/Components/EncounterChest.lua
 	Description:
@@ -39,20 +40,12 @@ local TweenService = game:GetService("TweenService")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local chestLidSwing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.chestLidSwing)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
-
-local CameraShakeController
-
-Knit.OnStart()
-	:andThen(function()
-		CameraShakeController = Knit.GetController("CameraShakeController")
-	end)
-	:catch(warn)
 
 --[ Constants ]--
 
@@ -231,7 +224,7 @@ function EncounterChest:_muteForNonOwner(instance: Instance)
 	then
 		-- Enabled only gates CONTINUOUS emission — the landing burst
 		-- still :Emit()s, so the drop keeps its impact.
-		instance.Enabled = false
+		(instance :: any).Enabled = false
 	elseif instance:IsA("TextLabel") then
 		instance.TextTransparency = NON_OWNER_TEXT_TRANSPARENCY
 	elseif instance:IsA("UIStroke") then

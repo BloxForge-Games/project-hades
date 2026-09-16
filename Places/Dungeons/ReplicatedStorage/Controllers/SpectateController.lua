@@ -1,9 +1,10 @@
+--!strict
 --[[
      Module: SpectateController.lua
      Description:
      Client-side spectate input handler. Listens for Left/Right arrow
      keys (and gamepad equivalents) while the local player is in
-     LifeService.DeathState, and fires SpectateService.OnCycleRequested
+     LifeService.DeathState, and fires PlayerNetwork.SpectateCycle
      to the server. Server picks the next eligible target, updates the
      SpectateTargets property, AND fires IsometricCameraService.OnCameraTargetChanged
      for this player — so the camera lerp comes for free from the
@@ -21,13 +22,21 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local LifeController = require(ReplicatedStorage.Controllers.LifeController)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 
-local LifeController
-local SpectateService
-
-local SpectateController = Knit.CreateController({
+local SpectateController = {
 	Name = "SpectateController",
+	Dependencies = { LifeController } :: { any },
+}
+
+-- Replicated map of spectator userId -> spectated userId (was
+-- SpectateService.SpectateTargets). SpectateInterfaceController and
+-- IsometricCameraController read it from here.
+SpectateController.SpectateTargets = RemoteProperty.Client({
+	changed = PlayerNetwork.SpectateTargetsChanged,
+	get = PlayerNetwork.GetSpectateTargets,
 })
 
 --[ Properties ]--
@@ -44,18 +53,18 @@ SpectateController._isLocalSpectating = false
 -- Returns true if the input key should trigger a left/right cycle, and
 -- which direction. Arrow keys for keyboard; D-pad for gamepad (left-stick
 -- left/right is too easy to bump during normal camera use).
-local function resolveCycleDirection(input: InputObject): string?
+local function resolveCycleDirection(input: InputObject): ("Left" | "Right")?
 	if input.UserInputType == Enum.UserInputType.Keyboard then
 		if input.KeyCode == Enum.KeyCode.Left then
-			return "left"
+			return "Left"
 		elseif input.KeyCode == Enum.KeyCode.Right then
-			return "right"
+			return "Right"
 		end
 	elseif input.UserInputType == Enum.UserInputType.Gamepad1 then
 		if input.KeyCode == Enum.KeyCode.DPadLeft then
-			return "left"
+			return "Left"
 		elseif input.KeyCode == Enum.KeyCode.DPadRight then
-			return "right"
+			return "Right"
 		end
 	end
 	return nil
@@ -63,13 +72,7 @@ end
 
 --[ Lifecycle ]--
 
-function SpectateController:KnitInit()
-	SpectateService = Knit.GetService("SpectateService")
-end
-
-function SpectateController:KnitStart()
-	LifeController = Knit.GetController("LifeController")
-
+function SpectateController.Start(self: typeof(SpectateController))
 	-- Seed initial value in case the spectate state already flipped on
 	-- before this controller mounted (defensive — controllers normally
 	-- all init before any player can die).
@@ -90,11 +93,13 @@ function SpectateController:KnitStart()
 		if processed or not self._isLocalSpectating then
 			return
 		end
-		local direction = resolveCycleDirection(input)
-		if not direction then
+		-- Annotated: the old solver widens a refined singleton union back to
+		-- `string` unless the local carries the type itself.
+		local direction: ("Left" | "Right")? = resolveCycleDirection(input)
+		if direction == nil then
 			return
 		end
-		SpectateService.OnCycleRequested:Fire(direction)
+		PlayerNetwork.SpectateCycle.Fire(direction)
 	end)
 end
 

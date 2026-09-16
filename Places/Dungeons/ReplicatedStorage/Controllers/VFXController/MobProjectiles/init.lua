@@ -8,7 +8,7 @@
 
 	Module contract:
 	  function(zombieModel: Model, originCFrame: CFrame,
-	           targetPosition: Vector3, castUuid: string, attackConfig: table)
+	           targetPosition: Vector3, castUuid: string, attackConfig: { [any]: any })
 	    The module owns the FULL client-side projectile lifecycle:
 	      * Clones GameAssets.VFX.<projectileName>.Projectile
 	      * Positions at originCFrame
@@ -27,7 +27,7 @@
 	Adding a new ranged-mob projectile = new ModuleScript in this folder
 	with a matching name + a new GameAssets.VFX.<name> Folder/Model.
 	No dispatcher edits needed — child modules are auto-required at
-	KnitInit time.
+	Init time.
 ]]
 
 local MobProjectiles = {}
@@ -36,7 +36,7 @@ local MobProjectiles = {}
 local registry: { [string]: any } = {}
 
 -- Auto-register every child ModuleScript by its Name. Called once
--- on require — matches the VFXController.KnitInit pattern.
+-- on require — matches the VFXController.Init pattern.
 for _, moduleScript in script:GetChildren() do
 	if moduleScript:IsA("ModuleScript") then
 		registry[moduleScript.Name] = require(moduleScript)

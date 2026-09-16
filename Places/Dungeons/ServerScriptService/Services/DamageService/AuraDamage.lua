@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: DamageService/AuraDamage.lua
 	Description:
@@ -28,19 +29,13 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local AuraService = require(ServerScriptService.Services.AuraService)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
-
-local RelicService
-local AuraService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-	AuraService = Knit.GetService("AuraService")
-end)
 
 local SHIELD_ATTRIBUTE = "ShieldValue"
 return function(player: Player, damage: number, isMagic: boolean)
@@ -48,9 +43,10 @@ return function(player: Player, damage: number, isMagic: boolean)
 		return 0
 	end
 
-	local character = player.Character
+	local character: Model? = player.Character
+
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	if not hrp then
+	if not character or not hrp then
 		return 0
 	end
 

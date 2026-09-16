@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: EventService.lua
 	Description:
@@ -9,7 +10,7 @@
 	trust the client with an outcome, only with a request.
 
 	--- WIRING ---
-	Rooms arrive from DungeonService.Signals.OnDungeonGenerated. Every
+	Rooms arrive from getDungeonService().Signals.OnDungeonGenerated. Every
 	Event room is recognised by its PREFAB NAME (SwordStone, MerchantShop,
 	CursedShrine — the clone keeps it), and its interactables are wired
 	here at runtime: NPC tag + DialogueGraph attribute, plus a server-side
@@ -35,10 +36,18 @@ local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local DropService = require(ServerScriptService.Services.DropService)
+local LifeService = require(ServerScriptService.Services.LifeService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
@@ -48,15 +57,25 @@ local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
 
-local DungeonService
-local RelicService
-local DropService
-local LifeService
-local PlayerStatsService
-local UserNotificationService
-local CoffinEventService
-local TextIndicatorService
-local RunEscrowService
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
+
+-- CoffinEventService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local coffinEventServiceLazy: any = nil
+local function getCoffinEventService(): any
+	if coffinEventServiceLazy == nil then
+		coffinEventServiceLazy = (require :: any)(ServerScriptService.Services.CoffinEventService)
+	end
+	return coffinEventServiceLazy
+end
 
 --[ Constants ]--
 
@@ -162,14 +181,17 @@ local SOLD_COLOR = Color3.fromRGB(85, 255, 127)
 
 --[ Service ]--
 
-local EventService = Knit.CreateService({
+local EventService = {
 	Name = "EventService",
-	Client = {
-		-- Fired (with the roomId) when a merchant room's stock unlocks
-		-- — the room before the shop has STARTED. Clients re-fetch
-		-- stalls on it.
-		OnMerchantStockUnlocked = Knit.CreateSignal(),
-	},
+	Dependencies = {
+		RelicService,
+		DropService,
+		LifeService,
+		TextIndicatorService,
+		RunEscrowService,
+		PlayerStatsService,
+		UserNotificationService,
+	} :: { any },
 
 	-- [model] = { kind = "SwordStone" | "CursedShrine" | "MerchantShop", room = room }
 	-- Only models wired at generation are honoured by any client call.
@@ -187,7 +209,7 @@ local EventService = Knit.CreateService({
 	_greaterShrineTaken = {},
 	-- [userId][statueModel] = { blessingId, ... } rolled once and kept,
 	-- so walking away and returning cannot re-roll for a better offer.
-	_greaterShrineOffers = {},
+	_greaterShrineOffers = {} :: { [number]: { [Instance]: { string } } },
 	-- [userId][statueModel] = true while this player's Healing Orbs are
 	-- owed, until the close path drops them (DropGreaterShrineOrbs).
 	-- Separate from _greaterShrineDone so the orbs land exactly once.
@@ -226,7 +248,7 @@ local EventService = Knit.CreateService({
 	-- CursedShrine = finished a conversation; MerchantShop = chose
 	-- "I'm ready to continue".
 	_interactions = {},
-})
+}
 
 --[ Private ]--
 
@@ -241,7 +263,7 @@ local function playDropPop(part: BasePart?)
 	for _, childName in DROP_POP_SOUND_PATH do
 		node = node and node:FindFirstChild(childName)
 	end
-	local machinePrimary = node and node:IsA("Model") and node.PrimaryPart
+	local machinePrimary = if node and node:IsA("Model") then node.PrimaryPart else nil
 	local template = machinePrimary and machinePrimary:FindFirstChild(DROP_POP_SOUND_NAME)
 	if not template or not template:IsA("Sound") then
 		warn("[EventService] Missing the vending machine's " .. DROP_POP_SOUND_NAME .. " sound")
@@ -275,7 +297,7 @@ end
 -- never reaches 0 directly — LifeService:LoseLife decides whether the
 -- player has a life to burn or enters the death state. Returns "dead"
 -- when the cost was lethal, "ok" otherwise.
-function EventService:_applyHealthCost(player: Player, fraction: number): string
+function EventService._applyHealthCost(_self: typeof(EventService), player: Player, fraction: number): string
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then
@@ -298,7 +320,7 @@ end
 -- Validates one client request against the wiring registry: the model
 -- must be one we blessed, of the expected kind, and the player must be
 -- physically near it.
-function EventService:_validate(player: Player, model: Instance?, kind: string): boolean
+function EventService._validate(self: typeof(EventService), player: Player, model: Instance?, kind: string): boolean
 	if typeof(model) ~= "Instance" then
 		return false
 	end
@@ -307,7 +329,7 @@ function EventService:_validate(player: Player, model: Instance?, kind: string):
 		return false
 	end
 
-	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local anchor = model:IsA("Model") and model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
 	if not hrp or not anchor then
 		return false
@@ -320,7 +342,8 @@ end
 -- deals whatever fate it likes (all Cursed are NC today, so this is
 -- future-proofing more than behavior); the Sword's payout stays
 -- usable-only.
-function EventService:_rollUsableRelics(
+function EventService._rollUsableRelics(
+	_self: typeof(EventService),
 	player: Player,
 	rarity: string,
 	count: number,
@@ -360,7 +383,8 @@ end
 -- instead of all at once — a three-relic payout reads as the source
 -- dealing them out rather than one pile appearing. Nil / 0 keeps the
 -- simultaneous fan.
-function EventService:_spawnRelicFan(
+function EventService._spawnRelicFan(
+	_self: typeof(EventService),
 	player: Player,
 	sourceModel: Model,
 	relicNames: { string },
@@ -460,7 +484,7 @@ end
 -- Runtime wiring for one generated dungeon: every Event room's
 -- interactable gets its NPC tag + DialogueGraph, and lands in the
 -- validation registry. Prefab NAME is the event identity.
-function EventService:_wireDungeon(dungeon)
+function EventService._wireDungeon(self: typeof(EventService), dungeon)
 	local wired = 0
 	for _, room in dungeon.roomsById do
 		if room.roomType ~= RoomTypes.Event or not room.model then
@@ -516,8 +540,8 @@ function EventService:_wireDungeon(dungeon)
 				coffin:SetAttribute("DialogueGraph", "CoffinEvent")
 				CollectionService:AddTag(coffin, TagList.NPC)
 				self._eventModels[coffin] = { kind = "CoffinEvent", room = room }
-				if CoffinEventService then
-					CoffinEventService:RegisterRoom(room, coffin)
+				if getCoffinEventService() then
+					getCoffinEventService():RegisterRoom(room, coffin)
 				end
 				wired += 1
 			else
@@ -604,14 +628,14 @@ function EventService:_wireDungeon(dungeon)
 end
 
 -- DungeonService polls this during the event exit-door hold.
-function EventService:GetEventInteractions(roomId: number): { [number]: boolean }
+function EventService.GetEventInteractions(self: typeof(EventService), roomId: number): { [number]: boolean }
 	return self._interactions[roomId] or {}
 end
 
 -- Server-side mark (CoffinEventService's decline): the same registry the
 -- client method writes, without the proximity check — the caller has
 -- already validated the request against its own model.
-function EventService:MarkInteracted(player: Player, roomId: number)
+function EventService.MarkInteracted(self: typeof(EventService), player: Player, roomId: number)
 	self._interactions[roomId] = self._interactions[roomId] or {}
 	self._interactions[roomId][player.UserId] = true
 end
@@ -619,7 +643,7 @@ end
 -- "<Name> wishes to continue." to the whole party — the Merchant's leave
 -- option and the Coffin's decline both announce it, so nobody waits on
 -- a teammate who has already voted with their feet.
-function EventService:NotifyWishesToContinue(player: Player)
+function EventService.NotifyWishesToContinue(_self: typeof(EventService), player: Player)
 	if not UserNotificationService then
 		return
 	end
@@ -642,7 +666,8 @@ end
 -- finished Sword/Shrine conversation, or the Merchant's ready option.
 -- Registry + proximity validated; the worst a spoof achieves is
 -- removing the SPOOFER's own contribution to the party's wait.
-function EventService.Client:MarkEventInteracted(player: Player, model: Instance)
+-- DungeonNetwork.MarkEventInteracted handler (was a client-callable method).
+function EventService._onMarkEventInteracted(_self: typeof(EventService), player: Player, model: Instance?)
 	if typeof(model) ~= "Instance" then
 		return
 	end
@@ -676,7 +701,8 @@ end
 --   "dead"    — the cost was lethal
 --   "done"    — this player already pulled it out
 --   "invalid" — bad model / too far / unknown
-function EventService.Client:AttemptSwordPull(player: Player, swordModel: Instance): string
+-- DungeonNetwork.AttemptSwordPull handler (was a client-callable method).
+function EventService._onAttemptSwordPull(_self: typeof(EventService), player: Player, swordModel: Instance?): string
 	if not EventService:_validate(player, swordModel, "SwordStone") then
 		return "invalid"
 	end
@@ -716,7 +742,8 @@ end
 -- the "Bargain is struck" node: the COST lands under the billboard;
 -- the FAN is queued and released by MarkEventInteracted at close.
 -- Returns "struck" | "done" | "invalid".
-function EventService.Client:AcceptCurse(player: Player, shrineModel: Instance): string
+-- DungeonNetwork.AcceptCurse handler (was a client-callable method).
+function EventService._onAcceptCurse(_self: typeof(EventService), player: Player, shrineModel: Instance?): string
 	if not EventService:_validate(player, shrineModel, "CursedShrine") then
 		return "invalid"
 	end
@@ -752,7 +779,8 @@ end
 -- first node fetches it (yielding PreAction, same beat the sword's pull
 -- lands on) so the conversation can route to the "waters lie still" line
 -- instead of re-offering a spent choice.
-function EventService.Client:IsFountainSpent(player: Player, fountainModel: Instance): boolean
+-- DungeonNetwork.IsFountainSpent handler (was a client-callable method).
+function EventService._onIsFountainSpent(_self: typeof(EventService), player: Player, fountainModel: Instance?): boolean
 	if typeof(fountainModel) ~= "Instance" then
 		return true
 	end
@@ -767,7 +795,12 @@ end
 -- Drink: restore FOUNTAIN_HEAL_FRACTION of Maximum Health through the
 -- central heal path (Holiday Ham applies). Spends the fountain for this
 -- player. Returns "ok" | "done" | "invalid".
-function EventService.Client:DrinkFromFountain(player: Player, fountainModel: Instance): string
+-- DungeonNetwork.DrinkFromFountain handler (was a client-callable method).
+function EventService._onDrinkFromFountain(
+	_self: typeof(EventService),
+	player: Player,
+	fountainModel: Instance?
+): string
 	if not EventService:_validate(player, fountainModel, "HealingFountain") then
 		return "invalid"
 	end
@@ -791,7 +824,8 @@ end
 -- the run, joining the relic/rune additive pool (PlayerStatsService).
 -- RecomputeHealth's carry-up grants the new headroom as flesh too. Spends
 -- the fountain for this player. Returns "ok" | "done" | "invalid".
-function EventService.Client:AttuneToFountain(player: Player, fountainModel: Instance): string
+-- DungeonNetwork.AttuneToFountain handler (was a client-callable method).
+function EventService._onAttuneToFountain(_self: typeof(EventService), player: Player, fountainModel: Instance?): string
 	if not EventService:_validate(player, fountainModel, "HealingFountain") then
 		return "invalid"
 	end
@@ -810,7 +844,12 @@ end
 -- Whether this player already took a Greater Blessing from this statue.
 -- Fetched by the graph's opening node (yielding PreAction) so the
 -- conversation can route to the spent line instead of re-offering.
-function EventService.Client:IsGreaterShrineSpent(player: Player, statueModel: Instance): boolean
+-- DungeonNetwork.IsGreaterShrineSpent handler (was a client-callable method).
+function EventService._onIsGreaterShrineSpent(
+	_self: typeof(EventService),
+	player: Player,
+	statueModel: Instance?
+): boolean
 	if typeof(statueModel) ~= "Instance" then
 		return true
 	end
@@ -839,7 +878,12 @@ end
 -- and comes back gets the same three, so the shrine cannot be
 -- re-rolled by leaving. Returns ids in pool order (the dialogue's rows
 -- are authored in that order too, so the menu reads consistently).
-function EventService.Client:GetGreaterShrineOffer(player: Player, statueModel: Instance): { string }
+-- DungeonNetwork.GetGreaterShrineOffer handler (was a client-callable method).
+function EventService._onGetGreaterShrineOffer(
+	_self: typeof(EventService),
+	player: Player,
+	statueModel: Instance?
+): { string }
 	if typeof(statueModel) ~= "Instance" then
 		return {}
 	end
@@ -880,7 +924,13 @@ end
 -- Take a blessing: spends the statue for this player, grants the stat
 -- immediately, and marks their Healing Orbs owed (the close path drops
 -- them once the bars are down). Returns "ok" | "done" | "invalid".
-function EventService.Client:ChooseGreaterBlessing(player: Player, statueModel: Instance, blessing: string): string
+-- DungeonNetwork.ChooseGreaterBlessing handler (was a client-callable method).
+function EventService._onChooseGreaterBlessing(
+	_self: typeof(EventService),
+	player: Player,
+	statueModel: Instance?,
+	blessing: string
+): string
 	if not EventService:_validate(player, statueModel, "GreaterShrine") then
 		return "invalid"
 	end
@@ -893,9 +943,9 @@ function EventService.Client:ChooseGreaterBlessing(player: Player, statueModel: 
 	-- picks a row, but the row it picked is not evidence -- without this
 	-- any blessing could be claimed at any statue.
 	local offers = EventService._greaterShrineOffers[player.UserId]
-	local offer = offers and offers[statueModel]
+	local offer = if offers and statueModel then offers[statueModel] else nil
 	local offered = false
-	for _, id in offer or {} do
+	for _, id in (offer or {}) :: { string } do
 		if id == blessing then
 			offered = true
 			break
@@ -938,9 +988,9 @@ function EventService.Client:ChooseGreaterBlessing(player: Player, statueModel: 
 			titleTextColor3 = Color3.fromRGB(174, 95, 252),
 			titleTextTransparency = 0,
 
-			text = line,
+			text = player.Name .. ": " .. line,
 			textFont = Enum.Font.SourceSansBold,
-			textColor3 = Color3.fromRGB(255, 255, 255),
+			textColor3 = Color3.fromRGB(126, 251, 69),
 			textTransparency = 0,
 		})
 	end
@@ -952,7 +1002,12 @@ end
 -- the statue's base, through the ordinary Health drop -- 5% each via
 -- DropService. Once: the pending entry is consumed.
 -- Returns "ok" | "none" | "invalid".
-function EventService.Client:DropGreaterShrineOrbs(player: Player, statueModel: Instance): string
+-- DungeonNetwork.DropGreaterShrineOrbs handler (was a client-callable method).
+function EventService._onDropGreaterShrineOrbs(
+	_self: typeof(EventService),
+	player: Player,
+	statueModel: Instance?
+): string
 	if typeof(statueModel) ~= "Instance" then
 		return "invalid"
 	end
@@ -1007,7 +1062,13 @@ end
 -- fan pops from the blacksmith when the conversation ends, the same
 -- beat the Sword's payout lands on (_pendingRelicFans).
 -- Returns "reforged" | "none" | "done" | "invalid".
-function EventService.Client:ReforgeRelic(player: Player, forgeModel: Instance, relicName: string): string
+-- DungeonNetwork.ReforgeRelic handler (was a client-callable method).
+function EventService._onReforgeRelic(
+	_self: typeof(EventService),
+	player: Player,
+	forgeModel: Instance?,
+	relicName: string
+): string
 	if not EventService:_validate(player, forgeModel, "Forge") then
 		return "invalid"
 	end
@@ -1089,7 +1150,7 @@ end
 -- before the shop has already landed by then.
 -- Keyed by roomId, not the merchant Instance:
 -- rooms are the stable identity; models come and go with streaming.
-function EventService:_stockForRoom(player: Player, roomId: number): { any }
+function EventService._stockForRoom(self: typeof(EventService), player: Player, roomId: number): { any }
 	local byPlayer = self._merchantStock[player.UserId]
 	if not byPlayer then
 		byPlayer = {}
@@ -1191,12 +1252,12 @@ end
 -- could still be at the vending machine, so their own pick could land
 -- after their roll and show up for sale. Each player unlocks a shop by
 -- entering it THEMSELVES, and only their client is told.
-function EventService:_isMerchantUnlockedFor(player: Player, roomId: number): boolean
+function EventService._isMerchantUnlockedFor(self: typeof(EventService), player: Player, roomId: number): boolean
 	local byPlayer = self._merchantUnlocked[player.UserId]
 	return byPlayer ~= nil and byPlayer[roomId] == true
 end
 
-function EventService:_unlockMerchantRoom(player: Player, room)
+function EventService._unlockMerchantRoom(self: typeof(EventService), player: Player, room)
 	if not player or not room or room.id == nil then
 		return
 	end
@@ -1209,7 +1270,7 @@ function EventService:_unlockMerchantRoom(player: Player, room)
 		self._merchantUnlocked[player.UserId] = byPlayer
 	end
 	byPlayer[room.id] = true
-	self.Client.OnMerchantStockUnlocked:Fire(player, room.id)
+	DungeonNetwork.MerchantStockUnlocked.Fire(player, room.id)
 end
 
 -- Everything a client needs to dress every SERVABLE merchant room, in
@@ -1217,7 +1278,8 @@ end
 -- CFrame captured at generation. No range gate and no streaming
 -- dependence — but rooms THIS player has not entered yet are withheld
 -- entirely; OnMerchantStockUnlocked tells their client when to come back.
-function EventService.Client:GetMerchantStalls(player: Player): { any }
+-- DungeonNetwork.GetMerchantStalls handler (was a client-callable method).
+function EventService._onGetMerchantStalls(_self: typeof(EventService), player: Player): { any }
 	local stalls = {}
 	for roomId, entry in EventService._merchantRooms do
 		if not EventService:_isMerchantUnlockedFor(player, roomId) then
@@ -1244,7 +1306,13 @@ end
 -- Buys stock slot `index` of merchant room `roomId`. Grants the relic
 -- DIRECTLY (no physical drop) and empties the pedestal for this player
 -- only. Returns "bought" | "poor" | "sold" | "invalid".
-function EventService.Client:BuyMerchantRelic(player: Player, roomId: number, index: number): string
+-- DungeonNetwork.BuyMerchantRelic handler (was a client-callable method).
+function EventService._onBuyMerchantRelic(
+	_self: typeof(EventService),
+	player: Player,
+	roomId: number,
+	index: number
+): string
 	if typeof(roomId) ~= "number" or typeof(index) ~= "number" then
 		return "invalid"
 	end
@@ -1256,7 +1324,7 @@ function EventService.Client:BuyMerchantRelic(player: Player, roomId: number, in
 	-- floor-wide at generation, so the buy is where physical presence
 	-- gets enforced.
 	local slotCFrame = entry.slotCFrames[index]
-	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not slotCFrame or not hrp or (hrp.Position - slotCFrame.Position).Magnitude > INTERACT_RANGE then
 		return "invalid"
 	end
@@ -1307,7 +1375,8 @@ end
 -- Sells one owned relic at the flat rarity price. The relic and its
 -- effects leave immediately (RemoveRelicsRegistry replicates; stats
 -- recompute off the registry). Returns the coins paid, or 0.
-function EventService.Client:SellRelic(player: Player, relicName: string): number
+-- DungeonNetwork.SellRelic handler (was a client-callable method).
+function EventService._onSellRelic(_self: typeof(EventService), player: Player, relicName: string): number
 	if typeof(relicName) ~= "string" or not RelicData[relicName] then
 		return 0
 	end
@@ -1325,7 +1394,7 @@ function EventService.Client:SellRelic(player: Player, relicName: string): numbe
 
 	-- Full sale presentation: green receipt over the head, the Buy
 	-- chime, and the everyone-visible removed-relic shockwave.
-	local sellerHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local sellerHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if TextIndicatorService and sellerHrp then
 		TextIndicatorService:ShowIndicator(player, sellerHrp, ("You sold %s!"):format(relicName), SOLD_COLOR, true)
 	end
@@ -1336,20 +1405,51 @@ end
 
 --[ Lifecycle ]--
 
-function EventService:KnitInit()
-	DungeonService = Knit.GetService("DungeonService")
-	RelicService = Knit.GetService("RelicService")
-	DropService = Knit.GetService("DropService")
-	LifeService = Knit.GetService("LifeService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	RunEscrowService = Knit.GetService("RunEscrowService")
-	PlayerStatsService = Knit.GetService("PlayerStatsService")
-	UserNotificationService = Knit.GetService("UserNotificationService")
-	CoffinEventService = Knit.GetService("CoffinEventService")
-end
+function EventService.Start(self: typeof(EventService))
+	DungeonNetwork.MarkEventInteracted.On(function(player: Player, model: Instance?)
+		self:_onMarkEventInteracted(player, model)
+	end)
+	DungeonNetwork.AttemptSwordPull.On(function(player: Player, swordModel: Instance?)
+		return self:_onAttemptSwordPull(player, swordModel)
+	end)
+	DungeonNetwork.AcceptCurse.On(function(player: Player, shrineModel: Instance?)
+		return self:_onAcceptCurse(player, shrineModel)
+	end)
+	DungeonNetwork.IsFountainSpent.On(function(player: Player, fountainModel: Instance?)
+		return self:_onIsFountainSpent(player, fountainModel)
+	end)
+	DungeonNetwork.DrinkFromFountain.On(function(player: Player, fountainModel: Instance?)
+		return self:_onDrinkFromFountain(player, fountainModel)
+	end)
+	DungeonNetwork.AttuneToFountain.On(function(player: Player, fountainModel: Instance?)
+		return self:_onAttuneToFountain(player, fountainModel)
+	end)
+	DungeonNetwork.IsGreaterShrineSpent.On(function(player: Player, statueModel: Instance?)
+		return self:_onIsGreaterShrineSpent(player, statueModel)
+	end)
+	DungeonNetwork.GetGreaterShrineOffer.On(function(player: Player, statueModel: Instance?)
+		return self:_onGetGreaterShrineOffer(player, statueModel)
+	end)
+	DungeonNetwork.DropGreaterShrineOrbs.On(function(player: Player, statueModel: Instance?)
+		return self:_onDropGreaterShrineOrbs(player, statueModel)
+	end)
+	DungeonNetwork.ChooseGreaterBlessing.On(function(player: Player, payload)
+		return self:_onChooseGreaterBlessing(player, payload.Statue, payload.Blessing)
+	end)
+	DungeonNetwork.ReforgeRelic.On(function(player: Player, payload)
+		return self:_onReforgeRelic(player, payload.Forge, payload.RelicName)
+	end)
+	DungeonNetwork.GetMerchantStalls.On(function(player: Player)
+		return self:_onGetMerchantStalls(player)
+	end)
+	DungeonNetwork.BuyMerchantRelic.On(function(player: Player, payload)
+		return self:_onBuyMerchantRelic(player, payload.RoomId, payload.Index)
+	end)
+	DungeonNetwork.SellRelic.On(function(player: Player, relicName: string)
+		return self:_onSellRelic(player, relicName)
+	end)
 
-function EventService:KnitStart()
-	DungeonService.Signals.OnDungeonGenerated:Connect(function(dungeon)
+	getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
 		-- Fresh floor: everything here is per-floor state — old room
 		-- models are destroyed with the floor, so wholesale reset both
 		-- drops the dead Instance keys and re-arms the per-player
@@ -1371,8 +1471,8 @@ function EventService:KnitStart()
 		self._interactions = {}
 		-- The coffin's per-floor state goes with ours, BEFORE the wiring
 		-- below registers the new floor's coffin with it.
-		if CoffinEventService then
-			CoffinEventService:ResetForFloor()
+		if getCoffinEventService() then
+			getCoffinEventService():ResetForFloor()
 		end
 		self:_wireDungeon(dungeon)
 
@@ -1384,7 +1484,7 @@ function EventService:KnitStart()
 	-- Merchant stock unlocks when a player first ENTERS the shop — see
 	-- _unlockMerchantRoom for why nothing earlier is safe. Per player:
 	-- each party member unlocks it by walking in themselves.
-	DungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
+	getDungeonService().Signals.OnRoomEntered:Connect(function(player: Player, room)
 		self:_unlockMerchantRoom(player, room)
 	end)
 

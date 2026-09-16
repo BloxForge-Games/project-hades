@@ -38,7 +38,7 @@ local function RelicListFragment(props: any)
 							count = relicData.hashmap[relicName] or 0,
 							selectedRelic = selectedRelic,
 
-							onClick = function(selectedData: table)
+							onClick = function(selectedData: { [any]: any })
 								setSelectedRelic(selectedData)
 							end,
 						}),

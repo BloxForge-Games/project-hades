@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: RelicInterfaceController.lua
      Description:
@@ -9,7 +10,10 @@ local Players = game:GetService("Players")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicController = require(ReplicatedStorage.Controllers.RelicController)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
@@ -17,6 +21,16 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 
 local Container = require(script.ReactComponents.Container)
+
+-- EventController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local eventControllerLazy: any = nil
+local function getEventController(): any
+	if eventControllerLazy == nil then
+		eventControllerLazy = (require :: any)(ReplicatedStorage.Controllers.EventController)
+	end
+	return eventControllerLazy
+end
 
 local INTERFACE_ID = "RelicInterfaceController"
 
@@ -26,11 +40,10 @@ export type RelicList = {
 
 --[ App Component ]--
 
-local RelicController
-
-local RelicInterfaceController = Knit.CreateController({
+local RelicInterfaceController = {
 	Name = "RelicInterfaceController",
-})
+	Dependencies = { RelicController, InterfaceManagerController } :: { any },
+}
 
 RelicInterfaceController.Signals = {
 	OnPulseGradient = Signal.new(),
@@ -50,9 +63,9 @@ RelicInterfaceController.Signals = {
 	SetReforgeMode = Signal.new(),
 }
 
-function RelicInterfaceController:_render()
+function RelicInterfaceController._render(_self: typeof(RelicInterfaceController))
 	return function()
-		local relicData, setRelicData = React.useState(nil)
+		local relicData, setRelicData = React.useState(nil :: { hashmap: RelicList, list: { RelicNames.RelicNames } }?)
 
 		React.useEffect(function()
 			local onRelicUpdateConn
@@ -87,31 +100,29 @@ function RelicInterfaceController:_render()
 				sellModeSignal = RelicInterfaceController.Signals.SetSellMode,
 				reforgeModeSignal = RelicInterfaceController.Signals.SetReforgeMode,
 
-				-- Server round-trips for the tray's action row. Resolved
-				-- lazily: Knit services exist by first render, but not at
-				-- module scope (circular-require rule, same as the signals).
+				-- Server round-trips for the tray's action row.
 				onDropRelic = function(relicName: string): boolean
-					return Knit.GetService("RelicService"):DropRelic(relicName):expect()
+					return RelicNetwork.DropRelic.Invoke(relicName)
 				end,
 				-- Routed through EventController rather than straight to the
 				-- service: the controller counts sales for the merchant's
 				-- post-sale dialogue (sold vs browsed-and-left lines).
 				onSellRelic = function(relicName: string): number
-					return Knit.GetController("EventController"):SellRelicViaMerchant(relicName)
+					return getEventController():SellRelicViaMerchant(relicName)
 				end,
 				onSellModeEnded = function()
-					Knit.GetController("EventController"):OnSellUIClosed()
+					getEventController():OnSellUIClosed()
 				end,
 				-- The Forge's anvil. Returns true once the swap landed; the
 				-- controller closes the tray and advances the dialogue itself.
 				onReforgeRelic = function(relicName: string): boolean
-					return Knit.GetController("EventController"):ReforgeRelicViaForge(relicName)
+					return getEventController():ReforgeRelicViaForge(relicName)
 				end,
 				onReforgeModeEnded = function()
-					Knit.GetController("EventController"):OnReforgeUIClosed()
+					getEventController():OnReforgeUIClosed()
 				end,
 				onBlockedAction = function()
-					Knit.GetController("EventController"):ShowBlockedActionNotification()
+					getEventController():ShowBlockedActionNotification()
 				end,
 			}),
 		})
@@ -120,13 +131,11 @@ end
 
 --[ Lifecycle ]--
 
-function RelicInterfaceController:KnitInit()
-	RelicController = Knit.GetController("RelicController")
-
+function RelicInterfaceController.Init(self: typeof(RelicInterfaceController))
 	-- Windows scope, NON-restoring: closing the scope slides the tray shut,
 	-- but reopening the scope must not slide it back out — it only unlocks
 	-- the tray's own toggle button.
-	Knit.GetController("InterfaceManagerController"):Register(INTERFACE_ID, {
+	InterfaceManagerController:Register(INTERFACE_ID, {
 		scope = InterfaceScopes.Windows,
 		restoreOnScopeOpen = false,
 		onClose = function()
@@ -140,16 +149,16 @@ function RelicInterfaceController:KnitInit()
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
 end
 
-function RelicInterfaceController:KnitStart()
+function RelicInterfaceController.Start(self: typeof(RelicInterfaceController))
 	-- The Merchant's "sell relics" option: force the tray open with the
 	-- Sell button lit. Closing the tray (any path) ends the session.
-	Knit.GetController("EventController").Signals.OnSellModeRequested:Connect(function()
+	getEventController().Signals.OnSellModeRequested:Connect(function()
 		self.Signals.SetVisible:Fire(true)
 		self.Signals.SetSellMode:Fire(true)
 	end)
 
 	-- The Forge's "Reforge" option: same force-open, Reforge lit instead.
-	Knit.GetController("EventController").Signals.OnReforgeModeRequested:Connect(function()
+	getEventController().Signals.OnReforgeModeRequested:Connect(function()
 		self.Signals.SetVisible:Fire(true)
 		self.Signals.SetReforgeMode:Fire(true)
 	end)

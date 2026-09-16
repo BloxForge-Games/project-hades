@@ -14,7 +14,7 @@
 	cracks the floor beneath it; the relic's strike is much smaller and the
 	debris read as noise at this scale.
 
-	Server fires RelicService.Client.OnLightningStrikeActivated:FireAll, so
+	Server fires RelicNetwork.LightningStrikeEffect.FireAll, so
 	every client renders the strike — including dead players spectating.
 ]]
 

@@ -1,8 +1,9 @@
+--!strict
 --[[
-	Module: CameraShakeController.lua
+	Module: Controllers/CameraShakeController.lua
 	Description:
 	Custom camera shake — replaces the old CameraShaker-library wrapper.
-	Listens to CameraShakeService.OnShakeRequested and exposes :Shake(preset)
+	Listens to the Combat.CameraShake Blink event and exposes :Shake(preset)
 	for client-side callers. Presets (Small / Medium / Large) are tuned in
 	Shared/Data/CameraShakeData.lua.
 
@@ -17,25 +18,21 @@
 	  frame from a RenderStepped connection — AFTER the IsometricCamera's
 	  own write (that runs on Stepped) — and the IsometricCamera smooths
 	  from its INTERNAL CFrame (see its _smoothedCFrame), so the shake can
-	  never leak into the camera's base position. The old system fed the
-	  shaken CFrame back through the isometric lerp, which ate or
-	  compounded the offset depending on frame rate — the "sometimes
-	  invisible, sometimes violent" bug.
+	  never leak into the camera's base position.
 
 	* Same slot as the cutscene's cinematic bob, ON TOP of it. The bob
 	  (CutsceneController) is a RenderStepped connection too; connections
 	  fire most-recent-first, the bob is connected when a cutscene starts
-	  (long after this controller's KnitStart), so the bob writes, then
-	  this multiplies the shake onto the bobbed camera. Both are offsets,
-	  so both survive. A BindToRenderStep overlay was used before and the
-	  shake never showed during a cutscene while the bob did: whatever the
-	  engine's exact ordering between that slot and the cutscene's camera
-	  tween, this slot is the one the bob is provably rendered from.
+	  (long after this controller's Start), so the bob writes, then this
+	  multiplies the shake onto the bobbed camera. Both are offsets, so
+	  both survive.
 
 	* Platform parity. Motion is view-space POSITION (studs) plus a small
 	  roll, sampled from time-based sine blends — no frame-rate or FOV
 	  dependence, so PC and mobile read the same. Phases are randomized per
 	  shake so repeats don't look stamped.
+
+	A Blitz module with no dependencies.
 ]]
 
 --[ Roblox Services ]--
@@ -45,23 +42,42 @@ local RunService = game:GetService("RunService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local CameraShakeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CameraShakeData)
 
-local CameraShakeService
+--[ Types ]--
+
+type ShakeConfig = {
+	rank: number,
+	duration: number,
+	fadeIn: number,
+	fadeOut: number,
+	frequency: number,
+	magnitude: number,
+	roll: number,
+}
+
+type ActiveShake = {
+	config: ShakeConfig,
+	startClock: number,
+	endClock: number,
+	phaseX: number,
+	phaseY: number,
+	phaseRoll: number,
+}
 
 --[ Constants ]--
 
 local TAU = math.pi * 2
 
---[ Controller ]--
+--[ Module ]--
 
-local CameraShakeController = Knit.CreateController({
+local CameraShakeController = {
 	Name = "CameraShakeController",
-})
 
--- The single active shake: { config, startClock, phaseX/Y/Roll }, or nil.
-CameraShakeController._active = nil
+	-- The single active shake, or nil.
+	_active = nil :: ActiveShake?,
+}
 
 --[ Private ]--
 
@@ -80,8 +96,8 @@ end
 -- Play a shake by preset name (CameraShakePresets.Small/Medium/Large).
 -- Rank-gated: ignored while a HIGHER-rank shake is still playing;
 -- equal-or-higher rank replaces the active shake and restarts.
-function CameraShakeController:Shake(preset: string)
-	local config = CameraShakeData[preset]
+function CameraShakeController.Shake(self: typeof(CameraShakeController), preset: string)
+	local config: ShakeConfig? = CameraShakeData[preset]
 	if not config then
 		warn(("[CameraShakeController] Unknown shake preset %q"):format(tostring(preset)))
 		return
@@ -118,7 +134,7 @@ end
 
 --[ Private ]--
 
-function CameraShakeController:_update()
+function CameraShakeController._update(self: typeof(CameraShakeController))
 	local active = self._active
 	if not active then
 		return
@@ -153,23 +169,22 @@ function CameraShakeController:_update()
 	local roll = sampleAxis(elapsed, config.frequency * 0.87, active.phaseRoll) * config.roll * envelope
 
 	local camera = workspace.CurrentCamera
+	if not camera then
+		return
+	end
 	camera.CFrame = camera.CFrame * CFrame.new(x, y, 0) * CFrame.Angles(0, 0, math.rad(roll))
 end
 
 --[ Lifecycle ]--
 
-function CameraShakeController:KnitInit()
-	CameraShakeService = Knit.GetService("CameraShakeService")
-end
-
-function CameraShakeController:KnitStart()
+function CameraShakeController.Start(self: typeof(CameraShakeController))
 	-- RenderStepped, not BindToRenderStep: see the header's "same slot as
 	-- the cinematic bob" note.
 	RunService.RenderStepped:Connect(function()
 		self:_update()
 	end)
 
-	CameraShakeService.OnShakeRequested:Connect(function(preset: string)
+	Combat.CameraShake.On(function(preset: string)
 		self:Shake(preset)
 	end)
 end

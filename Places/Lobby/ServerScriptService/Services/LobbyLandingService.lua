@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: LobbyLandingService.lua
 	Description:
@@ -28,13 +29,13 @@ local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
-local PlayerEventService
 
 --[ Constants ]--
 
@@ -56,20 +57,16 @@ local LANDING_HOLD_TOLERANCE_STUDS = 2 -- see _holdLandingPosition
 
 --[ Service ]--
 
-local LobbyLandingService = Knit.CreateService({
+local LobbyLandingService = {
 	Name = "LobbyLandingService",
-	Client = {
-		OnLandingStart = Knit.CreateSignal(), -- (to one player) drop loading screen + lock controls
-		OnLandingImpact = Knit.CreateSignal(), -- (broadcast, player) landing VFX hook
-		OnLandingEnd = Knit.CreateSignal(), -- (to one player) restore controls
-	},
-})
+	Dependencies = { PlayerEventService } :: { any },
+}
 
 LobbyLandingService._landed = {} -- [Player]: true -- landed once this join
 
 --[ Private Functions ]--
 
-function LobbyLandingService:_getSpawnPoint(): BasePart?
+function LobbyLandingService._getSpawnPoint(_self: typeof(LobbyLandingService)): BasePart?
 	local ignoreInstances = workspace:FindFirstChild(IGNORE_INSTANCES_NAME)
 	local spawnPoint = ignoreInstances and ignoreInstances:FindFirstChild(SPAWN_POINT_NAME)
 	if not spawnPoint or not spawnPoint:IsA("BasePart") then
@@ -85,7 +82,7 @@ function LobbyLandingService:_getSpawnPoint(): BasePart?
 end
 
 -- Mirrors DungeonService:_teleportPlayerToStart minus the marker lookup.
-function LobbyLandingService:_teleportPlayerToSpawnPoint(player: Player): CFrame?
+function LobbyLandingService._teleportPlayerToSpawnPoint(self: typeof(LobbyLandingService), player: Player): CFrame?
 	local spawnPoint = self:_getSpawnPoint()
 	if not spawnPoint then
 		return
@@ -110,7 +107,7 @@ function LobbyLandingService:_teleportPlayerToSpawnPoint(player: Player): CFrame
 	-- the landing animation lifts the visible body +25 studs, which shifts the
 	-- model's bounding-box pivot up, so PivotTo(ground) would sink the root
 	-- below the floor. The HRP's own CFrame is unaffected by the animation.
-	local hrp = character:FindFirstChild("HumanoidRootPart")
+	local hrp = character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if hrp then
 		hrp.AssemblyLinearVelocity = Vector3.zero
 		hrp.CFrame = targetCFrame
@@ -126,7 +123,8 @@ end
 -- mobile aim -- all gated client-side now, this is the safety net) would
 -- otherwise win. Horizontal only: the humanoid settles vertically onto the
 -- floor by itself and must not be fought.
-function LobbyLandingService:_holdLandingPosition(
+function LobbyLandingService._holdLandingPosition(
+	_self: typeof(LobbyLandingService),
 	character: Model,
 	hrp: BasePart,
 	targetCFrame: CFrame,
@@ -151,9 +149,9 @@ end
 -- Same dust + sound as DungeonService:_onLandingImpact. The Dungeons place
 -- parents the clone under IgnoreInstances.MagicSpells; the Lobby may not
 -- have that folder, so fall back to IgnoreInstances, then workspace.
-function LobbyLandingService:_onLandingImpact(player: Player)
+function LobbyLandingService._onLandingImpact(_self: typeof(LobbyLandingService), player: Player)
 	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not root then
 		return
 	end
@@ -190,13 +188,13 @@ function LobbyLandingService:_onLandingImpact(player: Player)
 end
 
 -- DungeonService:_runPlayerLanding, minus the run bookkeeping.
-function LobbyLandingService:_runPlayerLanding(player: Player)
+function LobbyLandingService._runPlayerLanding(self: typeof(LobbyLandingService), player: Player)
 	if self._landed[player] then
 		return
 	end
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not character or not humanoid or not hrp then
 		return
 	end
@@ -266,7 +264,7 @@ function LobbyLandingService:_runPlayerLanding(player: Player)
 		end
 
 		-- Reveal: drop the joiner's loading screen + lock controls.
-		self.Client.OnLandingStart:Fire(player, targetCFrame)
+		DungeonNetwork.LandingStart.Fire(player, targetCFrame)
 
 		-- Drop: resume the animation from the frozen pose down to the ground.
 		if landAnimationTrack then
@@ -280,7 +278,7 @@ function LobbyLandingService:_runPlayerLanding(player: Player)
 				return
 			end
 			self:_onLandingImpact(player)
-			self.Client.OnLandingImpact:FireAll(player)
+			DungeonNetwork.LandingImpact.FireAll(player)
 		end)
 
 		-- End -- restore controls.
@@ -288,18 +286,14 @@ function LobbyLandingService:_runPlayerLanding(player: Player)
 			if character.Parent then
 				character:SetAttribute(Attributes.Landing, nil)
 			end
-			self.Client.OnLandingEnd:Fire(player)
+			DungeonNetwork.LandingEnd.Fire(player)
 		end)
 	end)
 end
 
 --[ Lifecycle ]--
 
-function LobbyLandingService:KnitInit()
-	PlayerEventService = Knit.GetService("PlayerEventService")
-end
-
-function LobbyLandingService:KnitStart()
+function LobbyLandingService.Start(self: typeof(LobbyLandingService))
 	-- PlayerEventService.OnPlayerAdded fires AFTER this player's client
 	-- finishes preloading (PlayerEventController waits on OnPreloadComplete
 	-- before calling SetupCharacter) -- the same per-player "ready" cue

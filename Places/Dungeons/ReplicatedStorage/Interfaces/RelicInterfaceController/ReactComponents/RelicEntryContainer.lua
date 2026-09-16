@@ -4,6 +4,7 @@ local TweenService = game:GetService("TweenService")
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
+local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 
 local function RelicEntryContainer(props: any)
 	local relicName = props.relicName
@@ -14,7 +15,8 @@ local function RelicEntryContainer(props: any)
 
 	React.useEffect(function()
 		if selectedRelic and selectedRelic.name == relicName then
-			containerRef.current:TweenSize(
+			tweenGui.size(
+				containerRef.current,
 				UDim2.fromScale(1.25, 1.25),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quad,
@@ -22,7 +24,8 @@ local function RelicEntryContainer(props: any)
 				true
 			)
 		else
-			containerRef.current:TweenSize(
+			tweenGui.size(
+				containerRef.current,
 				UDim2.fromScale(1.1, 1.1),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quad,
@@ -51,7 +54,8 @@ local function RelicEntryContainer(props: any)
 				{ Rotation = if math.random(1, 2) == 1 then -5 else 5 }
 			):Play()
 
-			containerRef.current:TweenSize(
+			tweenGui.size(
+				containerRef.current,
 				UDim2.fromScale(1.175, 1.175),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quad,
@@ -67,7 +71,8 @@ local function RelicEntryContainer(props: any)
 				{ Rotation = 0 }
 			):Play()
 
-			containerRef.current:TweenSize(
+			tweenGui.size(
+				containerRef.current,
 				UDim2.fromScale(1.1, 1.1),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quad,

@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: SpectateService.lua
      Description:
@@ -22,28 +23,27 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local LifeService = require(ServerScriptService.Services.LifeService)
+local IsometricCameraService = require(ServerScriptService.Submodules.Core.Source.Services.IsometricCameraService)
+local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 
-local LifeService
-local IsometricCameraService
-
-local SpectateService = Knit.CreateService({
+local SpectateService = {
 	Name = "SpectateService",
-	Client = {
-		-- Map of spectator userId → spectated userId. Replicated to all
-		-- clients (spectate UI reads it for the local player; HUD
-		-- features for who's watching whom can read it too).
-		SpectateTargets = Knit.CreateProperty({}),
+	Dependencies = { LifeService, IsometricCameraService } :: { any },
+}
 
-		-- Client → server cycle request. Payload: "left" | "right".
-		-- Server validates IsDeathState and picks the next eligible
-		-- target in sorted order.
-		OnCycleRequested = Knit.CreateSignal(),
-	},
-})
+-- Map of spectator userId -> spectated userId, replicated to ALL clients
+-- (was a replicated property): the spectate UI reads it for the local
+-- player, IsometricCameraController for the camera origin.
+SpectateService._targetsProperty = RemoteProperty.Server({
+	changed = PlayerNetwork.SpectateTargetsChanged,
+	get = PlayerNetwork.GetSpectateTargets,
+}, {})
 
 --[ Properties ]--
 
@@ -55,7 +55,7 @@ SpectateService._spectateTargets = {} :: { [number]: number }
 -- Eligible spectate candidates for `spectator`. A candidate is any other
 -- player who has a Humanoid above 0 HP and is NOT themselves in the
 -- death state. Sorted by UserId for deterministic cycling.
-function SpectateService:_getCandidates(spectator: Player): { Player }
+function SpectateService._getCandidates(_self: typeof(SpectateService), spectator: Player): { Player }
 	local list = {}
 	for _, player in Players:GetPlayers() do
 		if player == spectator then
@@ -77,21 +77,21 @@ function SpectateService:_getCandidates(spectator: Player): { Player }
 end
 
 -- Publishes the current SpectateTargets snapshot to clients.
-function SpectateService:_replicateTargets()
+function SpectateService._replicateTargets(self: typeof(SpectateService))
 	local snapshot = table.clone(self._spectateTargets)
-	self.Client.SpectateTargets:Set(snapshot)
+	self._targetsProperty:Set(snapshot)
 end
 
 -- Aims the spectator's camera at the target player's HRP via the existing
 -- IsometricCameraService signal. The IsometricCameraController on the
 -- client side already does a smooth 2s lerp to the new origin, so we
 -- get the "lerp between spectated players" feel for free.
-function SpectateService:_routeCameraTo(spectator: Player, target: Player?)
+function SpectateService._routeCameraTo(_self: typeof(SpectateService), spectator: Player, target: Player?)
 	if not IsometricCameraService then
 		return
 	end
 	if target and target.Character then
-		local hrp = target.Character:FindFirstChild("HumanoidRootPart")
+		local hrp = target.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 		if hrp then
 			-- 3rd arg `fireAll = false` → server routes the signal to
 			-- this one spectator only.
@@ -109,7 +109,7 @@ end
 
 -- Returns the Player that `spectator` is currently watching, or nil if
 -- they have no target / aren't spectating.
-function SpectateService:GetSpectateTarget(spectator: Player): Player?
+function SpectateService.GetSpectateTarget(self: typeof(SpectateService), spectator: Player): Player?
 	local targetId = self._spectateTargets[spectator.UserId]
 	if not targetId then
 		return nil
@@ -128,7 +128,7 @@ end
 -- library's internal interpolation state drifts slightly from the
 -- rendered position and the lerp interpolates that delta. Skipping
 -- the fire when prev == new (both nil in solo) sidesteps the bob.
-function SpectateService:SetSpectateTarget(spectator: Player, target: Player?)
+function SpectateService.SetSpectateTarget(self: typeof(SpectateService), spectator: Player, target: Player?)
 	local previousTargetId = self._spectateTargets[spectator.UserId]
 	local newTargetId = target and target.UserId or nil
 
@@ -146,14 +146,14 @@ end
 
 -- Picks the first alive teammate for `spectator` (sorted by UserId).
 -- Returns nil if everyone else is dead / there are no other players.
-function SpectateService:PickInitialTarget(spectator: Player): Player?
+function SpectateService.PickInitialTarget(self: typeof(SpectateService), spectator: Player): Player?
 	local candidates = self:_getCandidates(spectator)
 	return candidates[1]
 end
 
 -- Advances `spectator` to the next eligible target. direction = 1 (right)
 -- or -1 (left). Wraps around. No-op when the candidate pool is empty.
-function SpectateService:CycleTarget(spectator: Player, direction: number)
+function SpectateService.CycleTarget(self: typeof(SpectateService), spectator: Player, direction: number)
 	local candidates = self:_getCandidates(spectator)
 	if #candidates == 0 then
 		self:SetSpectateTarget(spectator, nil)
@@ -181,19 +181,20 @@ function SpectateService:CycleTarget(spectator: Player, direction: number)
 	self:SetSpectateTarget(spectator, candidates[nextIndex])
 end
 
-function SpectateService.Client:OnDeathStateReplicated(player: Player)
-	local initial = self.Server:PickInitialTarget(player)
-	self.Server:SetSpectateTarget(player, initial)
+-- PlayerNetwork.SpectateRequested handler (was a client-callable method): the
+-- client's death cinematic is over, pick it an initial target.
+function SpectateService._onSpectateRequested(self: typeof(SpectateService), player: Player)
+	local initial = self:PickInitialTarget(player)
+	self:SetSpectateTarget(player, initial)
 end
 
 --[ Lifecycle ]--
 
-function SpectateService:KnitInit()
-	LifeService = Knit.GetService("LifeService")
-	IsometricCameraService = Knit.GetService("IsometricCameraService")
-end
+function SpectateService.Start(self: typeof(SpectateService))
+	PlayerNetwork.SpectateRequested.On(function(player: Player)
+		self:_onSpectateRequested(player)
+	end)
 
-function SpectateService:KnitStart()
 	-- On revive: clear their spectate target (they're back to controlling
 	-- their own character; IsometricCameraController will already have
 	-- the local HRP via OnCameraTargetReset firing during the unanchor).
@@ -221,11 +222,11 @@ function SpectateService:KnitStart()
 
 	-- Client-driven cycle (arrow keys). Validate IsDeathState — only
 	-- downed players can spectate.
-	self.Client.OnCycleRequested:Connect(function(player: Player, direction: string?)
+	PlayerNetwork.SpectateCycle.On(function(player: Player, direction: string)
 		if not LifeService:IsDeathState(player) then
 			return
 		end
-		local delta = direction == "right" and 1 or -1
+		local delta = direction == "Right" and 1 or -1
 		self:CycleTarget(player, delta)
 	end)
 

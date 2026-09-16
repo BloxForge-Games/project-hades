@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: GearDrop.lua (Server-side component)
 	Description:
@@ -6,17 +7,16 @@
 	tagged Model that GearDropService spawns in workspace.
 
 	Architecture mirrors Server/Components/Relic.lua:
-	  * Construct creates a `_comm:CreateSignal("OnGearCollected")` so the
-	    client component (on the same Instance) can `_comm:GetSignal(...)`
-	    and Fire it on prompt Triggered.
-	  * Start hooks the signal — when it fires, this component validates
+	  * The client component (on the same Instance) fires
+	    DungeonNetwork.GearDropCollected on prompt Triggered.
+	  * Start binds this instance to it — when it fires, this component validates
 	    the player matches the model's OwnerId attribute, grants the
 	    inventory item, and destroys the model.
 	  * Construct also schedules a task.delay for the 120s expire window;
 	    if no one picks the drop up by then, it sets the Expired attribute
 	    (so the client can fade) and destroys after the fade duration.
 
-	The GearDropService no longer fires Knit Client signals for pickup /
+	The GearDropService no longer fires client remote signals for pickup /
 	expire — that responsibility moved here so the server logic lives
 	next to the tagged Instance instead of being plumbed via uuids
 	through a pair of remotes.
@@ -25,13 +25,17 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local GearDropService = require(ServerScriptService.Services.GearDropService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
@@ -44,18 +48,6 @@ local ENCHANTMENT_CHANCE = 0.25
 local ENCHANTMENT_POOL = {
 	EnchantmentNames.Looter,
 }
-
-local RunEscrowService
-local TextIndicatorService
-local GearDropService
-
-Knit.OnStart()
-	:andThen(function()
-		RunEscrowService = Knit.GetService("RunEscrowService")
-		TextIndicatorService = Knit.GetService("TextIndicatorService")
-		GearDropService = Knit.GetService("GearDropService")
-	end)
-	:catch(warn)
 
 --[ Constants ]--
 
@@ -99,9 +91,10 @@ local DEFAULT_INVENTORY_LEVEL = 1
 
 --[ Component ]--
 
+local collectedRouter = InstanceRouter.Server(DungeonNetwork.GearDropCollected)
+
 local GearDrop = Component.new({
 	Tag = TagList.GearDrop,
-	Extensions = { CommAdder },
 })
 
 --[ Private helpers ]--
@@ -256,11 +249,6 @@ end
 --[ Lifecycle ]--
 
 function GearDrop:Construct()
-	-- Create the comm signal. The client component (attached to the same
-	-- Instance) reads this via `_comm:GetSignal("OnGearCollected")` and
-	-- fires it on prompt Triggered.
-	self._onGearCollected = self._comm:CreateSignal("OnGearCollected")
-
 	-- Track whether we've already granted this drop. Prevents a race
 	-- where the player rapid-fire-clicks before we destroy the model.
 	self._collected = false
@@ -274,7 +262,7 @@ function GearDrop:Construct()
 end
 
 function GearDrop:Start()
-	self._onGearCollected:Connect(function(player: Player)
+	collectedRouter:Bind(self.Instance, function(player: Player)
 		-- Idempotency — drops the second click on the floor.
 		if self._collected then
 			return
@@ -335,7 +323,7 @@ function GearDrop:Start()
 		-- the next line and would take the indicator with it.
 		local character = player.Character
 		local indicatorPart = character
-			and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+			and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
 		if indicatorPart then
 			TextIndicatorService:ShowIndicator(
 				player,

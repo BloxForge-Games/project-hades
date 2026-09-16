@@ -3,7 +3,7 @@
      Description:
      Spectate HUD. Two Observe subscriptions:
        1. LifeService.DeathState — am I dead? Drives visibility.
-       2. SpectateService.SpectateTargets — who am I watching? Drives the
+       2. SpectateController.SpectateTargets — who am I watching? Drives the
           "Now Viewing: X" label.
 
      Layout:
@@ -11,7 +11,7 @@
          flanking the name (matches the arrow-key cycle controls).
 
      Bottom-center: REVIVE button (paid, restored). Calls
-     LifeService:PromptRevivePurchase; the server's ProcessReceipt →
+     PlayerNetwork.PromptRevivePurchase; the server's ProcessReceipt →
      :Revive flow fades, teleports to the party, and clears DeathState
      (which hides this whole UI). Run escrow stays lost — revive buys
      your feet back, not your loot.
@@ -22,6 +22,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 
 -- Fade duration for the spectate UI entrance / exit. Matches the death-fade
 -- timing in LifeController (0.4s feels parallel to the screen-fade window
@@ -39,9 +40,8 @@ local FONT = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeig
 --[ Component ]--
 
 local function Container(props: any)
-	local LifeService = props.LifeService
 	local LifeController = props.LifeController
-	local SpectateService = props.SpectateService
+	local SpectateTargets = props.SpectateTargets
 
 	-- Visibility: am I in the "actively spectating" visual state? Gated
 	-- on LifeController.OnSpectateStateChanged (NOT DeathState) — that
@@ -69,16 +69,12 @@ local function Container(props: any)
 
 	-- Observe SpectateTargets — name to display.
 	React.useEffect(function()
-		local observer = SpectateService.SpectateTargets:Observe(function(data: { [any]: any }?)
+		local disconnect = SpectateTargets:Observe(function(data: { [any]: any }?)
 			local localId = Players.LocalPlayer.UserId
 			local targetId = data and (data[localId] or data[tostring(localId)])
 			setSpectatedUserId(targetId)
 		end)
-		return function()
-			if observer then
-				observer:Disconnect()
-			end
-		end
+		return disconnect
 	end, {})
 
 	-- CanvasGroup ref + token guarding the fade tween. A CanvasGroup lets
@@ -235,7 +231,7 @@ local function Container(props: any)
 							-- via IsometricCameraService. The SpectateTargets
 							-- Observe above picks up the new userId and the
 							-- name label updates on its own.
-							SpectateService.OnCycleRequested:Fire("left")
+							PlayerNetwork.SpectateCycle.Fire("Left")
 						end,
 					}),
 				}),
@@ -278,7 +274,7 @@ local function Container(props: any)
 						Image = "rbxassetid://12198207955",
 						ScaleType = Enum.ScaleType.Fit,
 						[React.Event.Activated] = function()
-							SpectateService.OnCycleRequested:Fire("right")
+							PlayerNetwork.SpectateCycle.Fire("Right")
 						end,
 					}),
 				}),
@@ -286,8 +282,8 @@ local function Container(props: any)
 		}),
 
 		--[ REVIVE button (paid, restored) ]--
-		-- Taps LifeService:PromptRevivePurchase, a server-validated Knit
-		-- method that prompts the dev product. On purchase, the server's
+		-- Fires PlayerNetwork.PromptRevivePurchase; the server validates the
+		-- player is downed and prompts the dev product. On purchase, the server's
 		-- ProcessReceipt -> :Revive flow fades, teleports, and clears the
 		-- death state -- which hides this whole UI mid-fade.
 		ReviveButton = React.createElement("TextButton", {
@@ -302,7 +298,7 @@ local function Container(props: any)
 			BorderSizePixel = 0,
 			AutoButtonColor = true,
 			[React.Event.Activated] = function()
-				LifeService:PromptRevivePurchase()
+				PlayerNetwork.PromptRevivePurchase.Fire()
 			end,
 		}, {
 			UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(0.2, 0) }),

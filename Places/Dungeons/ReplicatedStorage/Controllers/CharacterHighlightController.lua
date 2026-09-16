@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: CharacterHighlightController.lua
 	Description:
@@ -68,12 +69,10 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
-local packages: Folder = ReplicatedStorage.Submodules.Core.Packages
-
-local Knit = require(packages.Knit)
-local Janitor = require(packages.Janitor)
+local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
 
 local camera: Camera = workspace.CurrentCamera
 
@@ -144,12 +143,35 @@ local WINDUP_COLOR = Color3.fromRGB(255, 255, 255)
 -- be slow under load. If it never arrives we just skip the zombie.
 local MOB_HIGHLIGHT_WAIT_TIMEOUT = 5
 
-local PlayerEventController
+-- Per-zombie state for the priority resolver (see _RegisterZombie).
+type ZombieHighlightData = {
+	head: BasePart,
+	highlight: Highlight,
+	-- Damage flash state: nil if not flashing, else the os.clock()
+	-- timestamp at which the flash expires.
+	damageFlashEndAt: number?,
+	-- Attack windup local-tween intensity (0..1).
+	windupIntensity: number,
+}
 
-local CharacterHighlightController = Knit.CreateController({
+local CharacterHighlightController = {
 	Name = "CharacterHighlightController",
-	Client = {},
-})
+	Dependencies = { PlayerEventController } :: { any },
+
+	-- Both built in Init.
+	_janitor = nil :: typeof(Janitor.new())?,
+	_ignoreList = {} :: { Instance },
+
+	_zombieRegistry = {} :: { [Model]: ZombieHighlightData },
+
+	-- Local player highlight state (see _InitHighlightThread).
+	_playerHighlight = nil :: Highlight?,
+	_playerInvulnIntensity = 0,
+	_playerDamageFlashEndAt = nil :: number?,
+	_playerDodgeStartAt = nil :: number?,
+	_playerDeathStartAt = nil :: number?,
+	_threadGeneration = 0,
+}
 
 --------------------------------------------------
 -- INTERNAL
@@ -157,7 +179,10 @@ local CharacterHighlightController = Knit.CreateController({
 
 -- Used only for the LOCAL player highlight. Zombies don't get a
 -- client-created Highlight — they use the server-replicated MobHighlight.
-function CharacterHighlightController:_CreatePlayerHighlightInstance(model: Model)
+function CharacterHighlightController._createPlayerHighlightInstance(
+	_self: typeof(CharacterHighlightController),
+	model: Model
+)
 	for _, name in LEGACY_LOCAL_HIGHLIGHT_NAMES do
 		local legacy = model:FindFirstChild(name)
 		if legacy then
@@ -187,7 +212,7 @@ end
 -- up to MOB_HIGHLIGHT_WAIT_TIMEOUT seconds), then seeds per-zombie
 -- state for the priority resolver. NO new Highlight Instance is
 -- created here — that's the whole point.
-function CharacterHighlightController:_RegisterZombie(zombie: Model)
+function CharacterHighlightController._registerZombie(self: typeof(CharacterHighlightController), zombie: Model)
 	if not zombie:FindFirstChild("Head") then
 		return
 	end
@@ -210,8 +235,8 @@ function CharacterHighlightController:_RegisterZombie(zombie: Model)
 		end
 
 		self._zombieRegistry[zombie] = {
-			head = zombie:FindFirstChild("Head"),
-			highlight = highlight,
+			head = zombie:FindFirstChild("Head") :: BasePart,
+			highlight = highlight :: Highlight,
 
 			-- Damage flash state: nil if not flashing, else tick()
 			-- timestamp at which the flash expires.
@@ -242,7 +267,7 @@ end
 -- DamageIndicatorController when the local player damages a zombie, and
 -- HumanoidStateController when the LOCAL PLAYER takes damage. No-ops for
 -- any other model (those go through the legacy onDamageIndicator path).
-function CharacterHighlightController:RequestDamageFlash(model: Model)
+function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterHighlightController), model: Model)
 	if model == Players.LocalPlayer.Character then
 		self._playerDamageFlashEndAt = os.clock() + DAMAGE_FLASH_DURATION
 		ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
@@ -258,7 +283,7 @@ function CharacterHighlightController:RequestDamageFlash(model: Model)
 end
 
 -- Perfect dodge: the white snap-and-fade, as a layer. Local player only.
-function CharacterHighlightController:RequestDodgeFlash(model: Model)
+function CharacterHighlightController.RequestDodgeFlash(self: typeof(CharacterHighlightController), model: Model)
 	if model ~= Players.LocalPlayer.Character then
 		return
 	end
@@ -266,7 +291,7 @@ function CharacterHighlightController:RequestDodgeFlash(model: Model)
 end
 
 -- Death: the red flash, as a layer. Local player only.
-function CharacterHighlightController:RequestDeathFlash(model: Model)
+function CharacterHighlightController.RequestDeathFlash(self: typeof(CharacterHighlightController), model: Model)
 	if model ~= Players.LocalPlayer.Character then
 		return
 	end
@@ -276,7 +301,11 @@ end
 -- Per-frame resolver for the LOCAL player's single highlight. Same shape
 -- as the zombie resolver, highest layer wins: death, damage, dodge,
 -- invulnerable, then the through-wall outline, then nothing.
-function CharacterHighlightController:_resolvePlayerHighlight(character: Model, deltaTime: number)
+function CharacterHighlightController._resolvePlayerHighlight(
+	self: typeof(CharacterHighlightController),
+	character: Model,
+	deltaTime: number
+)
 	local highlight = self._playerHighlight
 	if not highlight or not highlight.Parent then
 		return
@@ -327,8 +356,8 @@ function CharacterHighlightController:_resolvePlayerHighlight(character: Model, 
 	end
 	self._playerDamageFlashEndAt = nil
 
-	local head = character:FindFirstChild("Head")
-	local occluded = head ~= nil and self:_IsOccluded(head.Position)
+	local head = character:FindFirstChild("Head") :: BasePart?
+	local occluded = head ~= nil and self:_isOccluded(head.Position)
 
 	-- Priority 1.5: perfect dodge (white: 1 -> peak over the attack, then
 	-- peak -> 1 over the decay).
@@ -380,7 +409,7 @@ end
 -- Attributes.Invulnerable is true and faded out + destroyed when it drops.
 -- Their characters carry no other client highlight, so this cannot take
 -- a slot from anything.
-function CharacterHighlightController:_bindOtherCharacter(character: Model)
+function CharacterHighlightController._bindOtherCharacter(_self: typeof(CharacterHighlightController), character: Model)
 	local function refresh()
 		local wants = character:GetAttribute(Attributes.Invulnerable) == true
 		local existing = character:FindFirstChild(OTHER_INVULN_HIGHLIGHT_NAME)
@@ -416,7 +445,7 @@ function CharacterHighlightController:_bindOtherCharacter(character: Model)
 	refresh()
 end
 
-function CharacterHighlightController:_watchOtherPlayers()
+function CharacterHighlightController._watchOtherPlayers(self: typeof(CharacterHighlightController))
 	local function bind(player: Player)
 		if player == Players.LocalPlayer then
 			return
@@ -434,7 +463,7 @@ function CharacterHighlightController:_watchOtherPlayers()
 	Players.PlayerAdded:Connect(bind)
 end
 
-function CharacterHighlightController:_IsOccluded(point: Vector3)
+function CharacterHighlightController._isOccluded(self: typeof(CharacterHighlightController), point: Vector3)
 	local hit = camera:GetPartsObscuringTarget({ point }, self._ignoreList)
 	return hit and #hit > 0
 end
@@ -443,7 +472,12 @@ end
 -- priority active layer and writes its color/transparency to the
 -- single MobHighlight Instance. Lower-priority layers are NOT
 -- additive — only the winner is rendered.
-function CharacterHighlightController:_resolveZombieHighlight(zombie: Model, data, deltaTime: number)
+function CharacterHighlightController._resolveZombieHighlight(
+	self: typeof(CharacterHighlightController),
+	zombie: Model,
+	data: ZombieHighlightData,
+	deltaTime: number
+)
 	local highlight = data.highlight
 	if not highlight or not highlight.Parent then
 		-- Server already destroyed the Highlight (mob death janitor
@@ -489,7 +523,7 @@ function CharacterHighlightController:_resolveZombieHighlight(zombie: Model, dat
 	end
 
 	-- Priority 2: occlusion outline (white, 0.65, AlwaysOnTop).
-	local occluded = self:_IsOccluded(head.Position)
+	local occluded = self:_isOccluded(head.Position)
 	if occluded then
 		highlight.FillColor = OUTLINE_COLOR
 		highlight.FillTransparency = OUTLINE_TRANSPARENCY
@@ -517,8 +551,9 @@ function CharacterHighlightController:_resolveZombieHighlight(zombie: Model, dat
 	highlight.OutlineTransparency = 1
 end
 
-function CharacterHighlightController:_InitHighlightThread()
-	self._janitor:Cleanup()
+function CharacterHighlightController._initHighlightThread(self: typeof(CharacterHighlightController))
+	local janitor = assert(self._janitor, "[CharacterHighlightController] Init has not run")
+	janitor:Cleanup()
 
 	local player = Players.LocalPlayer
 	local character = player.Character
@@ -530,7 +565,7 @@ function CharacterHighlightController:_InitHighlightThread()
 	self._threadGeneration = (self._threadGeneration or 0) + 1
 	local generation = self._threadGeneration
 
-	self._playerHighlight = self:_CreatePlayerHighlightInstance(character)
+	self._playerHighlight = self:_createPlayerHighlightInstance(character)
 	self._playerDamageFlashEndAt = nil
 	self._playerDodgeStartAt = nil
 	self._playerDeathStartAt = nil
@@ -556,7 +591,7 @@ function CharacterHighlightController:_InitHighlightThread()
 	end
 end
 
-function CharacterHighlightController:KnitInit()
+function CharacterHighlightController.Init(self: typeof(CharacterHighlightController))
 	self._janitor = Janitor.new()
 	self._zombieRegistry = {}
 
@@ -575,21 +610,19 @@ function CharacterHighlightController:KnitInit()
 	}
 end
 
-function CharacterHighlightController:KnitStart()
-	PlayerEventController = Knit.GetController("PlayerEventController")
-
+function CharacterHighlightController.Start(self: typeof(CharacterHighlightController))
 	PlayerEventController.OnCharacterLoaded:Connect(function()
-		self:_InitHighlightThread()
+		self:_initHighlightThread()
 	end)
 
 	self:_watchOtherPlayers()
 
 	for _, zombie in ipairs(workspace.IgnoreInstances.Zombies:GetChildren()) do
-		self:_RegisterZombie(zombie)
+		self:_registerZombie(zombie)
 	end
 
 	workspace.IgnoreInstances.Zombies.ChildAdded:Connect(function(zombie)
-		self:_RegisterZombie(zombie)
+		self:_registerZombie(zombie)
 	end)
 end
 

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: BuildingTransparencyController.lua
 	Description:
@@ -32,7 +33,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local IgnoreListController = require(ReplicatedStorage.Controllers.IgnoreListController)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
@@ -63,17 +65,16 @@ local AUTHORED_TRANSPARENCY_ATTRIBUTE = "AuthoredTransparency"
 local MODE_WHOLE = "whole"
 local MODE_ROOF = "roof"
 
-local IgnoreListController
-local VFXService
-
-local BuildingTransparencyController = Knit.CreateController({
+local BuildingTransparencyController = {
 	Name = "BuildingTransparencyController",
+	Dependencies = { IgnoreListController } :: { any },
+
 	_buildingIgnoreList = {},
 	-- [building Model] = MODE_WHOLE | MODE_ROOF for every building currently faded.
-	_activeModes = {},
+	_activeModes = {} :: { [Model]: string },
 	-- [pillar Model] = os.clock() deadline the whole-fade holds until.
 	_pillarHoldUntil = {},
-})
+}
 
 --[ Private ]--
 
@@ -185,7 +186,10 @@ local function buildingOf(part: BasePart): Model?
 	return nil
 end
 
-function BuildingTransparencyController:_BuildingProximityFunction(overlapParams: OverlapParams)
+function BuildingTransparencyController._buildingProximityFunction(
+	self: typeof(BuildingTransparencyController),
+	overlapParams: OverlapParams
+)
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	local head = character and character:FindFirstChild("Head")
@@ -267,13 +271,7 @@ end
 
 --[ Lifecycle ]--
 
-function BuildingTransparencyController:KnitInit()
-	VFXService = Knit.GetService("VFXService")
-
-	IgnoreListController = Knit.GetController("IgnoreListController")
-end
-
-function BuildingTransparencyController:KnitStart()
+function BuildingTransparencyController.Start(self: typeof(BuildingTransparencyController))
 	self._buildingIgnoreList = IgnoreListController:GetBuildingTransparencyIgnoreList()
 
 	local overlapParams = OverlapParams.new()
@@ -283,9 +281,10 @@ function BuildingTransparencyController:KnitStart()
 	-- A broken piece leaves its building (it is reparented to MagicSpells
 	-- and flung): it comes back to its authored look on its own, whatever
 	-- fade its building was under.
-	VFXService.OnBuildingBroken:Connect(function(parts: { BasePart })
+	Magic.BuildingsBroken.On(function(parts)
 		for _, part in parts do
-			if not part.Parent then
+			-- A piece destroyed before this arrived is nil in the list.
+			if not part or not part.Parent then
 				continue
 			end
 			part.Transparency = authoredTransparency(part)
@@ -306,7 +305,7 @@ function BuildingTransparencyController:KnitStart()
 	-- Run on a separate thread so it never blocks anything else.
 	task.spawn(function()
 		while task.wait(THREAD_LOOP_WAIT) do
-			self:_BuildingProximityFunction(overlapParams)
+			self:_buildingProximityFunction(overlapParams)
 		end
 	end)
 end

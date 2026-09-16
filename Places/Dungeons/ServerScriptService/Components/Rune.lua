@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Components/Rune.lua
 	Description:
@@ -22,46 +23,37 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RuneService = require(ServerScriptService.Services.RuneService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local RuneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneData)
 
-local RuneService
-local RelicService
-local TextIndicatorService
-
-Knit.OnStart()
-	:andThen(function()
-		RuneService = Knit.GetService("RuneService")
-		RelicService = Knit.GetService("RelicService")
-		TextIndicatorService = Knit.GetService("TextIndicatorService")
-	end)
-	:catch(warn)
+local collectRouter = InstanceRouter.Server(RelicNetwork.RuneCollectRequested)
 
 local Rune = Component.new({
 	Tag = TagList.Rune,
-	Extensions = { CommAdder },
 })
 
 function Rune:Construct()
 	self._claimed = false
-	self._onRuneCollected = self._comm:CreateSignal("OnRuneCollected")
 	-- Server -> owner ACCEPT: the client consumes (fades the pull, kills
 	-- the prompts, plays the burst) ONLY when this fires — same contract
 	-- as the Relic component, even though runes have no refusal path
 	-- today, so a future one (events, shops) slots in without a client
 	-- change.
-	self._onRuneCollectAccepted = self._comm:CreateSignal("OnRuneCollectAccepted")
 	self._collectedSound = ReplicatedStorage.GameAssets.Sounds.RelicPickup:Clone()
 	self._collectedSound.Parent = self.Instance:FindFirstChild("Handle") or self.Instance.PrimaryPart
 end
 
 function Rune:Start()
-	self._onRuneCollected:Connect(function(player: Player)
+	collectRouter:Bind(self.Instance, function(player: Player)
 		if self._claimed then
 			return
 		end
@@ -80,7 +72,7 @@ function Rune:Start()
 
 		-- Accepted: tell the owner's client to play the pickup BEFORE the
 		-- server-side destroy so the fade has its models to animate.
-		self._onRuneCollectAccepted:Fire(player)
+		RelicNetwork.RuneCollectAccepted.Fire(player, self.Instance)
 
 		RuneService:AddRune(player, self.Instance.Name, rarity)
 

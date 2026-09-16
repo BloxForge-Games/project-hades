@@ -1,8 +1,15 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local MagicService = require(ServerScriptService.Services.MagicService)
+local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
+local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local Signal = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
@@ -12,7 +19,6 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
-local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local RuneRarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneRarityColors)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -34,13 +40,6 @@ local IS_BOSS_COIN_DROP_DELAY = 0.05
 local COIN_BONUS_RELICS = {
 	RelicNames["Pot Of Gold"],
 }
-
-local MagicService
-local PlayerStatsService
-local RunEscrowService
-local RelicService
-local ArmorSetBonusService
-local DataService
 
 -- Looter enchantment: ×1.10 coin credit when the COLLECTOR has a
 -- Looter-enchanted weapon EQUIPPED (either slot). Reads the persisted
@@ -122,9 +121,27 @@ local function playOrbPickupVFX(player: Player, dropType: string)
 	end
 end
 
-local DropService = Knit.CreateService({
+-- Per-drop options carried on OnRelicDropRequested. `public`: anyone's to
+-- take, no fan (the tray's Drop button). `originalOwner*`: whose name the
+-- floor label shows -- the FIRST player to drop this relic, not whoever is
+-- dropping it now.
+type RelicDropOptions = {
+	public: boolean?,
+	originalOwnerId: number?,
+	originalOwnerName: string?,
+}
+
+local DropService = {
 	Name = "DropService",
-})
+	Dependencies = {
+		MagicService,
+		RunEscrowService,
+		RelicService,
+		ArmorSetBonusService,
+		DataService,
+		PlayerStatsService,
+	} :: { any },
+}
 
 -- `isBoss` is the SCATTER RADIUS (Client/Components/Drop reads it as
 -- IsBoss and throws the drop ±20 studs instead of ±8), not a tier flag.
@@ -133,123 +150,117 @@ local DropService = Knit.CreateService({
 -- and only they can bank it. Omit it (as the mob death drops do) and the
 -- drop stays SHARED — every player collects the full value once, which
 -- is the game's normal party-loot behaviour.
-DropService.OnDropRequested = Signal.new() :: (
-	basePart: BasePart,
-	dropType: DropTypes.DropTypes,
-	minDropRate: number,
-	maxDropRate: number,
-	minValue: number,
-	maxValue: number,
-	isBoss: boolean,
-	ownerId: number?,
-	fromChest: boolean?
-) -> ()
-DropService.OnRelicDropRequested = Signal.new()
-DropService.OnRuneDropRequested = Signal.new()
-DropService.OnDropCollected = Signal.new() :: (player: Player, dropType: DropTypes.DropTypes, value: number) -> ()
-DropService.OnCoinCollected = Signal.new() :: (playerName: string, coinsValue: number) -> ()
-DropService.OnManaCollected = Signal.new() :: (playerName: string, manaValue: number) -> ()
-DropService.OnChestCoinsRequested = Signal.new()
+--
+-- (basePart, dropType, minDropRate, maxDropRate, minValue, maxValue,
+-- isBoss, ownerId?, fromChest?)
+DropService.OnDropRequested =
+	Signal.new() :: Signal.Signal<BasePart, string, number, number, number, number, boolean, number?, boolean?>
+-- (player, itemRarity, relicName, originalPosition, targetPosition, options?)
+DropService.OnRelicDropRequested =
+	Signal.new() :: Signal.Signal<Player, string, string, Vector3, Vector3, RelicDropOptions?>
+-- (player, itemRarity, runeName, originalPosition, targetPosition)
+DropService.OnRuneDropRequested = Signal.new() :: Signal.Signal<Player, string, string, Vector3, Vector3>
+-- (player, dropType, value)
+DropService.OnDropCollected = Signal.new() :: Signal.Signal<Player, string, number>
+-- (playerName, coinsValue)
+DropService.OnCoinCollected = Signal.new() :: Signal.Signal<string, number>
+-- (playerName, manaValue)
+DropService.OnManaCollected = Signal.new() :: Signal.Signal<string, number>
+-- (player, value?)
+DropService.OnChestCoinsRequested = Signal.new() :: Signal.Signal<Player, number?>
 
-function DropService:KnitStart()
-	MagicService = Knit.GetService("MagicService")
-	RunEscrowService = Knit.GetService("RunEscrowService")
-	RelicService = Knit.GetService("RelicService")
-	ArmorSetBonusService = Knit.GetService("ArmorSetBonusService")
-	DataService = Knit.GetService("DataService")
-	PlayerStatsService = Knit.GetService("PlayerStatsService")
+function DropService.Start(self: typeof(DropService))
+	self.OnRelicDropRequested:Connect(
+		function(
+			player: Player,
+			itemRarity: string,
+			relicName: string,
+			originalPosition: Vector3,
+			targetPosition: Vector3,
+			options: RelicDropOptions?
+		)
+			local character = player.Character
 
-	self.OnRelicDropRequested:Connect(function(
-		player: Player,
-		itemRarity: ItemRarity.ItemRarity,
-		relicName: RelicNames.RelicNames,
-		originalPosition: Vector3,
-		targetPosition: Vector3,
-		-- public: anyone's to take, no fan (the tray's Drop button).
-		-- originalOwner*: whose name the floor label shows — the FIRST
-		-- player to drop this relic, not whoever is dropping it now.
-		options: {
-			public: boolean?,
-			originalOwnerId: number?,
-			originalOwnerName: string?,
-		}?
+			if not character or not character.PrimaryPart then
+				return
+			end
+
+			-- Element-rework folder layout: Relics/<Tree>/<Rarity>/<Name>.
+			-- The Skip offer (and anything without a RelicData entry) still
+			-- resolves the OLD way -- its `Folder` rides in the rarity slot
+			-- (Relics.Skip["Skip Relic"]).
+			local relicsFolder = game.ReplicatedStorage.GameAssets.Relics
+			local data = RelicData[relicName]
+			local template
+			if data and data.tree then
+				local treeFolder = relicsFolder:FindFirstChild(data.tree)
+				local rarityFolder = treeFolder and treeFolder:FindFirstChild(itemRarity)
+				template = rarityFolder and rarityFolder:FindFirstChild(relicName)
+			end
+			if not template then
+				local rarityFolder = relicsFolder:FindFirstChild(itemRarity)
+				template = rarityFolder and rarityFolder:FindFirstChild(relicName)
+			end
+			if not template then
+				warn(
+					"[DropService] Missing relic model: " .. tostring(relicName) .. " (" .. tostring(itemRarity) .. ")"
+				)
+				return
+			end
+			local drop = template:Clone()
+			drop:ScaleTo(1.5)
+
+			local collectedAttachment = ReplicatedStorage.GameAssets.Particles.Collected:Clone()
+			collectedAttachment.Parent = drop.Handle
+
+			-- Tint the collected-burst particles per rarity. RarityColors:Get
+			-- returns the Default color for unmapped rarities (Common /
+			-- Uncommon / Unique / Mythic / Shiny), which is fine here —
+			-- relic drops only roll Rare+ in practice, but if that changes
+			-- the particles still render a sensible color instead of nil.
+			local rarityColor = RarityColors:Get(itemRarity)
+			for _, descendant in collectedAttachment:GetChildren() do
+				descendant.Color = ColorSequence.new(rarityColor)
+			end
+
+			local dropAttachment = ReplicatedStorage.GameAssets.Particles.DropAttachment:Clone()
+			dropAttachment.Parent = drop.Handle
+			-- A target past a dungeon wall (a fan slot into a corner, a relic
+			-- tossed at a wall) ricochets back into the room; the client flies
+			-- the two-segment arc through BouncePosition.
+			local landing, bounce = resolveArcLanding(originalPosition, targetPosition)
+			drop:SetAttribute("TargetPosition", landing)
+			if bounce then
+				drop:SetAttribute(Attributes.BouncePosition, bounce)
+			end
+			if options and options.public then
+				-- No OwnerId at all: the owner lock and the fan-wide claim
+				-- (client + server Relic components) both key off it. The
+				-- ORIGINAL owner's name rides along instead, purely for the
+				-- billboard's UserText — it grants nothing. RelicService supplies
+				-- it and carries it across hand-offs, so a relic passed down a
+				-- chain of players still reads its first owner. Falls back to the
+				-- dropper for any caller that does not say.
+				drop:SetAttribute(Attributes.PublicDrop, true)
+				drop:SetAttribute(Attributes.DroppedByName, (options and options.originalOwnerName) or player.Name)
+				drop:SetAttribute(Attributes.DroppedById, (options and options.originalOwnerId) or player.UserId)
+			else
+				drop:SetAttribute("OwnerId", player.UserId)
+			end
+			drop:AddTag(TagList.Relic)
+			-- PivotTo, not PrimaryPart.CFrame, so MULTI-handle relics
+			-- (e.g. Super Stomp Boots Full with Handle + Handle2) move
+			-- as one unit. Setting PrimaryPart.CFrame only moves that
+			-- one part — secondary handles stayed at their template
+			-- world position, so only one boot appeared at the drop
+			-- site and the other one was stranded at 0,0,0.
+			drop:PivotTo(CFrame.new(originalPosition))
+			-- Atomic: the client component needs the Handle and its attachments
+			-- the moment the tagged Model streams in.
+			drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+			drop.Parent = workspace.IgnoreInstances.Drops
+		end
 	)
-		local character = player.Character
-
-		if not character or not character.PrimaryPart then
-			return
-		end
-
-		-- Element-rework folder layout: Relics/<Tree>/<Rarity>/<Name>.
-		-- The Skip offer (and anything without a RelicData entry) still
-		-- resolves the OLD way -- its `Folder` rides in the rarity slot
-		-- (Relics.Skip["Skip Relic"]).
-		local relicsFolder = game.ReplicatedStorage.GameAssets.Relics
-		local data = RelicData[relicName]
-		local template
-		if data and data.tree then
-			local treeFolder = relicsFolder:FindFirstChild(data.tree)
-			local rarityFolder = treeFolder and treeFolder:FindFirstChild(itemRarity)
-			template = rarityFolder and rarityFolder:FindFirstChild(relicName)
-		end
-		if not template then
-			local rarityFolder = relicsFolder:FindFirstChild(itemRarity)
-			template = rarityFolder and rarityFolder:FindFirstChild(relicName)
-		end
-		if not template then
-			warn("[DropService] Missing relic model: " .. tostring(relicName) .. " (" .. tostring(itemRarity) .. ")")
-			return
-		end
-		local drop = template:Clone()
-		drop:ScaleTo(1.5)
-
-		local collectedAttachment = ReplicatedStorage.GameAssets.Particles.Collected:Clone()
-		collectedAttachment.Parent = drop.Handle
-
-		-- Tint the collected-burst particles per rarity. RarityColors:Get
-		-- returns the Default color for unmapped rarities (Common /
-		-- Uncommon / Unique / Mythic / Shiny), which is fine here —
-		-- relic drops only roll Rare+ in practice, but if that changes
-		-- the particles still render a sensible color instead of nil.
-		local rarityColor = RarityColors:Get(itemRarity)
-		for _, descendant in collectedAttachment:GetChildren() do
-			descendant.Color = ColorSequence.new(rarityColor)
-		end
-
-		local dropAttachment = ReplicatedStorage.GameAssets.Particles.DropAttachment:Clone()
-		dropAttachment.Parent = drop.Handle
-		-- A target past a dungeon wall (a fan slot into a corner, a relic
-		-- tossed at a wall) ricochets back into the room; the client flies
-		-- the two-segment arc through BouncePosition.
-		local landing, bounce = resolveArcLanding(originalPosition, targetPosition)
-		drop:SetAttribute("TargetPosition", landing)
-		if bounce then
-			drop:SetAttribute(Attributes.BouncePosition, bounce)
-		end
-		if options and options.public then
-			-- No OwnerId at all: the owner lock and the fan-wide claim
-			-- (client + server Relic components) both key off it. The
-			-- ORIGINAL owner's name rides along instead, purely for the
-			-- billboard's UserText — it grants nothing. RelicService supplies
-			-- it and carries it across hand-offs, so a relic passed down a
-			-- chain of players still reads its first owner. Falls back to the
-			-- dropper for any caller that does not say.
-			drop:SetAttribute(Attributes.PublicDrop, true)
-			drop:SetAttribute(Attributes.DroppedByName, (options and options.originalOwnerName) or player.Name)
-			drop:SetAttribute(Attributes.DroppedById, (options and options.originalOwnerId) or player.UserId)
-		else
-			drop:SetAttribute("OwnerId", player.UserId)
-		end
-		drop:AddTag(TagList.Relic)
-		-- PivotTo, not PrimaryPart.CFrame, so MULTI-handle relics
-		-- (e.g. Super Stomp Boots Full with Handle + Handle2) move
-		-- as one unit. Setting PrimaryPart.CFrame only moves that
-		-- one part — secondary handles stayed at their template
-		-- world position, so only one boot appeared at the drop
-		-- site and the other one was stranded at 0,0,0.
-		drop:PivotTo(CFrame.new(originalPosition))
-		drop.Parent = workspace.IgnoreInstances.Drops
-	end)
 
 	-- Physical rune drops (rune machines). Mirrors the relic path but
 	-- simpler: the model comes from GameAssets.Runes[<name>], the particles
@@ -316,6 +327,9 @@ function DropService:KnitStart()
 			-- Spawn at the machine's mouth; the client's bezier carries it to
 			-- the fan position (PivotTo so multi-part models move as one).
 			drop:PivotTo(CFrame.new(originalPosition))
+			-- Atomic: the client component needs the Handle and its attachments
+			-- the moment the tagged Model streams in.
+			drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 			drop.Parent = workspace.IgnoreInstances.Drops
 		end
 	)
@@ -323,7 +337,7 @@ function DropService:KnitStart()
 	self.OnDropRequested:Connect(
 		function(
 			basePart: BasePart,
-			dropType: DropTypes.DropTypes,
+			dropType: string,
 			minDropRate: number,
 			maxDropRate: number,
 			minValue: number,
@@ -362,12 +376,15 @@ function DropService:KnitStart()
 					drop:SetAttribute(Attributes.BouncePosition, bounce)
 				end
 				drop.PrimaryPart.Position = basePart.Position
+				-- Atomic: the client component needs the Handle and its attachments
+				-- the moment the tagged Model streams in.
+				drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 				drop.Parent = workspace.IgnoreInstances.Drops
 			end
 		end
 	)
 
-	self.OnDropCollected:Connect(function(player: Player, dropType: DropTypes.DropTypes, value: number)
+	self.OnDropCollected:Connect(function(player: Player, dropType: string, value: number)
 		if dropType == DropTypes.Coins then
 			-- Collector-side coin multipliers, all at credit time so the
 			-- bonus belongs to whoever picks the coin up and lands on the
@@ -430,8 +447,12 @@ function DropService:KnitStart()
 			local BASE_MANA_FRACTION = 0.1
 			local manaMultiplier = RelicService:GetRelicEffect(player, RelicNames["Gear Recycler"]) or 1
 
-			local currentMana = MagicService:GetPlayerMagicData(player).mana
-			local maxMana = MagicService:GetPlayerMagicData(player).maxMana
+			local magicData = MagicService:GetPlayerMagicData(player)
+			if not magicData then
+				return -- no magic data yet: nothing to restore into
+			end
+			local currentMana = magicData.mana
+			local maxMana = magicData.maxMana
 			local manaRestored = currentMana + (maxMana * BASE_MANA_FRACTION * manaMultiplier)
 
 			MagicService:SetPlayerMagicData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
@@ -452,15 +473,13 @@ function DropService:KnitStart()
 			-- ApplyHealing — any-source, summed additively.
 			local BASE_HEALTH_FRACTION = 0.05
 
-			local humanoid = player.Character and player.Character:FindFirstChild("Humanoid")
+			local humanoid = player.Character and player.Character:FindFirstChild("Humanoid") :: Humanoid?
 
 			if not humanoid then
 				return
 			end
 
 			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION)
-		elseif dropType == DropTypes.ChestCoins then
-			self.OnChestCoinsRequested:Fire(player, value)
 		elseif dropType == DropTypes.Relics then
 			-- Relic drops are handled in the RelicService, so we just fire a signal here for any client-side effects
 			self.OnDropCollected:Fire(player, dropType, value)

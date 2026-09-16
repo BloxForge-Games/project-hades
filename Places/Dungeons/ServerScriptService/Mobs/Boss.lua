@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Boss.lua
 	Description: Boss mob — a Miniboss (aggressive cadence + no-ragdoll death)
@@ -31,16 +32,14 @@
 	One phase runs at a time.
 ]]
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local EncounterService = require(ServerScriptService.Services.EncounterService)
+local DungeonService = require(ServerScriptService.Services.DungeonService)
 local Miniboss = require(script.Parent.Miniboss)
 
 local Boss = setmetatable({}, Miniboss)
 Boss.__index = Boss
-
-local EncounterService
-local DungeonService
 
 -- HP fractions at which phase changes fire, in order. A boss with N active
 -- phases uses the first N (phase 1 at 66%, phase 2 at 33%). A phase entry can
@@ -73,9 +72,6 @@ end
 function Boss.new(model: Model)
 	local self = Miniboss.new(model)
 	setmetatable(self, Boss)
-
-	EncounterService = EncounterService or Knit.GetService("EncounterService")
-	DungeonService = DungeonService or Knit.GetService("DungeonService")
 
 	-- Resolve which phases are active for this run (boss config + difficulty).
 	local dungeon = DungeonService and DungeonService:GetActiveDungeon()

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: DamageService/LaserScythes.lua
 	Description:
@@ -16,15 +17,10 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-
-local RelicService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-end)
 
 local BONUS_HEALTH_PERCENT_ATTRIBUTE = "BonusHealthPercent"
 local BONUS_MANA_PERCENT_ATTRIBUTE = "BonusManaPercent"
@@ -37,11 +33,11 @@ return function(player: Player, damage: number, isMagic: boolean)
 	local fraction = 0
 
 	if not isMagic and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Red Laser Scythe"]) or 0) > 0 then
-		fraction += player:GetAttribute(BONUS_HEALTH_PERCENT_ATTRIBUTE) or 0
+		fraction += (player:GetAttribute(BONUS_HEALTH_PERCENT_ATTRIBUTE) :: number?) or 0
 	end
 
 	if isMagic and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Blue Laser Scythe"]) or 0) > 0 then
-		fraction += player:GetAttribute(BONUS_MANA_PERCENT_ATTRIBUTE) or 0
+		fraction += (player:GetAttribute(BONUS_MANA_PERCENT_ATTRIBUTE) :: number?) or 0
 	end
 
 	if fraction <= 0 then

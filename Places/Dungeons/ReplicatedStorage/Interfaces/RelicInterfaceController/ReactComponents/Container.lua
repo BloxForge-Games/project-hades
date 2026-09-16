@@ -14,6 +14,7 @@ local RelicEntryContainer = require(script.Parent.RelicEntryContainer)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
+local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 
 local localPlayer = Players.LocalPlayer
 
@@ -172,7 +173,8 @@ local function Container(props: any)
 				if visibleRef.current and selectedRelicRef.current then
 					descriptionFrameRef.current.Position = DESCRIPTION_HIDDEN_POSITION
 
-					descriptionFrameRef.current:TweenPosition(
+					tweenGui.position(
+						descriptionFrameRef.current,
 						DESCRIPTION_SHOWN_POSITION,
 						Enum.EasingDirection.Out,
 						Enum.EasingStyle.Quint,
@@ -198,7 +200,8 @@ local function Container(props: any)
 				TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
 				{ GroupTransparency = 1 }
 			):Play()
-			descriptionFrameRef.current:TweenPosition(
+			tweenGui.position(
+				descriptionFrameRef.current,
 				DESCRIPTION_HIDDEN_POSITION,
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
@@ -220,7 +223,8 @@ local function Container(props: any)
 
 	React.useEffect(function()
 		if visible then
-			containerRef.current:TweenPosition(
+			tweenGui.position(
+				containerRef.current,
 				CONTAINER_SHOWN_POSITION,
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
@@ -234,7 +238,8 @@ local function Container(props: any)
 				{ BackgroundTransparency = 0.5 }
 			):Play()
 
-			toggleButtonRef.current:TweenPosition(
+			tweenGui.position(
+				toggleButtonRef.current,
 				TOGGLE_SHOWN_POSITION,
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
@@ -242,7 +247,8 @@ local function Container(props: any)
 				true
 			)
 		else
-			containerRef.current:TweenPosition(
+			tweenGui.position(
+				containerRef.current,
 				CONTAINER_HIDDEN_POSITION,
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
@@ -262,7 +268,8 @@ local function Container(props: any)
 				{ GroupTransparency = 1 }
 			):Play()
 
-			toggleButtonRef.current:TweenPosition(
+			tweenGui.position(
+				toggleButtonRef.current,
 				TOGGLE_HIDDEN_POSITION,
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
@@ -322,7 +329,7 @@ local function Container(props: any)
 	-- Strip the rich-text tags once for the length-based size-tier
 	-- visibility check below — the small label hides past 47 chars and
 	-- the large label hides at/under 47.
-	local descriptionPlainLength = string.len(string.gsub(descriptionText, "<[^>]+>", ""))
+	local descriptionPlainLength = string.len((string.gsub(descriptionText, "<[^>]+>", "")))
 
 	return React.createElement("Frame", {
 		ref = containerRef,
@@ -685,7 +692,7 @@ local function Container(props: any)
 				relicData = relicData,
 				selectedRelic = selectedRelic,
 
-				setSelectedRelic = function(selectedData: table)
+				setSelectedRelic = function(selectedData: { [any]: any })
 					setSelectedRelic(selectedData)
 				end,
 			}),

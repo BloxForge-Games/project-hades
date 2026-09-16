@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: PlayerIndicatorService.lua
@@ -15,16 +16,12 @@
 --[ Roblox Services ]--
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local PlayerIndicatorService = Knit.CreateService({
+local PlayerIndicatorService = {
 	Name = "PlayerIndicatorService",
-	Client = {},
-})
+}
 
 --[ Imports ]--
 
@@ -40,7 +37,7 @@ local THUMBNAIL_SIZE = Enum.ThumbnailSize.Size420x420
 
 --[ Private Functions ]--
 
-function PlayerIndicatorService:_getAvatarImage(userId: number): string
+function PlayerIndicatorService._getAvatarImage(_self: typeof(PlayerIndicatorService), userId: number): string
 	local ok, content = pcall(function()
 		return Players:GetUserThumbnailAsync(userId, THUMBNAIL_TYPE, THUMBNAIL_SIZE)
 	end)
@@ -50,7 +47,7 @@ function PlayerIndicatorService:_getAvatarImage(userId: number): string
 	return content
 end
 
-function PlayerIndicatorService:_attachIndicator(player: Player, character: Model)
+function PlayerIndicatorService._attachIndicator(self: typeof(PlayerIndicatorService), player: Player, character: Model)
 	local hrp = character:FindFirstChild("HumanoidRootPart")
 	if not hrp then
 		return
@@ -72,7 +69,7 @@ function PlayerIndicatorService:_attachIndicator(player: Player, character: Mode
 	attachment.Parent = hrp
 end
 
-function PlayerIndicatorService:_bindPlayer(player: Player)
+function PlayerIndicatorService._bindPlayer(self: typeof(PlayerIndicatorService), player: Player)
 	local function onCharacter(character: Model)
 		-- HRP may not be parented yet on first frame; wait briefly.
 		local hrp = character:FindFirstChild("HumanoidRootPart")
@@ -94,9 +91,7 @@ end
 
 --[ Initializers ]--
 
-function PlayerIndicatorService:KnitInit() end
-
-function PlayerIndicatorService:KnitStart()
+function PlayerIndicatorService.Start(self: typeof(PlayerIndicatorService))
 	Players.PlayerAdded:Connect(function(player: Player)
 		self:_bindPlayer(player)
 	end)

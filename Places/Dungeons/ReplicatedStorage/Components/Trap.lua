@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): ryanisawesome25
      Module: Trap.luau
@@ -14,14 +15,16 @@ local TweenService = game:GetService("TweenService")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
+local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 
 --[ Component Root ]--
 
+local spikesRouter = InstanceRouter.Client(DungeonNetwork.TrapSpikesTriggered)
+
 local Trap = Component.new({
 	Tag = "Trap",
-
-	Extensions = { CommAdder },
 })
 
 --[ Constants ]--
@@ -35,17 +38,9 @@ local Trap = Component.new({
 --[ Initializers ]--
 
 function Trap:Construct()
-	-- CommAdder leaves _comm nil when the instance was destroyed
-	-- mid-wait (DungeonService backtracks destroying already-parented
-	-- chunks — see CommAdder's awaitComm comment). Bail cleanly here
-	-- instead of throwing on :GetSignal, then Start nil-guards the
-	-- same way. The component will Stop shortly when the destroy
-	-- replication finishes; no leaks.
-	if not self._comm then
-		return
-	end
-
-	self._onSpikesTriggered = self._comm:GetSignal("OnSpikesTriggered") :: table
+	-- The parts can stream in after the tagged Model does; wait for them
+	-- so the spike cache below is complete.
+	waitForPrimaryPart(self.Instance)
 
 	-- Cache spike parts and their original CFrames
 	self._spikeOriginalCFrames = {}
@@ -58,12 +53,10 @@ function Trap:Construct()
 end
 
 function Trap:Start()
-	if not self._onSpikesTriggered then
-		return
-	end
-	self._onSpikesTriggered:Connect(function(trapInstance: Model)
+	self._unbindSpikes = spikesRouter:Bind(self.Instance, function(trapInstance: Model)
 		if trapInstance ~= self.Instance then
-			return warn("Spike trigger received for different trap instance:", trapInstance.Name)
+			warn("Spike trigger received for different trap instance:", trapInstance.Name)
+			return
 		end
 
 		-- Play spike animation
@@ -105,6 +98,11 @@ function Trap:Start()
 	end)
 end
 
-function Trap:Stop() end
+function Trap:Stop()
+	if self._unbindSpikes then
+		self._unbindSpikes()
+		self._unbindSpikes = nil
+	end
+end
 
 return Trap

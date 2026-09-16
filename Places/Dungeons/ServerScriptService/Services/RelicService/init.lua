@@ -1,3 +1,4 @@
+--!strict
 --[[
     Author(s):
     Module: RelicService.lua
@@ -9,10 +10,17 @@
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local VFXService = require(ServerScriptService.Services.VFXService)
+local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
+local DodgeService = require(ServerScriptService.Submodules.Core.Source.Services.DodgeService)
+local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
@@ -34,36 +42,50 @@ local Fireworks = require(script.Incremental.Fireworks)
 local GhostDragon = require(script.Incremental.GhostDragon)
 local SuperStompBoots = require(script.Incremental.SuperStompBoots)
 
-local DropService
-local PlayerEventService
-local IgnoreListService
-local VFXService
-local EncounterService
+-- DropService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dropServiceLazy: any = nil
+local function getDropService(): any
+	if dropServiceLazy == nil then
+		dropServiceLazy = (require :: any)(ServerScriptService.Services.DropService)
+	end
+	return dropServiceLazy
+end
 
-local RelicService = Knit.CreateService({
+-- EncounterService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local encounterServiceLazy: any = nil
+local function getEncounterService(): any
+	if encounterServiceLazy == nil then
+		encounterServiceLazy = (require :: any)(ServerScriptService.Services.EncounterService)
+	end
+	return encounterServiceLazy
+end
+
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
+
+local RelicService = {
 	Name = "RelicService",
-	Client = {
-
-		OnReplicateRelics = Knit.CreateSignal(),
-		OnVolleyballEffectActivated = Knit.CreateSignal(),
-		OnPumpkinEffectActivated = Knit.CreateSignal(),
-		OnJailEffectActivated = Knit.CreateSignal(),
-		OnFireworksEffectActivated = Knit.CreateSignal(),
-		-- Super Stomp Boots: fired AFTER damage application from
-		-- SuperStompBoots:InvokeStomp. Payload: (caster, landingPosition,
-		-- radius, baseDamage). Designer wires VFX in RelicController's
-		-- subscriber.
-		OnSuperStompBoots = Knit.CreateSignal(),
-		-- Ice Breaker's Shatter burst. Payload: (position). Fired from
-		-- StatusConditionService when Chill lands on a Chilled target.
-		OnShatterActivated = Knit.CreateSignal(),
-		-- Throwing Bolts' Lightning Strike. Payload: (groundPosition).
-		-- Fired from DamageService on a crit into a Shocked enemy.
-		OnLightningStrikeActivated = Knit.CreateSignal(),
-	},
+	Dependencies = {
+		PlayerEventService,
+		VFXService,
+		IgnoreListService,
+		DodgeService,
+		DamageIndicatorService,
+		PlayerStatsService,
+	} :: { any },
 
 	_relicLimitRegistry = {},
-	_relicRegistry = {},
+	-- [userId][relicName] = count held.
+	_relicRegistry = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = { id, name } — who ORIGINALLY put this relic
 	-- on the floor, carried forward through every hand-off so the owner
 	-- tag never becomes "whoever dropped it last".
@@ -75,10 +97,10 @@ local RelicService = Knit.CreateService({
 	-- and read back when that player drops it again.
 	_relicOrigins = {},
 	_incrementalCount = 0,
-	_incrementalRegistry = {},
+	_incrementalRegistry = {} :: { [number]: number },
 	_activeRegistry = {},
 	_relicsList = {},
-})
+}
 
 --[ Imports ]--
 
@@ -126,7 +148,7 @@ RelicService.Signals = {
 -- character-parented part would; we have to clean it up explicitly on
 -- CharacterRemoving (the next relic tick will recreate it bound to the
 -- fresh HRP) and on PlayerRemoving.
-function RelicService:_cleanupGhostDragon(userId: number)
+function RelicService._cleanupGhostDragon(_self: typeof(RelicService), userId: number)
 	local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
 	local magicSpells = ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")
 	if not magicSpells then
@@ -138,10 +160,14 @@ function RelicService:_cleanupGhostDragon(userId: number)
 	end
 end
 
-function RelicService:_fireworks(userId: number)
+function RelicService._fireworks(self: typeof(RelicService), userId: number)
 	local player = Players:GetPlayerByUserId(userId)
 	-- Periodic relics (Fireworks, Ghost Dragon) never fire into a cutscene.
-	if EncounterService and EncounterService.IsCutsceneActive and EncounterService:IsCutsceneActive() then
+	if
+		getEncounterService()
+		and getEncounterService().IsCutsceneActive
+		and getEncounterService():IsCutsceneActive()
+	then
 		return
 	end
 
@@ -151,32 +177,34 @@ function RelicService:_fireworks(userId: number)
 	if
 		fireworkCount ~= 0 and (self._incrementalRegistry[userId] % RelicData["Summer Fireworks"].data.interval == 0)
 	then
-		Fireworks.new(
+		-- The Incremental modules type their instances loosely (a bare
+		-- setmetatable), so the method calls go through `any`.
+		local fireworks: any = Fireworks.new(
 			player,
-			self:GetRelicEffect(player, RelicNames["Summer Fireworks"]),
+			self:GetRelicEffect(player, RelicNames["Summer Fireworks"]) :: number,
 			self,
 			VFXService,
 			IgnoreListService
 		)
-			:InvokeFireworks()
+		fireworks:InvokeFireworks()
 	end
 
 	if
 		ghostDragonCount ~= 0
 		and self._incrementalRegistry[userId] % RelicData["Ghost Dragon"].data.minInterval == 0
 	then
-		GhostDragon.new(
+		local ghostDragon: any = GhostDragon.new(
 			player,
 			self:GetSpecificRelicRegistry(player, RelicNames["Ghost Dragon"]),
 			self,
 			VFXService,
 			IgnoreListService
 		)
-			:InvokeGhostDragon()
+		ghostDragon:InvokeGhostDragon()
 	end
 end
 
-function RelicService:_incrementalRelicEffects()
+function RelicService._incrementalRelicEffects(self: typeof(RelicService))
 	for userId, _ in self._relicRegistry do
 		self._incrementalRegistry[userId] += 1
 
@@ -190,15 +218,15 @@ end
 
 --[ Public Functions ]--
 
-function RelicService:GetRelicLimitRegistry(relicName: string)
+function RelicService.GetRelicLimitRegistry(self: typeof(RelicService), relicName: string)
 	return self._relicLimitRegistry[relicName]
 end
 
-function RelicService:SetRelicLimitRegistry(relicName: string, limit: number)
+function RelicService.SetRelicLimitRegistry(self: typeof(RelicService), relicName: string, limit: number)
 	self._relicLimitRegistry[relicName] = limit
 end
 
-function RelicService:GetRelicActiveModule(player: Player, moduleName: string)
+function RelicService.GetRelicActiveModule(self: typeof(RelicService), player: Player, moduleName: string)
 	if self._activeRegistry[moduleName] == nil then
 		return
 	end
@@ -223,7 +251,7 @@ end
 -- Both designs were scrapped — it is now a crit-chance relic whose
 -- Adrenaline proc rides DamageService:_postDamage's `wasCrit`, so it
 -- needs no perfect-dodge hook either way.
-function RelicService:OnPlayerPerfectDodged(player: Player)
+function RelicService.OnPlayerPerfectDodged(self: typeof(RelicService), player: Player)
 	-- Jetpack proc — existing behavior, kept identical. GetRelicActiveModule
 	-- internally checks ownership before invoking.
 	self:GetRelicActiveModule(player, "Jetpack")
@@ -248,7 +276,7 @@ local BASE_WALKSPEED_RELICS = {
 -- Slateskin Potion HALVES the effective base (its callback owns the 0.50).
 -- Keep in sync with the client mirror, getEffectiveBaseWalkSpeed.
 
-function RelicService:GetEffectiveBaseWalkSpeed(player: Player): number
+function RelicService.GetEffectiveBaseWalkSpeed(self: typeof(RelicService), player: Player): number
 	local total = HumanoidProperties.WalkSpeed
 	for _, relicName in BASE_WALKSPEED_RELICS do
 		if self:GetSpecificRelicRegistry(player, relicName) > 0 then
@@ -266,11 +294,11 @@ function RelicService:GetEffectiveBaseWalkSpeed(player: Player): number
 	return total
 end
 
-function RelicService:GetRelicsRegistry(player: Player)
+function RelicService.GetRelicsRegistry(self: typeof(RelicService), player: Player)
 	return table.clone(self._relicRegistry[player.UserId] or {})
 end
 
-function RelicService:GetSpecificRelicRegistry(player: Player, relic: RelicNames.RelicNames)
+function RelicService.GetSpecificRelicRegistry(self: typeof(RelicService), player: Player, relic: string)
 	return self._relicRegistry[player.UserId] and self._relicRegistry[player.UserId][relic] or 0
 end
 
@@ -290,7 +318,12 @@ end
 -- changed. Listeners (DodgeService for Gravity Coil, UI controllers
 -- for the relic tray, …) subscribe to those signals; a no-op pickup
 -- shouldn't wake them up.
-function RelicService:AddRelicsRegistry(player: Player, relic: string, count: number): boolean
+function RelicService.AddRelicsRegistry(
+	self: typeof(RelicService),
+	player: Player,
+	relic: string,
+	count: number
+): boolean
 	local registry = self._relicRegistry[player.UserId]
 
 	if not registry then
@@ -323,7 +356,11 @@ function RelicService:AddRelicsRegistry(player: Player, relic: string, count: nu
 		RelicData[relic].callback(player, registry[relic])
 	end
 
-	self.Client.OnReplicateRelics:FireAll(player.UserId, self._relicRegistry, self._relicsList)
+	RelicNetwork.RelicsReplicated.FireAll({
+		UserId = player.UserId,
+		Registry = self._relicRegistry,
+		List = self._relicsList,
+	})
 
 	RelicService.Signals.OnRelicsUpdated:Fire(player, relic, registry[relic], self._relicsList)
 	self:_publishOwnedRelicCount(player)
@@ -332,7 +369,7 @@ function RelicService:AddRelicsRegistry(player: Player, relic: string, count: nu
 	-- DISTINCT relics held (it also gates the relic cap), so a stacking
 	-- pickup leaves it unchanged and a listener watching it for "I gained
 	-- something" silently misses those.
-	player:SetAttribute(Attributes.RelicsGained, (player:GetAttribute(Attributes.RelicsGained) or 0) + 1)
+	player:SetAttribute(Attributes.RelicsGained, ((player:GetAttribute(Attributes.RelicsGained) :: number?) or 0) + 1)
 	return true
 end
 
@@ -341,9 +378,9 @@ end
 -- burst once (server-side clone — it replicates on its own). Called
 -- by the tray's Destroy and the Merchant's sell (EventService).
 -- Same one-shot recipe as AuraService's aura shockwaves.
-function RelicService:PlayRelicRemovedFX(player: Player)
+function RelicService.PlayRelicRemovedFX(_self: typeof(RelicService), player: Player)
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return
 	end
@@ -397,7 +434,13 @@ local DROP_RELIC_ROOT_ABOVE_FLOOR = 3
 -- than this player's. Called by the Relic component on an accepted
 -- pickup; a nil origin (a machine offer, an event reward, mob loot)
 -- clears any stale note, making the next drop the item's first.
-function RelicService:SetRelicOrigin(player: Player, relicName: string, originId: number?, originName: string?)
+function RelicService.SetRelicOrigin(
+	self: typeof(RelicService),
+	player: Player,
+	relicName: string,
+	originId: number?,
+	originName: string?
+)
 	local origins = self._relicOrigins[player.UserId]
 	if not origins then
 		origins = {}
@@ -418,7 +461,8 @@ end
 -- drawback is the price of their payoff, and dropping one would make
 -- the trade-off free. Validated server-side; the tray button is only a
 -- request, and it greys Cursed out on its own. Replaced DestroyRelic.
-function RelicService.Client:DropRelic(player: Player, relicName: string): boolean
+-- RelicNetwork.DropRelic handler (was a client-callable method).
+function RelicService._onDropRelic(_self: typeof(RelicService), player: Player, relicName: string): boolean
 	if typeof(relicName) ~= "string" or not RelicData[relicName] then
 		return false
 	end
@@ -429,8 +473,8 @@ function RelicService.Client:DropRelic(player: Player, relicName: string): boole
 		return false
 	end
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	if not hrp or not DropService then
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not hrp or not getDropService() then
 		return false
 	end
 
@@ -466,7 +510,7 @@ function RelicService.Client:DropRelic(player: Player, relicName: string): boole
 		origins[relicName] = nil
 	end
 
-	DropService.OnRelicDropRequested:Fire(player, RelicData[relicName].rarity, relicName, origin, target, {
+	getDropService().OnRelicDropRequested:Fire(player, RelicData[relicName].rarity, relicName, origin, target, {
 		public = true,
 		originalOwnerId = (recorded and recorded.id) or player.UserId,
 		originalOwnerName = (recorded and recorded.name) or player.Name,
@@ -474,7 +518,7 @@ function RelicService.Client:DropRelic(player: Player, relicName: string): boole
 	return true
 end
 
-function RelicService:RemoveRelicsRegistry(player: Player, relic: string, count: number)
+function RelicService.RemoveRelicsRegistry(self: typeof(RelicService), player: Player, relic: string, count: number)
 	local registry = self._relicRegistry[player.UserId]
 
 	if not registry then
@@ -502,13 +546,17 @@ function RelicService:RemoveRelicsRegistry(player: Player, relic: string, count:
 		end
 	end
 
-	self.Client.OnReplicateRelics:FireAll(player.UserId, self._relicRegistry, self._relicsList)
+	RelicNetwork.RelicsReplicated.FireAll({
+		UserId = player.UserId,
+		Registry = self._relicRegistry,
+		List = self._relicsList,
+	})
 
 	RelicService.Signals.OnRelicsUpdated:Fire(player, relic, registry[relic], self._relicsList)
 	self:_publishOwnedRelicCount(player)
 end
 
-function RelicService:GetRelicEffect(player: Player, relicName: RelicNames.RelicNames): any?
+function RelicService.GetRelicEffect(self: typeof(RelicService), player: Player, relicName: string): any?
 	if
 		self._relicRegistry[player.UserId]
 		and self._relicRegistry[player.UserId][relicName]
@@ -520,7 +568,7 @@ function RelicService:GetRelicEffect(player: Player, relicName: RelicNames.Relic
 	return false
 end
 
-function RelicService:GetPlayerAvailableRelics(player: Player): { RelicNames.RelicNames }
+function RelicService.GetPlayerAvailableRelics(self: typeof(RelicService), player: Player): { string }
 	local unstacked = {}
 
 	for relicName, relicInfo in RelicData do
@@ -554,7 +602,7 @@ end
 -- and all three listeners (DungeonService, DodgeService, PlayerStatsService)
 -- read only the `player` argument. The trailing nils are therefore safe, and
 -- the recomputes they trigger are idempotent.
-function RelicService:MarkRelicChoiceMade(player: Player)
+function RelicService.MarkRelicChoiceMade(self: typeof(RelicService), player: Player)
 	RelicService.Signals.OnRelicsUpdated:Fire(player, nil, nil, self._relicsList)
 end
 
@@ -567,11 +615,11 @@ end
 -- player, not just their own.
 --
 -- On the PLAYER rather than the character so it survives a respawn.
-function RelicService:_publishOwnedRelicCount(player: Player)
+function RelicService._publishOwnedRelicCount(self: typeof(RelicService), player: Player)
 	player:SetAttribute(Attributes.OwnedRelicCount, self:GetOwnedRelicCount(player))
 end
 
-function RelicService:GetOwnedRelicCount(player: Player): number
+function RelicService.GetOwnedRelicCount(self: typeof(RelicService), player: Player): number
 	return #(self._relicsList[player.UserId] or {})
 end
 
@@ -579,7 +627,7 @@ end
 -- vending machine reads this to decide whether to dispense the Skip offer:
 -- a capped player cannot claim anything, so the Skip is their only way to
 -- clear the pull and open the gate.
-function RelicService:IsAtRelicCap(player: Player): boolean
+function RelicService.IsAtRelicCap(self: typeof(RelicService), player: Player): boolean
 	return self:GetOwnedRelicCount(player) >= MAX_OWNED_RELICS
 end
 
@@ -587,7 +635,7 @@ end
 -- MAX_OWNED_RELICS and doesn't already own this one (owned relics re-trigger
 -- the per-relic stack guard instead). Pickup paths check this BEFORE
 -- consuming anything so a refused grab wastes nothing.
-function RelicService:CanAcceptRelic(player: Player, relic: string): boolean
+function RelicService.CanAcceptRelic(self: typeof(RelicService), player: Player, relic: string): boolean
 	local registry = self._relicRegistry[player.UserId]
 	if registry and (registry[relic] or 0) > 0 then
 		return true
@@ -604,7 +652,7 @@ end
 -- unconditionally, and under STRICT gating that is correct: Flaming Mace is
 -- itself gated behind Frenzy, so owning it already implies owning a Frenzy
 -- source. The dependency resolves itself.
-function RelicService:GetGrantedMechanics(player: Player): { [string]: boolean }
+function RelicService.GetGrantedMechanics(self: typeof(RelicService), player: Player): { [string]: boolean }
 	local granted = {}
 	local registry = self._relicRegistry[player.UserId]
 	if not registry then
@@ -629,7 +677,7 @@ end
 
 -- How many relics of `tree` the player already owns. Drives the affinity
 -- weight below; Neutral is never counted because it is exempt.
-function RelicService:GetOwnedTreeCount(player: Player, tree: string): number
+function RelicService.GetOwnedTreeCount(self: typeof(RelicService), player: Player, tree: string): number
 	local registry = self._relicRegistry[player.UserId]
 	if not registry or not tree or tree == ElementTrees.Neutral then
 		return 0
@@ -650,7 +698,7 @@ end
 -- dampeners key off this rather than off distinct-tree count: a
 -- distinct-tree gate never fires for a mono-element build, and that is
 -- precisely the build the drift hurts most.
-function RelicService:GetOwnedElementalCount(player: Player): number
+function RelicService.GetOwnedElementalCount(self: typeof(RelicService), player: Player): number
 	local registry = self._relicRegistry[player.UserId]
 	if not registry then
 		return 0
@@ -674,7 +722,7 @@ end
 -- because the trees you are actually building get heavier, not because the
 -- others are removed -- so a fifth-element relic stays possible to the end,
 -- just increasingly rare. Neutral is exempt and always returns 1.
-function RelicService:GetElementAffinityWeight(relicName: string, player: Player?): number
+function RelicService.GetElementAffinityWeight(self: typeof(RelicService), relicName: string, player: Player?): number
 	local data = RelicData[relicName]
 	local tree = data and data.tree
 	if not player or not tree then
@@ -717,7 +765,7 @@ end
 -- toward Ice Breaker; from the moment they own one Frost relic, the tree's
 -- centrepiece is what it tries to complete them with. 1 for everything
 -- else, so the multiply is a no-op on the rest of the pool.
-function RelicService:GetKeystoneWeight(relicName: string, player: Player?): number
+function RelicService.GetKeystoneWeight(self: typeof(RelicService), relicName: string, player: Player?): number
 	local data = RelicData[relicName]
 	if not player or not data or not data.keystone then
 		return 1
@@ -735,7 +783,7 @@ end
 
 -- The UNOWNED, ungated (NC) relics of one tree. The starter machine uses
 -- this to guarantee a foothold in each of the run's two elements.
-function RelicService:GetUnownedNCRelicsForTree(player: Player, tree: string): { string }
+function RelicService.GetUnownedNCRelicsForTree(self: typeof(RelicService), player: Player, tree: string): { string }
 	local registry = self._relicRegistry[player.UserId] or {}
 	local found = {}
 	for relicName, data in RelicData do
@@ -762,7 +810,8 @@ end
 -- against the tree's pair in ElementTreeData. Neutral relics carry no
 -- pair and are always offerable. An offer should never be something you
 -- cannot use.
-function RelicService:IsRelicRollEligible(
+function RelicService.IsRelicRollEligible(
+	self: typeof(RelicService),
 	relicName: string,
 	granted: { [string]: boolean },
 	ownerPlayer: Player?
@@ -810,9 +859,9 @@ end
 -- from the existing run progression: DungeonService's 1-based dungeon index
 -- over Shared/Data/DungeonSequence. No run in progress (lobby, Studio solo)
 -- falls back to Early.
-function RelicService:GetRunStage(): string
+function RelicService.GetRunStage(_self: typeof(RelicService)): string
 	local ok, index = pcall(function()
-		return Knit.GetService("DungeonService"):GetRunDungeonIndex()
+		return getDungeonService():GetRunDungeonIndex()
 	end)
 	if not ok or type(index) ~= "number" or index <= 1 then
 		return "Early"
@@ -827,7 +876,12 @@ end
 -- odds), from the run-stage table in RelicRollConfig. Rarities with no
 -- candidate are simply absent from the plan, which IS the graceful fallback.
 -- Cursed never appears -- it has no entry in any stage table.
-function RelicService:RollRelicRarity(poolByRarity: { [string]: { string } }, stage: string, luck: number?): string?
+function RelicService.RollRelicRarity(
+	_self: typeof(RelicService),
+	poolByRarity: { [string]: { string } },
+	stage: string,
+	luck: number?
+): string?
 	local weights = RelicRollConfig.RarityWeights[stage] or RelicRollConfig.RarityWeights.Early
 	local plan = LootPlan.new("single")
 	local any = false
@@ -862,7 +916,8 @@ end
 --   `luck`             LootPlan luck passthrough.
 --
 -- Returns (relicName, rarity), or (nil, nil) when the pool is empty.
-function RelicService:RollRandomRelicFromPool(
+function RelicService.RollRandomRelicFromPool(
+	self: typeof(RelicService),
 	availableRelics: { string },
 	weights: { [string]: number }?,
 	luck: number?,
@@ -965,7 +1020,7 @@ local HOLIDAY_HAM_CHARACTER_SCALE = 1.20
 -- deliberately handles the NOT-owned case too: without the reset branch a
 -- player who somehow loses the relic would keep the scale for the rest of
 -- the run, since nothing else ever writes it back.
-function RelicService:_applyHolidayHamScale(player: Player)
+function RelicService._applyHolidayHamScale(self: typeof(RelicService), player: Player)
 	local character = player.Character
 	if not character or not character.PrimaryPart then
 		return
@@ -986,12 +1041,15 @@ end
 local CRIMSON_CLONE_NAME = "CrimsonRelicAura"
 local CRIMSON_BODY_PARTS = { "HumanoidRootPart", "Head", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
 
-function RelicService:_applyCrimsonAura(player: Player)
+function RelicService._applyCrimsonAura(self: typeof(RelicService), player: Player)
 	if self:GetSpecificRelicRegistry(player, RelicNames["Sword of the Epicredness"]) <= 0 then
 		return
 	end
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not character then
+		return
+	end
+	local hrp = character:FindFirstChild("HumanoidRootPart")
 	if not hrp or hrp:FindFirstChild(CRIMSON_CLONE_NAME) then
 		return
 	end
@@ -1016,12 +1074,10 @@ function RelicService:_applyCrimsonAura(player: Player)
 	end
 end
 
-function RelicService:KnitStart()
-	DropService = Knit.GetService("DropService")
-	EncounterService = Knit.GetService("EncounterService")
-	PlayerEventService = Knit.GetService("PlayerEventService")
-	VFXService = Knit.GetService("VFXService")
-	IgnoreListService = Knit.GetService("IgnoreListService")
+function RelicService.Start(self: typeof(RelicService))
+	RelicNetwork.DropRelic.On(function(player: Player, relicName: string): boolean
+		return self:_onDropRelic(player, relicName)
+	end)
 
 	-- Super Stomp Boots — constructed per dodge-land event for owners.
 	-- Mirrors the Fireworks pattern (`SuperStompBoots.new(...):InvokeStomp()`)
@@ -1029,8 +1085,6 @@ function RelicService:KnitStart()
 	-- instance per stomp, garbage-collected after :InvokeStomp returns.
 	-- Ownership gate lives here so the class itself stays focused on
 	-- "do the AOE", not "decide whether to fire".
-	local DodgeService = Knit.GetService("DodgeService")
-	local DamageIndicatorService = Knit.GetService("DamageIndicatorService")
 
 	DodgeService.Signals.OnDodgeLanded:Connect(function(player: Player, landingPosition: Vector3)
 		-- Callback now returns the per-level base damage (25), not a
@@ -1042,8 +1096,15 @@ function RelicService:KnitStart()
 			return
 		end
 
-		SuperStompBoots.new(player, damagePerLevel, landingPosition, self, IgnoreListService, DamageIndicatorService)
-			:InvokeStomp()
+		local stomp: any = SuperStompBoots.new(
+			player,
+			damagePerLevel,
+			landingPosition,
+			self,
+			IgnoreListService,
+			DamageIndicatorService
+		)
+		stomp:InvokeStomp()
 	end)
 
 	-- Apple Pie (Rare): clearing ANY dungeon room restores 8% Maximum
@@ -1058,7 +1119,6 @@ function RelicService:KnitStart()
 	--     player as the party's cursors advance, and it fires once per
 	--     room, so there is no double-heal to guard against.
 	local APPLE_PIE_HEAL_FRACTION = 0.08
-	local DungeonService = Knit.GetService("DungeonService")
 
 	local function healApplePieOwner(player: Player)
 		if self:GetSpecificRelicRegistry(player, RelicNames["Apple Pie"]) <= 0 then
@@ -1069,7 +1129,7 @@ function RelicService:KnitStart()
 		if humanoid and humanoid.Health > 0 then
 			-- Through ApplyHealing so Holiday Ham's +50% applies, same as
 			-- every other mid-run restore.
-			Knit.GetService("PlayerStatsService"):ApplyHealing(player, humanoid.MaxHealth * APPLE_PIE_HEAL_FRACTION)
+			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * APPLE_PIE_HEAL_FRACTION)
 		end
 	end
 
@@ -1079,15 +1139,15 @@ function RelicService:KnitStart()
 		end
 	end
 
-	DungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, _lastChunk)
+	getDungeonService().Signals.OnSegmentCleared:Connect(function(_dungeon, _lastChunk)
 		healApplePieOwners()
 	end)
 
-	DungeonService.Signals.OnDungeonCompleted:Connect(function(_dungeon)
+	getDungeonService().Signals.OnDungeonCompleted:Connect(function(_dungeon)
 		healApplePieOwners()
 	end)
 
-	DungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
+	getDungeonService().Signals.OnRoomEntered:Connect(function(player: Player, room)
 		if room and room.roomType == RoomTypes.Event then
 			healApplePieOwner(player)
 		end
@@ -1095,7 +1155,7 @@ function RelicService:KnitStart()
 
 	for _, module in script.Active:GetChildren() do
 		if module:IsA("ModuleScript") then
-			self._activeRegistry[module.Name] = require(module)
+			self._activeRegistry[module.Name] = (require :: any)(module)
 		end
 	end
 
@@ -1126,9 +1186,16 @@ function RelicService:KnitStart()
 		self._incrementalRegistry[player.UserId] = 0
 		self._relicsList[player.UserId] = {}
 
-		self.Client.OnReplicateRelics:FireAll(player.UserId, self._relicRegistry, self._relicsList)
+		RelicNetwork.RelicsReplicated.FireAll({
+			UserId = player.UserId,
+			Registry = self._relicRegistry,
+			List = self._relicsList,
+		})
 
-		player.Character:SetAttribute(Attributes.OnJetpack, false)
+		-- OnPlayerAdded fires from the client's SetupCharacter request, once
+		-- its character exists; this indexed it directly before as well.
+		local character = player.Character :: Model
+		character:SetAttribute(Attributes.OnJetpack, false)
 
 		-- Ghost Dragon visual lives outside the character tree (see
 		-- _cleanupGhostDragon comment), so the engine doesn't auto-destroy
@@ -1210,14 +1277,16 @@ function RelicService:KnitStart()
 		self._incrementalRegistry[player.UserId] = nil
 		self._relicsList[player.UserId] = nil
 
-		self.Client.OnReplicateRelics:FireAll(player.UserId, self._relicRegistry, self._relicsList)
+		RelicNetwork.RelicsReplicated.FireAll({
+			UserId = player.UserId,
+			Registry = self._relicRegistry,
+			List = self._relicsList,
+		})
 
 		-- Final cleanup of the workspace-parented Ghost Dragon visual —
 		-- CharacterRemoving handles respawns; this catches the disconnect.
 		self:_cleanupGhostDragon(player.UserId)
 	end)
 end
-
-function RelicService:KnitInit() end
 
 return RelicService

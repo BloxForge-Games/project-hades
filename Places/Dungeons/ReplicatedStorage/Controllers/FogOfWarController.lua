@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: FogOfWarController.lua
 	Description:
@@ -42,12 +43,10 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DungeonGateController = require(ReplicatedStorage.Controllers.DungeonGateController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local fogHideables = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.fogHideables)
-
-local FogOfWarService
-local DungeonGateController
 
 --[ Constants ]--
 
@@ -63,9 +62,10 @@ local SERVER_FOG_BOOLEAN_ATTRIBUTE = "FogEnabled"
 
 --[ Controller ]--
 
-local FogOfWarController = Knit.CreateController({
+local FogOfWarController = {
 	Name = "FogOfWarController",
-})
+	Dependencies = { DungeonGateController } :: { any },
+}
 
 --[ Private ]--
 
@@ -90,7 +90,7 @@ local function hideLocally(instance: Instance)
 	end
 end
 
-function FogOfWarController:_fogModel(model: Instance, hideables: { Instance })
+function FogOfWarController._fogModel(_self: typeof(FogOfWarController), model: Instance, hideables: { Instance })
 	if not model.Parent or model:GetAttribute(Attributes.LocalFogged) == true then
 		return
 	end
@@ -103,25 +103,35 @@ end
 -- The payload of one OnRoomsLeftBehind: every room model and relocated
 -- building the server says is behind this player now. Idempotent per
 -- model, so the server can resend the whole trail on every crossing.
-function FogOfWarController:_onRoomsLeftBehind(payload)
-	local rooms = payload and payload.rooms or {}
-	local buildings = payload and payload.buildings or {}
+function FogOfWarController._onRoomsLeftBehind(
+	self: typeof(FogOfWarController),
+	payload: {
+		Rooms: { Model? },
+		Buildings: { Instance? },
+		DelaySeconds: number,
+		AfterGateClose: boolean,
+	}
+)
+	local rooms = payload.Rooms
+	local buildings = payload.Buildings
 
-	local delay = payload and payload.delaySeconds or 0
-	if payload and payload.afterGateClose then
+	local delay = payload.DelaySeconds
+	if payload.AfterGateClose then
 		-- The slam is this client's own tween; the beat starts when it lands.
 		delay += DungeonGateController:GetGateSlamSeconds()
 	end
 
 	task.delay(delay, function()
 		for _, roomModel in rooms do
-			if roomModel:IsA("Model") and roomModel.Parent then
-				self:_fogModel(roomModel, fogHideables.collectRoomHideables(roomModel))
+			local room = roomModel :: Model
+			if room:IsA("Model") and room.Parent then
+				self:_fogModel(room, fogHideables.collectRoomHideables(room))
 			end
 		end
 		for _, building in buildings do
-			if building.Parent then
-				self:_fogModel(building, fogHideables.collectBuildingHideables(building))
+			local buildingModel = building :: Instance
+			if buildingModel.Parent then
+				self:_fogModel(buildingModel, fogHideables.collectBuildingHideables(buildingModel))
 			end
 		end
 	end)
@@ -129,13 +139,8 @@ end
 
 --[ Lifecycle ]--
 
-function FogOfWarController:KnitInit() end
-
-function FogOfWarController:KnitStart()
-	FogOfWarService = Knit.GetService("FogOfWarService")
-	DungeonGateController = Knit.GetController("DungeonGateController")
-
-	FogOfWarService.OnRoomsLeftBehind:Connect(function(payload)
+function FogOfWarController.Start(self: typeof(FogOfWarController))
+	DungeonNetwork.RoomsLeftBehind.On(function(payload)
 		self:_onRoomsLeftBehind(payload)
 	end)
 end

@@ -1,7 +1,9 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local MagicAmbienceController = require(ReplicatedStorage.Controllers.MagicAmbienceController)
 
 -- The screen tint is CLAIMED through MagicAmbienceController, not written
 -- to Lighting here: one global property cannot be owned by two casts, and
@@ -14,20 +16,12 @@ local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicN
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
-local CutsceneController
-local MagicAmbienceController
-
-Knit.OnStart():andThen(function()
-	CutsceneController = Knit.GetController("CutsceneController")
-	MagicAmbienceController = Knit.GetController("MagicAmbienceController")
-end)
-
 return function(player: Player, preload: boolean?)
-	local character = player.Character
+	local character = player.Character :: Model
 
-	character.Humanoid.WalkSpeed = 0
+	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = 0
 
-	local susanooAnimation = character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator"):LoadAnimation(
+	local susanooAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooArmorAnimation")
 	)
 

@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: LifeService.lua
      Description:
@@ -17,44 +18,60 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local RunService = game:GetService("RunService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
+local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
+local RagdollService = require(ServerScriptService.Services.RagdollService)
+local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 
-local PlayerEventService
-local DungeonService
-local RagdollService
-local TextIndicatorService
-local InvulnerabilityService
-local UserNotificationService
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
 
-local LifeService = Knit.CreateService({
+local LifeService = {
 	Name = "LifeService",
-	Client = {
-		-- Per-player lives snapshot, replicated to ALL clients.
-		--   { [userId] = { current: number, max: number } }
-		LivesData = Knit.CreateProperty({}),
+	Dependencies = {
+		PlayerEventService,
+		TextIndicatorService,
+		InvulnerabilityService,
+		UserNotificationService,
+		RagdollService,
+	} :: { any },
+}
 
-		DeathState = Knit.CreateProperty({}),
+-- Per-player lives snapshot, replicated to ALL clients (was a replicated
+-- property): { [userId] = { current: number, max: number } }
+LifeService._livesProperty = RemoteProperty.Server({
+	changed = PlayerNetwork.LivesDataChanged,
+	get = PlayerNetwork.GetLivesData,
+}, {})
 
-		OnLifeLost = Knit.CreateSignal(),
-		OnPlayerDied = Knit.CreateSignal(),
-		OnPlayerRevived = Knit.CreateSignal(),
+-- Per-player death snapshot, replicated to ALL clients (was a replicated
+-- property): { [userId] = { diedAtServerTime, deathPosition, player } }
+LifeService._deathStateProperty = RemoteProperty.Server({
+	changed = PlayerNetwork.DeathStateChanged,
+	get = PlayerNetwork.GetDeathState,
+}, {})
 
-		RevivalFade = Knit.CreateSignal(),
-
-		OnTeleportToLobby = Knit.CreateSignal(),
-
-		OnGameOver = Knit.CreateSignal(),
-
-		GameOverState = Knit.CreateProperty(false),
-	},
-})
+-- Whole party down. Server-side only: no client ever read the old
+-- GameOverState property, the GameOver broadcast is what they act on.
+LifeService._isGameOver = false
 
 --[ Constants ]--
 
@@ -91,15 +108,15 @@ LifeService.OnPlayerRevived = Signal.new() -- (player)
 --[ Private helpers ]--
 
 -- Publishes the current LivesData snapshot to clients.
-function LifeService:_replicateLives()
+function LifeService._replicateLives(self: typeof(LifeService))
 	local snapshot = {}
 	for userId, entry in self._lives do
 		snapshot[userId] = { current = entry.current, max = entry.max }
 	end
-	self.Client.LivesData:Set(snapshot)
+	self._livesProperty:Set(snapshot)
 end
 
-function LifeService:_replicateDeathState()
+function LifeService._replicateDeathState(self: typeof(LifeService))
 	local snapshot = {}
 	for userId, entry in self._deathState do
 		snapshot[userId] = {
@@ -108,10 +125,10 @@ function LifeService:_replicateDeathState()
 			player = Players:GetPlayerByUserId(userId),
 		}
 	end
-	self.Client.DeathState:Set(snapshot)
+	self._deathStateProperty:Set(snapshot)
 end
 
-function LifeService:_playDeathAnimation(player: Player)
+function LifeService._playDeathAnimation(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 
 	self:_stopDeathAnimation(userId)
@@ -146,7 +163,7 @@ function LifeService:_playDeathAnimation(player: Player)
 end
 
 -- Stops the death animation for `userId` if one is active. Idempotent.
-function LifeService:_stopDeathAnimation(userId: number)
+function LifeService._stopDeathAnimation(self: typeof(LifeService), userId: number)
 	local track = self._deathAnimationTracks[userId]
 	if not track then
 		return
@@ -160,7 +177,7 @@ end
 -- false on an empty server so a teleport never fires when nobody's even here
 -- (defensive — the scheduling path can only run from inside LoseLife so the
 -- caller is always in the player list anyway).
-function LifeService:_areAllPlayersDead(): boolean
+function LifeService._areAllPlayersDead(self: typeof(LifeService)): boolean
 	local players = Players:GetPlayers()
 	if #players == 0 then
 		return false
@@ -183,14 +200,14 @@ end
 -- the lobby teleport without duplicating the OnTeleportToLobby fire +
 -- TeleportAsync + pcall scaffolding. The party-wipe path that originally
 -- owned this method now goes through the public name too.
-function LifeService:TeleportAllToLobby()
+function LifeService.TeleportAllToLobby(_self: typeof(LifeService))
 	local players = Players:GetPlayers()
 
 	if #players == 0 then
 		return
 	end
 
-	self.Client.OnTeleportToLobby:FireAll()
+	PlayerNetwork.TeleportToLobby.FireAll()
 
 	-- Re-fetch in case anyone left during the grace window. TeleportAsync
 	-- on an empty list throws.
@@ -212,7 +229,7 @@ end
 -- OnTeleportToLobby cue for that player.
 -- Returns true if the teleport was ISSUED (Studio can't teleport at all, so
 -- callers must be able to tell and not strand the player).
-function LifeService:TeleportPlayerToLobby(player: Player): boolean
+function LifeService.TeleportPlayerToLobby(_self: typeof(LifeService), player: Player): boolean
 	if not player or not player.Parent then
 		return false
 	end
@@ -224,7 +241,7 @@ function LifeService:TeleportPlayerToLobby(player: Player): boolean
 		)
 		return false
 	end
-	self.Client.OnTeleportToLobby:Fire(player)
+	PlayerNetwork.TeleportToLobby.Fire(player)
 	local ok, err = pcall(function()
 		TeleportService:TeleportAsync(Constants.LOBBY_PLACE_ID, { player })
 	end)
@@ -241,7 +258,7 @@ end
 --   2. The "are still all dead?" re-check at fire time handles the rare race
 --      where a player joins mid-window (joiners aren't in death state, so
 --      _areAllPlayersDead returns false → teleport aborts)
-function LifeService:_scheduleLobbyTeleport()
+function LifeService._scheduleLobbyTeleport(self: typeof(LifeService))
 	local token = {}
 	self._lobbyTeleportToken = token
 
@@ -265,14 +282,14 @@ end
 
 -- Seeds (or resets) a player's lives to `max`. Called by DungeonService on
 -- dungeon generation, and by OnPlayerAdded for late-joiners. Idempotent.
-function LifeService:InitializePlayer(player: Player, max: number)
+function LifeService.InitializePlayer(self: typeof(LifeService), player: Player, max: number)
 	local userId = player.UserId
 	self._lives[userId] = { current = max, max = max }
 	self:_replicateLives()
 end
 
 -- Returns (current, max). Both zero if the player isn't registered yet.
-function LifeService:GetLives(player: Player): (number, number)
+function LifeService.GetLives(self: typeof(LifeService), player: Player): (number, number)
 	local entry = self._lives[player.UserId]
 	if not entry then
 		return 0, 0
@@ -281,21 +298,21 @@ function LifeService:GetLives(player: Player): (number, number)
 end
 
 -- True when the player is in the death state (downed, awaiting revive).
-function LifeService:IsDeathState(player: Player): boolean
+function LifeService.IsDeathState(self: typeof(LifeService), player: Player): boolean
 	return self._deathState[player.UserId] ~= nil
 end
 
 -- Alias for IsDeathState — no longer distinguishes "in window" vs "fully
 -- dead" since there's no timed window anymore. Kept for any external
 -- code that still calls IsFullyDead.
-function LifeService:IsFullyDead(player: Player): boolean
+function LifeService.IsFullyDead(self: typeof(LifeService), player: Player): boolean
 	return self:IsDeathState(player)
 end
 
 -- Called by DamageService when damage would have killed the player.
 -- Decrements lives and either restores HP in place (lives left) or
 -- transitions to the death state (no lives left).
-function LifeService:LoseLife(player: Player)
+function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 	local entry = self._lives[userId]
 	if not entry then
@@ -315,16 +332,12 @@ function LifeService:LoseLife(player: Player)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if entry.current > 0 then
-		if TextIndicatorService and character then
+		local head = character and character:FindFirstChild("Head") :: BasePart?
+		if TextIndicatorService and head then
 			if entry.current == 1 then
-				TextIndicatorService:ShowIndicator(player, character.Head, "Last Life!", Color3.fromRGB(255, 74, 74))
+				TextIndicatorService:ShowIndicator(player, head, "Last Life!", Color3.fromRGB(255, 74, 74))
 			else
-				TextIndicatorService:ShowIndicator(
-					player,
-					character.Head,
-					"Death Defied!",
-					Color3.fromRGB(85, 255, 127)
-				)
+				TextIndicatorService:ShowIndicator(player, head, "Death Defied!", Color3.fromRGB(85, 255, 127))
 			end
 		end
 
@@ -333,10 +346,13 @@ function LifeService:LoseLife(player: Player)
 			humanoid.Health = humanoid.MaxHealth
 		end
 
-		InvulnerabilityService:ApplyTo(character, POST_LIFE_LOSS_INVULN_SECONDS)
+		-- ApplyTo itself no-ops on a nil character; the guard only narrows the type.
+		if character then
+			InvulnerabilityService:ApplyTo(character, POST_LIFE_LOSS_INVULN_SECONDS)
+		end
 
 		self.OnLifeLost:Fire(player)
-		self.Client.OnLifeLost:FireAll(userId)
+		PlayerNetwork.LifeLost.FireAll(userId)
 		print(("[LifeService] %s lost a life. Remaining: %d/%d"):format(player.Name, entry.current, entry.max))
 		return
 	end
@@ -348,7 +364,7 @@ function LifeService:LoseLife(player: Player)
 		character:SetAttribute(Attributes.Death, true)
 	end
 
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local deathPosition = (hrp and hrp.Position) or Vector3.zero
 
 	local deathClock = os.clock()
@@ -363,17 +379,17 @@ function LifeService:LoseLife(player: Player)
 	local isWipe = self:_areAllPlayersDead()
 
 	if isWipe then
-		self.Client.GameOverState:Set(true)
+		self._isGameOver = true
 	end
 
 	-- isWipe rides the server signal too: RunEscrowService keeps a dead
 	-- player's run loot for a possible revive and discards it only when
 	-- the whole party is down.
 	self.OnPlayerDied:Fire(player, isWipe)
-	self.Client.OnPlayerDied:FireAll(userId, isWipe)
+	PlayerNetwork.PlayerDied.FireAll({ UserId = userId, IsWipe = isWipe })
 
 	if isWipe then
-		self.Client.OnGameOver:FireAll()
+		PlayerNetwork.GameOver.FireAll()
 	end
 
 	if TextIndicatorService and character then
@@ -408,7 +424,10 @@ function LifeService:LoseLife(player: Player)
 
 		self:_playDeathAnimation(player)
 
-		TextIndicatorService:ShowIndicator(player, character.Head, "Eternally Damned!", Color3.fromRGB(247, 67, 67))
+		local head = character:FindFirstChild("Head") :: BasePart?
+		if head then
+			TextIndicatorService:ShowIndicator(player, head, "Eternally Damned!", Color3.fromRGB(247, 67, 67))
+		end
 	end
 
 	if isWipe then
@@ -422,7 +441,7 @@ function LifeService:LoseLife(player: Player)
 end
 
 -- Increments lives, capped at max. Use for relic/event grants.
-function LifeService:AddLife(player: Player)
+function LifeService.AddLife(self: typeof(LifeService), player: Player)
 	local entry = self._lives[player.UserId]
 	if not entry then
 		return
@@ -439,7 +458,7 @@ end
 -- Escrow note: RunEscrowService discarded this player's run items and
 -- coins the moment they entered the death state. Revive does NOT restore
 -- them -- you buy your way back to your feet, not your loot back.
-function LifeService:Revive(player: Player)
+function LifeService.Revive(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 	if not self._deathState[userId] then
 		return
@@ -450,11 +469,9 @@ function LifeService:Revive(player: Player)
 	-- wipe screen already went up -- a revive un-wipes the party.
 	self._lobbyTeleportToken = nil
 
-	if self.Client.GameOverState:Get() then
-		self.Client.GameOverState:Set(false)
-	end
+	self._isGameOver = false
 
-	self.Client.RevivalFade:Fire(player, { phase = "in", duration = FADE_DURATION })
+	PlayerNetwork.RevivalFade.Fire(player, { Phase = "in", Duration = FADE_DURATION })
 
 	for _, playerIndex in pairs(Players:GetPlayers()) do
 		UserNotificationService:RequestUserNotification(playerIndex, {
@@ -481,8 +498,8 @@ function LifeService:Revive(player: Player)
 		RagdollService:Unragdoll(character)
 	end
 
-	if character and DungeonService then
-		local room = DungeonService:GetPlayerRoom(player)
+	if character and getDungeonService() then
+		local room = getDungeonService():GetPlayerRoom(player)
 		if room and room.model and room.model.PrimaryPart then
 			character:PivotTo(CFrame.new(room.model.PrimaryPart.Position + Vector3.new(0, 5, 0)))
 		end
@@ -492,10 +509,10 @@ function LifeService:Revive(player: Player)
 		humanoid.Health = humanoid.MaxHealth
 	end
 
-	self.Client.RevivalFade:Fire(player, { phase = "out", duration = FADE_DURATION })
+	PlayerNetwork.RevivalFade.Fire(player, { Phase = "out", Duration = FADE_DURATION })
 
 	self.OnPlayerRevived:Fire(player)
-	self.Client.OnPlayerRevived:FireAll(userId)
+	PlayerNetwork.PlayerRevived.FireAll(userId)
 
 	if character then
 		InvulnerabilityService:ApplyTo(character, POST_LIFE_LOSS_INVULN_SECONDS + REVIVE_CUTSCENE_DURATION)
@@ -522,21 +539,16 @@ end
 
 --[ Lifecycle ]--
 
-function LifeService:KnitInit()
-	PlayerEventService = Knit.GetService("PlayerEventService")
-	DungeonService = Knit.GetService("DungeonService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	InvulnerabilityService = Knit.GetService("InvulnerabilityService")
-	UserNotificationService = Knit.GetService("UserNotificationService")
-	RagdollService = Knit.GetService("RagdollService")
-end
+function LifeService.Start(self: typeof(LifeService))
+	PlayerNetwork.PromptRevivePurchase.On(function(player: Player)
+		self:_onPromptRevivePurchase(player)
+	end)
 
-function LifeService:KnitStart()
-	if DungeonService and DungeonService.Signals and DungeonService.Signals.OnDungeonGenerated then
-		DungeonService.Signals.OnDungeonGenerated:Connect(function(dungeon)
+	if getDungeonService() and getDungeonService().Signals and getDungeonService().Signals.OnDungeonGenerated then
+		getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
 			-- Lives are PER RUN: seeded when the run's FIRST dungeon generates and
 			-- carried across dungeons 2 / 3 -- a later dungeon must not refill them.
-			if DungeonService.GetRunDungeonIndex and DungeonService:GetRunDungeonIndex() > 1 then
+			if getDungeonService().GetRunDungeonIndex and getDungeonService():GetRunDungeonIndex() > 1 then
 				return
 			end
 			local dungeonConfig = DungeonData[dungeon.id]
@@ -551,8 +563,8 @@ function LifeService:KnitStart()
 
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)
 		local maxLives = DEFAULT_LIVES
-		if DungeonService then
-			local active = DungeonService:GetActiveDungeon()
+		if getDungeonService() then
+			local active = getDungeonService():GetActiveDungeon()
 			if active then
 				local dungeonConfig = DungeonData[active.id]
 				local difficultyConfig = dungeonConfig and dungeonConfig.difficulties[active.difficulty]
@@ -601,8 +613,8 @@ end
 -- Client requests the revive purchase prompt. Server-initiated so the dev
 -- product flow can't be spoofed; validates the player is actually downed
 -- before prompting.
-function LifeService.Client:PromptRevivePurchase(player: Player)
-	if not self.Server:IsDeathState(player) then
+function LifeService._onPromptRevivePurchase(self: typeof(LifeService), player: Player)
+	if not self:IsDeathState(player) then
 		warn(("[LifeService] %s tried to prompt revive but isn't downed"):format(player.Name))
 		return
 	end

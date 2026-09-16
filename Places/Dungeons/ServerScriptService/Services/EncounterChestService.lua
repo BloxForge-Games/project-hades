@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: EncounterChestService.lua
 	Description:
@@ -34,19 +35,18 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DropService = require(ServerScriptService.Services.DropService)
+local GearDropService = require(ServerScriptService.Services.GearDropService)
+local RelicMachineService = require(ServerScriptService.Services.RelicMachineService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
-
-local DropService
-local GearDropService
-local RelicMachineService
 
 --[ Constants ]--
 
@@ -111,17 +111,32 @@ local OWNER_ATTRIBUTE = "OwnerId"
 -- timeout is a backstop rather than the normal path.
 local BATCH_TIMEOUT_SECONDS = 90
 
+-- One chest batch (see BATCH_TIMEOUT_SECONDS). `coins` is an optional
+-- ZombieData-shaped coin row every chest in the batch pays instead of the
+-- dead mob's own.
+type ChestBatch = {
+	pending: number,
+	done: boolean,
+	onAllOpened: (() -> ())?,
+	coins: { [string]: number }?,
+	-- [userId] = true for every player who got a chest / who opened it.
+	owners: { [number]: boolean },
+	opened: { [number]: boolean },
+}
+
 --[ Service ]--
 
-local EncounterChestService = Knit.CreateService({
+local EncounterChestService = {
 	Name = "EncounterChestService",
-	Client = {},
-})
+	Dependencies = { DropService, GearDropService, RelicMachineService } :: { any },
+	_batchByChest = {} :: { [Model]: ChestBatch },
+	_activeBatch = nil :: ChestBatch?,
+}
 
 --[ Private ]--
 
 -- Fires a batch's completion callback exactly once.
-local function completeBatch(batch)
+local function completeBatch(batch: ChestBatch)
 	if batch.done then
 		return
 	end
@@ -166,8 +181,11 @@ local function graftMachineFX(chestPrimary: BasePart): ProximityPrompt?
 	end
 
 	local sourceAttachment = source:FindFirstChild("Attachment")
-	local attachment = chestPrimary:FindFirstChild("Attachment")
-	if not attachment then
+	local existingAttachment = chestPrimary:FindFirstChild("Attachment")
+	local attachment: Instance
+	if existingAttachment then
+		attachment = existingAttachment
+	else
 		if not sourceAttachment then
 			return nil
 		end
@@ -190,8 +208,9 @@ local function graftMachineFX(chestPrimary: BasePart): ProximityPrompt?
 	if not prompt and sourceAttachment then
 		local sourcePrompt = sourceAttachment:FindFirstChildWhichIsA("ProximityPrompt")
 		if sourcePrompt then
-			prompt = sourcePrompt:Clone()
-			prompt.Parent = attachment
+			local clonedPrompt = sourcePrompt:Clone()
+			clonedPrompt.Parent = attachment
+			prompt = clonedPrompt
 		end
 	end
 	return prompt
@@ -238,7 +257,7 @@ end
 -- server pose gives replication exactly one truth to converge on.
 local function placeChestAtRest(player: Player, chest: Model): boolean
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp or not chest.PrimaryPart then
 		return false
 	end
@@ -280,7 +299,7 @@ end
 -- Resolves ONE chest against its batch: opened, destroyed, or its owner
 -- left the game. When the last one resolves, the batch completes — which
 -- is what opens the encounter's exit gate.
-function EncounterChestService:_resolveChest(chest: Model)
+function EncounterChestService._resolveChest(self: typeof(EncounterChestService), chest: Model)
 	local batch = self._batchByChest[chest]
 	if not batch then
 		return
@@ -294,7 +313,7 @@ function EncounterChestService:_resolveChest(chest: Model)
 end
 
 -- Pays out ONE chest to its owner, then retires it.
-function EncounterChestService:_openChest(chest: Model, player: Player)
+function EncounterChestService._openChest(self: typeof(EncounterChestService), chest: Model, player: Player)
 	-- One payout only — the chest persists after opening, so the attribute
 	-- doubles as the "already opened" latch (and guards a double Trigger
 	-- racing the Enabled flip below).
@@ -332,8 +351,8 @@ function EncounterChestService:_openChest(chest: Model, player: Player)
 		return
 	end
 
-	local enemyType = chest:GetAttribute(Attributes.EnemyType)
-	local mobName = chest:GetAttribute("MobName")
+	local enemyType = chest:GetAttribute(Attributes.EnemyType) :: string?
+	local mobName = chest:GetAttribute("MobName") :: string?
 
 	-- GEAR: the dungeon's own dungeonDrops table, rolled for this player
 	-- against the encounter tier's perEnemyType row.
@@ -383,7 +402,8 @@ end
 -- ({ minDropRate, maxDropRate, minCoins, maxCoins }) that every chest in
 -- this batch pays instead of `mob`'s row — the Event Chest, which has no
 -- mob behind it.
-function EncounterChestService:DropChestsForEncounter(
+function EncounterChestService.DropChestsForEncounter(
+	self: typeof(EncounterChestService),
 	enemyType: string,
 	mob: (Model | string)?,
 	onAllOpened: (() -> ())?,
@@ -392,7 +412,7 @@ function EncounterChestService:DropChestsForEncounter(
 	-- The batch exists BEFORE the first bail-out: every early return has
 	-- to complete it, or a missing prefab would leave the gate shut and
 	-- the run unfinishable.
-	local batch = {
+	local batch: ChestBatch = {
 		pending = 0,
 		done = false,
 		onAllOpened = onAllOpened,
@@ -554,7 +574,7 @@ end
 -- True when `player` has opened their chest from the CURRENT batch, or
 -- never had one in it (dead at the drop, joined later): nothing to wait
 -- for. True with no batch at all, for the same reason.
-function EncounterChestService:HasPlayerOpenedChest(player: Player): boolean
+function EncounterChestService.HasPlayerOpenedChest(self: typeof(EncounterChestService), player: Player): boolean
 	local batch = self._activeBatch
 	if not batch or batch.done then
 		return true
@@ -567,23 +587,19 @@ end
 
 -- True once the current batch has fully resolved (every chest opened,
 -- its owner gone, or the backstop timeout).
-function EncounterChestService:AllChestsOpened(): boolean
+function EncounterChestService.AllChestsOpened(self: typeof(EncounterChestService)): boolean
 	local batch = self._activeBatch
 	return batch == nil or batch.done == true or batch.pending <= 0
 end
 
 --[ Lifecycle ]--
 
-function EncounterChestService:KnitInit()
+function EncounterChestService.Init(self: typeof(EncounterChestService))
 	self._batchByChest = {}
 	self._activeBatch = nil
 end
 
-function EncounterChestService:KnitStart()
-	DropService = Knit.GetService("DropService")
-	GearDropService = Knit.GetService("GearDropService")
-	RelicMachineService = Knit.GetService("RelicMachineService")
-
+function EncounterChestService.Start(self: typeof(EncounterChestService))
 	-- A player who leaves can never open theirs — release it so the rest
 	-- of the party is not held at the gate waiting on a ghost.
 	Players.PlayerRemoving:Connect(function(player: Player)

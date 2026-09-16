@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): ryanisawesome25
      Module: RelicMachine.luau
@@ -10,12 +11,16 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DropService = require(ServerScriptService.Services.DropService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
@@ -24,23 +29,15 @@ local RuneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RuneNam
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
-
-local DropService
-local RelicService
-
-Knit.OnStart()
-	:andThen(function()
-		DropService = Knit.GetService("DropService")
-		RelicService = Knit.GetService("RelicService")
-	end)
-	:catch(warn)
 
 --[ Component Root ]--
 
+local promptRouter = InstanceRouter.Server(DungeonNetwork.RelicMachinePromptTriggered, function(data)
+	return data.Machine
+end)
+
 local RelicMachine = Component.new({
 	Tag = "RelicMachine",
-	Extensions = { CommAdder },
 })
 
 --[ Constants ]--
@@ -188,9 +185,9 @@ end
 -- rolled from the run-stage weights (same table the relic roll uses,
 -- Cursed excluded -- runes have no Cursed tier).
 local function rollRuneOffers(count: number): { { name: string, rarity: string } }
-	local names = {}
+	local names: { string } = {}
 	for _, runeName in RuneNames do
-		table.insert(names, runeName)
+		table.insert(names, runeName :: string)
 	end
 	-- Fisher-Yates, then take the first `count`.
 	for i = #names, 2, -1 do
@@ -207,7 +204,7 @@ local function rollRuneOffers(count: number): { { name: string, rarity: string }
 			total += weight
 		end
 		local roll = math.random() * total
-		local rolled = ItemRarity.Rare
+		local rolled: string = ItemRarity.Rare
 		for rarity, weight in weights do
 			roll -= weight
 			if roll <= 0 then
@@ -237,7 +234,6 @@ function RelicMachine:Construct()
 	end
 	self._proximityPrompt = attachment:WaitForChild("ProximityPrompt")
 	self._ownerId = self.Instance:GetAttribute(Attributes.OwnerId)
-	self._onPromptTriggered = self._comm:CreateSignal("OnPromptTriggered")
 	self._relics = {}
 	self._canClick = true
 end
@@ -268,7 +264,8 @@ function RelicMachine:Start()
 
 	self._relics = RelicService:GetPlayerAvailableRelics(Players:GetPlayerByUserId(self._ownerId))
 
-	self._onPromptTriggered:Connect(function(player: Player, cframe: CFrame)
+	promptRouter:Bind(self.Instance, function(player: Player, payload: { CFrame: CFrame })
+		local cframe = payload.CFrame
 		if self._ownerId == player.UserId and self._canClick then
 			self._proximityPrompt.Enabled = false
 			self._canClick = false

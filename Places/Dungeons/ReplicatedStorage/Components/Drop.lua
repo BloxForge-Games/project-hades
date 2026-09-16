@@ -1,18 +1,21 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DropIndicatorController = require(ReplicatedStorage.Controllers.DropIndicatorController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
+local RelicController = require(ReplicatedStorage.Controllers.RelicController)
 
 local MAX_STUD_RAYCAST_DIST = 8
 
@@ -35,29 +38,25 @@ local PICKUP_DELAY = 0.25
 local DEFAULT_X_Z_DISTANCE = 8
 local BOSS_X_Z_DISTANCE = 20
 local Y_POS_OFFSET = -1
-local DropIndicatorController
 
 local Drop = Component.new({
 	Tag = TagList.Drop,
-	Extensions = { CommAdder, JanitorAdder },
+	Extensions = { JanitorAdder } :: { any },
 })
 
 -- True when Pot Of Gold should pull THIS drop in regardless of distance.
 -- Reads the replicated relic registry, so it costs no round trip; a missing
--- controller (pre-KnitStart) simply falls back to the normal radius.
+-- controller (pre-Start) simply falls back to the normal radius.
 local function potOfGoldCollects(dropType: string?): boolean
 	if not dropType or not COMPASS_DROP_TYPES[dropType] then
 		return false
 	end
-	local ok, controller = pcall(Knit.GetController, "RelicController")
-	if not ok or not controller then
-		return false
-	end
+	local controller = RelicController
 	local owned = controller:GetRelicsFromUserId(Players.LocalPlayer.UserId)
 	return owned ~= nil and (owned[RelicNames["Pot Of Gold"]] or 0) > 0
 end
 
-function Drop:_HeartbeatUpdate()
+function Drop:_onHeartbeat()
 	self.Instance:PivotTo(
 		self.Instance:GetPivot()
 			+ Vector3.new(0, self._amplitude * math.sin((tick() * 2) * (math.pi / self._durationPerCycle)), 0)
@@ -109,7 +108,7 @@ function Drop:_HeartbeatUpdate()
 	coinCFrameTween:Play()
 	coinImageTransparencyTween:Play()
 
-	self._onCoinCollected:Fire()
+	DungeonNetwork.CoinDropCollected.Fire(self.Instance)
 
 	coinCFrameTween.Completed:Connect(function()
 		self.Instance:Destroy()
@@ -117,12 +116,11 @@ function Drop:_HeartbeatUpdate()
 end
 
 function Drop:Construct()
-	DropIndicatorController = Knit.GetController("DropIndicatorController")
-
 	self._amplitude = Random.new():NextNumber(0.01, 0.015)
 	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
-	self._primaryPart = self.Instance.PrimaryPart
-	self._onCoinCollected = self._comm:GetSignal("OnCoinCollected")
+	-- The parts can stream in after the tagged Model does; wait for them.
+	self._primaryPart = waitForPrimaryPart(self.Instance)
+	assert(self._primaryPart, "[Drop] PrimaryPart never replicated for " .. self.Instance:GetFullName())
 	self._overlapParams = OverlapParams.new()
 	-- Set overlap params
 	self._overlapParams.FilterDescendantsInstances = {
@@ -200,7 +198,7 @@ function Drop:Start()
 	end)
 
 	self._janitor:Add(RunService.Heartbeat:Connect(function()
-		self:_HeartbeatUpdate()
+		self:_onHeartbeat()
 	end))
 end
 

@@ -1,6 +1,8 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DropService = require(ServerScriptService.Services.DropService)
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local ChestCoinData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ChestCoinData)
@@ -32,14 +34,6 @@ local OPENED_ATTRIBUTE = "Opened"
 -- animates every Drop-tagged instance the same way.
 local MIN_ORB_DROP = 1
 local MAX_ORB_DROP = 3
-
-local DropService
-
-Knit.OnStart()
-	:andThen(function()
-		DropService = Knit.GetService("DropService")
-	end)
-	:catch(warn)
 
 local Chest = Component.new({
 	Tag = TagList.Chest,
@@ -100,9 +94,25 @@ function Chest:Start()
 			true
 		)
 
-		DropService.OnDropRequested:Fire(self.Instance.PrimaryPart, DropTypes.Health, MIN_ORB_DROP, MAX_ORB_DROP, 1, 1)
+		DropService.OnDropRequested:Fire(
+			self.Instance.PrimaryPart,
+			DropTypes.Health,
+			MIN_ORB_DROP,
+			MAX_ORB_DROP,
+			1,
+			1,
+			false
+		)
 
-		DropService.OnDropRequested:Fire(self.Instance.PrimaryPart, DropTypes.Mana, MIN_ORB_DROP, MAX_ORB_DROP, 1, 1)
+		DropService.OnDropRequested:Fire(
+			self.Instance.PrimaryPart,
+			DropTypes.Mana,
+			MIN_ORB_DROP,
+			MAX_ORB_DROP,
+			1,
+			1,
+			false
+		)
 	end)
 end
 

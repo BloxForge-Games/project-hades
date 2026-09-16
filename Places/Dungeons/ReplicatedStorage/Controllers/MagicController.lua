@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: MagicController.lua
@@ -11,25 +12,61 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local MagicLoadoutController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.MagicLoadoutController)
+local VFXController = require(ReplicatedStorage.Controllers.VFXController)
+local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
+local WeldConstraintController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.WeldConstraintController)
+local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateController)
+local RelicController = require(ReplicatedStorage.Controllers.RelicController)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 
-local RelicController
-local PlayerStateController
-local PlayerEventController
+-- AimController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local aimControllerLazy: any = nil
+local function getAimController(): any
+	if aimControllerLazy == nil then
+		aimControllerLazy = (require :: any)(ReplicatedStorage.Controllers.AimController)
+	end
+	return aimControllerLazy
+end
 
-local MagicController = Knit.CreateController({
+-- The replicated mana record (PlayerNetwork.MagicDataChanged).
+type PlayerMagicData = { mana: number, maxMana: number }
+
+-- The loadout registry is keyed by the slot's STRING (every reader below
+-- goes through tostring), while MagicLoadout declares number keys; this is
+-- the one place that mismatch is bridged.
+local function loadoutForSlot(equipSlot: number): { [string]: any }?
+	local registry = MagicLoadoutController:GetMagicLoadoutRegistry() :: any
+	return registry[tostring(equipSlot)]
+end
+
+local MagicController = {
 	Name = "MagicController",
-	Client = {},
+	Dependencies = {
+		MagicLoadoutController,
+		VFXController,
+		PlayerEventController,
+		WeldConstraintController,
+		PlayerStateController,
+		RelicController,
+	} :: { any },
 
-	_magicData = {},
-	_magicCooldownRegistry = {},
+	-- Empty until the first replicate; typed as the seeded record because
+	-- every reader has always assumed it is one.
+	_magicData = ({} :: any) :: PlayerMagicData,
+	_magicCooldownRegistry = {} :: { [string]: { cooldown: number, lastUsed: number } },
 	_magicDebounce = false,
-	_studMarkers = {},
+	-- Cloned MobileHitMarkers, keyed by marker name; indexed by child name.
+	_studMarkers = {} :: { [string]: any },
+	_arrowBeamPart = nil :: any,
+	_mouse = nil :: Mouse?,
 	Signals = {
 		OnMagicCasted = Signal.new(),
 		OnMagicComplete = Signal.new(),
@@ -43,15 +80,9 @@ local MagicController = Knit.CreateController({
 		OnManaCostsChanged = Signal.new(),
 		OnManaChanged = Signal.new(),
 	},
-})
+}
 
 --[ Imports ]--
-
-local MagicService
-local MagicLoadoutController
-local VFXController
-local WeldConstraintController
-local AimController
 
 --[ Constants ]--
 
@@ -71,7 +102,7 @@ local AimController
 --     live aura, so the toolbar grey-out can lag a beat when it
 --     starts/ends; the CAST gate reads this helper live, so casting is
 --     always correct.
-function MagicController:GetEffectiveManaCost(vfxName: string): number
+function MagicController.GetEffectiveManaCost(_self: typeof(MagicController), vfxName: string): number
 	local magicIndexData = MagicData[vfxName]
 	if not magicIndexData then
 		return 0
@@ -100,8 +131,8 @@ end
 -- again. Slots with no spell equipped read as unaffordable / not on
 -- cooldown. UI should re-read these on OnManaChanged, OnManaCostsChanged
 -- and the slot's OnMagic<N>CooldownUpdated.
-function MagicController:CanAffordSlot(equipSlot: number): boolean
-	local loadout = MagicLoadoutController:GetMagicLoadoutRegistry()[tostring(equipSlot)]
+function MagicController.CanAffordSlot(self: typeof(MagicController), equipSlot: number): boolean
+	local loadout = loadoutForSlot(equipSlot)
 	if not loadout or not MagicData[loadout.name] then
 		return false
 	end
@@ -109,8 +140,8 @@ function MagicController:CanAffordSlot(equipSlot: number): boolean
 	return mana - self:GetEffectiveManaCost(loadout.name) >= 0
 end
 
-function MagicController:IsSlotOnCooldown(equipSlot: number): boolean
-	local loadout = MagicLoadoutController:GetMagicLoadoutRegistry()[tostring(equipSlot)]
+function MagicController.IsSlotOnCooldown(self: typeof(MagicController), equipSlot: number): boolean
+	local loadout = loadoutForSlot(equipSlot)
 	if not loadout then
 		return false
 	end
@@ -127,19 +158,23 @@ end
 -- right now, else false. Shared by :CastMagic and by CastModeController's
 -- Normal Cast, which refuses to even open aim mode for a spell that would
 -- be rejected -- so the two paths can never disagree on what's castable.
-function MagicController:CanCastMagic(equipSlot: number): (boolean, string?, Model?, number?)
+function MagicController.CanCastMagic(
+	self: typeof(MagicController),
+	equipSlot: number
+): (boolean, string?, Model?, number?)
 	if PlayerStateController:GeneralActionEnabled() == false then
 		return false
 	end
 
 	local character = Players.LocalPlayer.Character
 
-	if not MagicLoadoutController:GetMagicLoadoutRegistry()[tostring(equipSlot)] then
+	local loadout = loadoutForSlot(equipSlot)
+	if not loadout then
 		warn("[MagicController] No magic found in loadout for equip slot: " .. tostring(equipSlot))
 		return false
 	end
 
-	local vfxName = MagicLoadoutController:GetMagicLoadoutRegistry()[tostring(equipSlot)].name
+	local vfxName = loadout.name
 
 	if not character or not character.PrimaryPart or self._magicDebounce or MagicData[vfxName] == nil then
 		return false
@@ -167,7 +202,7 @@ function MagicController:CanCastMagic(equipSlot: number): (boolean, string?, Mod
 	return true, vfxName, character, effectiveManaCost
 end
 
-function MagicController:CastMagic(equipSlot: number)
+function MagicController.CastMagic(self: typeof(MagicController), equipSlot: number)
 	local castable, vfxName, character, effectiveManaCost = self:CanCastMagic(equipSlot)
 	if not castable or not vfxName or not character or not effectiveManaCost then
 		return
@@ -214,8 +249,8 @@ function MagicController:CastMagic(equipSlot: number)
 	-- keeps the stick's own aim). This is the ONE cast-desync guard now —
 	-- it replaced both the inline CFrame write that raced the humanoid's
 	-- steering here, and the mobile-only SkillshotDelay attribute.
-	if AimController then
-		AimController:BeginCastLock(MagicData[vfxName].duration)
+	if getAimController() then
+		getAimController():BeginCastLock(MagicData[vfxName].duration)
 	end
 
 	-- Runs the caster's OWN effect module immediately (cast animation, cast
@@ -247,8 +282,9 @@ function MagicController:CastMagic(equipSlot: number)
 	end)
 end
 
-function MagicController:ToggleMobileIndicator(toggle: boolean, equipSlot: number)
-	local loadoutIndex = MagicLoadoutController:GetMagicLoadoutRegistry()[tostring(equipSlot)]
+function MagicController.ToggleMobileIndicator(self: typeof(MagicController), toggle: boolean, equipSlot: number)
+	-- Same as before: a slot with nothing equipped throws here.
+	local loadoutIndex = loadoutForSlot(equipSlot) :: { [string]: any }
 	local magicIndex = MagicData[loadoutIndex.name]
 
 	if magicIndex.uniqueMobileIndicator == true then
@@ -274,24 +310,13 @@ function MagicController:ToggleMobileIndicator(toggle: boolean, equipSlot: numbe
 	self._arrowBeamPart.ArrowBeam.Enabled = toggle
 end
 
-function MagicController:GetMagicData(): table
+function MagicController.GetMagicData(self: typeof(MagicController)): { [any]: any }
 	return self._magicData
 end
 
 --[ Initializers ]--
 
-function MagicController:KnitStart()
-	MagicService = Knit.GetService("MagicService")
-
-	MagicLoadoutController = Knit.GetController("MagicLoadoutController")
-	VFXController = Knit.GetController("VFXController")
-	PlayerEventController = Knit.GetController("PlayerEventController")
-	WeldConstraintController = Knit.GetController("WeldConstraintController")
-	MagicLoadoutController = Knit.GetController("MagicLoadoutController")
-	PlayerStateController = Knit.GetController("PlayerStateController")
-	RelicController = Knit.GetController("RelicController")
-	AimController = Knit.GetController("AimController")
-
+function MagicController.Start(self: typeof(MagicController))
 	self._mouse = Players.LocalPlayer:GetMouse()
 
 	-- Relic pickups can change effective COSTS with mana untouched
@@ -300,11 +325,13 @@ function MagicController:KnitStart()
 		self.Signals.OnManaCostsChanged:Fire()
 	end)
 
-	MagicService.MagicData:Observe(function(magicData: table)
-		self._magicData = magicData
+	RemoteProperty.Client({ changed = PlayerNetwork.MagicDataChanged, get = PlayerNetwork.GetMagicData })
+		:Observe(function(magicData: PlayerMagicData?)
+			-- The server always seeds the record; nil here was never handled.
+			self._magicData = magicData :: PlayerMagicData
 
-		self.Signals.OnManaChanged:Fire(self._magicData)
-	end)
+			self.Signals.OnManaChanged:Fire(self._magicData)
+		end)
 
 	PlayerEventController.OnCharacterLoaded:Connect(function(character)
 		-- Defensive reset: clear any stuck MagicEnabled flag from a
@@ -314,28 +341,27 @@ function MagicController:KnitStart()
 		-- the gate back to a known-good state.
 		character:SetAttribute(Attributes.MagicEnabled, false)
 
+		-- Direct child index as before: a rig with no root throws here.
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart
+
 		self._arrowBeamPart = ReplicatedStorage.GameAssets.MobileHitMarkers.ArrowBeamPart:Clone()
-		self._arrowBeamPart.CFrame = character.HumanoidRootPart.CFrame * CFrame.Angles(0, math.rad(180), 0)
+		self._arrowBeamPart.CFrame = humanoidRootPart.CFrame * CFrame.Angles(0, math.rad(180), 0)
 		self._arrowBeamPart.ArrowBeam.Enabled = false
 		self._arrowBeamPart.Parent = workspace.IgnoreInstances.MagicSpells
 
-		WeldConstraintController:CreateWeldConstraint(self._arrowBeamPart, character.HumanoidRootPart)
+		WeldConstraintController:CreateWeldConstraint(self._arrowBeamPart, humanoidRootPart)
 
 		for _, aoeMarker in pairs(ReplicatedStorage.GameAssets.MobileHitMarkers.AOEMarkers:GetChildren()) do
 			self._studMarkers[aoeMarker.Name] = aoeMarker:Clone()
-			self._studMarkers[aoeMarker.Name]:PivotTo(
-				character.HumanoidRootPart.CFrame * CFrame.Angles(0, math.rad(270), 0)
-			)
+			self._studMarkers[aoeMarker.Name]:PivotTo(humanoidRootPart.CFrame * CFrame.Angles(0, math.rad(270), 0))
 			self._studMarkers[aoeMarker.Name].Parent = workspace.IgnoreInstances.MagicSpells
 
 			WeldConstraintController:CreateWeldConstraint(
 				self._studMarkers[aoeMarker.Name].PrimaryPart,
-				character.HumanoidRootPart
+				humanoidRootPart
 			)
 		end
 	end)
 end
-
-function MagicController:KnitInit() end
 
 return MagicController

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/ExitGateWindService.lua
 	Description:
@@ -38,12 +39,11 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local DungeonService
+local DungeonService = require(ServerScriptService.Services.DungeonService)
 
 --[ Constants ]--
 
@@ -54,12 +54,21 @@ local EXIT_GATE_NAME = "ExitGate"
 -- Set by FogOfWarService on a chunk's model when it lights up.
 local ROOM_REVEALED_ATTRIBUTE = "FogRevealed"
 
+--[ Types ]--
+
+-- One placed wind; see the _winds comment below for what each field means.
+type WindEntry = {
+	model: Model,
+	room: DungeonService.Room?,
+	destination: DungeonService.Room?,
+}
+
 --[ Service ]--
 
-local ExitGateWindService = Knit.CreateService({
+local ExitGateWindService = {
 	Name = "ExitGateWindService",
-	Client = {},
-})
+	Dependencies = { DungeonService } :: { any },
+}
 
 --[ State ]--
 
@@ -72,7 +81,7 @@ local ExitGateWindService = Knit.CreateService({
 --   destination  the chunk through that gate, or nil on the dungeon's
 --                last gate (nothing beyond it is ever revealed, so its
 --                wind simply never switches off)
-ExitGateWindService._winds = {}
+ExitGateWindService._winds = {} :: { WindEntry }
 
 --[ Private ]--
 
@@ -90,20 +99,24 @@ end
 local function setWindActive(model: Model, active: boolean)
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("Beam") or descendant:IsA("ParticleEmitter") then
-			descendant.Enabled = active
+			-- Written through the Beam view: the analyzer refuses a property
+			-- write through a class union, and ParticleEmitter has the same
+			-- Enabled.
+			local emitter = descendant :: Beam
+			emitter.Enabled = active
 		end
 	end
 end
 
 -- Whether a chunk has been lit by the fog service.
-local function isRevealed(room): boolean
-	return room ~= nil and room.model ~= nil and room.model:GetAttribute(ROOM_REVEALED_ATTRIBUTE) == true
+local function isRevealed(room: DungeonService.Room?): boolean
+	return room ~= nil and (room.model :: Model?) ~= nil and room.model:GetAttribute(ROOM_REVEALED_ATTRIBUTE) == true
 end
 
 -- Re-evaluates every wind against the current fog state. Cheap enough to
 -- run wholesale on each reveal (a dungeon holds a handful of chunks), and
 -- being idempotent means a double-fire costs nothing.
-function ExitGateWindService:_refresh()
+function ExitGateWindService._refresh(self: typeof(ExitGateWindService))
 	for _, entry in self._winds do
 		if entry.model.Parent then
 			-- No destination (the dungeon's final gate) means nothing
@@ -116,7 +129,7 @@ function ExitGateWindService:_refresh()
 end
 
 -- Tears down the previous floor's winds.
-function ExitGateWindService:_clear()
+function ExitGateWindService._clear(self: typeof(ExitGateWindService))
 	for _, entry in self._winds do
 		entry.model:Destroy()
 	end
@@ -129,7 +142,13 @@ end
 -- Clones one wind onto `model`'s ExitGate, if it has one. `room` is the
 -- chunk that gate belongs to (nil for the start area) and `destination`
 -- is the chunk it opens into (nil when nothing lies beyond).
-function ExitGateWindService:_placeWind(template: Model, model: Instance?, room, destination)
+function ExitGateWindService._placeWind(
+	self: typeof(ExitGateWindService),
+	template: Model,
+	model: Instance?,
+	room: DungeonService.Room?,
+	destination: DungeonService.Room?
+)
 	local gate = model and model:FindFirstChild(EXIT_GATE_NAME)
 	if not gate or not gate:IsA("BasePart") then
 		return
@@ -154,7 +173,7 @@ function ExitGateWindService:_placeWind(template: Model, model: Instance?, room,
 	table.insert(self._winds, { model = wind, room = room, destination = destination })
 end
 
-function ExitGateWindService:_placeWinds(dungeon)
+function ExitGateWindService._placeWinds(self: typeof(ExitGateWindService), dungeon: DungeonService.Dungeon?)
 	self:_clear()
 
 	if not dungeon or not dungeon.rooms then
@@ -194,11 +213,7 @@ end
 
 --[ Lifecycle ]--
 
-function ExitGateWindService:KnitInit() end
-
-function ExitGateWindService:KnitStart()
-	DungeonService = Knit.GetService("DungeonService")
-
+function ExitGateWindService.Start(self: typeof(ExitGateWindService))
 	DungeonService.Signals.OnDungeonGenerated:Connect(function(dungeon)
 		self:_placeWinds(dungeon)
 	end)

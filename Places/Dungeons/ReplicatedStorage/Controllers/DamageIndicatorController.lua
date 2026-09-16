@@ -1,10 +1,15 @@
+--!strict
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local InputPlatformController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.InputPlatformController)
+local CharacterHighlightController = require(ReplicatedStorage.Controllers.CharacterHighlightController)
+-- Blink client module for the Combat domain (bfg-core/Network/Combat.blink):
+-- the typed replacement for DamageIndicatorService's old remote signals.
+local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
 local HighlightIndicators = require(ReplicatedStorage.Submodules.Core.Shared.Enums.HighlightIndicators)
@@ -122,90 +127,73 @@ local STATUS_VFX_EMIT_COUNT = 5
 -- than a fixed guess that a long authored fade would outlive.
 local STATUS_VFX_CLEANUP_MARGIN = 0.5
 
-local InputPlatformController
-local CharacterHighlightController
-local DamageIndicatorService
-
-local DamageIndicatorController = Knit.CreateController({
+local DamageIndicatorController = {
 	Name = "DamageIndicatorController",
-})
+	Dependencies = { InputPlatformController, CharacterHighlightController } :: { any },
+}
 
 DamageIndicatorController.OnIndicatorRequested = Signal.new()
 
-function DamageIndicatorController:KnitInit()
-	DamageIndicatorService = Knit.GetService("DamageIndicatorService")
-	InputPlatformController = Knit.GetController("InputPlatformController")
-	CharacterHighlightController = Knit.GetController("CharacterHighlightController")
-end
-
-function DamageIndicatorController:KnitStart()
-	DamageIndicatorService.DamageVFXRequested:Connect(
-		function(
-			_: Player,
-			character: Model,
-			_: number,
-			_: boolean,
-			color3: Color3?,
-			_isMelee: boolean?,
-			_resistKind: string?,
-			_isStatus: boolean?,
-			sparks: boolean?
-		)
-			-- Zombies AND the local character resolve through the single-
-			-- highlight controller; only untracked models (breakables, NPCs)
-			-- take the standalone flash.
-			if
-				CharacterHighlightController
-				and (
-					CharacterHighlightController._zombieRegistry[character]
-					or character == Players.LocalPlayer.Character
-				)
-			then
-				CharacterHighlightController:RequestDamageFlash(character)
-			else
-				onDamageIndicator(character, HIGHLIGHT_NAME)
-			end
-
-			-- The flash above is for every hit; the sparks below are not. A
-			-- gun shot sends `sparks = false` (its BulletImpact is the impact),
-			-- and nil -- every other caller -- keeps them.
-			if sparks == false then
-				return
-			end
-
-			local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
-			-- Random roll about the attachment's own Z. The slash is a flat
-			-- streak, so without this every hit stamps it at the identical
-			-- angle and a combo reads as one frame repeated. Applied to the
-			-- attachment rather than the emitter so the whole burst turns
-			-- together, and multiplied onto the authored CFrame so the
-			-- asset's own orientation is preserved.
-			hitVFX.CFrame = hitVFX.CFrame * CFrame.Angles(0, 0, math.random() * 2 * math.pi)
-			hitVFX.Parent = character.HumanoidRootPart
-
-			-- Resisted hits tint the impact sparks to match the grey number.
-			-- Keyed off the shared enum, not a colour literal, so a retune of
-			-- the resist colour can't silently desync this.
-			if color3 == DamageIndicatorColors.Resisted then
-				hitVFX.Balls.Color = ColorSequence.new(color3)
-				hitVFX.Hit.Color = ColorSequence.new(color3)
-			end
-
-			for _, particle in pairs(hitVFX:GetDescendants()) do
-				if not particle:IsA("ParticleEmitter") then
-					continue
-				end
-
-				if particle.Name == "Hit" then
-					particle:Emit(2)
-				else
-					particle:Emit(6)
-				end
-			end
-
-			Debris:AddItem(hitVFX, 2)
+function DamageIndicatorController.Start(self: typeof(DamageIndicatorController))
+	Combat.DamageVFX.On(function(payload)
+		-- The mob can be gone before this arrives (died / streamed out).
+		local character = payload.Character
+		if not character then
+			return
 		end
-	)
+		local color3 = payload.Color
+		local sparks = payload.Sparks
+		-- Zombies AND the local character resolve through the single-
+		-- highlight controller; only untracked models (breakables, NPCs)
+		-- take the standalone flash.
+		if
+			CharacterHighlightController
+			and (CharacterHighlightController._zombieRegistry[character] or character == Players.LocalPlayer.Character)
+		then
+			CharacterHighlightController:RequestDamageFlash(character)
+		else
+			onDamageIndicator(character, HIGHLIGHT_NAME)
+		end
+
+		-- The flash above is for every hit; the sparks below are not. A
+		-- gun shot sends `sparks = false` (its BulletImpact is the impact),
+		-- and nil -- every other caller -- keeps them.
+		if sparks == false then
+			return
+		end
+
+		local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
+		-- Random roll about the attachment's own Z. The slash is a flat
+		-- streak, so without this every hit stamps it at the identical
+		-- angle and a combo reads as one frame repeated. Applied to the
+		-- attachment rather than the emitter so the whole burst turns
+		-- together, and multiplied onto the authored CFrame so the
+		-- asset's own orientation is preserved.
+		hitVFX.CFrame = hitVFX.CFrame * CFrame.Angles(0, 0, math.random() * 2 * math.pi)
+		hitVFX.Parent = character:FindFirstChild("HumanoidRootPart") :: BasePart
+
+		-- Resisted hits tint the impact sparks to match the grey number.
+		-- Keyed off the shared enum, not a colour literal, so a retune of
+		-- the resist colour can't silently desync this.
+		if color3 == DamageIndicatorColors.Resisted then
+			hitVFX.Balls.Color = ColorSequence.new(color3 :: Color3)
+			hitVFX.Hit.Color = ColorSequence.new(color3 :: Color3)
+		end
+
+		for _, particle in pairs(hitVFX:GetDescendants()) do
+			if not particle:IsA("ParticleEmitter") then
+				continue
+			end
+
+			if particle.Name == "Hit" then
+				particle:Emit(2)
+			else
+				particle:Emit(6)
+			end
+		end
+
+		Debris:AddItem(hitVFX, 2)
+	end)
 
 	-- Status proc burst. Clones the dedicated StatusFX asset (NOT the HitFX
 	-- the hit burst above uses) and tints every emitter to the status's
@@ -216,7 +204,10 @@ function DamageIndicatorController:KnitStart()
 	-- Tints every ParticleEmitter descendant rather than naming children
 	-- explicitly, so StatusFX can hold any emitter layout and an emitter
 	-- added later still gets tinted instead of firing an untinted puff.
-	DamageIndicatorService.StatusVFXRequested:Connect(function(character: Model, color3: Color3, vfxName: string?)
+	Combat.StatusVFX.On(function(payload)
+		local character = payload.Character
+		local color3 = payload.Color
+		local vfxName = payload.VFXName
 		-- A proc can land on the same frame the mob dies, by which point
 		-- the model may already be gone on this client.
 		local hrp = character and character.Parent and character:FindFirstChild("HumanoidRootPart")
@@ -263,184 +254,184 @@ function DamageIndicatorController:KnitStart()
 	-- Sent explicitly by DamageService rather than inferred from the number's
 	-- colour: both resist kinds now render the SAME grey, so colour can no
 	-- longer distinguish them (this used to match two different golds).
-	DamageIndicatorService.DamageIndicatorRequested:Connect(
-		function(
-			character: Model,
-			value: number,
-			critical: boolean,
-			color3: Color3?,
-			isMelee: boolean?,
-			resistKind: string?,
-			isStatus: boolean?
-		)
-			-- Magic cutscene: DROPPED, not deferred (see
-			-- TextIndicatorController for why nothing is deferred).
-			if isMagicCutscenePlaying() then
-				return
+	Combat.DamageIndicator.On(function(payload)
+		local character = payload.Character
+		if not character then
+			return
+		end
+		local value = payload.Value
+		local critical = payload.Critical
+		local color3 = payload.Color
+		local isMelee = payload.IsMelee
+		local resistKind = payload.ResistKind
+		local isStatus = payload.IsStatus
+		-- Magic cutscene: DROPPED, not deferred (see
+		-- TextIndicatorController for why nothing is deferred).
+		if isMagicCutscenePlaying() then
+			return
+		end
+
+		self.OnIndicatorRequested:Fire()
+
+		local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()
+		local indicator = damageIndicator.Indicator
+		local textLabel = damageIndicator.Indicator.TextLabel
+		textLabel.FontFace =
+			Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+		local indicatorSize
+
+		if resistKind == "Projectile" then
+			ReplicatedStorage.GameAssets.Sounds.Bulletproof:Play()
+		elseif resistKind == "Magic" then
+			ReplicatedStorage.GameAssets.Sounds.MagicResist:Play()
+		else
+			if not isMelee then
+				ReplicatedStorage.GameAssets.Sounds.BulletHit:Play()
 			end
+		end
 
-			self.OnIndicatorRequested:Fire()
+		-- Indicator Billboard GUI prop changes
+		indicator.ExtentsOffsetWorldSpace = Vector3.new(0, 0, 0)
+		-- TextLabel prop changes. TextScaled is forced ON here: the asset
+		-- authors it off, and with it off the font size is fixed, so no
+		-- Size tween can make the number pulse (or make crits any bigger).
+		-- ON = the label's box IS the text size, which every size below
+		-- (crit frame, pulse overshoot) relies on.
+		textLabel.TextScaled = true
+		textLabel.TextTransparency = 0
+		textLabel.UIStroke.Transparency = 0.65
+		textLabel.UIStroke.Color = Color3.fromRGB(0, 0, 0)
 
-			local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()
-			local indicator = damageIndicator.Indicator
-			local textLabel = damageIndicator.Indicator.TextLabel
-			textLabel.FontFace =
-				Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
-			local indicatorSize
+		-- Critical: bigger frame (TextScaled = bigger text) and the crit
+		-- gold. Gold wins over the damage-type colour (magic purple /
+		-- resist grey) — "this was a crit" is the louder signal to read
+		-- at a glance; the type is still carried by the hit VFX tint.
+		if critical then
+			indicatorSize = if not InputPlatformController:IsMobilePlatform()
+				then CRITICAL_SIZE_DESKTOP
+				else CRITICAL_SIZE_MOBILE
+			textLabel.TextColor3 = CRITICAL_COLOR3
+			textLabel.Text = value .. "!"
 
-			if resistKind == "Projectile" then
-				ReplicatedStorage.GameAssets.Sounds.Bulletproof:Play()
-			elseif resistKind == "Magic" then
-				ReplicatedStorage.GameAssets.Sounds.MagicResist:Play()
-			else
-				if not isMelee then
-					ReplicatedStorage.GameAssets.Sounds.BulletHit:Play()
-				end
-			end
+			ReplicatedStorage.GameAssets.Sounds.CriticalHit:Play()
+		else
+			indicatorSize = if not InputPlatformController:IsMobilePlatform()
+				then UDim2.fromOffset(75 / FONT_SCALED, 40 / FONT_SCALED)
+				else UDim2.fromOffset(60 / FONT_SCALED, 25 / FONT_SCALED)
+			textLabel.TextColor3 = color3 or Color3.fromRGB(255, 255, 255)
+			textLabel.Text = value
 
-			-- Indicator Billboard GUI prop changes
-			indicator.ExtentsOffsetWorldSpace = Vector3.new(0, 0, 0)
-			-- TextLabel prop changes. TextScaled is forced ON here: the asset
-			-- authors it off, and with it off the font size is fixed, so no
-			-- Size tween can make the number pulse (or make crits any bigger).
-			-- ON = the label's box IS the text size, which every size below
-			-- (crit frame, pulse overshoot) relies on.
-			textLabel.TextScaled = true
-			textLabel.TextTransparency = 0
-			textLabel.UIStroke.Transparency = 0.65
-			textLabel.UIStroke.Color = Color3.fromRGB(0, 0, 0)
-
-			-- Critical: bigger frame (TextScaled = bigger text) and the crit
-			-- gold. Gold wins over the damage-type colour (magic purple /
-			-- resist grey) — "this was a crit" is the louder signal to read
-			-- at a glance; the type is still carried by the hit VFX tint.
-			if critical then
-				indicatorSize = if not InputPlatformController:IsMobilePlatform()
-					then CRITICAL_SIZE_DESKTOP
-					else CRITICAL_SIZE_MOBILE
-				textLabel.TextColor3 = CRITICAL_COLOR3
-				textLabel.Text = value .. "!"
-
-				ReplicatedStorage.GameAssets.Sounds.CriticalHit:Play()
-			else
-				indicatorSize = if not InputPlatformController:IsMobilePlatform()
-					then UDim2.fromOffset(75 / FONT_SCALED, 40 / FONT_SCALED)
-					else UDim2.fromOffset(60 / FONT_SCALED, 25 / FONT_SCALED)
-				textLabel.TextColor3 = color3 or Color3.fromRGB(255, 255, 255)
-				textLabel.Text = value
-
-				-- Status DoT ticks read as a secondary, "it's working" readout —
-				-- half the size of a real hit so a Burn stack never competes
-				-- with the number that landed it. TextScaled fits the glyphs to
-				-- the frame, so halving the frame halves the text.
-				if isStatus then
-					indicatorSize = UDim2.fromOffset(
-						indicatorSize.X.Offset * STATUS_SIZE_SCALE,
-						indicatorSize.Y.Offset * STATUS_SIZE_SCALE
-					)
-				end
-			end
-
-			-- Part prop changes
-			damageIndicator.Position = character.Head.Position
-
-			-- The BillboardGui frame is FIXED at the final size, immediately —
-			-- never tweened (see the pulse constants for why). The label is
-			-- center-anchored inside it so any size change grows in place.
-			indicator.Size = indicatorSize
-			textLabel.AnchorPoint = Vector2.new(0.5, 0.5)
-			textLabel.Position = UDim2.fromScale(0.5, 0.5)
-
-			damageIndicator.Parent = workspace.IgnoreInstances.MagicSpells
-
-			-- Size-in on the LABEL only, as a scale of the fixed frame.
-			-- Weapon / magic hits get the impact PULSE (overshoot past full
-			-- size, then settle to full); status ticks keep the plain grow-in
-			-- from small to full.
-			local fullSize = UDim2.fromScale(1, 1)
+			-- Status DoT ticks read as a secondary, "it's working" readout —
+			-- half the size of a real hit so a Burn stack never competes
+			-- with the number that landed it. TextScaled fits the glyphs to
+			-- the frame, so halving the frame halves the text.
 			if isStatus then
-				textLabel.Size = UDim2.fromScale(0, 0)
-				TweenService:Create(textLabel, DEFAULT_TWEEN_INFO_PROPS, { Size = fullSize }):Play()
-			else
-				-- +PULSE_OVERSHOOT_PX on each axis, expressed as a scale of the
-				-- frame so it's the same relative pop on desktop and mobile.
-				local overshootSize = UDim2.fromScale(
-					(indicatorSize.X.Offset + PULSE_OVERSHOOT_PX) / indicatorSize.X.Offset,
-					(indicatorSize.Y.Offset + PULSE_OVERSHOOT_PX) / indicatorSize.Y.Offset
+				indicatorSize = UDim2.fromOffset(
+					indicatorSize.X.Offset * STATUS_SIZE_SCALE,
+					indicatorSize.Y.Offset * STATUS_SIZE_SCALE
 				)
-
-				textLabel.Size = UDim2.fromScale(0, 0)
-				local pulseIn = TweenService:Create(textLabel, PULSE_IN_TWEEN_INFO, { Size = overshootSize })
-
-				-- Settle back to full size once the overshoot lands.
-				pulseIn.Completed:Once(function()
-					TweenService:Create(textLabel, PULSE_SETTLE_TWEEN_INFO, { Size = fullSize }):Play()
-				end)
-
-				pulseIn:Play()
 			end
+		end
 
-			-- ARC: rise (ease-out) to a random apex, then fall (ease-in) to just
-			-- below the spawn point. Vertical travel is world-space; the
-			-- sideways drift is CAMERA-space (ExtentsOffset.X) so it always
-			-- reads as left/right on screen from any angle. Fade is chained to
-			-- the fall so the number is solid on the way up and dissolves on
-			-- the way down.
-			local peak = math.random(ARC_PEAK_MIN, ARC_PEAK_MAX)
-			local landing = math.random(ARC_END_MIN, ARC_END_MAX)
-			local lateral = math.random(ARC_LATERAL_MIN, ARC_LATERAL_MAX) * (if math.random() < 0.5 then -1 else 1)
-			indicator.ExtentsOffset = Vector3.zero
+		-- Part prop changes
+		damageIndicator.Position = (character:FindFirstChild("Head") :: BasePart).Position
 
-			-- Crit rattle on the way up (see CRIT_JITTER_*). One Heartbeat
-			-- connection per crit, self-disconnecting when the envelope hits
-			-- zero or the number is torn down early.
-			if critical then
-				local jitterStart = os.clock()
-				local jitterConn: RBXScriptConnection
-				jitterConn = RunService.Heartbeat:Connect(function()
-					local envelope = 1 - math.clamp((os.clock() - jitterStart) / CRIT_JITTER_DURATION, 0, 1)
-					if envelope <= 0 or not textLabel.Parent then
-						jitterConn:Disconnect()
-						if textLabel.Parent then
-							textLabel.Rotation = 0
-							textLabel.Position = UDim2.fromScale(0.5, 0.5)
-						end
-						return
+		-- The BillboardGui frame is FIXED at the final size, immediately —
+		-- never tweened (see the pulse constants for why). The label is
+		-- center-anchored inside it so any size change grows in place.
+		indicator.Size = indicatorSize
+		textLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+		textLabel.Position = UDim2.fromScale(0.5, 0.5)
+
+		damageIndicator.Parent = workspace.IgnoreInstances.MagicSpells
+
+		-- Size-in on the LABEL only, as a scale of the fixed frame.
+		-- Weapon / magic hits get the impact PULSE (overshoot past full
+		-- size, then settle to full); status ticks keep the plain grow-in
+		-- from small to full.
+		local fullSize = UDim2.fromScale(1, 1)
+		if isStatus then
+			textLabel.Size = UDim2.fromScale(0, 0)
+			TweenService:Create(textLabel, DEFAULT_TWEEN_INFO_PROPS, { Size = fullSize }):Play()
+		else
+			-- +PULSE_OVERSHOOT_PX on each axis, expressed as a scale of the
+			-- frame so it's the same relative pop on desktop and mobile.
+			local overshootSize = UDim2.fromScale(
+				(indicatorSize.X.Offset + PULSE_OVERSHOOT_PX) / indicatorSize.X.Offset,
+				(indicatorSize.Y.Offset + PULSE_OVERSHOOT_PX) / indicatorSize.Y.Offset
+			)
+
+			textLabel.Size = UDim2.fromScale(0, 0)
+			local pulseIn = TweenService:Create(textLabel, PULSE_IN_TWEEN_INFO, { Size = overshootSize })
+
+			-- Settle back to full size once the overshoot lands.
+			pulseIn.Completed:Once(function()
+				TweenService:Create(textLabel, PULSE_SETTLE_TWEEN_INFO, { Size = fullSize }):Play()
+			end)
+
+			pulseIn:Play()
+		end
+
+		-- ARC: rise (ease-out) to a random apex, then fall (ease-in) to just
+		-- below the spawn point. Vertical travel is world-space; the
+		-- sideways drift is CAMERA-space (ExtentsOffset.X) so it always
+		-- reads as left/right on screen from any angle. Fade is chained to
+		-- the fall so the number is solid on the way up and dissolves on
+		-- the way down.
+		local peak = math.random(ARC_PEAK_MIN, ARC_PEAK_MAX)
+		local landing = math.random(ARC_END_MIN, ARC_END_MAX)
+		local lateral = math.random(ARC_LATERAL_MIN, ARC_LATERAL_MAX) * (if math.random() < 0.5 then -1 else 1)
+		indicator.ExtentsOffset = Vector3.zero
+
+		-- Crit rattle on the way up (see CRIT_JITTER_*). One Heartbeat
+		-- connection per crit, self-disconnecting when the envelope hits
+		-- zero or the number is torn down early.
+		if critical then
+			local jitterStart = os.clock()
+			local jitterConn: RBXScriptConnection
+			jitterConn = RunService.Heartbeat:Connect(function()
+				local envelope = 1 - math.clamp((os.clock() - jitterStart) / CRIT_JITTER_DURATION, 0, 1)
+				if envelope <= 0 or not textLabel.Parent then
+					jitterConn:Disconnect()
+					if textLabel.Parent then
+						textLabel.Rotation = 0
+						textLabel.Position = UDim2.fromScale(0.5, 0.5)
 					end
-					textLabel.Rotation = (math.random() * 2 - 1) * CRIT_JITTER_DEGREES * envelope
-					textLabel.Position = UDim2.new(
-						0.5,
-						(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope,
-						0.5,
-						(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope
-					)
-				end)
-			end
-
-			TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {
-				ExtentsOffset = Vector3.new(lateral * 0.5, 0, 0),
-			}):Play()
-			local rise = TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {
-				ExtentsOffsetWorldSpace = Vector3.new(0, peak, 0),
-			})
-			rise.Completed:Once(function()
-				if not damageIndicator.Parent then
 					return
 				end
-				TweenService:Create(indicator, ARC_FALL_TWEEN_INFO, {
-					ExtentsOffsetWorldSpace = Vector3.new(0, landing, 0),
-				}):Play()
-				TweenService:Create(indicator, ARC_FALL_TWEEN_INFO, {
-					ExtentsOffset = Vector3.new(lateral, 0, 0),
-				}):Play()
-				TweenService:Create(textLabel, FADE_TWEEN_INFO, { TextTransparency = 1 }):Play()
-				TweenService:Create(textLabel.UIStroke, FADE_TWEEN_INFO, { Transparency = 1 }):Play()
+				textLabel.Rotation = (math.random() * 2 - 1) * CRIT_JITTER_DEGREES * envelope
+				textLabel.Position = UDim2.new(
+					0.5,
+					(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope,
+					0.5,
+					(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope
+				)
 			end)
-			rise:Play()
-
-			Debris:AddItem(damageIndicator, INDICATOR_LIFETIME)
 		end
-	)
+
+		TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {
+			ExtentsOffset = Vector3.new(lateral * 0.5, 0, 0),
+		}):Play()
+		local rise = TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {
+			ExtentsOffsetWorldSpace = Vector3.new(0, peak, 0),
+		})
+		rise.Completed:Once(function()
+			if not damageIndicator.Parent then
+				return
+			end
+			TweenService:Create(indicator, ARC_FALL_TWEEN_INFO, {
+				ExtentsOffsetWorldSpace = Vector3.new(0, landing, 0),
+			}):Play()
+			TweenService:Create(indicator, ARC_FALL_TWEEN_INFO, {
+				ExtentsOffset = Vector3.new(lateral, 0, 0),
+			}):Play()
+			TweenService:Create(textLabel, FADE_TWEEN_INFO, { TextTransparency = 1 }):Play()
+			TweenService:Create(textLabel.UIStroke, FADE_TWEEN_INFO, { Transparency = 1 }):Play()
+		end)
+		rise:Play()
+
+		Debris:AddItem(damageIndicator, INDICATOR_LIFETIME)
+	end)
 end
 
 return DamageIndicatorController

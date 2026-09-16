@@ -11,7 +11,7 @@
 	Client/Controllers/RelicController/ThrownRelic:PlayEffect — keep the two in
 	step if that one is ever retuned.
 
-	Server fires RelicService.Client.OnShatterActivated:FireAll, so every
+	Server fires RelicNetwork.ShatterEffect.FireAll, so every
 	client renders the burst — including dead players spectating.
 ]]
 

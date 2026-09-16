@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: GameOverGradientInterfaceController.lua
      Description:
@@ -26,10 +27,7 @@
 
      Server-side wiring lives in LifeService (forthcoming) — for visual
      testing, fire from the command bar:
-       game:GetService("ReplicatedStorage").Submodules.Core.Packages.Knit
-       ... or call the Knit controller's signal directly via studio's
-       command bar after Knit boots:
-         Knit.GetController("GameOverGradientInterfaceController")
+       require(game.ReplicatedStorage.Interfaces.GameOverGradientInterfaceController)
               .Signals.OnPulseGradient:Fire(Color3.fromRGB(255, 0, 0), true)
 ]]
 
@@ -38,7 +36,6 @@ local Players = game:GetService("Players")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
@@ -50,15 +47,15 @@ local INTERFACE_ID = "GameOverGradientInterfaceController"
 
 --[ App Component ]--
 
-local GameOverGradientInterfaceController = Knit.CreateController({
+local GameOverGradientInterfaceController = {
 	Name = "GameOverGradientInterfaceController",
-})
+}
 
 -- Re-entry latch + token, mirroring the death controller. _gameOverPulse
 -- blocks new fires during an active hold; _pulseToken invalidates any
 -- stale reset callback whose pulse has since been superseded.
 GameOverGradientInterfaceController._gameOverPulse = false
-GameOverGradientInterfaceController._pulseToken = nil
+GameOverGradientInterfaceController._pulseToken = nil :: {}?
 GameOverGradientInterfaceController.Signals = {
 	-- Same signature as DeathGradient.OnPulseGradient: (color3, gameOver?).
 	-- gameOver=true takes the long-hold branch (GameOverDuration). Without
@@ -77,7 +74,7 @@ GameOverGradientInterfaceController.Signals = {
 	OnClearGradient = Signal.new(), -- ()
 }
 
-function GameOverGradientInterfaceController:_render()
+function GameOverGradientInterfaceController._render(self: typeof(GameOverGradientInterfaceController))
 	return function()
 		local pulseGradient, setPulseGradient = React.useState(false)
 		local imageColor3, setImageColor3 = React.useState(Color3.fromRGB(255, 255, 255))
@@ -150,7 +147,7 @@ end
 
 --[ Lifecycle ]--
 
-function GameOverGradientInterfaceController:KnitInit()
+function GameOverGradientInterfaceController.Init(self: typeof(GameOverGradientInterfaceController))
 	local root = ReactRoblox.createRoot(Instance.new("Folder"))
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
 end

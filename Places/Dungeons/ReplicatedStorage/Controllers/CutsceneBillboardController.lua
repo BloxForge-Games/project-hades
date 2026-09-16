@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: CutsceneBillboardController.lua
 	Description:
@@ -39,12 +40,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 --[ Controller ]--
 
-local CutsceneBillboardController = Knit.CreateController({
+local CutsceneBillboardController = {
 	Name = "CutsceneBillboardController",
 
 	-- The billboards THIS controller switched off, and must switch back on.
@@ -58,8 +58,8 @@ local CutsceneBillboardController = Knit.CreateController({
 	_active = false,
 	-- Catches billboards that arrive mid-cutscene (a relic dropping, a mob
 	-- spawning); nil while no cutscene is running.
-	_arrivalConnection = nil,
-})
+	_arrivalConnection = nil :: { RBXScriptConnection }?,
+}
 
 --[ Private ]--
 
@@ -67,7 +67,7 @@ local CutsceneBillboardController = Knit.CreateController({
 -- because a BillboardGui parented there still renders in the world
 -- through its Adornee -- and ScreenGuis there are untouched, since the
 -- sweep only ever looks at the BillboardGui class.
-function CutsceneBillboardController:_roots(): { Instance }
+function CutsceneBillboardController._roots(_self: typeof(CutsceneBillboardController)): { Instance }
 	local roots = { workspace }
 	local playerGui = Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
 	if playerGui then
@@ -76,7 +76,7 @@ function CutsceneBillboardController:_roots(): { Instance }
 	return roots
 end
 
-function CutsceneBillboardController:_hide(instance: Instance)
+function CutsceneBillboardController._hide(self: typeof(CutsceneBillboardController), instance: Instance)
 	if not instance:IsA("BillboardGui") or not (instance :: BillboardGui).Enabled then
 		return
 	end
@@ -84,7 +84,7 @@ function CutsceneBillboardController:_hide(instance: Instance)
 	self._hidden[instance] = true
 end
 
-function CutsceneBillboardController:_start()
+function CutsceneBillboardController._start(self: typeof(CutsceneBillboardController))
 	if self._active then
 		return
 	end
@@ -112,13 +112,13 @@ function CutsceneBillboardController:_start()
 	self._arrivalConnection = connections
 end
 
-function CutsceneBillboardController:_stop()
+function CutsceneBillboardController._stop(self: typeof(CutsceneBillboardController))
 	if not self._active then
 		return
 	end
 	self._active = false
 
-	for _, connection in self._arrivalConnection or {} do
+	for _, connection in (self._arrivalConnection or {}) :: { RBXScriptConnection } do
 		connection:Disconnect()
 	end
 	self._arrivalConnection = nil
@@ -134,9 +134,7 @@ end
 
 --[ Lifecycle ]--
 
-function CutsceneBillboardController:KnitInit() end
-
-function CutsceneBillboardController:KnitStart()
+function CutsceneBillboardController.Start(self: typeof(CutsceneBillboardController))
 	local localPlayer = Players.LocalPlayer
 
 	local function bind(character: Model)

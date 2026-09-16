@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: PlayerStateController.lua
@@ -12,28 +13,54 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local DialogueBillboardInterface =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.DialogueBillboardInterface)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+
+-- AimController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local aimControllerLazy: any = nil
+local function getAimController(): any
+	if aimControllerLazy == nil then
+		aimControllerLazy = (require :: any)(ReplicatedStorage.Controllers.AimController)
+	end
+	return aimControllerLazy
+end
+
+-- CastModeController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local castModeControllerLazy: any = nil
+local function getCastModeController(): any
+	if castModeControllerLazy == nil then
+		castModeControllerLazy = (require :: any)(ReplicatedStorage.Controllers.CastModeController)
+	end
+	return castModeControllerLazy
+end
+
+-- MagicController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local magicControllerLazy: any = nil
+local function getMagicController(): any
+	if magicControllerLazy == nil then
+		magicControllerLazy = (require :: any)(ReplicatedStorage.Controllers.MagicController)
+	end
+	return magicControllerLazy
+end
 local getEffectiveBaseWalkSpeed =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveBaseWalkSpeed)
 local getEffectiveJetpackWalkSpeed =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveJetpackWalkSpeed)
 
-local BuildController
-local CinematicInterfaceController
-local AimController
-local CastModeController
-local MagicController
-local DialogueBillboardInterface
-local DialogueBillboardService
-
-local PlayerStateController = Knit.CreateController({
+local PlayerStateController = {
 	Name = "PlayerStateController",
-	Client = {},
-})
+	Dependencies = { CinematicInterfaceController, DialogueBillboardInterface } :: { any },
+}
 
 --[ Imports ]--
 
@@ -96,6 +123,16 @@ local PlayerStateController = Knit.CreateController({
 -- attacking — if it were, a stuck melee gate would suppress its own
 -- rescue for as long as the player mashed it.
 local WATCHDOG_CHECK_INTERVAL_SECONDS = 1
+-- One watchdog check (see _buildWatchdogChecks). `restore` is pcall'd, so
+-- its (ignored) results are typed as an open pack.
+type WatchdogCheck = {
+	name: string,
+	threshold: number,
+	stuck: (character: Model, humanoid: Humanoid) -> boolean,
+	restore: (character: Model, humanoid: Humanoid) -> ...any,
+	trappedSince: ((character: Model, humanoid: Humanoid) -> number?)?,
+}
+
 local WATCHDOG_STUCK_SECONDS = 2
 local WATCHDOG_CUTSCENE_STUCK_SECONDS = 30 -- boss/miniboss cutscenes run long
 -- How long after the last executed attack the watchdog stays stood down.
@@ -135,7 +172,7 @@ PlayerStateController._lastAttackActivity = 0 :: number
 
 --[ Public Functions ]--
 
-function PlayerStateController:AimActionEnabled(): boolean
+function PlayerStateController.AimActionEnabled(_self: typeof(PlayerStateController)): boolean
 	local player = Players.LocalPlayer
 
 	if
@@ -155,7 +192,7 @@ function PlayerStateController:AimActionEnabled(): boolean
 	return true
 end
 
-function PlayerStateController:GeneralActionEnabled(): boolean
+function PlayerStateController.GeneralActionEnabled(_self: typeof(PlayerStateController)): boolean
 	if
 		Players.LocalPlayer.Character:GetAttribute(Attributes.MagicEnabled) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.IsDodging) == true
@@ -165,7 +202,6 @@ function PlayerStateController:GeneralActionEnabled(): boolean
 		-- aim gate above blocks cursor rotation. Walking away still works and
 		-- closes the dialogue, which clears the attribute.
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.TalkingToNPC) == true
-		or BuildController:GetBuildMode() == true
 		or Players.LocalPlayer.Character
 			and Players.LocalPlayer.Character:FindFirstChild(ValueNames.RagdollTrigger)
 			and Players.LocalPlayer.Character:FindFirstChild(ValueNames.RagdollTrigger).Value == true
@@ -176,7 +212,7 @@ function PlayerStateController:GeneralActionEnabled(): boolean
 	return true
 end
 
-function PlayerStateController:ToolBarActionEnabled(): boolean
+function PlayerStateController.ToolBarActionEnabled(_self: typeof(PlayerStateController)): boolean
 	if
 		Players.LocalPlayer.Character:GetAttribute(Attributes.MagicEnabled) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.Death) == true
@@ -195,7 +231,7 @@ end
 -- cutscene starting (killing blow on a boss → outro) writes the slow
 -- attack speed and then SKIPS the restore — leaving the player crawling
 -- until their next completed attack. This is the unconditional back-stop.
-function PlayerStateController:RestoreWalkSpeed()
+function PlayerStateController.RestoreWalkSpeed(_self: typeof(PlayerStateController))
 	local character = Players.LocalPlayer.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if not character or not humanoid then
@@ -243,7 +279,7 @@ local function movementLegitimatelyLocked(character: Model): boolean
 	then
 		return true
 	end
-	local ragdollTrigger = character:FindFirstChild(ValueNames.RagdollTrigger)
+	local ragdollTrigger = character:FindFirstChild(ValueNames.RagdollTrigger) :: BoolValue?
 	return ragdollTrigger ~= nil and ragdollTrigger.Value == true
 end
 
@@ -253,19 +289,19 @@ end
 -- focus (a backgrounded app never delivers the release that would have
 -- ended these) and as the tail of a WalkSpeed restore, so a runaway attack
 -- loop can't re-slow the character the moment it's been restored.
-function PlayerStateController:_releaseHeldInputs()
-	if AimController then
-		AimController:StopAutoAttack()
-		AimController.OnWeaponActivate:Fire(false)
+function PlayerStateController._releaseHeldInputs(_self: typeof(PlayerStateController))
+	if getAimController() then
+		getAimController():StopAutoAttack()
+		getAimController().OnWeaponActivate:Fire(false)
 	end
-	if CastModeController then
-		CastModeController:CancelAim()
+	if getCastModeController() then
+		getCastModeController():CancelAim()
 	end
 end
 
 -- An attack was just EXECUTED for the player. Called off outcomes only
 -- (see the watchdog header): the melee gate closing, a cast firing.
-function PlayerStateController:_noteAttackActivity()
+function PlayerStateController._noteAttackActivity(self: typeof(PlayerStateController))
 	self._lastAttackActivity = os.clock()
 end
 
@@ -278,12 +314,12 @@ end
 --     with no held attack input" check already uses. The flag ALONE is
 --     never enough: a stuck-true Attacking must not suppress its own
 --     rescue.
-function PlayerStateController:_isAttacking(character: Model): boolean
+function PlayerStateController._isAttacking(self: typeof(PlayerStateController), character: Model): boolean
 	if os.clock() - self._lastAttackActivity < WATCHDOG_ATTACK_GRACE_SECONDS then
 		return true
 	end
 	if character:GetAttribute(Attributes.Attacking) == true then
-		if AimController and AimController:IsAutoAttacking() then
+		if getAimController() and getAimController():IsAutoAttacking() then
 			return true
 		end
 		if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
@@ -297,7 +333,7 @@ end
 -- watchdog can ask how long it has been CONTINUOUSLY closed. Re-bound per
 -- character (a fresh body starts with the gate open, and the old
 -- character's connection dies with it).
-function PlayerStateController:_watchMeleeGate()
+function PlayerStateController._watchMeleeGate(self: typeof(PlayerStateController))
 	local localPlayer = Players.LocalPlayer
 
 	local function bind(character: Model)
@@ -333,10 +369,10 @@ end
 -- timestamp of when its condition became true, which replaces the poll's
 -- own first-seen bookkeeping. Required for anything that can flicker
 -- between polls (see the watchdog header).
-function PlayerStateController:_buildWatchdogChecks()
+function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateController)): { WatchdogCheck }
 	local magicThreshold = math.max(WATCHDOG_STUCK_SECONDS, longestSpellDuration() + WATCHDOG_MAGIC_MARGIN_SECONDS)
 
-	local function attributeStuckTrue(attribute: string, threshold: number)
+	local function attributeStuckTrue(attribute: string, threshold: number): WatchdogCheck
 		return {
 			name = "attribute '" .. attribute .. "' stuck true",
 			threshold = threshold,
@@ -398,7 +434,7 @@ function PlayerStateController:_buildWatchdogChecks()
 				if character:GetAttribute(Attributes.Attacking) ~= true then
 					return false
 				end
-				if AimController and AimController:IsAutoAttacking() then
+				if getAimController() and getAimController():IsAutoAttacking() then
 					return false
 				end
 				if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
@@ -450,15 +486,13 @@ function PlayerStateController:_buildWatchdogChecks()
 			end,
 			restore = function(character: Model)
 				character:SetAttribute(Attributes.TalkingToNPC, nil)
-				if DialogueBillboardService then
-					DialogueBillboardService.SetTalking:Fire(false)
-				end
+				DungeonNetwork.SetTalking.Fire(false)
 			end,
 		},
 	}
 end
 
-function PlayerStateController:_startWatchdog()
+function PlayerStateController._startWatchdog(self: typeof(PlayerStateController))
 	local checks = self:_buildWatchdogChecks()
 
 	task.spawn(function()
@@ -507,7 +541,11 @@ function PlayerStateController:_startWatchdog()
 				-- read as one continuous stretch.
 				if check.trappedSince then
 					local exactOk, since = pcall(check.trappedSince, character, humanoid)
-					stuckSince[check] = if exactOk and typeof(since) == "number" then since else nil
+					if exactOk and typeof(since) == "number" then
+						stuckSince[check] = since
+					else
+						stuckSince[check] = nil
+					end
 					if stuckSince[check] == nil then
 						continue
 					end
@@ -534,15 +572,7 @@ function PlayerStateController:_startWatchdog()
 	end)
 end
 
-function PlayerStateController:KnitStart()
-	BuildController = Knit.GetController("BuildController")
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-	AimController = Knit.GetController("AimController")
-	CastModeController = Knit.GetController("CastModeController")
-	MagicController = Knit.GetController("MagicController")
-	DialogueBillboardInterface = Knit.GetController("DialogueBillboardInterface")
-	DialogueBillboardService = Knit.GetService("DialogueBillboardService")
-
+function PlayerStateController.Start(self: typeof(PlayerStateController))
 	-- App focus: a backgrounded app (mobile app switch, alt-tab) never
 	-- delivers the touch-release / mouse-up that ends a held attack or an
 	-- open aim, so the loops keep running blind and the character comes
@@ -579,8 +609,8 @@ function PlayerStateController:KnitStart()
 
 	-- A cast that FIRED is an executed attack (magic weaved between swings
 	-- is the exact case that tripped the WalkSpeed check).
-	if MagicController then
-		MagicController.Signals.OnMagicCasted:Connect(function()
+	if getMagicController() then
+		getMagicController().Signals.OnMagicCasted:Connect(function()
 			self:_noteAttackActivity()
 		end)
 	end

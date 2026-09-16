@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: DropVisibilityController.lua
 	Description:
@@ -41,8 +42,8 @@ local CollectionService = game:GetService("CollectionService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local SignalTypes = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
@@ -55,14 +56,14 @@ local GOVERNED_TAGS = { TagList.Relic, TagList.GearDrop }
 
 --[ Controller ]--
 
-local DropVisibilityController = Knit.CreateController({
+local DropVisibilityController = {
 	Name = "DropVisibilityController",
-})
+}
 
 --[ Properties ]--
 
 DropVisibilityController._hidden = false
-DropVisibilityController.OnChanged = Signal.new() :: (hidden: boolean) -> ()
+DropVisibilityController.OnChanged = Signal.new() :: SignalTypes.Signal<boolean>
 
 -- [model] = what this controller switched OFF when it hid that model, so
 -- the restore can put back exactly that and nothing else.
@@ -72,7 +73,7 @@ DropVisibilityController._suppressed = {} :: { [Instance]: { Instance } }
 
 -- Is this model a drop the setting is allowed to hide? Public, and not
 -- the local player's own.
-function DropVisibilityController:_isOtherPlayersDrop(model: Instance): boolean
+function DropVisibilityController._isOtherPlayersDrop(_self: typeof(DropVisibilityController), model: Instance): boolean
 	if model:GetAttribute(Attributes.PublicDrop) ~= true then
 		return false
 	end
@@ -80,7 +81,7 @@ function DropVisibilityController:_isOtherPlayersDrop(model: Instance): boolean
 end
 
 -- Hides `model` and remembers what it switched off.
-function DropVisibilityController:_hide(model: Instance)
+function DropVisibilityController._hide(self: typeof(DropVisibilityController), model: Instance)
 	if self._suppressed[model] then
 		return -- already hidden
 	end
@@ -99,7 +100,7 @@ function DropVisibilityController:_hide(model: Instance)
 			-- Only what is ON right now is recorded, so the restore cannot
 			-- switch on something that was off for its own reasons.
 			if descendant.Enabled then
-				descendant.Enabled = false
+				(descendant :: any).Enabled = false
 				table.insert(switchedOff, descendant)
 			end
 		end
@@ -108,7 +109,7 @@ function DropVisibilityController:_hide(model: Instance)
 end
 
 -- Puts `model` back exactly as it was found.
-function DropVisibilityController:_show(model: Instance)
+function DropVisibilityController._show(self: typeof(DropVisibilityController), model: Instance)
 	local switchedOff = self._suppressed[model]
 	if not switchedOff then
 		return -- was never hidden by us
@@ -122,13 +123,13 @@ function DropVisibilityController:_show(model: Instance)
 	end
 	for _, instance in switchedOff do
 		if instance.Parent then
-			instance.Enabled = true
+			(instance :: any).Enabled = true
 		end
 	end
 end
 
 -- Brings one drop in line with the current setting.
-function DropVisibilityController:Apply(model: Instance)
+function DropVisibilityController.Apply(self: typeof(DropVisibilityController), model: Instance)
 	if self._hidden and self:_isOtherPlayersDrop(model) then
 		self:_hide(model)
 	else
@@ -136,7 +137,7 @@ function DropVisibilityController:Apply(model: Instance)
 	end
 end
 
-function DropVisibilityController:_applyAll()
+function DropVisibilityController._applyAll(self: typeof(DropVisibilityController))
 	for _, tag in GOVERNED_TAGS do
 		for _, model in CollectionService:GetTagged(tag) do
 			self:Apply(model)
@@ -146,11 +147,11 @@ end
 
 --[ Public ]--
 
-function DropVisibilityController:IsHidden(): boolean
+function DropVisibilityController.IsHidden(self: typeof(DropVisibilityController)): boolean
 	return self._hidden
 end
 
-function DropVisibilityController:SetHidden(hidden: boolean)
+function DropVisibilityController.SetHidden(self: typeof(DropVisibilityController), hidden: boolean)
 	if self._hidden == hidden then
 		return
 	end
@@ -159,13 +160,13 @@ function DropVisibilityController:SetHidden(hidden: boolean)
 	self.OnChanged:Fire(hidden)
 end
 
-function DropVisibilityController:Toggle()
+function DropVisibilityController.Toggle(self: typeof(DropVisibilityController))
 	self:SetHidden(not self._hidden)
 end
 
 --[ Lifecycle ]--
 
-function DropVisibilityController:KnitStart()
+function DropVisibilityController.Start(self: typeof(DropVisibilityController))
 	for _, tag in GOVERNED_TAGS do
 		-- Deferred one frame: the tag lands before the components have built
 		-- the drop's billboard and prompt, and hiding has to see them to
@@ -183,7 +184,5 @@ function DropVisibilityController:KnitStart()
 	end
 	self:_applyAll()
 end
-
-function DropVisibilityController:KnitInit() end
 
 return DropVisibilityController

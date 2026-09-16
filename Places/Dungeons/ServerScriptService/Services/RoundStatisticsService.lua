@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: RoundStatisticsService.lua
@@ -7,18 +8,17 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 
-local PlayerEventService
-
-local RoundStatisticsService = Knit.CreateService({
+local RoundStatisticsService = {
 	Name = "RoundStatisticsService",
-	Client = {},
-})
+	Dependencies = { PlayerEventService } :: { any },
+}
 
 --[ Imports ]--
 
@@ -44,7 +44,12 @@ RoundStatisticsService.Signals = {
 -- free thread — which does NOT interrupt whatever fired it, so the only
 -- visible symptom was a stack trace and a stat that silently stopped
 -- counting. A warn naming the field is far easier to act on.
-function RoundStatisticsService:_indexRoundRegistry(player: Player, registryIndex: string, count: number)
+function RoundStatisticsService._indexRoundRegistry(
+	self: typeof(RoundStatisticsService),
+	player: Player,
+	registryIndex: string,
+	count: number
+)
 	local playerStats = self._roundStats[player.UserId]
 
 	if not playerStats then
@@ -77,27 +82,25 @@ end
 
 --[ Public Functions ]--
 
-function RoundStatisticsService:GetTotalKillsAndAssists(player: Player): number
+function RoundStatisticsService.GetTotalKillsAndAssists(self: typeof(RoundStatisticsService), player: Player): number
 	return self._roundStats[player.UserId] and self._roundStats[player.UserId].totalKillsAndAssists or 0
 end
 
-function RoundStatisticsService:GetTotalElites(player: Player): number
+function RoundStatisticsService.GetTotalElites(self: typeof(RoundStatisticsService), player: Player): number
 	return self._roundStats[player.UserId] and self._roundStats[player.UserId].totalElites or 0
 end
 
-function RoundStatisticsService:GetTotalMinibosses(player: Player): number
+function RoundStatisticsService.GetTotalMinibosses(self: typeof(RoundStatisticsService), player: Player): number
 	return self._roundStats[player.UserId] and self._roundStats[player.UserId].totalMinibosses or 0
 end
 
-function RoundStatisticsService:GetTotalBosses(player: Player): number
+function RoundStatisticsService.GetTotalBosses(self: typeof(RoundStatisticsService), player: Player): number
 	return self._roundStats[player.UserId] and self._roundStats[player.UserId].totalBosses or 0
 end
 
 --[ Initializers ]--
 
-function RoundStatisticsService:KnitStart()
-	PlayerEventService = Knit.GetService("PlayerEventService")
-
+function RoundStatisticsService.Start(self: typeof(RoundStatisticsService))
 	self.Signals.OnKillOrAssist:Connect(function(player: Player, count: number)
 		self:_indexRoundRegistry(player, "totalKillsAndAssists", count)
 	end)
@@ -130,7 +133,7 @@ function RoundStatisticsService:KnitStart()
 	end)
 end
 
-function RoundStatisticsService:KnitInit()
+function RoundStatisticsService.Init(_self: typeof(RoundStatisticsService))
 	print("RoundStatisticsService Initialized")
 end
 

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Client/Controllers/PlayerVitalsBillboardController.lua
 	Description:
@@ -42,7 +43,6 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 --[ Constants ]--
@@ -103,18 +103,49 @@ local FULL_EPSILON = 0.001
 -- character does; past this a missing billboard is simply skipped.
 local BILLBOARD_WAIT_SECONDS = 10
 
+--[ Types ]--
+
+type FadeTarget = { instance: Instance, property: string, base: number }
+
+type BarEntry = {
+	billboard: BillboardGui,
+	bar: GuiObject,
+	shieldBar: GuiObject?,
+	fraction: () -> number,
+	shieldFraction: (() -> number)?,
+	tween: Tween?,
+	shieldTween: Tween?,
+	fadeTargets: { FadeTarget },
+	fadeTweens: { Tween },
+	shown: boolean,
+	hideToken: {}?,
+	fillWidth: number,
+	fillMaxHeight: number,
+	fillCenterX: number?,
+	fillBottomY: number?,
+	lastFraction: number?,
+	lastShieldFraction: number?,
+	refreshScheduled: boolean,
+}
+
+type TrackedEntry = {
+	character: Model,
+	humanoid: Humanoid,
+	isLocal: boolean,
+	connections: { RBXScriptConnection },
+	bars: { BarEntry },
+	visible: boolean?,
+	visibilityToken: {}?,
+}
+
 --[ Controller ]--
 
-local PlayerVitalsBillboardController = Knit.CreateController({
+local PlayerVitalsBillboardController = {
 	Name = "PlayerVitalsBillboardController",
-})
+}
 
--- [character]: { character, humanoid, connections = { RBXScriptConnection },
---               bars = { { billboard, bar, fraction: () -> number, tween,
---                         fadeTargets, fadeTweens, shown, hideToken,
---                         fillWidth, fillMaxHeight, lastFraction,
---                         refreshScheduled } } }
-PlayerVitalsBillboardController._tracked = {}
+-- [character]: TrackedEntry (see the type above)
+PlayerVitalsBillboardController._tracked = {} :: { [Model]: TrackedEntry }
 PlayerVitalsBillboardController._viewerInCutscene = false
 -- True during a health/mana event cutscene: every character EXCEPT the
 -- viewer's own is hidden (see the header).
@@ -131,7 +162,10 @@ end
 
 -- Enabled = alive AND not landing AND not viewer-cutscene AND (mine, or we
 -- are not inside the own-bars-only window), applied to every bar.
-function PlayerVitalsBillboardController:_refreshVisibility(entry)
+function PlayerVitalsBillboardController._refreshVisibility(
+	self: typeof(PlayerVitalsBillboardController),
+	entry: TrackedEntry
+)
 	local character = entry.character
 	local alive = entry.humanoid.Health > 0 and character:GetAttribute(Attributes.Death) ~= true
 	-- The SUBJECT's own dungeon-entry fall hides its bars for everyone,
@@ -180,30 +214,42 @@ end
 
 -- Every fadeable visual under a billboard with its authored transparency,
 -- so show restores the design and hide goes to 1. Captured once at resolve.
-local function collectFadeTargets(billboard: BillboardGui): { { instance: Instance, property: string, base: number } }
-	local targets = {}
+local function collectFadeTargets(billboard: BillboardGui): { FadeTarget }
+	local targets: { FadeTarget } = {}
 	for _, descendant in billboard:GetDescendants() do
 		if descendant:IsA("GuiObject") then
-			table.insert(targets, {
-				instance = descendant,
-				property = "BackgroundTransparency",
-				base = descendant.BackgroundTransparency,
-			})
+			table.insert(
+				targets,
+				{
+					instance = descendant,
+					property = "BackgroundTransparency",
+					base = descendant.BackgroundTransparency,
+				} :: FadeTarget
+			)
 			if descendant:IsA("ImageLabel") or descendant:IsA("ImageButton") then
-				table.insert(targets, {
-					instance = descendant,
-					property = "ImageTransparency",
-					base = descendant.ImageTransparency,
-				})
+				table.insert(
+					targets,
+					{
+						instance = descendant,
+						property = "ImageTransparency",
+						base = descendant.ImageTransparency,
+					} :: FadeTarget
+				)
 			elseif descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
-				table.insert(targets, {
-					instance = descendant,
-					property = "TextTransparency",
-					base = descendant.TextTransparency,
-				})
+				table.insert(
+					targets,
+					{
+						instance = descendant,
+						property = "TextTransparency",
+						base = descendant.TextTransparency,
+					} :: FadeTarget
+				)
 			end
 		elseif descendant:IsA("UIStroke") then
-			table.insert(targets, { instance = descendant, property = "Transparency", base = descendant.Transparency })
+			table.insert(
+				targets,
+				{ instance = descendant, property = "Transparency", base = descendant.Transparency } :: FadeTarget
+			)
 		end
 	end
 	return targets
@@ -214,7 +260,12 @@ end
 -- Tweens (or snaps) a bar's visuals toward shown / hidden WITHOUT touching
 -- its auto-hide `shown` state -- used both by the auto-hide and by the
 -- cutscene fade, which must not disturb the auto-hide bookkeeping.
-function PlayerVitalsBillboardController:_fadeBarVisuals(barEntry, shown: boolean, instant: boolean?)
+function PlayerVitalsBillboardController._fadeBarVisuals(
+	_self: typeof(PlayerVitalsBillboardController),
+	barEntry: BarEntry,
+	shown: boolean,
+	instant: boolean?
+)
 	for _, fadeTween in barEntry.fadeTweens do
 		fadeTween:Cancel()
 	end
@@ -233,14 +284,23 @@ function PlayerVitalsBillboardController:_fadeBarVisuals(barEntry, shown: boolea
 	end
 end
 
-function PlayerVitalsBillboardController:_setBarShown(barEntry, shown: boolean, instant: boolean?)
+function PlayerVitalsBillboardController._setBarShown(
+	self: typeof(PlayerVitalsBillboardController),
+	barEntry: BarEntry,
+	shown: boolean,
+	instant: boolean?
+)
 	barEntry.shown = shown
 	self:_fadeBarVisuals(barEntry, shown, instant)
 end
 
 -- Value changed (or first read): show the bar; if it's full, arm the
 -- linger-then-hide, otherwise cancel any pending hide.
-function PlayerVitalsBillboardController:_onBarValueChanged(barEntry, instant: boolean?)
+function PlayerVitalsBillboardController._onBarValueChanged(
+	self: typeof(PlayerVitalsBillboardController),
+	barEntry: BarEntry,
+	instant: boolean?
+)
 	local isFull = barEntry.fraction() >= 1 - FULL_EPSILON
 		and (barEntry.shieldFraction == nil or barEntry.shieldFraction() <= FULL_EPSILON)
 
@@ -266,7 +326,11 @@ function PlayerVitalsBillboardController:_onBarValueChanged(barEntry, instant: b
 	end
 end
 
-function PlayerVitalsBillboardController:_refreshBar(barEntry, instant: boolean?)
+function PlayerVitalsBillboardController._refreshBar(
+	self: typeof(PlayerVitalsBillboardController),
+	barEntry: BarEntry,
+	instant: boolean?
+)
 	local fraction = barEntry.fraction()
 	-- Shield segment (health bar only): fraction of the SAME denominator, so
 	-- it stacks on the fill without either overflowing the track.
@@ -303,7 +367,10 @@ function PlayerVitalsBillboardController:_refreshBar(barEntry, instant: boolean?
 	local shieldTarget = if shieldBar
 		then {
 			Size = UDim2.fromScale(barEntry.fillWidth, barEntry.fillMaxHeight * shieldFraction),
-			Position = UDim2.fromScale(barEntry.fillCenterX, barEntry.fillBottomY - barEntry.fillMaxHeight * fraction),
+			Position = UDim2.fromScale(
+				barEntry.fillCenterX :: number,
+				(barEntry.fillBottomY :: number) - barEntry.fillMaxHeight * fraction
+			),
 		}
 		else nil
 
@@ -330,7 +397,10 @@ end
 -- Coalesces every signal that fires in one frame (Max + current written
 -- back-to-back) into ONE refresh next Heartbeat, so the bar evaluates the
 -- settled state rather than each half-written step.
-function PlayerVitalsBillboardController:_scheduleRefresh(barEntry)
+function PlayerVitalsBillboardController._scheduleRefresh(
+	self: typeof(PlayerVitalsBillboardController),
+	barEntry: BarEntry
+)
 	if barEntry.refreshScheduled then
 		return
 	end
@@ -349,7 +419,7 @@ end
 -- the fill is too (no per-name wait -- a wrong name must not stall 10s).
 -- Anchors the fill's bottom edge so a shrinking height reads as DOWN.
 local function resolveBar(hrp: BasePart, billboardName: string, barNames: { string }): (BillboardGui?, GuiObject?, any)
-	local billboard = hrp:WaitForChild(billboardName, BILLBOARD_WAIT_SECONDS)
+	local billboard = hrp:WaitForChild(billboardName, BILLBOARD_WAIT_SECONDS) :: BillboardGui?
 	if not billboard then
 		return nil, nil
 	end
@@ -396,7 +466,7 @@ local function resolveBar(hrp: BasePart, billboardName: string, barNames: { stri
 	return billboard, bar, geometry
 end
 
-function PlayerVitalsBillboardController:_untrack(character: Model)
+function PlayerVitalsBillboardController._untrack(self: typeof(PlayerVitalsBillboardController), character: Model)
 	local entry = self._tracked[character]
 	if not entry then
 		return
@@ -419,11 +489,11 @@ function PlayerVitalsBillboardController:_untrack(character: Model)
 	end
 end
 
-function PlayerVitalsBillboardController:_track(character: Model)
+function PlayerVitalsBillboardController._track(self: typeof(PlayerVitalsBillboardController), character: Model)
 	self:_untrack(character)
 
-	local humanoid = character:WaitForChild("Humanoid", BILLBOARD_WAIT_SECONDS)
-	local hrp = character:WaitForChild("HumanoidRootPart", BILLBOARD_WAIT_SECONDS)
+	local humanoid = character:WaitForChild("Humanoid", BILLBOARD_WAIT_SECONDS) :: Humanoid?
+	local hrp = character:WaitForChild("HumanoidRootPart", BILLBOARD_WAIT_SECONDS) :: BasePart?
 	if not humanoid or not hrp or not character.Parent then
 		return
 	end
@@ -434,7 +504,7 @@ function PlayerVitalsBillboardController:_track(character: Model)
 		return -- character left mid-wait, or a second _track raced this one
 	end
 
-	local entry = {
+	local entry: TrackedEntry = {
 		character = character,
 		humanoid = humanoid,
 		-- Whose bars these are: the own-bars-only window draws only the
@@ -444,25 +514,26 @@ function PlayerVitalsBillboardController:_track(character: Model)
 		bars = {},
 	}
 
-	local healthEntry, manaEntry
+	local healthEntry: BarEntry?, manaEntry: BarEntry?
 	if healthBillboard and healthBar then
 		-- ShieldBar: create from the HealthBar (same authored look), tinted
 		-- grey, drawn above it. Created BEFORE fade targets are collected so
 		-- it fades with the rest of the billboard.
 		local shieldBar = healthBillboard:FindFirstChild(SHIELD_BAR_NAME) :: GuiObject?
 		if not shieldBar then
-			shieldBar = healthBar:Clone()
-			shieldBar.Name = SHIELD_BAR_NAME
-			shieldBar.BackgroundColor3 = SHIELD_COLOR
-			shieldBar.ZIndex = healthBar.ZIndex + 1
-			shieldBar.Size = UDim2.fromScale(healthGeometry.fillWidth, 0)
-			shieldBar.Parent = healthBillboard
+			local newShieldBar = healthBar:Clone()
+			newShieldBar.Name = SHIELD_BAR_NAME
+			newShieldBar.BackgroundColor3 = SHIELD_COLOR
+			newShieldBar.ZIndex = healthBar.ZIndex + 1
+			newShieldBar.Size = UDim2.fromScale(healthGeometry.fillWidth, 0)
+			newShieldBar.Parent = healthBillboard
+			shieldBar = newShieldBar
 		end
 
 		-- LoL rescale: one denominator for both fractions.
 		local function healthDenominator(): number
-			local shield = character:GetAttribute(SHIELD_ATTRIBUTE)
-			shield = if typeof(shield) == "number" then shield else 0
+			local shieldAttribute = character:GetAttribute(SHIELD_ATTRIBUTE)
+			local shield = if typeof(shieldAttribute) == "number" then shieldAttribute else 0
 			return math.max(humanoid.MaxHealth, humanoid.Health + shield)
 		end
 
@@ -491,14 +562,17 @@ function PlayerVitalsBillboardController:_track(character: Model)
 			lastShieldFraction = nil,
 			refreshScheduled = false,
 		}
-		table.insert(entry.bars, healthEntry)
+		table.insert(entry.bars, healthEntry :: BarEntry)
 	end
 	if manaBillboard and manaBar then
 		manaEntry = {
 			billboard = manaBillboard,
 			bar = manaBar,
 			fraction = function()
-				return safeFraction(character:GetAttribute(Attributes.Mana), character:GetAttribute(Attributes.MaxMana))
+				return safeFraction(
+					character:GetAttribute(Attributes.Mana) :: number?,
+					character:GetAttribute(Attributes.MaxMana) :: number?
+				)
 			end,
 			tween = nil,
 			fadeTargets = collectFadeTargets(manaBillboard),
@@ -510,7 +584,7 @@ function PlayerVitalsBillboardController:_track(character: Model)
 			lastFraction = nil,
 			refreshScheduled = false,
 		}
-		table.insert(entry.bars, manaEntry)
+		table.insert(entry.bars, manaEntry :: BarEntry)
 	end
 	if #entry.bars == 0 then
 		return
@@ -584,7 +658,7 @@ function PlayerVitalsBillboardController:_track(character: Model)
 	self:_refreshVisibility(entry)
 end
 
-function PlayerVitalsBillboardController:_watchPlayer(player: Player)
+function PlayerVitalsBillboardController._watchPlayer(self: typeof(PlayerVitalsBillboardController), player: Player)
 	if player.Character then
 		task.spawn(function()
 			self:_track(player.Character)
@@ -602,7 +676,7 @@ end
 
 -- The viewer's cutscene state lives on THEIR character's CutscenePlaying
 -- attribute (client-set). Re-bound on every local respawn.
-function PlayerVitalsBillboardController:_watchViewerCutscene()
+function PlayerVitalsBillboardController._watchViewerCutscene(self: typeof(PlayerVitalsBillboardController))
 	local localPlayer = Players.LocalPlayer
 
 	local function bind(character: Model)
@@ -631,7 +705,7 @@ end
 
 --[ Lifecycle ]--
 
-function PlayerVitalsBillboardController:KnitStart()
+function PlayerVitalsBillboardController.Start(self: typeof(PlayerVitalsBillboardController))
 	self:_watchViewerCutscene()
 
 	for _, player in Players:GetPlayers() do
@@ -641,7 +715,5 @@ function PlayerVitalsBillboardController:KnitStart()
 		self:_watchPlayer(player)
 	end)
 end
-
-function PlayerVitalsBillboardController:KnitInit() end
 
 return PlayerVitalsBillboardController

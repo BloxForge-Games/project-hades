@@ -1,71 +1,108 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local IgnoreListData = require(ReplicatedStorage.Submodules.Core.Shared.Data.IgnoreListData)
 
-local PlayerEventService
-
-local IgnoreListService = Knit.CreateService({
+local IgnoreListService = {
 	Name = "IgnoreListService",
-	Client = {
-		WeaponIgnoreList = Knit.CreateProperty(table.clone(IgnoreListData)),
-		BuildingTransparencyIgnoreList = Knit.CreateProperty(table.clone(IgnoreListData)),
-		MagicSpellIgnoreList = Knit.CreateProperty(table.clone(IgnoreListData)),
-		ProximityRayIgnoreList = Knit.CreateProperty({}),
-		ZombieMagicSpellIgnoreList = Knit.CreateProperty({
-			workspace.IgnoreInstances:FindFirstChild("Zombies") or nil,
-			workspace.IgnoreInstances:FindFirstChild("DeadZombies") or nil,
-			workspace.IgnoreInstances:FindFirstChild("Terrain") or nil,
-			workspace.IgnoreInstances:FindFirstChild("MapMarkers") or nil,
-			workspace.IgnoreInstances:FindFirstChild("Boundaries") or nil,
-			workspace.IgnoreInstances:FindFirstChild("Regions") or nil,
-			workspace.IgnoreInstances:FindFirstChild("MagicSpells") or nil,
-			workspace.IgnoreInstances:FindFirstChild("Chests") or nil,
-			workspace:FindFirstChild("PlayerBaseplates") or nil,
-			workspace:FindFirstChild("Terrain") or nil,
-		}),
+	Dependencies = { PlayerEventService } :: { any },
+}
+
+-- Blink sends arrays by length, so a list must have no holes: folders
+-- missing from this place are skipped instead of leaving a nil slot.
+local function existing(...: Instance?): { Instance }
+	local list = {}
+	for index = 1, select("#", ...) do
+		local instance = select(index, ...)
+		if instance then
+			table.insert(list, instance)
+		end
+	end
+	return list
+end
+
+-- The five replicated ignore lists (were replicated properties).
+IgnoreListService._weaponIgnoreList = RemoteProperty.Server({
+	changed = DungeonNetwork.WeaponIgnoreListChanged,
+	get = DungeonNetwork.GetWeaponIgnoreList,
+}, table.clone(IgnoreListData))
+IgnoreListService._buildingTransparencyIgnoreList = RemoteProperty.Server({
+	changed = DungeonNetwork.BuildingTransparencyIgnoreListChanged,
+	get = DungeonNetwork.GetBuildingTransparencyIgnoreList,
+}, table.clone(IgnoreListData))
+IgnoreListService._magicSpellIgnoreList = RemoteProperty.Server({
+	changed = DungeonNetwork.MagicSpellIgnoreListChanged,
+	get = DungeonNetwork.GetMagicSpellIgnoreList,
+}, table.clone(IgnoreListData))
+IgnoreListService._proximityRayIgnoreList = RemoteProperty.Server({
+	changed = DungeonNetwork.ProximityRayIgnoreListChanged,
+	get = DungeonNetwork.GetProximityRayIgnoreList,
+}, {})
+IgnoreListService._zombieMagicSpellIgnoreList = RemoteProperty.Server(
+	{
+		changed = DungeonNetwork.ZombieMagicSpellIgnoreListChanged,
+		get = DungeonNetwork.GetZombieMagicSpellIgnoreList,
 	},
-})
+	existing(
+		workspace.IgnoreInstances:FindFirstChild("Zombies"),
+		workspace.IgnoreInstances:FindFirstChild("DeadZombies"),
+		workspace.IgnoreInstances:FindFirstChild("Terrain"),
+		workspace.IgnoreInstances:FindFirstChild("MapMarkers"),
+		workspace.IgnoreInstances:FindFirstChild("Boundaries"),
+		workspace.IgnoreInstances:FindFirstChild("Regions"),
+		workspace.IgnoreInstances:FindFirstChild("MagicSpells"),
+		workspace.IgnoreInstances:FindFirstChild("Chests"),
+		workspace:FindFirstChild("PlayerBaseplates"),
+		workspace:FindFirstChild("Terrain")
+	)
+)
 
-function IgnoreListService:SetWeaponIgnoreList(newIgnoreList: { Instance })
-	self.Client.WeaponIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetWeaponIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._weaponIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService:SetBuildingTransparencyIgnoreList(newIgnoreList: { Instance })
-	self.Client.BuildingTransparencyIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetBuildingTransparencyIgnoreList(
+	self: typeof(IgnoreListService),
+	newIgnoreList: { Instance }
+)
+	self._buildingTransparencyIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService:SetMagicSpellIgnoreList(newIgnoreList: { Instance })
-	self.Client.MagicSpellIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetMagicSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._magicSpellIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService:SetProximityRayIgnoreList(newIgnoreList: { Instance })
-	self.Client.ProximityRayIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetProximityRayIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._proximityRayIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService:SetZombieMagicSpellIgnoreList(newIgnoreList: { Instance })
-	self.Client.ZombieMagicSpellIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetZombieMagicSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._zombieMagicSpellIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService:GetWeaponIgnoreList(): { Instance }
-	return table.clone(self.Client.WeaponIgnoreList:Get())
+function IgnoreListService.GetWeaponIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._weaponIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService:GetBuildingTransparencyIgnoreList(): { Instance }
-	return table.clone(self.Client.BuildingTransparencyIgnoreList:Get())
+function IgnoreListService.GetBuildingTransparencyIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._buildingTransparencyIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService:GetMagicSpellIgnoreList(): { Instance }
-	return table.clone(self.Client.MagicSpellIgnoreList:Get())
+function IgnoreListService.GetMagicSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._magicSpellIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService:GetProximityRayIgnoreList(): { Instance }
-	return table.clone(self.Client.ProximityRayIgnoreList:Get())
+function IgnoreListService.GetProximityRayIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._proximityRayIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService:GetZombieMagicSpellIgnoreList(): { Instance }
-	return table.clone(self.Client.ZombieMagicSpellIgnoreList:Get())
+function IgnoreListService.GetZombieMagicSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._zombieMagicSpellIgnoreList:Get()) :: { Instance }
 end
 
 -- Per-zombie hookup that adds the mob's RaycastHitbox to the weapon
@@ -85,7 +122,7 @@ end
 --   ChildAdded fires the instant the model is parented, and
 --   WaitForChild blocks until the part appears, so the registration
 --   races the projectile pipeline reliably.
-function IgnoreListService:_registerZombieRaycastHitbox(zombie: Instance)
+function IgnoreListService._registerZombieRaycastHitbox(self: typeof(IgnoreListService), zombie: Instance)
 	if not zombie:IsA("Model") then
 		return
 	end
@@ -125,7 +162,7 @@ function IgnoreListService:_registerZombieRaycastHitbox(zombie: Instance)
 	end)
 end
 
-function IgnoreListService:_InitWeaponIgnoreList()
+function IgnoreListService._initWeaponIgnoreList(self: typeof(IgnoreListService))
 	-- ORDER MATTERS. Every WeaponIgnoreList mutation in this file
 	-- is a read-modify-write on the RemoteProperty (Get → mutate
 	-- clone → Set). The static inserts below MUST happen and commit
@@ -175,7 +212,7 @@ function IgnoreListService:_InitWeaponIgnoreList()
 	end)
 end
 
-function IgnoreListService:_InitBuildingTransparencyIgnoreList()
+function IgnoreListService._initBuildingTransparencyIgnoreList(self: typeof(IgnoreListService))
 	local buildingTransparencyIgnoreList = self:GetBuildingTransparencyIgnoreList()
 
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.Zombies)
@@ -186,7 +223,7 @@ function IgnoreListService:_InitBuildingTransparencyIgnoreList()
 	self:SetBuildingTransparencyIgnoreList(buildingTransparencyIgnoreList)
 end
 
-function IgnoreListService:_InitMagicSpellIgnoreList()
+function IgnoreListService._initMagicSpellIgnoreList(self: typeof(IgnoreListService))
 	local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
 
 	table.insert(magicSpellIgnoreList, workspace.IgnoreInstances.Terrain)
@@ -197,7 +234,7 @@ function IgnoreListService:_InitMagicSpellIgnoreList()
 	self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
 end
 
-function IgnoreListService:_InitProximityRayIgnoreList()
+function IgnoreListService._initProximityRayIgnoreList(self: typeof(IgnoreListService))
 	local proximityRayIgnoreList = self:GetProximityRayIgnoreList()
 
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map)
@@ -211,15 +248,11 @@ function IgnoreListService:_InitProximityRayIgnoreList()
 	self:SetProximityRayIgnoreList(proximityRayIgnoreList)
 end
 
-function IgnoreListService:KnitInit()
-	PlayerEventService = Knit.GetService("PlayerEventService")
-end
-
-function IgnoreListService:KnitStart()
-	self:_InitWeaponIgnoreList()
-	self:_InitBuildingTransparencyIgnoreList()
-	self:_InitMagicSpellIgnoreList()
-	self:_InitProximityRayIgnoreList()
+function IgnoreListService.Start(self: typeof(IgnoreListService))
+	self:_initWeaponIgnoreList()
+	self:_initBuildingTransparencyIgnoreList()
+	self:_initMagicSpellIgnoreList()
+	self:_initProximityRayIgnoreList()
 
 	-- Initialize players into ignore list. NEVER yield between Get
 	-- and Set on these lists — `CharacterAdded:Wait()` is a yield,

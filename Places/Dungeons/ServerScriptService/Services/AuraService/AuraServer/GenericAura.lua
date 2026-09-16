@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: AuraServer/GenericAura.lua
 	Description:
@@ -21,15 +22,10 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local vfxFade = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxFade)
-
-local TextIndicatorService
-
-Knit.OnStart():andThen(function()
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-end)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -42,7 +38,7 @@ local FADE_SECONDS = 1
 -- it each pass so a mid-window extension holds.
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = (marker:GetAttribute(EXPIRY_ATTRIBUTE) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
 		if remaining <= 0 then
 			return
 		end
@@ -105,13 +101,9 @@ return function(auraName: string, options: { transparencyFade: boolean? }?)
 		end
 
 		task.delay(math.random(1, 15) / 100, function()
-			if TextIndicatorService and character:FindFirstChild("Head") then
-				TextIndicatorService:ShowIndicator(
-					player,
-					character.Head,
-					auraName .. "!",
-					Color3.fromRGB(255, 255, 255)
-				)
+			local head = character:FindFirstChild("Head") :: BasePart?
+			if TextIndicatorService and head then
+				TextIndicatorService:ShowIndicator(player, head, auraName .. "!", Color3.fromRGB(255, 255, 255))
 			end
 		end)
 

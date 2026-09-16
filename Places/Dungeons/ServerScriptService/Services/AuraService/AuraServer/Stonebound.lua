@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: AuraServer/Stonebound.lua
 	Description:
@@ -31,15 +32,10 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
-
-local TextIndicatorService
-
-Knit.OnStart():andThen(function()
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-end)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local STONEBOUND_DAMAGE_ATTRIBUTE = "StoneboundDamageBonus"
@@ -65,7 +61,7 @@ local REPLACEMENT_POLL_SECONDS = 0.25
 
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = (marker:GetAttribute(EXPIRY_ATTRIBUTE) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
 		if remaining <= 0 then
 			return
 		end
@@ -84,9 +80,11 @@ type FadeTarget = { instance: Instance, sequence: NumberSequence?, number: numbe
 local function collectFadeTargets(root: Instance, targets: { FadeTarget })
 	local function capture(instance: Instance)
 		if instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") then
-			table.insert(targets, { instance = instance, sequence = instance.Transparency })
+			local target: FadeTarget = { instance = instance, sequence = instance.Transparency }
+			table.insert(targets, target)
 		elseif instance:IsA("BasePart") then
-			table.insert(targets, { instance = instance, number = instance.Transparency })
+			local target: FadeTarget = { instance = instance, number = instance.Transparency }
+			table.insert(targets, target)
 		end
 	end
 	capture(root)
@@ -138,7 +136,7 @@ end
 type Payload = { ownerId: number, damageBonus: number, damageReduction: number }
 
 return function(player: Player, character: Model, duration: number?, payload: Payload)
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp or hrp:FindFirstChild(AuraNames.Stonebound) ~= nil then
 		return
 	end
@@ -224,13 +222,9 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 	-- Fresh-grant pop, same beat as every other aura (small random delay so
 	-- simultaneous procs stagger instead of stacking on one pixel).
 	task.delay(math.random(1, 15) / 100, function()
-		if TextIndicatorService and character:FindFirstChild("Head") then
-			TextIndicatorService:ShowIndicator(
-				player,
-				character.Head,
-				AuraNames.Stonebound .. "!",
-				Color3.fromRGB(255, 255, 255)
-			)
+		local head = character:FindFirstChild("Head") :: BasePart?
+		if TextIndicatorService and head then
+			TextIndicatorService:ShowIndicator(player, head, AuraNames.Stonebound .. "!", Color3.fromRGB(255, 255, 255))
 		end
 	end)
 

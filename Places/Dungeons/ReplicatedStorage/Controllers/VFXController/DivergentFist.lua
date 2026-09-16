@@ -1,29 +1,29 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
-local DodgeController
-local VFXService
-
 local CASTING_HUMANOID_WALK_SPEED = 2
 
-Knit.OnStart():andThen(function()
-	DodgeController = Knit.GetController("DodgeController")
-	VFXService = Knit.GetService("VFXService")
-end)
+-- The Roblox type definitions no longer allow indexing the root part off
+-- the character; the cast keeps a missing one erroring where the old index did.
+local function getRootPart(character: Model): BasePart
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart
+end
 
 return function(player: Player, preload: boolean, _: CFrame)
-	local character = player.Character
+	local character = player.Character :: Model
 
-	character.Humanoid.WalkSpeed = CASTING_HUMANOID_WALK_SPEED
+	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = CASTING_HUMANOID_WALK_SPEED
 
-	local divergentFistAnimation = character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator"):LoadAnimation(
+	local divergentFistAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("DivergentFistAnimation")
 	)
 
@@ -43,26 +43,25 @@ return function(player: Player, preload: boolean, _: CFrame)
 	end
 
 	local divergentFistRight = ReplicatedStorage.GameAssets.VFX[MagicNames["Divergent Fist"]].Fists:Clone()
-	divergentFistRight.Parent = character["Right Arm"]
+	divergentFistRight.Parent = character:FindFirstChild("Right Arm")
 
 	local divergentFistLeft = ReplicatedStorage.GameAssets.VFX[MagicNames["Divergent Fist"]].Fists:Clone()
-	divergentFistLeft.Parent = character["Left Arm"]
+	divergentFistLeft.Parent = character:FindFirstChild("Left Arm")
 
 	if not preload then
 		local divergentFistSound = ReplicatedStorage.GameAssets.Sounds.DivergentFistCast:Clone()
-		divergentFistSound.Parent = character.HumanoidRootPart
+		divergentFistSound.Parent = getRootPart(character)
 		divergentFistSound:Play()
 		Debris:AddItem(divergentFistSound, 5)
 	end
 
 	task.delay(0.9, function()
 		if player == Players.LocalPlayer and not preload then
-			VFXService:OnVFXHitboxRequested(
-				player,
-				MagicNames["Divergent Fist"],
-				character.HumanoidRootPart.CFrame
-					+ character.HumanoidRootPart.CFrame.LookVector * MagicData[MagicNames["Divergent Fist"]].range
-			)
+			Magic.HitboxRequested.Fire({
+				MagicName = MagicNames["Divergent Fist"],
+				CFrame = getRootPart(character).CFrame
+					+ getRootPart(character).CFrame.LookVector * MagicData[MagicNames["Divergent Fist"]].range,
+			})
 		end
 	end)
 
@@ -70,9 +69,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 		local divergentFistExplosion =
 			ReplicatedStorage.GameAssets.VFX[MagicNames["Divergent Fist"]].ExplosionFX:Clone()
 		divergentFistExplosion.Parent = workspace.IgnoreInstances.MagicSpells
-		divergentFistExplosion:PivotTo(
-			character.HumanoidRootPart.CFrame + character.HumanoidRootPart.CFrame.LookVector * 5
-		)
+		divergentFistExplosion:PivotTo(getRootPart(character).CFrame + getRootPart(character).CFrame.LookVector * 5)
 
 		if not preload then
 			divergentFistExplosion.PrimaryPart.Explosion:Play()

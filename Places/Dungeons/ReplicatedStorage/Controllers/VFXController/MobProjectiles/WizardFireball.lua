@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: VFXController/MobProjectiles/WizardFireball.lua
 	Description:
@@ -34,10 +35,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local ZombieService
-local TextIndicatorController
+local TextIndicatorController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.TextIndicatorController)
+local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 
 -- Tick cadence. Matches FireBlast's 0.015s (~67Hz) — fast enough that
 -- a 60 stud/sec projectile only moves ~0.9 studs per tick, way under
@@ -65,11 +64,6 @@ local TICK_INTERVAL = 0.01
 -- airborne and wall hits resume normally — so a real wall in the
 -- middle of the room still stops the fireball as expected.
 local MUZZLE_CLEARANCE_DISTANCE = 5
-
-Knit.OnStart():andThen(function()
-	ZombieService = Knit.GetService("ZombieService")
-	TextIndicatorController = Knit.GetController("TextIndicatorController")
-end)
 
 return function(
 	_zombieModel: Model,
@@ -193,7 +187,8 @@ return function(
 	-- would otherwise fly straight through the player who got hit and keep
 	-- going. This subscription is how the other clients learn to despawn.
 	local despawned = false
-	local despawnConn = ZombieService.OnMobProjectileDespawn:Connect(function(despawnedUuid: string)
+	-- Blink's On returns a disconnect FUNCTION, not a connection.
+	local despawnConn = Combat.MobProjectileDespawn.On(function(despawnedUuid: string)
 		if despawnedUuid == castUuid then
 			despawned = true
 		end
@@ -224,7 +219,7 @@ return function(
 			-- Something destroyed the projectile externally (cleanup
 			-- sweep, etc.). Bail — releasing the despawn subscription,
 			-- since this is the one exit that skips the cleanup below.
-			despawnConn:Disconnect()
+			despawnConn()
 			return
 		end
 
@@ -300,7 +295,7 @@ return function(
 					-- we walk back into the path.
 					if not perfectDodgeFired then
 						perfectDodgeFired = true
-						ZombieService:OnMobProjectilePerfectDodgedRequested(castUuid)
+						Combat.MobProjectilePerfectDodged.Fire(castUuid)
 
 						TextIndicatorController:ShowIndicator(
 							localCharacter.HumanoidRootPart,
@@ -349,7 +344,7 @@ return function(
 	-- 	Debris:AddItem(explosion, 2)
 	-- end
 
-	despawnConn:Disconnect()
+	despawnConn()
 
 	-- Disable the projectile's particle emitters so trailing trails
 	-- fade naturally instead of snapping, then debris the model.
@@ -362,7 +357,7 @@ return function(
 
 	-- Impact callback — ONLY the targeted local player fires this.
 	-- Everyone else just sees the projectile fly + impact visual.
-	if hitLocalPlayer and hitCFrame and ZombieService then
-		ZombieService:OnMobProjectileHitRequested(castUuid, hitCFrame)
+	if hitLocalPlayer and hitCFrame then
+		Combat.MobProjectileHit.Fire({ CastUuid = castUuid, HitCFrame = hitCFrame })
 	end
 end

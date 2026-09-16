@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: ZombieService.lua
 	Description:
@@ -59,45 +60,20 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local DamageService = require(ServerScriptService.Services.DamageService)
+local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
-local ZombieService = Knit.CreateService({
+local ZombieService = {
 	Name = "ZombieService",
-
-	Client = {
-		OnReplicateZombieAttack = Knit.CreateSignal(),
-		OnReplicateMobAttack = Knit.CreateSignal(),
-
-		-- Ranged-projectile cast replication. Fires at WIND-UP END
-		-- (immediately before the projectile becomes visible). Each
-		-- client animates the projectile locally; the TARGETED player's
-		-- client reports the impact CFrame back via
-		-- OnMobProjectileHitRequested (below).
-		--
-		-- Payload:
-		--   mobModel        : Model
-		--   projectileName  : string         — looks up GameAssets.VFX.<name>
-		--   originCFrame    : CFrame         — muzzle position
-		--   targetPosition  : Vector3        — fire-and-forget aim point
-		--   castUuid        : string         — registry key for impact callback
-		--   attackConfig    : table          — { speed, lifetime, hitRadius }
-		OnReplicateMobRangedAttack = Knit.CreateSignal(),
-
-		-- (castUuid: string) — broadcast when a cast resolves, so every
-		-- client despawns its own copy of that projectile. Only the targeted
-		-- player's client can detect the impact, so this is the only way the
-		-- other clients learn the fireball is spent.
-		OnMobProjectileDespawn = Knit.CreateSignal(),
-	},
-})
+	Dependencies = { RelicService, TextIndicatorService, DamageService } :: { any },
+}
 
 local HttpService = game:GetService("HttpService")
-
-local TextIndicatorService
-local DamageService
-local RelicService
 
 -- Folder under workspace.IgnoreInstances where transient hitbox Models
 -- live during their hit-frame window. Picked to match other transient
@@ -144,7 +120,7 @@ ZombieService._pendingRangedCasts = {}
 -- missing — the user is responsible for authoring these under
 -- ReplicatedStorage.GameAssets.Hitboxes.<name>. Each template must be
 -- a Model with PrimaryPart set.
-function ZombieService:_resolveHitboxTemplate(hitboxName: string): Model?
+function ZombieService._resolveHitboxTemplate(_self: typeof(ZombieService), hitboxName: string): Model?
 	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
 	if not hitboxesFolder then
 		warn("[ZombieService] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
@@ -166,7 +142,7 @@ end
 --
 -- One damage application per (player, attack) — players who walk
 -- through multiple zones within one swing aren't multi-hit.
-function ZombieService:_runHitDetection(zombieModel: Model, attack, hitboxModel: Model)
+function ZombieService._runHitDetection(_self: typeof(ZombieService), zombieModel: Model, attack, hitboxModel: Model)
 	local hitRegistry: { [Player]: boolean } = {}
 	local startTime = os.clock()
 	-- Cache the zombie's humanoid so the per-tick alive-check below
@@ -260,8 +236,12 @@ end
 -- Computes the lunge goal CFrame for an attack with lungeDistance > 0.
 -- Raycasts forward — if a wall is in the way, the goal is clipped to
 -- just before the wall so the mob doesn't tween THROUGH geometry.
-function ZombieService:_computeLungeGoalCFrame(zombieModel: Model, lungeDistance: number): CFrame
-	local root = zombieModel.HumanoidRootPart
+function ZombieService._computeLungeGoalCFrame(
+	_self: typeof(ZombieService),
+	zombieModel: Model,
+	lungeDistance: number
+): CFrame
+	local root = zombieModel:FindFirstChild("HumanoidRootPart") :: BasePart
 	local goalCFrame = root.CFrame + root.CFrame.LookVector * lungeDistance
 
 	local rayOrigin = root.Position - Vector3.new(0, root.Size.Y, 0)
@@ -310,7 +290,7 @@ end
 --   lungeDistance    : number?               — default 0 (no lunge)
 --   onTelegraph      : (mob, cframe) -> ()?   — optional; fired server-side at windup start for
 --                                               signature VFX / camera shake (owns its replication)
-function ZombieService:SpawnHitbox(zombieModel: Model, config)
+function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Model, config)
 	if not zombieModel or not zombieModel.Parent then
 		return
 	end
@@ -340,7 +320,13 @@ function ZombieService:SpawnHitbox(zombieModel: Model, config)
 	-- it DOWN over hitFrameDuration so the visual peaks at impact and clears as
 	-- the damage window closes. Firing at windup START (not hit-frame start) is
 	-- what gives the player time to react.
-	self.Client.OnReplicateMobAttack:FireAll(zombieModel, config.hitboxName, cframe, windUpDuration, hitFrameDuration)
+	Combat.MobAttack.FireAll({
+		Mob = zombieModel,
+		HitboxName = config.hitboxName,
+		CFrame = cframe,
+		WindUpDuration = windUpDuration,
+		HitFrameDuration = hitFrameDuration,
+	})
 	if config.onTelegraph then
 		-- Spawned so a yielding / erroring hook can't stall or break the
 		-- hit-frame timeline. The hook owns its own client replication.
@@ -370,9 +356,14 @@ function ZombieService:SpawnHitbox(zombieModel: Model, config)
 	-- Phase 3: lunge (opt-in) — fires at hit-frame start
 	-- ============================================================
 	if config.lungeDistance and config.lungeDistance > 0 then
-		local root = zombieModel.HumanoidRootPart
+		local root = zombieModel:FindFirstChild("HumanoidRootPart") :: BasePart
 		local goalCFrame = self:_computeLungeGoalCFrame(zombieModel, config.lungeDistance)
-		self.Client.OnReplicateZombieAttack:FireAll(zombieModel, root.CFrame, goalCFrame, workspace:GetServerTimeNow())
+		Combat.MobLunge.FireAll({
+			Mob = zombieModel,
+			StartCFrame = root.CFrame,
+			GoalCFrame = goalCFrame,
+			ServerTime = workspace:GetServerTimeNow(),
+		})
 
 		-- Server-side: tween the mob to the goal mid-hitframe. Without this the
 		-- server-authoritative position lags and the next AI tick's distance
@@ -412,7 +403,7 @@ end
 -- adapter mapping one ZombieData genericAttacks entry onto SpawnHitbox (the
 -- shared primitive that owns the visual + damage timeline). Blocks for
 -- (windUpDuration + hitFrameDuration); MobBase owns recoveryDuration after.
-function ZombieService:ExecuteMobAttack(zombieModel: Model, attack)
+function ZombieService.ExecuteMobAttack(self: typeof(ZombieService), zombieModel: Model, attack)
 	self:SpawnHitbox(zombieModel, {
 		hitboxName = attack.hitboxName,
 		cframe = attack.hitboxCFrame,
@@ -439,7 +430,12 @@ end
 --      clean up the registry entry if no impact callback ever fires.
 --
 -- Returns the castUuid (mostly for testing / diagnostics).
-function ZombieService:FireMobRangedAttack(zombieModel: Model, target: Player, attack): string?
+function ZombieService.FireMobRangedAttack(
+	self: typeof(ZombieService),
+	zombieModel: Model,
+	target: Player,
+	attack
+): string?
 	if not zombieModel.Parent or not target or not target.Parent then
 		return nil
 	end
@@ -474,7 +470,8 @@ function ZombieService:FireMobRangedAttack(zombieModel: Model, target: Player, a
 	end)
 
 	-- Resolve muzzle origin (mob-relative CFrame from per-attack function).
-	local originCFrame = attack.muzzleOffset and attack.muzzleOffset(zombieModel) or zombieModel.HumanoidRootPart.CFrame
+	local mobRoot = zombieModel:FindFirstChild("HumanoidRootPart") :: BasePart
+	local originCFrame = attack.muzzleOffset and attack.muzzleOffset(zombieModel) or mobRoot.CFrame
 
 	-- Aim point: straight ahead along the MOB's facing at cast time —
 	-- NOT the target's position. The mob rotated to face the target
@@ -482,25 +479,23 @@ function ZombieService:FireMobRangedAttack(zombieModel: Model, target: Player, a
 	-- flies where the mob is pointing; moving out of its facing line
 	-- during the windup is the dodge counterplay. Flattened to the
 	-- muzzle's height so shots fly level.
-	local facing = zombieModel.HumanoidRootPart.CFrame.LookVector
+	local facing = mobRoot.CFrame.LookVector
 	local flatFacing = Vector3.new(facing.X, 0, facing.Z)
 	flatFacing = if flatFacing.Magnitude > 0.001 then flatFacing.Unit else Vector3.zAxis
 	local travelDistance = (attack.projectileSpeed or 40) * lifetime
 	local targetPosition = originCFrame.Position + flatFacing * travelDistance
 
-	self.Client.OnReplicateMobRangedAttack:FireAll(
-		zombieModel,
-		attack.projectileName,
-		originCFrame,
-		targetPosition,
-		castUuid,
-		{
-			speed = attack.projectileSpeed,
-			lifetime = lifetime,
-			hitRadius = attack.hitRadius or 4,
-			explosionRadius = attack.explosionRadius or 10,
-		}
-	)
+	Combat.MobRangedAttack.FireAll({
+		Mob = zombieModel,
+		ProjectileName = attack.projectileName,
+		OriginCFrame = originCFrame,
+		TargetPosition = targetPosition,
+		CastUuid = castUuid,
+		Speed = attack.projectileSpeed,
+		Lifetime = lifetime,
+		HitRadius = attack.hitRadius or 4,
+		ExplosionRadius = attack.explosionRadius or 10,
+	})
 
 	return castUuid
 end
@@ -538,8 +533,9 @@ end
 -- actually have the IsDodging attribute server-side. The IsDodging
 -- check closes the obvious exploit of spamming this signal to proc
 -- Jetpack without a dodge.
-function ZombieService.Client:OnMobProjectilePerfectDodgedRequested(player: Player, castUuid: string)
-	local registry = self.Server._pendingRangedCasts
+-- Combat.MobProjectilePerfectDodged handler (was a client-callable method).
+function ZombieService._onMobProjectilePerfectDodged(self: typeof(ZombieService), player: Player, castUuid: string)
+	local registry = self._pendingRangedCasts
 	local entry = registry[castUuid]
 	if not entry then
 		return -- expired or never existed
@@ -562,7 +558,7 @@ function ZombieService.Client:OnMobProjectilePerfectDodgedRequested(player: Play
 
 	-- Same fan-out as the melee dodge branch — see RelicService:OnPlayerPerfectDodged.
 	RelicService:OnPlayerPerfectDodged(player)
-	TextIndicatorService:ShowIndicator(player, character.Head, "Perfect Dodge!")
+	TextIndicatorService:ShowIndicator(player, character:FindFirstChild("Head") :: BasePart, "Perfect Dodge!")
 	-- Intentionally do NOT clear registry[castUuid] — the projectile
 	-- keeps flying client-side; the registry needs to stay alive so
 	-- a real impact later in the projectile's flight can apply damage.
@@ -570,8 +566,14 @@ function ZombieService.Client:OnMobProjectilePerfectDodgedRequested(player: Play
 	-- FireMobRangedAttack.
 end
 
-function ZombieService.Client:OnMobProjectileHitRequested(player: Player, castUuid: string, hitCFrame: CFrame)
-	local registry = self.Server._pendingRangedCasts
+-- Combat.MobProjectileHit handler (was a client-callable method).
+function ZombieService._onMobProjectileHit(
+	self: typeof(ZombieService),
+	player: Player,
+	castUuid: string,
+	hitCFrame: CFrame
+)
+	local registry = self._pendingRangedCasts
 	local entry = registry[castUuid]
 	if not entry then
 		return -- expired or never existed
@@ -627,18 +629,22 @@ function ZombieService.Client:OnMobProjectileHitRequested(player: Player, castUu
 			-- trigger Experimental Jetpack."
 			if character:GetAttribute(Attributes.IsDodging) then
 				RelicService:GetRelicActiveModule(hitPlayer, "Jetpack")
-				TextIndicatorService:ShowIndicator(hitPlayer, character.Head, "Perfect Dodge!")
+				TextIndicatorService:ShowIndicator(
+					hitPlayer,
+					character:FindFirstChild("Head") :: BasePart,
+					"Perfect Dodge!"
+				)
 			else
 				DamageService:PlayerTakeDamage(hitPlayer, entry.mob, entry.damage, entry.canRagdoll)
 			end
 			break -- only the registered target gets hit, no need to keep scanning
 		end
 	else
-		local character = player.Character
+		local character = player.Character :: Model
 
 		if character:GetAttribute(Attributes.IsDodging) then
 			RelicService:GetRelicActiveModule(player, "Jetpack")
-			TextIndicatorService:ShowIndicator(player, character.Head, "Perfect Dodge!")
+			TextIndicatorService:ShowIndicator(player, character:FindFirstChild("Head") :: BasePart, "Perfect Dodge!")
 		else
 			DamageService:PlayerTakeDamage(player, entry.mob, entry.damage, entry.canRagdoll)
 		end
@@ -656,14 +662,14 @@ function ZombieService.Client:OnMobProjectileHitRequested(player: Player, castUu
 	--
 	-- Fired AFTER damage resolution so the despawn can't race the hit.
 	--
-	-- `self.Server.Client`, NOT `self.Client`: this is a Client-table method,
+	-- `self.Client`, NOT `self.Client`: this is a Client-table method,
 	-- so `self` IS the Client table and has no `.Client` field. Server-side
 	-- methods elsewhere in this file (FireMobRangedAttack et al.) can write
 	-- `self.Client.X` because there `self` is the service — same expression,
 	-- different meaning depending on which table the method hangs off. Note
-	-- the `self.Server._pendingRangedCasts` read at the top of this very
+	-- the `self._pendingRangedCasts` read at the top of this very
 	-- function for the matching idiom.
-	self.Server.Client.OnMobProjectileDespawn:FireAll(castUuid)
+	Combat.MobProjectileDespawn.FireAll(castUuid)
 
 	-- One impact per cast — clear the registry.
 	registry[castUuid] = nil
@@ -671,10 +677,13 @@ end
 
 --[ Lifecycle ]--
 
-function ZombieService:KnitStart()
-	RelicService = Knit.GetService("RelicService")
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	DamageService = Knit.GetService("DamageService")
+function ZombieService.Start(self: typeof(ZombieService))
+	Combat.MobProjectilePerfectDodged.On(function(player: Player, castUuid: string)
+		self:_onMobProjectilePerfectDodged(player, castUuid)
+	end)
+	Combat.MobProjectileHit.On(function(player: Player, payload)
+		self:_onMobProjectileHit(player, payload.CastUuid, payload.HitCFrame)
+	end)
 end
 
 return ZombieService

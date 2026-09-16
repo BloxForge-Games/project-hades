@@ -1,11 +1,9 @@
+--!strict
 -- A controller that provides a series of Raycast helper functions
 
 local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 
 -- Below this planar speed a target counts as stationary and gets no lead —
 -- Humanoid velocity jitters slightly even when standing still.
@@ -18,16 +16,23 @@ local VISUALIZE_RAYCAST = false
 
 local camera = workspace.CurrentCamera
 
-local ProximityRayController = Knit.CreateController({
+local ProximityRayController = {
 	Name = "ProximityRayController",
+
 	_camera = workspace.CurrentCamera :: Camera,
 	_raycastResult = nil,
-})
+}
 
-function ProximityRayController:GetRayResult(ignoreList: table, filterType: string, x: number, y: number): RaycastResult
+function ProximityRayController.GetRayResult(
+	_self: typeof(ProximityRayController),
+	ignoreList: { [any]: any },
+	filterType: string,
+	x: number,
+	y: number
+): RaycastResult
 	local mouseCastParams = RaycastParams.new()
 	mouseCastParams.FilterDescendantsInstances = ignoreList
-	mouseCastParams.FilterType = Enum.RaycastFilterType[filterType]
+	mouseCastParams.FilterType = (Enum.RaycastFilterType :: any)[filterType]
 
 	local unitRay = camera:ViewportPointToRay(x, y)
 
@@ -52,13 +57,17 @@ end
 -- Y velocity is dropped deliberately. Mobs are ground units; folding in a
 -- jump or a knockback's vertical component would lift the aim point off
 -- their body and produce misses over flat ground.
-function ProximityRayController:GetVelocityOffset(raycastResult: RaycastResult, projectileSpeed: number?): Vector3
+function ProximityRayController.GetVelocityOffset(
+	_self: typeof(ProximityRayController),
+	raycastResult: RaycastResult,
+	projectileSpeed: number?
+): Vector3
 	local raycastModel: Model? = raycastResult.Instance:FindFirstAncestorWhichIsA("Model")
-		or raycastResult.Instance.Parent:FindFirstAncestorWhichIsA("Model")
+		or (raycastResult.Instance.Parent :: Instance):FindFirstAncestorWhichIsA("Model")
 
-	local targetRoot = raycastModel and raycastModel:FindFirstChild("HumanoidRootPart")
+	local targetRoot = raycastModel and raycastModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local character = Players.LocalPlayer.Character
-	local originRoot = character and character:FindFirstChild("HumanoidRootPart")
+	local originRoot = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 	-- No speed means the caller couldn't resolve weapon data. Aiming dead-on
 	-- is a far better failure than leading by a garbage amount.
@@ -81,11 +90,12 @@ function ProximityRayController:GetVelocityOffset(raycastResult: RaycastResult, 
 	return flatVelocity * (distance / projectileSpeed)
 end
 
-function ProximityRayController:_ComputeRaycastAngles(
+function ProximityRayController._computeRaycastAngles(
+	self: typeof(ProximityRayController),
 	params: RaycastParams,
 	angle1: number,
 	angle2: number,
-	tag: string
+	tag: string?
 )
 	if self._raycastResult then
 		return
@@ -101,7 +111,7 @@ function ProximityRayController:_ComputeRaycastAngles(
 	end
 
 	local raycastModel: Model? = raycastResult.Instance:FindFirstAncestorWhichIsA("Model")
-		or raycastResult.Instance.Parent:FindFirstAncestorWhichIsA("Model")
+		or (raycastResult.Instance.Parent :: Instance):FindFirstAncestorWhichIsA("Model")
 
 	if tag and not CollectionService:HasTag(raycastModel, tag) then
 		return
@@ -125,15 +135,19 @@ function ProximityRayController:_ComputeRaycastAngles(
 	self._raycastResult = raycastResult
 end
 
-function ProximityRayController:CastProximityRays(raycastParams: RaycastParams, tag: string?)
+function ProximityRayController.CastProximityRays(
+	self: typeof(ProximityRayController),
+	raycastParams: RaycastParams,
+	tag: string?
+)
 	local castCount = 25
 
 	self._raycastResult = nil
 
 	for _ = 1, MAX_RAY_COUNT, 1 do
-		self:_ComputeRaycastAngles(raycastParams, castCount, 0, tag)
-		self:_ComputeRaycastAngles(raycastParams, castCount, RAY_SPREAD_ANGLE, tag)
-		self:_ComputeRaycastAngles(raycastParams, castCount, -RAY_SPREAD_ANGLE, tag)
+		self:_computeRaycastAngles(raycastParams, castCount, 0, tag)
+		self:_computeRaycastAngles(raycastParams, castCount, RAY_SPREAD_ANGLE, tag)
+		self:_computeRaycastAngles(raycastParams, castCount, -RAY_SPREAD_ANGLE, tag)
 
 		castCount -= RAY_INCREMENT_ANGLE
 

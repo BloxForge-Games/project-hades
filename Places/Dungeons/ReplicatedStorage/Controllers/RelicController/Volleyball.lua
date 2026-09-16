@@ -27,7 +27,7 @@ function Volleyball.new(
 end
 
 function Volleyball:PlayEffect()
-	local volleyball = getRelicModelTemplate(RelicNames.Volleyball):Clone()
+	local volleyball = (getRelicModelTemplate(RelicNames.Volleyball) :: Model):Clone()
 	local character = self._character
 	local targetCharacter = self._targetCharacter
 

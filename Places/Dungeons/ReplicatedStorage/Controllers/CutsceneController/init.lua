@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: CutsceneController.lua
@@ -12,18 +13,18 @@ local RunService = game:GetService("RunService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local IsometricCameraController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.IsometricCameraController)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local AmbientGradientInterfaceController = require(ReplicatedStorage.Interfaces.AmbientGradientInterfaceController)
 
-local IsometricCameraController
-local CinematicInterfaceController
-local AmbientGradientInterfaceController
-
-local CutsceneController = Knit.CreateController({
+local CutsceneController = {
 	Name = "CutsceneController",
-	Client = {},
-})
+	Dependencies = { CinematicInterfaceController, IsometricCameraController, AmbientGradientInterfaceController } :: { any },
+}
 
 --[ Constants ]--
 
@@ -55,7 +56,7 @@ local ABILITY_CUTSCENE_ANIMATION_NAMES = {
 
 --[ Properties ]--
 
-CutsceneController._cutscenes = {}
+CutsceneController._cutscenes = {} :: { [string]: any }
 CutsceneController._cinematicBobConnection = nil
 CutsceneController._cinematicBobEnabled = false
 CutsceneController._bobTime = 0
@@ -63,7 +64,11 @@ CutsceneController._bobTime = 0
 -- The cutscene module currently inside PlayCutscene's yield. Set just before
 -- :Play() is called, cleared just after. CancelActive uses this to know which
 -- cutscene to :Stop. nil when no cutscene is running.
-CutsceneController._activeCutscene = nil
+CutsceneController._activeCutscene = nil :: any
+
+-- PlayMagicCutscene's per-magic guard: [magicName] = os.clock() deadline
+-- until which a repeat request for the same magic is the same cast.
+CutsceneController._magicCutsceneGuard = nil :: { [string]: number }?
 
 -- Set by CancelActive(preserveLock=true). When true, PlayCutscene's cleanup
 -- skips releasing CutscenePlaying / firing OnCinematicEnd, so the entity that
@@ -74,7 +79,7 @@ CutsceneController._suppressUnlockOnEnd = false
 
 --[ Private Functions ]--
 
-function CutsceneController:_startCinematicBob()
+function CutsceneController._startCinematicBob(self: typeof(CutsceneController))
 	if self._cinematicBobConnection then
 		return
 	end
@@ -109,7 +114,7 @@ function CutsceneController:_startCinematicBob()
 	end)
 end
 
-function CutsceneController:_stopCinematicBob()
+function CutsceneController._stopCinematicBob(self: typeof(CutsceneController))
 	self._cinematicBobEnabled = false
 
 	if self._cinematicBobConnection then
@@ -120,7 +125,7 @@ end
 
 --[ Public Functions ]--
 
-function CutsceneController:Shake(strength: number, speed: number, duration: number)
+function CutsceneController.Shake(self: typeof(CutsceneController), strength: number, speed: number, duration: number)
 	self._shakeTime = 0
 	self._shakeStrength = strength
 	self._shakeSpeed = speed
@@ -158,7 +163,7 @@ function CutsceneController:Shake(strength: number, speed: number, duration: num
 	end)
 end
 
-function CutsceneController:PlayCutscene(cutsceneName: string)
+function CutsceneController.PlayCutscene(self: typeof(CutsceneController), cutsceneName: string)
 	local cutscene = self._cutscenes[cutsceneName]
 	if not cutscene then
 		warn("[CutsceneController] Cutscene not found:", cutsceneName)
@@ -255,7 +260,7 @@ end
 -- (CutsceneBillboardController) and swallows damage / text indicators, and
 -- it is deliberately NOT CutscenePlaying, which every other cinematic
 -- takes and which dresses the screen differently.
-function CutsceneController:PlayMagicCutscene(magicName: string)
+function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), magicName: string)
 	local data = MagicData[magicName]
 	local config = data and data.cutscene
 	if not config or config.enabled ~= true then
@@ -276,8 +281,9 @@ function CutsceneController:PlayMagicCutscene(magicName: string)
 	if guardUntil and now < guardUntil then
 		return
 	end
-	self._magicCutsceneGuard = self._magicCutsceneGuard or {}
-	self._magicCutsceneGuard[magicName] = now + guardWindow
+	local guard = self._magicCutsceneGuard or {}
+	self._magicCutsceneGuard = guard
+	guard[magicName] = now + guardWindow
 
 	local character = Players.LocalPlayer.Character
 	if not character then
@@ -298,18 +304,14 @@ function CutsceneController:PlayMagicCutscene(magicName: string)
 		CinematicInterfaceController.Signals.OnCinematicStart:Fire()
 		character:SetAttribute(Attributes.CutscenePlaying, true)
 	end
-	if AmbientGradientInterfaceController then
-		AmbientGradientInterfaceController:SetStrong(true)
-	end
+	AmbientGradientInterfaceController:SetStrong(true)
 
 	local beat = newCinematicBeat(duration)
 	self._activeCutscene = beat
 	beat:Play()
 	self._activeCutscene = nil
 
-	if AmbientGradientInterfaceController then
-		AmbientGradientInterfaceController:SetStrong(false)
-	end
+	AmbientGradientInterfaceController:SetStrong(false)
 	local suppressUnlock = self._suppressUnlockOnEnd
 	self._suppressUnlockOnEnd = false
 	if not externallyOwned and not suppressUnlock then
@@ -331,7 +333,7 @@ end
 -- wind-up animation pose, call CancelActiveAbility — it bundles both
 -- operations into one call for the common "kill a cutscene ability
 -- cleanly" use case.
-function CutsceneController:CancelActive(preserveLock: boolean?)
+function CutsceneController.CancelActive(self: typeof(CutsceneController), preserveLock: boolean?)
 	local active = self._activeCutscene
 	if not active then
 		return
@@ -347,7 +349,7 @@ end
 -- ABILITY_CUTSCENE_ANIMATION_NAMES so non-cutscene animations (idle, walk,
 -- Fire Blast, etc.) are left alone. Idempotent — no-op when nothing
 -- matches. Private; the public surface is CancelActiveAbility.
-function CutsceneController:_stopAbilityCutsceneAnimations()
+function CutsceneController._stopAbilityCutsceneAnimations(_self: typeof(CutsceneController))
 	local character = Players.LocalPlayer.Character
 	if not character then
 		return
@@ -377,21 +379,17 @@ end
 --
 -- Adding a new caller? Just call this — no need to maintain a local copy
 -- of the animation whitelist or duplicate the Animator-iteration boilerplate.
-function CutsceneController:CancelActiveAbility(preserveLock: boolean?)
+function CutsceneController.CancelActiveAbility(self: typeof(CutsceneController), preserveLock: boolean?)
 	self:CancelActive(preserveLock)
 	self:_stopAbilityCutsceneAnimations()
 end
 
 --[ Initializers ]--
 
-function CutsceneController:KnitStart()
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-	IsometricCameraController = Knit.GetController("IsometricCameraController")
-	AmbientGradientInterfaceController = Knit.GetController("AmbientGradientInterfaceController")
-
+function CutsceneController.Start(self: typeof(CutsceneController))
 	for _, cutsceneModule in pairs(script.Cutscenes:GetChildren()) do
 		if cutsceneModule:IsA("ModuleScript") then
-			local cutscene = require(cutsceneModule)
+			local cutscene = (require :: any)(cutsceneModule)
 			self._cutscenes[cutsceneModule.Name] = cutscene
 		end
 	end
@@ -401,7 +399,5 @@ function CutsceneController:KnitStart()
 	-- screen stripped of billboards and swallowing indicators.
 	Players.LocalPlayer.Character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 end
-
-function CutsceneController:KnitCutsceneController() end
 
 return CutsceneController

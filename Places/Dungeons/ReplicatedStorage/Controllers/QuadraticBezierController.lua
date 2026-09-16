@@ -1,23 +1,31 @@
+--!strict
 local Debris = game:GetService("Debris")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local QuadraticBezierController = Knit.CreateController({
+local QuadraticBezierController = {
 	Name = "QuadraticBezierController",
-})
+}
 
 local Y_AXIS_DECREASE: number = 200
 local BEZIER_PART_LIFETIME = 30
 
-function QuadraticBezierController:GenerateBezierCurve(t, p0, p1, p2): Vector3
+function QuadraticBezierController.GenerateBezierCurve(
+	_self: typeof(QuadraticBezierController),
+	t: number,
+	p0: Vector3,
+	p1: Vector3,
+	p2: Vector3
+): Vector3
 	return (1 - t) ^ 2 * p0 + 2 * (1 - t) * t * p1 + t ^ 2 * p2
 end
 
 -- For debugging purposes
-function QuadraticBezierController:GenerateBezierParts(targetRadius: Part, origin: Part): (Part?, Part?)
-	local part0: Part = targetRadius:FindFirstChild("Part0")
-	local part1: Part = targetRadius:FindFirstChild("Part1")
+function QuadraticBezierController.GenerateBezierParts(
+	_self: typeof(QuadraticBezierController),
+	targetRadius: Part,
+	origin: Part
+): (Part?, Part?)
+	local part0 = targetRadius:FindFirstChild("Part0") :: Part?
+	local part1 = targetRadius:FindFirstChild("Part1") :: Part?
 
 	if not part0 or not part1 then
 		return
@@ -32,8 +40,8 @@ function QuadraticBezierController:GenerateBezierParts(targetRadius: Part, origi
 		return
 	end
 
-	local randomXPosition: number? = math.random(math.min(aX, bX), math.max(aX, bX))
-	local randomZPosition: number? = math.random(math.min(aZ, bZ), math.max(aZ, bZ))
+	local randomXPosition: number = math.random(math.min(aX, bX), math.max(aX, bX))
+	local randomZPosition: number = math.random(math.min(aZ, bZ), math.max(aZ, bZ))
 
 	local endPoint: Part = Instance.new("Part")
 	endPoint.CFrame = CFrame.new(randomXPosition, targetRadius.Position.Y, randomZPosition)
@@ -46,7 +54,8 @@ function QuadraticBezierController:GenerateBezierParts(targetRadius: Part, origi
 	intermediatePoint.Anchored = true
 	intermediatePoint.Parent = workspace:FindFirstChild("Snowballs")
 
-	local rootPart: Part = origin.Parent:FindFirstChild("RootPart")
+	-- Same direct lookups as before: a missing parent or RootPart still throws here.
+	local rootPart = (origin.Parent :: Instance):FindFirstChild("RootPart") :: Part
 
 	endPoint.CFrame = CFrame.lookAt(
 		endPoint.Position,

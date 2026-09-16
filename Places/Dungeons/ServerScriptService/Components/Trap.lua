@@ -1,19 +1,19 @@
+--!strict
 --[[
      Author(s): ryanisawesome25
      Module: Trap.luau
      Description: Spike trap that damages ANY humanoid entity (zombies and
-                  players, including the player who built it) walking over
-                  it. Uses ZonePlus for zone detection. Plays a spike
-                  extension animation on trigger, then enters a cooldown.
+                  players) walking over it. Uses ZonePlus for zone
+                  detection. Plays a spike extension animation on trigger,
+                  then enters a cooldown.
 
-                  Ownership: traps may carry an OwnerId attribute (set by
-                  BuildService for player-built traps) OR have no owner at
-                  all (set by the chunk system for dungeon-room traps —
-                  these are pre-tagged 'Trap' inside Combat chunks and
-                  auto-instantiate when the chunk parents into workspace).
-                  Owner is used only for kill attribution against zombies;
-                  it does NOT exempt the owner from self-damage. Traps are
-                  now pure hazards, not friendly builds.
+                  Ownership: traps may carry an OwnerId attribute OR have
+                  no owner at all (the chunk system's dungeon-room traps —
+                  pre-tagged 'Trap' inside Combat chunks, auto-instantiated
+                  when the chunk parents into workspace). Owner is used
+                  only for kill attribution against zombies; it does NOT
+                  exempt the owner from self-damage. Traps are pure
+                  hazards.
 ]]
 
 --[ Exports & Types & Defaults ]--
@@ -23,6 +23,7 @@
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
@@ -30,24 +31,15 @@ local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 local Zone = require(ReplicatedStorage.Submodules.Core.Packages.ZonePlus)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DamageService = require(ServerScriptService.Services.DamageService)
+local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
-local DamageIndicatorService
-local DamageService
-
-Knit.OnStart():andThen(function()
-	DamageService = Knit.GetService("DamageService")
-	DamageIndicatorService = Knit.GetService("DamageIndicatorService")
-end)
 
 --[ Component Root ]--
 
 local Trap = Component.new({
 	Tag = "Trap",
-
-	Extensions = { CommAdder },
 })
 
 --[ Constants ]--
@@ -156,7 +148,7 @@ function Trap:_onEntityEntered()
 			return
 		end
 
-		self._onSpikesTriggered:FireAll(self.Instance)
+		DungeonNetwork.TrapSpikesTriggered.FireAll(self.Instance)
 
 		task.delay(TRAP_COOLDOWN, function()
 			self._onCooldown = false
@@ -174,8 +166,6 @@ function Trap:Construct()
 	self._janitor = Janitor.new()
 	self._onCooldown = false
 	self._player = Players:GetPlayerByUserId(self.Instance:GetAttribute(Attributes.OwnerId) or -1)
-
-	self._onSpikesTriggered = self._comm:CreateSignal("OnSpikesTriggered")
 end
 
 function Trap:Start()
@@ -187,9 +177,8 @@ function Trap:Start()
 	--     union of every descendant (Base plate, CollisionBox, the
 	--     inner spike Model, etc.) which can be much wider/taller
 	--     than the intended trigger volume.
-	--   * Player-built traps don't ship with a BoundingBox child, so
-	--     fall back to Model:GetBoundingBox() — preserves the legacy
-	--     behavior for BuildService-spawned traps with no regression.
+	--   * A trap with no BoundingBox child falls back to
+	--     Model:GetBoundingBox().
 	local boundCFrame: CFrame, boundSize: Vector3
 	local boundingBoxPart = self.Instance:FindFirstChild("BoundingBox")
 	if boundingBoxPart and boundingBoxPart:IsA("BasePart") then

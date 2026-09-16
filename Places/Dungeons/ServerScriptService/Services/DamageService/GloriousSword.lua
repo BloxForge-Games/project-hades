@@ -1,3 +1,4 @@
+--!strict
 -- Glorious Sword (Legendary): +50% Weapon Damage on EVERY weapon hit --
 -- melee AND ranged (the description's "Weapon Damage" is unqualified,
 -- same convention as The General's .45 passive). The +6 stud Melee Range
@@ -8,15 +9,10 @@
 -- a flat bonus for the orchestrator's additive amplifier sum.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-
-local RelicService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-end)
 
 return function(player: Player, damage: number, isMagic: boolean)
 	if isMagic then

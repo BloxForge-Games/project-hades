@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: LobbyLandingController
 	Description:
@@ -6,7 +7,7 @@
 	DungeonService:
 
 	  1. Character loads -> controls locked, loading screen up (PreloadInterface
-	     shows itself at KnitInit; only a PLACE controller ever hides it).
+	     shows itself at Init; only a PLACE controller ever hides it).
 	  2. PreloadController preloads GameAssets (skipped in Studio -- see
 	     PRELOAD_IN_STUDIO in PreloadController; the bar reads 0/0 there).
 	  3. PlayerEventController calls the server's SetupCharacter; the server
@@ -31,17 +32,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
+local PreloadController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PreloadController)
+local PreloadInterface = require(ReplicatedStorage.Submodules.Core.Source.Interfaces.PreloadInterface)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
-
-local LobbyLandingService
-
-local PlayerEventController
-local PreloadController
-local PreloadInterface
-local CinematicInterfaceController
-local InterfaceManagerController
 
 --[ Constants ]--
 
@@ -69,18 +69,25 @@ local LANDING_SNAP_TOLERANCE_STUDS = 2
 
 --[ Controller ]--
 
-local LobbyLandingController = Knit.CreateController({
+local LobbyLandingController = {
 	Name = "LobbyLandingController",
-})
+	Dependencies = {
+		PlayerEventController,
+		PreloadController,
+		PreloadInterface,
+		CinematicInterfaceController,
+		InterfaceManagerController,
+	} :: { any },
+}
 
 -- Cached PlayerModule:GetControls() handle (lazy). Resolved on first lock.
-LobbyLandingController._playerControls = nil
+LobbyLandingController._playerControls = nil :: any
 -- True once the loading screen has been dismissed (server cue or fallback).
 LobbyLandingController._revealed = false
 
 --[ Private Functions ]--
 
-function LobbyLandingController:_getPlayerControls()
+function LobbyLandingController._getPlayerControls(self: typeof(LobbyLandingController))
 	if self._playerControls then
 		return self._playerControls
 	end
@@ -100,7 +107,7 @@ end
 -- `barsDelay` = seconds until the cinematic bars slide in (nil = the join
 -- default); `false` = don't touch the bars (the pre-reveal lock, where the
 -- loading screen still covers everything). Same contract as Dungeons.
-function LobbyLandingController:_lockControls(barsDelay: (number | boolean)?)
+function LobbyLandingController._lockControls(self: typeof(LobbyLandingController), barsDelay: (number | boolean)?)
 	local character = Players.LocalPlayer.Character
 
 	local controls = self:_getPlayerControls()
@@ -128,7 +135,7 @@ function LobbyLandingController:_lockControls(barsDelay: (number | boolean)?)
 	end
 end
 
-function LobbyLandingController:_unlockControls()
+function LobbyLandingController._unlockControls(self: typeof(LobbyLandingController))
 	local character = Players.LocalPlayer.Character
 
 	local controls = self:_getPlayerControls()
@@ -155,7 +162,7 @@ end
 -- The server's landing teleport is a CFrame write on a root THIS client owns;
 -- OnLandingStart carries the target so the owner can make the authoritative
 -- write itself if anything left it off the spot.
-function LobbyLandingController:_snapToLanding(targetCFrame: CFrame?)
+function LobbyLandingController._snapToLanding(_self: typeof(LobbyLandingController), targetCFrame: CFrame?)
 	if typeof(targetCFrame) ~= "CFrame" then
 		return
 	end
@@ -173,7 +180,7 @@ end
 
 -- Dismisses the loading screen. Idempotent: safe to call from both the
 -- server cue and the fallback.
-function LobbyLandingController:_reveal()
+function LobbyLandingController._reveal(self: typeof(LobbyLandingController))
 	if self._revealed then
 		return
 	end
@@ -184,21 +191,13 @@ end
 
 --[ Lifecycle ]--
 
-function LobbyLandingController:KnitInit()
-	LobbyLandingService = Knit.GetService("LobbyLandingService")
-
-	PlayerEventController = Knit.GetController("PlayerEventController")
-	PreloadController = Knit.GetController("PreloadController")
-	PreloadInterface = Knit.GetController("PreloadInterface")
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-
-	-- KnitInit, not KnitStart: the HUD interfaces mount during their own
-	-- KnitInit and read this scope for their initial state.
-	InterfaceManagerController = Knit.GetController("InterfaceManagerController")
+function LobbyLandingController.Init(_self: typeof(LobbyLandingController))
+	-- Init, not Start: the HUD interfaces mount during their own
+	-- Init and read this scope for their initial state.
 	InterfaceManagerController:Hide(InterfaceScopes.HUD, LANDING_SOURCE)
 end
 
-function LobbyLandingController:KnitStart()
+function LobbyLandingController.Start(self: typeof(LobbyLandingController))
 	-- First character only: respawns after the reveal keep their controls.
 	-- No bars here -- the loading screen still covers the view; they come in
 	-- with the reveal on OnLandingStart.
@@ -208,13 +207,13 @@ function LobbyLandingController:KnitStart()
 		end
 	end)
 
-	LobbyLandingService.OnLandingStart:Connect(function(targetCFrame: CFrame?)
+	DungeonNetwork.LandingStart.On(function(targetCFrame: CFrame?)
 		self:_snapToLanding(targetCFrame)
 		self:_lockControls()
 		self:_reveal()
 	end)
 
-	LobbyLandingService.OnLandingEnd:Connect(function()
+	DungeonNetwork.LandingEnd.On(function()
 		self:_unlockControls()
 	end)
 

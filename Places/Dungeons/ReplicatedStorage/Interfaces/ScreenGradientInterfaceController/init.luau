@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: ScreenGradientInterfaceController.lua
      Description:
@@ -9,7 +10,6 @@ local Players = game:GetService("Players")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
@@ -20,9 +20,9 @@ local INTERFACE_ID = "ScreenGradientInterfaceController"
 
 --[ App Component ]--
 
-local ScreenGradientInterfaceController = Knit.CreateController({
+local ScreenGradientInterfaceController = {
 	Name = "ScreenGradientInterfaceController",
-})
+}
 
 ScreenGradientInterfaceController._deathPulse = false
 -- Token guarding the most recently scheduled reset callback. Every fire of
@@ -52,7 +52,7 @@ ScreenGradientInterfaceController.Signals = {
 	OnClearHold = Signal.new(), -- (fadeDuration: number?)
 }
 
-function ScreenGradientInterfaceController:_render()
+function ScreenGradientInterfaceController._render(self: typeof(ScreenGradientInterfaceController))
 	return function()
 		-- Pulse state: existing one-shot flash (damage / dodge / relic).
 		local pulseGradient, setPulseGradient = React.useState(false)
@@ -70,7 +70,7 @@ function ScreenGradientInterfaceController:_render()
 		-- Optional override for the fade-out duration when OnClearHold
 		-- fires. Reset to nil on the next OnSetHold so a future ClearHold
 		-- without a duration argument uses the Container's default again.
-		local fadeOutDuration, setFadeOutDuration = React.useState(nil)
+		local fadeOutDuration, setFadeOutDuration = React.useState(nil :: number?)
 
 		React.useEffect(function()
 			local conns = {}
@@ -104,7 +104,9 @@ function ScreenGradientInterfaceController:_render()
 					setHoldColor(color3)
 					setHoldTransparency(transparency or 0.35)
 					setHoldActive(true)
-					setFadeOutDuration(nil)
+					-- Typed nil: the first call pins the setter's state type for
+					-- the old solver, which otherwise infers it as plain `nil`.
+					setFadeOutDuration(nil :: number?)
 				end)
 			)
 
@@ -153,7 +155,7 @@ end
 
 --[ Lifecycle ]--
 
-function ScreenGradientInterfaceController:KnitInit()
+function ScreenGradientInterfaceController.Init(self: typeof(ScreenGradientInterfaceController))
 	local root = ReactRoblox.createRoot(Instance.new("Folder"))
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
 end

@@ -1,32 +1,27 @@
+--!strict
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
-
-local RelicService
-local TextIndicatorService
-
-Knit.OnStart()
-	:andThen(function()
-		TextIndicatorService = Knit.GetService("TextIndicatorService")
-		RelicService = Knit.GetService("RelicService")
-	end)
-	:catch(warn)
 
 -- The pickup fade, mirrored by the client's PICKUP_FADE_SECONDS, plus a
 -- margin before the instance goes so the tween is never cut short.
 local PICKUP_FADE_SECONDS = 0.75
 local POST_FADE_DESTROY_DELAY = PICKUP_FADE_SECONDS + 0.25
 
+local collectRouter = InstanceRouter.Server(RelicNetwork.RelicCollectRequested)
+
 local Relic = Component.new({
 	Tag = TagList.Relic,
-	Extensions = { CommAdder },
 })
 
 function Relic:Construct()
@@ -35,16 +30,14 @@ function Relic:Construct()
 	-- OwnerId check; a PUBLIC drop has none, so this is what stops two
 	-- players who reach it on the same frame both being granted it.
 	self._claimed = false
-	self._onRelicCollected = self._comm:CreateSignal("OnRelicCollected")
 	-- Server -> owner ACCEPT. The client consumes (fades the pull, kills the
 	-- prompts, plays the burst) ONLY when this fires, so a refused grab --
 	-- relic cap, wrong owner, already claimed -- leaves every relic in the
 	-- pull untouched and re-claimable. The client never predicts the outcome.
-	self._onRelicCollectAccepted = self._comm:CreateSignal("OnRelicCollectAccepted")
 end
 
 function Relic:Start()
-	self._onRelicCollected:Connect(function(player: Player)
+	collectRouter:Bind(self.Instance, function(player: Player)
 		if self._playerRegistry[player] or self._claimed then
 			return
 		end
@@ -72,7 +65,7 @@ function Relic:Start()
 		if not isSkip and not RelicService:CanAcceptRelic(player, self.Instance.Name) then
 			local character = player.Character
 			local indicatorPart = character
-				and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+				and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
 			if TextIndicatorService and indicatorPart then
 				TextIndicatorService:ShowIndicator(
 					player,
@@ -106,7 +99,7 @@ function Relic:Start()
 
 		-- Accepted. Fired for the collector's own client-side flourish (the
 		-- screen pulse); the relic itself is gone by the next frame.
-		self._onRelicCollectAccepted:Fire(player)
+		RelicNetwork.RelicCollectAccepted.Fire(player, self.Instance)
 
 		-- Feedback rides the CHARACTER, not the relic. The relic is
 		-- destroyed immediately below, and a sound or indicator parented to
@@ -114,7 +107,7 @@ function Relic:Start()
 		local character = player.Character
 		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
 		local indicatorPart = character
-			and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+			and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
 		if rootPart then
 			local pickupSound = ReplicatedStorage.GameAssets.Sounds.RelicPickup:Clone()
 			pickupSound.Parent = rootPart

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/CoffinEventService.lua
 	Description:
@@ -16,7 +17,7 @@
 	    for the whole room: every other open coffin conversation is closed
 	    (OnDialogueCancelled), the coffin's prompt goes dead, the torches
 	    IGNITE, the exit hold is SUSPENDED, the encounter lobby countdown
-	    (EncounterService.EncounterLobbyData — the same widget the
+	    (EncounterService's lobby property — the same widget the
 	    miniboss / boss approach uses) starts, and the queue pours in.
 	  * DECLINE is per player: it marks that player interacted (the hold's
 	    early-open counts it), announces "<Name> wishes to continue.", and
@@ -45,20 +46,20 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DungeonService = require(ServerScriptService.Services.DungeonService)
+local EventService = require(ServerScriptService.Services.EventService)
+local EncounterService = require(ServerScriptService.Services.EncounterService)
+local MusicService = require(ServerScriptService.Submodules.Core.Source.Services.MusicService)
+local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
+local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
-
-local DungeonService
-local EventService
-local EncounterService
-local MusicService
-local ZombieSpawnService
-local EncounterChestService
-local UserNotificationService
 
 --[ Constants ]--
 
@@ -122,28 +123,50 @@ local NOTIFY_FAIL_COLOR = Color3.fromRGB(255, 92, 92)
 
 --[ Service ]--
 
-local CoffinEventService = Knit.CreateService({
-	Name = "CoffinEventService",
-	Client = {
-		-- (coffin: Model) — every client closes an open conversation with
-		-- this coffin (someone accepted, or the offer expired).
-		OnDialogueCancelled = Knit.CreateSignal(),
-	},
-})
+type Room = DungeonService.Room
 
--- [coffinModel] = state; [roomId] = the same state. One challenge per
--- room per floor.
---   state = { room, coffin, gate, status, declined = { [userId] = true },
---             startedAt, deadline, generation }
-CoffinEventService._byCoffin = {}
-CoffinEventService._byRoomId = {}
+-- One room's challenge. The clock fields are stamped by _startChallenge,
+-- rewardDeadline by a win.
+type CoffinState = {
+	room: Room,
+	coffin: Model,
+	status: string,
+	declined: { [number]: boolean },
+	generation: number,
+	startedAt: number?,
+	duration: number?,
+	deadline: number?,
+	total: number?,
+	rewardDeadline: number?,
+}
+
+local CoffinEventService = {
+	Name = "CoffinEventService",
+	Dependencies = {
+		DungeonService,
+		EventService,
+		EncounterService,
+		MusicService,
+		ZombieSpawnService,
+		EncounterChestService,
+		UserNotificationService,
+	} :: { any },
+
+	-- [coffinModel] = state; [roomId] = the same state. One challenge per
+	-- room per floor.
+	_byCoffin = {} :: { [Model]: CoffinState },
+	_byRoomId = {} :: { [number]: CoffinState },
+}
 
 --[ Private ]--
 
 -- The active difficulty's coffinEvent block, or the defaults.
 local function activeTuning(): { [string]: any }
 	local active = DungeonService and DungeonService:GetActiveDungeon()
-	local dungeonConfig = active and DungeonData[active.id]
+	if not active then
+		return {}
+	end
+	local dungeonConfig = DungeonData[active.id]
 	local difficultyConfig = dungeonConfig and dungeonConfig.difficulties[active.difficulty]
 	return (difficultyConfig and difficultyConfig.coffinEvent) or {}
 end
@@ -169,17 +192,19 @@ local function notifyAll(title: string, text: string, titleColor: Color3)
 	})
 end
 
-function CoffinEventService:_validate(player: Player, coffin: any)
+function CoffinEventService._validate(self: typeof(CoffinEventService), player: Player, coffin: any): CoffinState?
 	if typeof(coffin) ~= "Instance" then
 		return nil
 	end
-	local state = self._byCoffin[coffin]
+	-- _byCoffin is keyed by the coffin Model; any other Instance misses.
+	local model = coffin :: Model
+	local state = self._byCoffin[model]
 	if not state then
 		return nil
 	end
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	local anchor = coffin.PrimaryPart or coffin:FindFirstChildWhichIsA("BasePart", true)
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local anchor = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
 	if not hrp or not anchor then
 		return nil
 	end
@@ -192,13 +217,13 @@ end
 -- Kills the coffin as an interactable for EVERYONE: prompt off on the
 -- server, consumed-attribute so no client's re-arm brings it back, and
 -- every open conversation with it closed.
-function CoffinEventService:_retireCoffin(state)
+function CoffinEventService._retireCoffin(_self: typeof(CoffinEventService), state: CoffinState)
 	local prompt = coffinPrompt(state.coffin)
 	if prompt then
 		prompt:SetAttribute(PROMPT_CONSUMED_ATTRIBUTE, true)
 		prompt.Enabled = false
 	end
-	self.Client.OnDialogueCancelled:FireAll(state.coffin)
+	DungeonNetwork.CoffinDialogueCancelled.FireAll(state.coffin)
 end
 
 -- An emitter that belongs to a TORCH: it sits beside a Light, or anywhere
@@ -235,7 +260,7 @@ end
 -- Order-independent with FogOfWarService's hide: whichever runs first,
 -- the authored value survives (fog cache or live) and the room reveals
 -- dark. The chunk PrimaryPart's own glow is left alone.
-function CoffinEventService:_darkenRoom(room)
+function CoffinEventService._darkenRoom(_self: typeof(CoffinEventService), room: Room)
 	local model = room.model
 	if not model then
 		return
@@ -253,7 +278,7 @@ function CoffinEventService:_darkenRoom(room)
 			if descendant:GetAttribute(FOG_VALUE_ATTRIBUTE) ~= nil then
 				descendant:SetAttribute(FOG_VALUE_ATTRIBUTE, 0)
 			end
-		elseif isTorchPart(descendant) then
+		elseif descendant:IsA("BasePart") and isTorchPart(descendant) then
 			if descendant:GetAttribute(IGNITE_TRANSPARENCY_ATTRIBUTE) == nil then
 				descendant:SetAttribute(IGNITE_TRANSPARENCY_ATTRIBUTE, authoredNumber(descendant, "Transparency"))
 			end
@@ -269,7 +294,9 @@ function CoffinEventService:_darkenRoom(room)
 				or descendant:IsA("Sparkles")
 			) and isTorchEffect(descendant)
 		then
-			descendant.Enabled = false
+			-- Every one of those carries Enabled; the checker cannot write
+			-- through the class union (same cast FogOfWarService uses).
+			(descendant :: any).Enabled = false
 			if descendant:GetAttribute(FOG_ENABLED_ATTRIBUTE) ~= nil then
 				descendant:SetAttribute(FOG_ENABLED_ATTRIBUTE, false)
 			end
@@ -281,7 +308,7 @@ end
 -- word for the party). The consumed mark is cleared so every client's
 -- billboard re-arm honours it; a player who already declined has their
 -- own local consume, which the server's re-enable overrides.
-function CoffinEventService:_reviveCoffinPrompt(state)
+function CoffinEventService._reviveCoffinPrompt(_self: typeof(CoffinEventService), state: CoffinState)
 	local prompt = coffinPrompt(state.coffin)
 	if prompt then
 		prompt:SetAttribute(PROMPT_CONSUMED_ATTRIBUTE, nil)
@@ -293,7 +320,7 @@ end
 -- chunk's PrimaryPart (the coffin's own glow, lit all along) tweens to
 -- its cached brightness, torch parts fade back in, and only TORCH
 -- emitters switch on (see isTorchEffect).
-function CoffinEventService:_igniteRoom(room)
+function CoffinEventService._igniteRoom(_self: typeof(CoffinEventService), room: Room)
 	local model = room.model
 	if not model then
 		return
@@ -332,7 +359,7 @@ function CoffinEventService:_igniteRoom(room)
 				or descendant:IsA("Sparkles")
 			) and isTorchEffect(descendant)
 		then
-			descendant.Enabled = true
+			(descendant :: any).Enabled = true
 		end
 	end
 end
@@ -344,7 +371,12 @@ end
 -- part of the model and stays lit throughout.
 -- `restoreEffects` (restore only): false keeps the coffin's emitters OFF
 -- after it reappears — the coffin that has been laid to rest.
-function CoffinEventService:_setCoffinHidden(state, hidden: boolean, restoreEffects: boolean?)
+function CoffinEventService._setCoffinHidden(
+	_self: typeof(CoffinEventService),
+	state: CoffinState,
+	hidden: boolean,
+	restoreEffects: boolean?
+)
 	local coffin = state.coffin
 	if not coffin or not coffin.Parent then
 		return
@@ -371,7 +403,7 @@ function CoffinEventService:_setCoffinHidden(state, hidden: boolean, restoreEffe
 				if descendant:IsA("BasePart") then
 					local canCollide = descendant:GetAttribute(ATTR_ORIGINAL_CAN_COLLIDE)
 					if canCollide ~= nil then
-						descendant.CanCollide = canCollide
+						descendant.CanCollide = canCollide :: boolean
 					end
 				end
 			end
@@ -380,11 +412,11 @@ function CoffinEventService:_setCoffinHidden(state, hidden: boolean, restoreEffe
 				if descendant:GetAttribute(ATTR_ORIGINAL_ENABLED) == nil then
 					descendant:SetAttribute(ATTR_ORIGINAL_ENABLED, descendant.Enabled)
 				end
-				descendant.Enabled = false
+				(descendant :: any).Enabled = false
 			elseif restoreEffects ~= false then
 				local enabled = descendant:GetAttribute(ATTR_ORIGINAL_ENABLED)
 				if enabled ~= nil then
-					descendant.Enabled = enabled
+					(descendant :: any).Enabled = enabled
 				end
 			end
 		end
@@ -392,7 +424,7 @@ function CoffinEventService:_setCoffinHidden(state, hidden: boolean, restoreEffe
 end
 
 -- Seconds left on the challenge clock (0 once over).
-local function secondsLeft(state): number
+local function secondsLeft(state: CoffinState): number
 	return math.max(0, math.ceil((state.deadline or 0) - os.clock()))
 end
 
@@ -401,12 +433,12 @@ end
 -- clobber a live encounter lobby (cannot happen inside an event room;
 -- guarded anyway). `readyLabel` replaces the widget's pad count with
 -- the kill tally.
-function CoffinEventService:_publishLobby(state, remaining: number?)
+function CoffinEventService._publishLobby(_self: typeof(CoffinEventService), state: CoffinState, remaining: number?)
 	if not EncounterService or EncounterService._activeLobby ~= nil then
 		return
 	end
 	if remaining == nil then
-		EncounterService.Client.EncounterLobbyData:Set(nil)
+		EncounterService._lobbyProperty:Set(nil)
 		return
 	end
 	local total = state.total or 0
@@ -414,7 +446,7 @@ function CoffinEventService:_publishLobby(state, remaining: number?)
 	local alive = #ZombieSpawnService:GetZombiesInRoom(state.room)
 	local slain = math.max(0, total - queued - alive)
 	local anchor = state.coffin.PrimaryPart
-	EncounterService.Client.EncounterLobbyData:Set({
+	EncounterService._lobbyProperty:Set({
 		kind = "Coffin",
 		label = LOBBY_LABEL,
 		remainingSeconds = remaining,
@@ -427,9 +459,9 @@ function CoffinEventService:_publishLobby(state, remaining: number?)
 	})
 end
 
-function CoffinEventService:_startChallenge(state, player: Player)
+function CoffinEventService._startChallenge(self: typeof(CoffinEventService), state: CoffinState, player: Player)
 	local tuning = activeTuning()
-	local seconds = tuning.challengeSeconds or DEFAULT_CHALLENGE_SECONDS
+	local seconds: number = tuning.challengeSeconds or DEFAULT_CHALLENGE_SECONDS
 	local waveRange = tuning.waves or DEFAULT_WAVES
 	local waves = math.random(waveRange[1], waveRange[2] or waveRange[1])
 
@@ -449,7 +481,8 @@ function CoffinEventService:_startChallenge(state, player: Player)
 	state.status = STATUS.Running
 	state.startedAt = workspace:GetServerTimeNow()
 	state.duration = seconds
-	state.deadline = os.clock() + seconds
+	local deadline = os.clock() + seconds
+	state.deadline = deadline
 	state.total = total
 	state.generation += 1
 	local generation = state.generation
@@ -465,7 +498,7 @@ function CoffinEventService:_startChallenge(state, player: Player)
 		MusicService:SetEventRoomChallenge(state.room.id, true)
 	end
 	self:_publishLobby(state, seconds)
-	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name, seconds), NOTIFY_TITLE_COLOR)
+	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name), NOTIFY_TITLE_COLOR)
 	print(
 		("[CoffinEventService] Challenge started by %s: %d zombies, cap %d, %ds"):format(
 			player.Name,
@@ -482,7 +515,7 @@ function CoffinEventService:_startChallenge(state, player: Player)
 			if not state.room.model or not state.room.model.Parent then
 				return
 			end
-			if os.clock() >= state.deadline then
+			if os.clock() >= deadline then
 				self:_finish(state, false)
 				return
 			end
@@ -493,13 +526,13 @@ function CoffinEventService:_startChallenge(state, player: Player)
 				self:_finish(state, true)
 				return
 			end
-			self:_publishLobby(state, state.deadline - os.clock())
+			self:_publishLobby(state, deadline - os.clock())
 			task.wait(POLL_SECONDS)
 		end
 	end)
 end
 
-function CoffinEventService:_finish(state, won: boolean)
+function CoffinEventService._finish(self: typeof(CoffinEventService), state: CoffinState, won: boolean)
 	if state.status ~= STATUS.Running then
 		return
 	end
@@ -514,7 +547,9 @@ function CoffinEventService:_finish(state, won: boolean)
 		MusicService:SetEventRoomChallenge(state.room.id, false)
 	end
 	-- Final frame of the countdown (frozen), then it clears.
-	self:_publishLobby(state, if won then state.deadline - os.clock() else 0)
+	-- A challenge that could not start (no spawn points) is finished as won
+	-- without ever getting a deadline; show it as 0 remaining.
+	self:_publishLobby(state, if won and state.deadline then math.max(0, state.deadline - os.clock()) else 0)
 	local generation = state.generation
 	task.delay(RESULT_HUD_LINGER_SECONDS, function()
 		if state.generation == generation and self._byRoomId[state.room.id] == state then
@@ -527,9 +562,10 @@ function CoffinEventService:_finish(state, won: boolean)
 
 		-- The door: a visible reward clock. Opens when every chest is opened
 		-- (the batch callback) or when the clock runs out, whichever first.
-		state.rewardDeadline = os.clock() + REWARD_HOLD_SECONDS
+		local rewardDeadline = os.clock() + REWARD_HOLD_SECONDS
+		state.rewardDeadline = rewardDeadline
 		DungeonService:SuspendEventHold(state.room.id, function()
-			return HOLD_TEXT_REWARDS:format(math.max(0, math.ceil(state.rewardDeadline - os.clock())))
+			return HOLD_TEXT_REWARDS:format(math.max(0, math.ceil(rewardDeadline - os.clock())))
 		end)
 		local released = false
 		local function release()
@@ -558,7 +594,7 @@ function CoffinEventService:_finish(state, won: boolean)
 end
 
 -- The hold ended with no acceptance: the offer is gone.
-function CoffinEventService:_expire(state)
+function CoffinEventService._expire(self: typeof(CoffinEventService), state: CoffinState)
 	if state.status ~= STATUS.Idle then
 		return
 	end
@@ -572,7 +608,7 @@ end
 -- difficulty's coffin coin row. Shared by the win path and the /drop
 -- eventchest debug command. Returns false when the chest service is
 -- unavailable, so the caller can open the door itself.
-function CoffinEventService:DropRewardChests(onAllOpened: (() -> ())?): boolean
+function CoffinEventService.DropRewardChests(_self: typeof(CoffinEventService), onAllOpened: (() -> ())?): boolean
 	if not EncounterChestService then
 		return false
 	end
@@ -581,8 +617,8 @@ function CoffinEventService:DropRewardChests(onAllOpened: (() -> ())?): boolean
 end
 
 -- Called by EventService as it wires the floor's CoffinEvent room.
-function CoffinEventService:RegisterRoom(room, coffin: Model)
-	local state = {
+function CoffinEventService.RegisterRoom(self: typeof(CoffinEventService), room: Room, coffin: Model)
+	local state: CoffinState = {
 		room = room,
 		coffin = coffin,
 		status = STATUS.Idle,
@@ -620,7 +656,7 @@ end
 -- Bumping the generation drops the referee out of its loop and no-ops
 -- its pending publishes; moving the status off Running makes _finish
 -- refuse outright. Either alone would do, and both is cheap.
-function CoffinEventService:ResetForFloor()
+function CoffinEventService.ResetForFloor(self: typeof(CoffinEventService))
 	for _, state in self._byRoomId do
 		state.generation += 1
 		if state.status == STATUS.Running then
@@ -634,7 +670,8 @@ end
 --[ Client ]--
 
 -- The graph's opening node reads this to route the conversation.
-function CoffinEventService.Client:GetState(player: Player, coffin: Instance)
+-- DungeonNetwork.GetCoffinState handler (was a client-callable method).
+function CoffinEventService._onGetState(_self: typeof(CoffinEventService), player: Player, coffin: Instance?)
 	local state = CoffinEventService:_validate(player, coffin)
 	if not state then
 		return { status = STATUS.Expired, declined = false }
@@ -645,7 +682,8 @@ end
 -- true when THIS call started the challenge. false when it was already
 -- running / over (someone beat them to it — their dialogue is being
 -- cancelled by OnDialogueCancelled either way).
-function CoffinEventService.Client:Accept(player: Player, coffin: Instance): boolean
+-- DungeonNetwork.AcceptCoffin handler (was a client-callable method).
+function CoffinEventService._onAccept(_self: typeof(CoffinEventService), player: Player, coffin: Instance?): boolean
 	local state = CoffinEventService:_validate(player, coffin)
 	if not state or state.status ~= STATUS.Idle then
 		return false
@@ -655,7 +693,8 @@ function CoffinEventService.Client:Accept(player: Player, coffin: Instance): boo
 end
 
 -- Per player. Counts toward the hold's early-open and tells the party.
-function CoffinEventService.Client:Decline(player: Player, coffin: Instance)
+-- DungeonNetwork.DeclineCoffin handler (was a client-callable method).
+function CoffinEventService._onDecline(_self: typeof(CoffinEventService), player: Player, coffin: Instance?)
 	local state = CoffinEventService:_validate(player, coffin)
 	if not state or state.declined[player.UserId] then
 		return
@@ -669,17 +708,17 @@ end
 
 --[ Lifecycle ]--
 
-function CoffinEventService:KnitInit()
-	DungeonService = Knit.GetService("DungeonService")
-	EventService = Knit.GetService("EventService")
-	EncounterService = Knit.GetService("EncounterService")
-	MusicService = Knit.GetService("MusicService")
-	ZombieSpawnService = Knit.GetService("ZombieSpawnService")
-	EncounterChestService = Knit.GetService("EncounterChestService")
-	UserNotificationService = Knit.GetService("UserNotificationService")
-end
+function CoffinEventService.Start(self: typeof(CoffinEventService))
+	DungeonNetwork.GetCoffinState.On(function(player: Player, coffin: Instance?)
+		return self:_onGetState(player, coffin)
+	end)
+	DungeonNetwork.AcceptCoffin.On(function(player: Player, coffin: Instance?)
+		return self:_onAccept(player, coffin)
+	end)
+	DungeonNetwork.DeclineCoffin.On(function(player: Player, coffin: Instance?)
+		self:_onDecline(player, coffin)
+	end)
 
-function CoffinEventService:KnitStart()
 	DungeonService.Signals.OnEventHoldEnded:Connect(function(eventRoom)
 		local state = eventRoom and self._byRoomId[eventRoom.id]
 		if state then

@@ -8,7 +8,7 @@ local Players = game:GetService("Players")
 local SusanooExecutable = {}
 
 SusanooExecutable.Enabled = true :: boolean
-SusanooExecutable.CutsceneConnection = nil :: Tween
+SusanooExecutable.CutsceneConnection = nil :: Tween?
 SusanooExecutable.CutsceneHashmap = {
 	["Waypoint2"] = {
 		["easingDirection"] = "InOut",
@@ -55,8 +55,8 @@ function SusanooExecutable:Play()
 		local waypointData = hashmap["Waypoint" .. i]
 		local tweenInfo = TweenInfo.new(
 			tonumber(waypointData.duration),
-			Enum.EasingStyle[waypointData.easingStyle],
-			Enum.EasingDirection[waypointData.easingDirection],
+			(Enum.EasingStyle :: any)[waypointData.easingStyle],
+			(Enum.EasingDirection :: any)[waypointData.easingDirection],
 			0,
 			false,
 			tonumber(waypointData.delay)

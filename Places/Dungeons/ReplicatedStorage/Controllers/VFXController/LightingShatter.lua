@@ -1,28 +1,23 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local radialGroundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.radialGroundFracture)
 
-local VFXService
-
 local CASTING_HUMANOID_WALK_SPEED = 2
 
-Knit.OnStart():andThen(function()
-	VFXService = Knit.GetService("VFXService")
-end)
-
 return function(player: Player, preload: boolean, cframe: CFrame)
-	local character = player.Character
+	local character = player.Character :: Model
 
-	character.Humanoid.WalkSpeed = CASTING_HUMANOID_WALK_SPEED
+	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = CASTING_HUMANOID_WALK_SPEED
 
-	local lightingShatterAnimation = character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator"):LoadAnimation(
+	local lightingShatterAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("LightingShatterAnimation")
 	)
 
@@ -58,7 +53,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		task.spawn(function()
 			for i = 1, 3, 1 do
 				if player == Players.LocalPlayer and not preload then
-					VFXService:OnVFXHitboxRequested(player, MagicNames["Lighting Shatter"], cachedFrames[i])
+					Magic.HitboxRequested.Fire({ MagicName = MagicNames["Lighting Shatter"], CFrame = cachedFrames[i] })
 				end
 
 				task.delay(0.1, function()

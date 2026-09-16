@@ -34,6 +34,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 
 local RunItemFrame = require(script.Parent.RunItemFrame)
 -- Shared with the Inventory rather than duplicated: ItemViewport is
@@ -305,7 +306,7 @@ end
 --[ Main Container ]--
 
 local function Container(props: any)
-	local RunEscrowService = props.RunEscrowService
+	local EscrowData = props.EscrowData
 	local onClose = props.onClose
 
 	-- Opening-sweep generation, derived DURING RENDER from the Visible prop
@@ -338,15 +339,12 @@ local function Container(props: any)
 	local exitButtonSelectedFrameRef = React.useRef(nil)
 
 	React.useEffect(function()
-		if not RunEscrowService then
+		if not EscrowData then
 			return
 		end
-		local conn = RunEscrowService.EscrowData:Observe(function(snapshot: { [string]: any })
+		return EscrowData:Observe(function(snapshot: { [string]: any })
 			setEscrowData(snapshot)
 		end)
-		return function()
-			conn:Disconnect()
-		end
 	end, {})
 
 	local dropItems = buildDropItems(escrowData)
@@ -984,7 +982,7 @@ local function Container(props: any)
 					ZIndex = 2,
 					[React.Event.Activated] = function()
 						local uuid = displayedSelectedUuid
-						if not uuid or not RunEscrowService then
+						if not uuid then
 							return
 						end
 						uiSound:PlayClick()
@@ -992,7 +990,7 @@ local function Container(props: any)
 						-- re-renders the grid, and the selection effect
 						-- moves off the item that just left.
 						task.spawn(function()
-							RunEscrowService:DropItem(uuid)
+							PlayerNetwork.DropRunItem.Invoke(uuid)
 						end)
 					end,
 				}, {

@@ -1,7 +1,8 @@
+--!strict
 --[[
      Module: TombstoneController.lua
      Description:
-     Client-side death-marker renderer. Observes LifeService.DeathState
+     Client-side death-marker renderer. Observes LifeController.DeathState
      (whose entries now carry deathPosition + diedAtServerTime in addition
      to existence) and spawns / tweens / destroys a tombstone instance
      locally per dead player. Server doesn't track the marker at all — it
@@ -43,13 +44,12 @@ local TweenService = game:GetService("TweenService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local LifeController = require(ReplicatedStorage.Controllers.LifeController)
 
-local LifeService
-
-local TombstoneController = Knit.CreateController({
+local TombstoneController = {
 	Name = "TombstoneController",
-})
+	Dependencies = { LifeController } :: { any },
+}
 
 --[ Tuning ]--
 
@@ -149,7 +149,7 @@ end
 
 -- Destroys the local tombstone for userId if one exists, clears the
 -- pending-spawn token so any in-flight task.delay aborts. Idempotent.
-function TombstoneController:_destroyTombstone(userId: number)
+function TombstoneController._destroyTombstone(self: typeof(TombstoneController), userId: number)
 	-- Invalidate any pending spawn for this userId.
 	self._pendingTokens[userId] = nil
 
@@ -165,15 +165,14 @@ end
 -- immediately (late joiner past the spawn delay) or from the delayed
 -- spawn closure. No-op if a tombstone for this userId already exists
 -- (defensive against double-spawn races).
-function TombstoneController:_spawnTombstone(userId: number, player: Player)
+function TombstoneController._spawnTombstone(self: typeof(TombstoneController), userId: number, player: Player)
 	if self._tombstones[userId] then
 		return
 	end
 
 	local character = player and player.Character
-	local deathPosition = character
-		and character:FindFirstChild("HumanoidRootPart")
-		and character.HumanoidRootPart.Position
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local deathPosition = (rootPart and rootPart.Position) :: Vector3
 
 	-- Raycast down to find the ground, excluding the dying player's
 	-- character so we don't hit the ragdoll body.
@@ -200,7 +199,7 @@ function TombstoneController:_spawnTombstone(userId: number, player: Player)
 	if tombstone:IsA("BasePart") then
 		tombstone.CFrame = startCFrame
 	else
-		tombstone:PivotTo(startCFrame)
+		(tombstone :: PVInstance):PivotTo(startCFrame)
 	end
 
 	tombstone.Parent = getTombstoneContainer()
@@ -222,7 +221,8 @@ end
 -- Decides whether to spawn now or schedule a delayed spawn for a
 -- newly-observed DeathState entry. Token-stamps so subsequent changes
 -- for the same userId cancel an in-flight delay.
-function TombstoneController:_scheduleSpawn(
+function TombstoneController._scheduleSpawn(
+	self: typeof(TombstoneController),
 	userId: number,
 	entry: { diedAtServerTime: number, deathPosition: Vector3, player: Player }
 )
@@ -261,11 +261,7 @@ end
 
 --[ Lifecycle ]--
 
-function TombstoneController:KnitInit()
-	LifeService = Knit.GetService("LifeService")
-end
-
-function TombstoneController:KnitStart()
+function TombstoneController.Start(self: typeof(TombstoneController))
 	-- Single source of truth: observe DeathState changes and reconcile
 	-- the local tombstone set against it on every update.
 	--
@@ -275,8 +271,8 @@ function TombstoneController:KnitStart()
 	--     (handles die → revive → die where a stale tombstone might linger)
 	-- For each userId in the server state without a local instance:
 	--   - schedule a spawn (delayed for fresh deaths, immediate for late-join)
-	LifeService.DeathState:Observe(function(deathState: { [any]: any }?)
-		local serverEntries = deathState or {}
+	LifeController.DeathState:Observe(function(deathState: { [any]: any }?)
+		local serverEntries: { [any]: any } = deathState or {}
 
 		-- 1. Reap stale local tombstones.
 		for userId, _ in self._tombstones do

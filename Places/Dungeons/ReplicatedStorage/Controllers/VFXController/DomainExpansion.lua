@@ -1,3 +1,4 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -26,7 +27,10 @@ local SUKUNA_THEME_SOUND_NAME = "SukunaTheme"
 local SUKUNA_THEME_START_TIME = 96
 local SUKUNA_THEME_VOLUME = 0.075
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local MagicAmbienceController = require(ReplicatedStorage.Controllers.MagicAmbienceController)
+local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
@@ -41,33 +45,27 @@ local DOMAIN_RISE_SHAKE = CameraShakePresets.Medium
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
-local CutsceneController
-local VFXService
-local MagicAmbienceController
-local CameraShakeController
-
-Knit.OnStart():andThen(function()
-	CutsceneController = Knit.GetController("CutsceneController")
-	VFXService = Knit.GetService("VFXService")
-	MagicAmbienceController = Knit.GetController("MagicAmbienceController")
-	CameraShakeController = Knit.GetController("CameraShakeController")
-end)
+-- The Roblox type definitions no longer allow indexing the root part off
+-- the character; the cast keeps a missing one erroring where the old index did.
+local function getRootPart(character: Model): BasePart
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart
+end
 
 return function(player: Player, preload: boolean, cframe: CFrame)
-	local character = player.Character
+	local character = player.Character :: Model
 
 	if preload then
 		return
 	end
 
-	character.Humanoid.WalkSpeed = 0
+	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = 0
 
-	local domainExpansionAnimation = character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator"):LoadAnimation(
+	local domainExpansionAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("DomainExpansionAnimation")
 	)
 
 	if player == Players.LocalPlayer then
-		cframe = character.HumanoidRootPart.CFrame
+		cframe = getRootPart(character).CFrame
 	end
 
 	-- One ambience claim per cast (see the header): unique so two domains,
@@ -78,7 +76,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	shrineModel:PivotTo(cframe * CFrame.Angles(0, math.rad(90), 0) + cframe.LookVector * -11 + Vector3.new(0, -15, 0))
 	shrineModel.Parent = workspace.IgnoreInstances.Map.MagicSpells
 
-	shrineModel.AppearPart.Position = character.HumanoidRootPart.Position + Vector3.new(0, -5, 0)
+	shrineModel.AppearPart.Position = getRootPart(character).Position + Vector3.new(0, -5, 0)
 	shrineModel.AppearPart.Transparency = 1
 
 	task.delay(0.15, function()
@@ -243,11 +241,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 			end
 
-			VFXService:OnVFXPersistentHitboxRequested(
-				player,
-				MagicNames["Domain Expansion"],
-				shrineModel.PrimaryPart.CFrame
-			)
+			Magic.PersistentHitboxRequested.Fire({
+				MagicName = MagicNames["Domain Expansion"],
+				CFrame = shrineModel.PrimaryPart.CFrame,
+			})
 
 			task.delay(MagicData[MagicNames["Domain Expansion"]].hitboxDuration, function()
 				-- Wait few extra seconds to account for delay from cutscenes and dialogues

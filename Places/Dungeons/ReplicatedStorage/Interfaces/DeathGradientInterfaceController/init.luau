@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: DeathGradientInterfaceController.lua
      Description:
@@ -23,7 +24,6 @@ local Players = game:GetService("Players")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
@@ -35,21 +35,21 @@ local INTERFACE_ID = "DeathGradientInterfaceController"
 
 --[ App Component ]--
 
-local DeathGradientInterfaceController = Knit.CreateController({
+local DeathGradientInterfaceController = {
 	Name = "DeathGradientInterfaceController",
-})
+}
 
 -- Mirrors ScreenGradientInterfaceController's death-pulse latch + token. The
 -- latch (`_deathPulse`) blocks new fires while a death pulse is already
 -- showing; the token (`_pulseToken`) invalidates any stale task.delay reset
 -- callback whose pulse has since been superseded.
 DeathGradientInterfaceController._deathPulse = false
-DeathGradientInterfaceController._pulseToken = nil
+DeathGradientInterfaceController._pulseToken = nil :: { [any]: any }?
 DeathGradientInterfaceController.Signals = {
 	OnPulseGradient = Signal.new(),
 }
 
-function DeathGradientInterfaceController:_render()
+function DeathGradientInterfaceController._render(self: typeof(DeathGradientInterfaceController))
 	return function()
 		local pulseGradient, setPulseGradient = React.useState(false)
 		local imageColor3, setImageColor3 = React.useState(Color3.fromRGB(255, 255, 255))
@@ -114,7 +114,7 @@ end
 
 --[ Lifecycle ]--
 
-function DeathGradientInterfaceController:KnitInit()
+function DeathGradientInterfaceController.Init(self: typeof(DeathGradientInterfaceController))
 	local root = ReactRoblox.createRoot(Instance.new("Folder"))
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
 end

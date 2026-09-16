@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/ShieldService.lua
 	Description:
@@ -32,7 +33,7 @@
 
 	Cap: the SUM of live buckets never exceeds 100% of the holder's
 	MaxHealth. Absorption drains soonest-expiring buckets first, after all
-	damage mitigation (DamageService calls AbsorbShieldDamage last).
+	damage mitigation (getDamageService() calls AbsorbShieldDamage last).
 
 	The "ShieldValue" attribute on the character carries the visible total
 	(client UI + shieldGate consumers read it).
@@ -41,21 +42,30 @@
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local AuraService = require(ServerScriptService.Services.AuraService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 
-local TextIndicatorService
-local RelicService
-local DamageService
+-- DamageService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local damageServiceLazy: any = nil
+local function getDamageService(): any
+	if damageServiceLazy == nil then
+		damageServiceLazy = (require :: any)(ServerScriptService.Services.DamageService)
+	end
+	return damageServiceLazy
+end
 
-local ShieldService = Knit.CreateService({
+local ShieldService = {
 	Name = "ShieldService",
-	Client = {},
-})
+	Dependencies = { TextIndicatorService, RelicService, AuraService } :: { any },
+}
 
 --[ Constants ]--
 
@@ -120,10 +130,21 @@ local TREMOR_FADE_OUT_SECONDS = 0.9
 
 --[ Properties ]--
 
+type ShieldBucket = { value: number, expiresAt: number, ownerId: number }
+type ShieldState = {
+	character: Model,
+	userId: number,
+	buckets: { ShieldBucket },
+	emitters: { ParticleEmitter },
+	attachments: { Instance },
+	running: boolean,
+	golemRunning: boolean,
+}
+
 -- [userId] = { character, userId, buckets, emitters, attachments,
 --              running, golemRunning }
 -- buckets: { { value, expiresAt, ownerId }, ... }
-ShieldService._pools = {}
+ShieldService._pools = {} :: { [number]: ShieldState }
 
 -- Space Sandwich per-player last-proc clock.
 ShieldService._barrierProcLastAt = {}
@@ -134,14 +155,14 @@ ShieldService._barrierProcLastAt = {}
 -- a respawn replaces the character instance, so stale buckets from the
 -- previous life are dropped on first touch instead of leaking onto the
 -- new character.
-function ShieldService:_getState(player: Player)
+function ShieldService._getState(self: typeof(ShieldService), player: Player): ShieldState?
 	local character = player.Character
 	if not character then
 		return nil
 	end
 	local state = self._pools[player.UserId]
 	if not state or state.character ~= character then
-		state = {
+		local fresh: ShieldState = {
 			character = character,
 			userId = player.UserId,
 			buckets = {},
@@ -150,12 +171,13 @@ function ShieldService:_getState(player: Player)
 			running = false,
 			golemRunning = false,
 		}
-		self._pools[player.UserId] = state
+		self._pools[player.UserId] = fresh
+		state = fresh
 	end
 	return state
 end
 
-local function totalOf(state): number
+local function totalOf(state: ShieldState): number
 	local total = 0
 	for _, bucket in state.buckets do
 		total += bucket.value
@@ -165,7 +187,7 @@ end
 
 -- The set of appliers with at least one live bucket in this pool —
 -- Bundle of TNT diffs it across every removal to find whose shields ended.
-local function ownerSetOf(state): { [number]: boolean }
+local function ownerSetOf(state: ShieldState): { [number]: boolean }
 	local owners = {}
 	for _, bucket in state.buckets do
 		owners[bucket.ownerId] = true
@@ -175,7 +197,7 @@ end
 
 -- Drops buckets whose clock has run out. Returns true if anything was
 -- removed, so callers know to re-stamp.
-local function pruneExpired(state): boolean
+local function pruneExpired(state: ShieldState): boolean
 	local now = os.clock()
 	local removed = false
 	for index = #state.buckets, 1, -1 do
@@ -187,7 +209,7 @@ local function pruneExpired(state): boolean
 	return removed
 end
 
-function ShieldService:_stamp(state)
+function ShieldService._stamp(_self: typeof(ShieldService), state: ShieldState)
 	if state.character.Parent then
 		local total = totalOf(state)
 		state.character:SetAttribute(SHIELD_ATTRIBUTE, if total > 0 then math.round(total) else nil)
@@ -196,7 +218,7 @@ end
 
 -- Bursts every tracked emitter so a grant reads INSTANTLY — the authored
 -- Rate is slow (ambient shimmer).
-function ShieldService:_burstEmitters(state)
+function ShieldService._burstEmitters(_self: typeof(ShieldService), state: ShieldState)
 	for _, emitter in state.emitters do
 		if emitter.Parent then
 			emitter:Emit(1)
@@ -204,7 +226,7 @@ function ShieldService:_burstEmitters(state)
 	end
 end
 
-function ShieldService:_spawnVisuals(state, _player: Player)
+function ShieldService._spawnVisuals(self: typeof(ShieldService), state: ShieldState, _player: Player)
 	local hrp = state.character:FindFirstChild("HumanoidRootPart")
 	if not hrp then
 		return
@@ -237,7 +259,7 @@ end
 
 -- Bundle of TNT: applier X's last bucket on this holder just ended.
 -- Explodes AT THE HOLDER for (X's Level x 20) + 35% of X's BONUS max health.
-function ShieldService:_detonateTnt(ownerId: number, holderCharacter: Model)
+function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: number, holderCharacter: Model)
 	local owner = Players:GetPlayerByUserId(ownerId)
 	if not owner or not RelicService then
 		return
@@ -246,7 +268,7 @@ function ShieldService:_detonateTnt(ownerId: number, holderCharacter: Model)
 		return
 	end
 
-	local hrp = holderCharacter and holderCharacter:FindFirstChild("HumanoidRootPart")
+	local hrp = holderCharacter and holderCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local ownerHumanoid = owner.Character and owner.Character:FindFirstChildOfClass("Humanoid")
 	if not hrp or not ownerHumanoid then
 		return
@@ -300,7 +322,7 @@ function ShieldService:_detonateTnt(ownerId: number, holderCharacter: Model)
 			warn("[ShieldService] Missing GameAssets.VFX.BundleOfTNT.Explosion")
 		end
 
-		if DamageService then
+		if getDamageService() then
 			local overlapParams = OverlapParams.new()
 			overlapParams.FilterType = Enum.RaycastFilterType.Include
 			overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Zombies }
@@ -317,7 +339,7 @@ function ShieldService:_detonateTnt(ownerId: number, holderCharacter: Model)
 				struck[model] = true
 				-- Relic-sourced flat damage (never rolls appliers as a weapon
 				-- swing would).
-				DamageService:TakeDamage(owner, targetHumanoid, blastDamage, false, false, nil, true)
+				getDamageService():TakeDamage(owner, targetHumanoid, blastDamage, false, false, nil, true)
 			end
 		end
 	end)
@@ -325,7 +347,11 @@ end
 
 -- Fires the TNT check for every applier who was in `before` but has no
 -- bucket left now.
-function ShieldService:_detonateEndedOwners(state, before: { [number]: boolean })
+function ShieldService._detonateEndedOwners(
+	self: typeof(ShieldService),
+	state: ShieldState,
+	before: { [number]: boolean }
+)
 	local after = ownerSetOf(state)
 	for ownerId in before do
 		if not after[ownerId] then
@@ -336,7 +362,7 @@ function ShieldService:_detonateEndedOwners(state, before: { [number]: boolean }
 	end
 end
 
-function ShieldService:_teardown(state)
+function ShieldService._teardown(self: typeof(ShieldService), state: ShieldState)
 	table.clear(state.buckets)
 	self:_stamp(state)
 
@@ -362,7 +388,7 @@ end
 -- exits when the last bucket dies — absorbed dry or expired — or the
 -- character goes away. TNT owners whose buckets lapse mid-window detonate
 -- from here.
-function ShieldService:_ensureWatcher(state)
+function ShieldService._ensureWatcher(self: typeof(ShieldService), state: ShieldState)
 	if state.running then
 		return
 	end
@@ -384,7 +410,7 @@ end
 -- Golem's Hammer: while the holder is Shielded, keep the Empower rig on
 -- their HRP and pulse a Tremor every second — (Level x callback) damage to
 -- everything in the radius.
-function ShieldService:_ensureGolemLoop(state, player: Player)
+function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: ShieldState, player: Player)
 	if state.golemRunning then
 		return
 	end
@@ -409,7 +435,7 @@ function ShieldService:_ensureGolemLoop(state, player: Player)
 		end
 
 		while state.character.Parent and #state.buckets > 0 do
-			local hrp = state.character:FindFirstChild("HumanoidRootPart")
+			local hrp = state.character:FindFirstChild("HumanoidRootPart") :: BasePart?
 			local humanoid = state.character:FindFirstChildOfClass("Humanoid")
 			local owned = (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) > 0
 
@@ -419,9 +445,10 @@ function ShieldService:_ensureGolemLoop(state, player: Player)
 					local aurasFolder = ReplicatedStorage.GameAssets:FindFirstChild("Auras")
 					local template = aurasFolder and aurasFolder:FindFirstChild(AuraNames.Empower)
 					if template then
-						empowerClone = template:Clone()
-						empowerClone.Name = AuraNames.Empower
-						empowerClone.Parent = hrp
+						local clone = template:Clone()
+						clone.Name = AuraNames.Empower
+						clone.Parent = hrp
+						empowerClone = clone
 					end
 				end
 
@@ -485,7 +512,7 @@ function ShieldService:_ensureGolemLoop(state, player: Player)
 					end)
 				end
 
-				if tremorDamage > 0 and DamageService then
+				if tremorDamage > 0 and getDamageService() then
 					local overlapParams = OverlapParams.new()
 					overlapParams.FilterType = Enum.RaycastFilterType.Include
 					overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Zombies }
@@ -500,7 +527,7 @@ function ShieldService:_ensureGolemLoop(state, player: Player)
 							continue
 						end
 						struck[model] = true
-						DamageService:TakeDamage(player, targetHumanoid, tremorDamage, false, false, nil, true)
+						getDamageService():TakeDamage(player, targetHumanoid, tremorDamage, false, false, nil, true)
 					end
 				end
 			else
@@ -522,7 +549,8 @@ end
 -- `duration` seconds. Self-grants pass the same player twice. Returns the
 -- granted value (0 when nothing landed) so sharers (Earth Summoning Horn)
 -- know what to mirror.
-function ShieldService:GrantShield(
+function ShieldService.GrantShield(
+	self: typeof(ShieldService),
 	applierPlayer: Player,
 	targetPlayer: Player,
 	fraction: number,
@@ -592,7 +620,9 @@ function ShieldService:GrantShield(
 
 	-- Pop on EVERY grant — fresh or stacked.
 	if TextIndicatorService then
-		local head = state.character:FindFirstChild("Head") or state.character:FindFirstChild("HumanoidRootPart")
+		local head = (
+			state.character:FindFirstChild("Head") or state.character:FindFirstChild("HumanoidRootPart")
+		) :: BasePart?
 		if head then
 			TextIndicatorService:ShowIndicator(
 				targetPlayer,
@@ -619,12 +649,12 @@ function ShieldService:GrantShield(
 		and (RelicService:GetSpecificRelicRegistry(applierPlayer, RelicNames["Earth Summoning Horn"]) or 0) > 0
 	then
 		local shareFraction = RelicService:GetRelicEffect(applierPlayer, RelicNames["Earth Summoning Horn"]) or 0
-		local hrp = state.character:FindFirstChild("HumanoidRootPart")
+		local hrp = state.character:FindFirstChild("HumanoidRootPart") :: BasePart?
 		if shareFraction > 0 and hrp then
 			for _, ally in Players:GetPlayers() do
 				if ally ~= applierPlayer then
 					local allyCharacter = ally.Character
-					local allyHrp = allyCharacter and allyCharacter:FindFirstChild("HumanoidRootPart")
+					local allyHrp = allyCharacter and allyCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
 					if allyHrp and (allyHrp.Position - hrp.Position).Magnitude <= SUMMONING_HORN_RADIUS then
 						self:GrantShield(applierPlayer, ally, fraction * shareFraction, duration)
 					end
@@ -648,7 +678,7 @@ end
 --
 -- Chance, size and duration all come from RelicData so the card stays the
 -- one source of truth.
-function ShieldService:TryGoldenGlovesBarrier(player: Player)
+function ShieldService.TryGoldenGlovesBarrier(self: typeof(ShieldService), player: Player)
 	if not RelicService then
 		return
 	end
@@ -679,7 +709,7 @@ end
 
 -- Robloxian Battle Shield: called by VFXService on every successful magic
 -- cast by its owner.
-function ShieldService:TryRobloxionShield(player: Player)
+function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: Player)
 	if not RelicService then
 		return
 	end
@@ -698,14 +728,13 @@ end
 --
 -- No cooldown: this is gated by the mana the cast already cost, and
 -- SetAura extends rather than stacks.
-function ShieldService:TrySpartanStonebound(player: Player)
+function ShieldService.TrySpartanStonebound(_self: typeof(ShieldService), player: Player)
 	if not RelicService or not player.Character then
 		return
 	end
 	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Spartan Sword and Shield"]) or 0) <= 0 then
 		return
 	end
-	local AuraService = Knit.GetService("AuraService")
 	if AuraService then
 		AuraService:SetAura(player, AuraNames.Stonebound, player.Character)
 	end
@@ -715,7 +744,7 @@ end
 -- Called by DamageService:PlayerTakeDamage after every damage reduction
 -- and before Humanoid application. Buckets drain soonest-expiring first;
 -- a TNT applier whose buckets are absorbed dry detonates from here.
-function ShieldService:AbsorbShieldDamage(player: Player, damage: number): number
+function ShieldService.AbsorbShieldDamage(self: typeof(ShieldService), player: Player, damage: number): number
 	local state = self._pools[player.UserId]
 	if not state or state.character ~= player.Character then
 		return damage
@@ -760,7 +789,7 @@ function ShieldService:AbsorbShieldDamage(player: Player, damage: number): numbe
 	return remaining
 end
 
-function ShieldService:GetShieldValue(player: Player): number
+function ShieldService.GetShieldValue(self: typeof(ShieldService), player: Player): number
 	local state = self._pools[player.UserId]
 	if not state or state.character ~= player.Character then
 		return 0
@@ -771,11 +800,7 @@ end
 
 --[ Lifecycle ]--
 
-function ShieldService:KnitStart()
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-	RelicService = Knit.GetService("RelicService")
-	DamageService = Knit.GetService("DamageService")
-
+function ShieldService.Start(self: typeof(ShieldService))
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self._pools[player.UserId] = nil
 		self._barrierProcLastAt[player.UserId] = nil

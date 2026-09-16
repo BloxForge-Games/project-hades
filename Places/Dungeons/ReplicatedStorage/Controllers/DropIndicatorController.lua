@@ -1,7 +1,7 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
@@ -15,13 +15,13 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 -- local SHOW_DELAY = 0.5
 -- local INDICATOR_ENABLED = true
 
-local DropIndicatorController = Knit.CreateController({
+local DropIndicatorController = {
 	Name = "DropIndicatorController",
-})
+}
 
 DropIndicatorController.OnDropIndicatorRequested = Signal.new()
 
-function DropIndicatorController:KnitStart()
+function DropIndicatorController.Start(self: typeof(DropIndicatorController))
 	self.OnDropIndicatorRequested:Connect(function(_: Model, dropType: string, _: number)
 		DropData[dropType].sound:Play()
 

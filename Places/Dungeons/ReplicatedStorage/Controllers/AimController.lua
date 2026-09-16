@@ -1,3 +1,4 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -5,15 +6,33 @@ local UserInputService = game:GetService("UserInputService")
 
 local packages: Folder = ReplicatedStorage.Submodules.Core.Packages
 
-local Knit = require(packages.Knit)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 local Janitor = require(packages:FindFirstChild("Janitor"))
-local Signal = require(packages.Signal)
+local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local WorkspaceDependencies = require(ReplicatedStorage.Submodules.Core.Shared.Enums.WorkspaceDependencies)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local IsometricCameraController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.IsometricCameraController)
+local MagicController = require(ReplicatedStorage.Controllers.MagicController)
+local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateController)
+local CastModeController = require(ReplicatedStorage.Controllers.CastModeController)
+local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DataController)
 
 local player: Player = Players.LocalPlayer
 local mouse: Mouse = player:GetMouse()
+
+-- The Roblox type definitions no longer allow indexing the Humanoid or the
+-- root part straight off the character. These look the children up by name
+-- and CAST rather than guard, so a missing child still errors where the old
+-- direct index did.
+local function getHumanoid(character: Model): Humanoid
+	return character:FindFirstChildOfClass("Humanoid") :: Humanoid
+end
+
+local function getRootPart(character: Model): BasePart
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart
+end
 
 local INDEX: number = 0.125
 -- MINIMUM cast lock (see BeginCastLock). The server builds a spell's
@@ -77,17 +96,20 @@ local DEFAULT_AUTO_AIM = true
 -- instead (BeginCastLock), a different job.
 local WEAPON_RELEASE_FACING_HOLD_SECONDS = 0.1
 
-local IsometricCameraController
-local MagicController
-local PlayerStateController
-local CastModeController
-
-local AimController = Knit.CreateController({
+local AimController = {
 	Name = "AimController",
-	_janitor = Janitor.new() :: table,
+	Dependencies = {
+		IsometricCameraController,
+		MagicController,
+		PlayerStateController,
+		CastModeController,
+		DataController,
+	} :: { any },
+
+	_janitor = Janitor.new() :: { [any]: any },
 	_mobileFirstClick = true :: boolean,
-	_stepped = false :: boolean,
-	_mobileTargetCFrame = nil :: CFrame,
+	_stepped = false :: (RBXScriptConnection | boolean)?,
+	_mobileTargetCFrame = nil :: CFrame?,
 	_moveVectorRotationEnabled = true :: boolean,
 	_mobileRotationActivated = false,
 
@@ -113,23 +135,20 @@ local AimController = Knit.CreateController({
 
 	-- Auto Aim toggle (see DEFAULT_AUTO_AIM).
 	_autoAimEnabled = DEFAULT_AUTO_AIM :: boolean,
-})
+}
 
 AimController.OnWeaponActivate = Signal.new()
 AimController.OnMagicActivate = Signal.new()
 -- Fires (enabled: boolean) whenever the Auto Aim toggle flips.
 AimController.OnAutoAimChanged = Signal.new()
 
-local DataController
-local SettingsService
-
 --[ Auto Aim toggle ]--
 
-function AimController:IsAutoAimEnabled(): boolean
+function AimController.IsAutoAimEnabled(self: typeof(AimController)): boolean
 	return self._autoAimEnabled
 end
 
-function AimController:SetAutoAimEnabled(enabled: boolean)
+function AimController.SetAutoAimEnabled(self: typeof(AimController), enabled: boolean)
 	if self._autoAimEnabled == enabled then
 		return
 	end
@@ -143,16 +162,14 @@ function AimController:SetAutoAimEnabled(enabled: boolean)
 	end
 
 	self.OnAutoAimChanged:Fire(enabled)
-	if SettingsService then
-		SettingsService:SetAutoAim(enabled):catch(warn)
-	end
+	PlayerNetwork.SetAutoAim.Fire(enabled)
 end
 
-function AimController:ToggleAutoAim()
+function AimController.ToggleAutoAim(self: typeof(AimController))
 	self:SetAutoAimEnabled(not self._autoAimEnabled)
 end
 
-function AimController:_applyAutoAimProfile(profile: { [string]: any }?)
+function AimController._applyAutoAimProfile(self: typeof(AimController), profile: { [string]: any }?)
 	local settings = profile and profile.Settings
 	local saved = settings and settings.AutoAim
 	if typeof(saved) ~= "boolean" or saved == self._autoAimEnabled then
@@ -162,7 +179,7 @@ function AimController:_applyAutoAimProfile(profile: { [string]: any }?)
 	self.OnAutoAimChanged:Fire(saved)
 end
 
-function AimController:GetMobileMoveVectorOffset(): number
+function AimController.GetMobileMoveVectorOffset(_self: typeof(AimController)): number
 	-- local x, _, z = IsometricCameraController:GetDepthValues()
 
 	-- if x > 0 and z > 0 then
@@ -175,7 +192,7 @@ function AimController:GetMobileMoveVectorOffset(): number
 	-- 	return 315
 	-- end
 
-	local x, _, z = IsometricCameraController:GetDepthValues()
+	local x, _, z = (IsometricCameraController :: any):GetDepthValues()
 
 	return (math.deg(math.atan2(x, z)) + 360) % 360
 end
@@ -197,7 +214,7 @@ end
 -- old always-face-the-cursor model and removed: alternating track /
 -- freeze / track while holding the button read as stutter. Melee and
 -- ranged now behave identically here.)
-function AimController:_isTrackingCursor(): boolean
+function AimController._isTrackingCursor(self: typeof(AimController)): boolean
 	if next(self._aimHolds) ~= nil then
 		return true
 	end
@@ -207,11 +224,11 @@ function AimController:_isTrackingCursor(): boolean
 	return CastModeController ~= nil and CastModeController:IsAiming() == true
 end
 
-function AimController:_KeyboardMouseUpdate()
+function AimController._keyboardMouseUpdate(self: typeof(AimController))
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not rootPart then
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not character or not humanoid or not rootPart then
 		return
 	end
 
@@ -244,7 +261,7 @@ end
 -- components at the top of their click handlers, ahead of the attack, so
 -- the swing / shot is computed from the new facing. No-op on touch —
 -- mobile has its own auto-aim snap (_snapFacing).
-function AimController:SnapFacingToCursor()
+function AimController.SnapFacingToCursor(self: typeof(AimController))
 	if UserInputService.TouchEnabled then
 		return
 	end
@@ -259,10 +276,10 @@ end
 -- ALREADY raised MagicEnabled by the time it asks to face the cursor,
 -- and AimActionEnabled reads false under that flag — the gate would
 -- refuse the very snap the cast exists to make.
-function AimController:_snapFacingToCursorNow()
+function AimController._snapFacingToCursorNow(_self: typeof(AimController))
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not humanoid or not rootPart then
 		return
 	end
@@ -291,7 +308,7 @@ end
 --          AutoRotate back while the spell is still going).
 --   MOBILE keeps whatever the stick or auto-aim already chose — there is
 --          no cursor to face, and TapMagic has aimed it already.
-function AimController:BeginCastLock(seconds: number)
+function AimController.BeginCastLock(self: typeof(AimController), seconds: number)
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -312,14 +329,14 @@ end
 -- PC: while `key` is held the facing tracks the cursor. Keyed so a held
 -- weapon and an aimed skillshot can overlap without one release ending
 -- the other's hold. No-op on touch.
-function AimController:BeginAimHold(key: string)
+function AimController.BeginAimHold(self: typeof(AimController), key: string)
 	if UserInputService.TouchEnabled then
 		return
 	end
 	self._aimHolds[key] = true
 end
 
-function AimController:EndAimHold(key: string)
+function AimController.EndAimHold(self: typeof(AimController), key: string)
 	self._aimHolds[key] = nil
 end
 
@@ -335,7 +352,7 @@ end
 -- component only released on mouse-up while the weapon was still
 -- equipped, so click-and-hold, then open a merchant or talk to an NPC,
 -- and the release found an unequipped weapon and did nothing.
-function AimController:ReleaseAllAimHolds()
+function AimController.ReleaseAllAimHolds(self: typeof(AimController))
 	table.clear(self._aimHolds)
 end
 
@@ -344,7 +361,7 @@ end
 -- from movement-facing (so the first attack of a burst is aimed at
 -- once); while already tracking it just extends the linger, and the
 -- update's lerp does the turning. No-op on touch.
-function AimController:RequestCursorFacing()
+function AimController.RequestCursorFacing(self: typeof(AimController))
 	if UserInputService.TouchEnabled then
 		return
 	end
@@ -357,7 +374,7 @@ function AimController:RequestCursorFacing()
 	self._cursorLingerUntil = math.max(self._cursorLingerUntil, os.clock() + PC_CURSOR_LINGER_SECONDS)
 end
 
-function AimController:_MobileUpdate()
+function AimController._mobileUpdate(self: typeof(AimController))
 	-- Cast lock (BeginCastLock), the same one the keyboard loop honours:
 	-- the heading is pinned for the cast so the server's hitbox matches
 	-- what the player aimed. Was the SkillshotDelay attribute.
@@ -371,11 +388,12 @@ function AimController:_MobileUpdate()
 	end
 
 	if PlayerStateController:AimActionEnabled() == false then
+		local character = player.Character :: Model
 		if
-			player.Character:GetAttribute(Attributes.IsDodging) == true
-			or player.Character:GetAttribute(Attributes.MagicEnabled) == true
+			character:GetAttribute(Attributes.IsDodging) == true
+			or character:GetAttribute(Attributes.MagicEnabled) == true
 		then
-			player.Character.Humanoid.AutoRotate = false
+			getHumanoid(character).AutoRotate = false
 		end
 
 		return
@@ -385,7 +403,7 @@ function AimController:_MobileUpdate()
 		-- Nothing steering: hand rotation back to the humanoid — unless a
 		-- weapon-stick release hold is still running, in which case keep
 		-- the current facing (see HoldFacing).
-		player.Character.Humanoid.AutoRotate = os.clock() >= self._facingHoldUntil
+		getHumanoid(player.Character :: Model).AutoRotate = os.clock() >= self._facingHoldUntil
 
 		return
 	end
@@ -394,7 +412,7 @@ function AimController:_MobileUpdate()
 		return
 	end
 
-	local rootPart: BasePart = player.Character:FindFirstChild("HumanoidRootPart")
+	local rootPart = getRootPart(player.Character :: Model)
 
 	local currentAngle = rootPart.CFrame - rootPart.CFrame.Position
 	local desiredAngle = self._mobileTargetCFrame - self._mobileTargetCFrame.Position
@@ -403,11 +421,11 @@ function AimController:_MobileUpdate()
 	rootPart.CFrame = finalCF
 end
 
-function AimController:SetMoveVectorRotationEnabled(enable: boolean)
+function AimController.SetMoveVectorRotationEnabled(self: typeof(AimController), enable: boolean)
 	self._moveVectorRotationEnabled = enable
 end
 
-function AimController:RotatePlayerToMoveVector(activated: boolean, direction: Vector3)
+function AimController.RotatePlayerToMoveVector(self: typeof(AimController), activated: boolean, direction: Vector3)
 	if UserInputService.TouchEnabled then
 		if not self._moveVectorRotationEnabled then
 			return
@@ -424,7 +442,7 @@ function AimController:RotatePlayerToMoveVector(activated: boolean, direction: V
 		-- honours a running facing hold (writing AutoRotate = true here
 		-- would flicker it on for a frame and defeat the hold).
 		if self._mobileRotationActivated then
-			player.Character:WaitForChild("Humanoid").AutoRotate = false
+			((player.Character :: Model):WaitForChild("Humanoid") :: Humanoid).AutoRotate = false
 		else
 			self._mobileFirstClick = true
 		end
@@ -433,16 +451,17 @@ function AimController:RotatePlayerToMoveVector(activated: boolean, direction: V
 			return
 		end
 
-		local rootPart = player.Character.HumanoidRootPart
+		local rootPart = getRootPart(player.Character :: Model)
 		local targetDirection = Vector3.new(direction.X, 0, direction.Z).Unit
 		local targetPosition = Vector3.new(rootPart.Position.X, rootPart.Position.Y, rootPart.Position.Z)
 
-		self._mobileTargetCFrame = CFrame.new(targetPosition, targetPosition + targetDirection)
+		local targetCFrame = CFrame.new(targetPosition, targetPosition + targetDirection)
 			* CFrame.Angles(0, math.rad(self:GetMobileMoveVectorOffset()), 0)
+		self._mobileTargetCFrame = targetCFrame
 
 		if self._mobileFirstClick then
 			self._mobileFirstClick = false
-			player.Character.HumanoidRootPart.CFrame = self._mobileTargetCFrame
+			getRootPart(player.Character :: Model).CFrame = targetCFrame
 		end
 	end
 end
@@ -452,9 +471,9 @@ end
 -- Root part of the nearest living zombie within `rangeStuds` of the local
 -- character, or nil. Pure distance — no line-of-sight filtering, by design:
 -- rooms are open arenas and a raycast miss would read as a dead button.
-function AimController:_findNearestEnemy(rangeStuds: number): BasePart?
+function AimController._findNearestEnemy(_self: typeof(AimController), rangeStuds: number): BasePart?
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return nil
 	end
@@ -472,7 +491,7 @@ function AimController:_findNearestEnemy(rangeStuds: number): BasePart?
 			continue
 		end
 		local zombieHumanoid = zombie:FindFirstChildOfClass("Humanoid")
-		local zombieRoot = zombie:FindFirstChild("HumanoidRootPart") or zombie.PrimaryPart
+		local zombieRoot = (zombie:FindFirstChild("HumanoidRootPart") or zombie.PrimaryPart) :: BasePart?
 		if not zombieHumanoid or zombieHumanoid.Health <= 0 or not zombieRoot then
 			continue
 		end
@@ -488,7 +507,7 @@ function AimController:_findNearestEnemy(rangeStuds: number): BasePart?
 end
 
 -- Position variant, kept for callers that only need a point (TapMagic).
-function AimController:GetNearestEnemyPosition(rangeStuds: number?): Vector3?
+function AimController.GetNearestEnemyPosition(self: typeof(AimController), rangeStuds: number?): Vector3?
 	local root = self:_findNearestEnemy(rangeStuds or AUTO_AIM_ACQUIRE_RANGE_STUDS)
 	return root and root.Position
 end
@@ -498,9 +517,9 @@ end
 -- RotatePlayerToMoveVector, which expects a STICK-space vector and applies
 -- the camera-yaw offset — feeding it a world direction would aim wrong by
 -- the camera's rotation.
-function AimController:_snapFacing(targetPosition: Vector3)
+function AimController._snapFacing(_self: typeof(AimController), targetPosition: Vector3)
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return
 	end
@@ -513,14 +532,14 @@ end
 
 -- Is the session's sticky target still worth keeping? Alive, still in the
 -- world, and within DROP range (wider than acquire — hysteresis).
-function AimController:_isAutoAttackTargetValid(): boolean
+function AimController._isAutoAttackTargetValid(self: typeof(AimController)): boolean
 	local targetRoot = self._autoAttackTargetRoot
 	if not targetRoot or not targetRoot.Parent then
 		return false
 	end
 
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return false
 	end
@@ -539,9 +558,9 @@ end
 -- signal hot. Firing every step mirrors what a stick drag already does
 -- (OnWeaponActivate(true) per TouchMoved) — the weapon components own
 -- their own fire-rate / swing debounce.
-function AimController:_autoAttackStep()
+function AimController._autoAttackStep(self: typeof(AimController))
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if not hrp or not humanoid or PlayerStateController:GeneralActionEnabled() == false then
@@ -588,7 +607,7 @@ end
 -- PRESS on the weapon thumbstick. Idempotent — a second call while a
 -- session runs is a no-op. Refuses (and attacks nothing) while general
 -- actions are disabled (death, cutscene, stun).
-function AimController:StartAutoAttack()
+function AimController.StartAutoAttack(self: typeof(AimController))
 	if self._autoAttackConnection then
 		return
 	end
@@ -608,7 +627,7 @@ end
 -- True while a mobile press-and-hold auto-attack session is running.
 -- Read by PlayerStateController's watchdog so it can tell a live held
 -- attack from an Attacking flag whose clear was lost.
-function AimController:IsAutoAttacking(): boolean
+function AimController.IsAutoAttacking(self: typeof(AimController)): boolean
 	return self._autoAttackConnection ~= nil
 end
 
@@ -622,7 +641,7 @@ end
 -- re-activation was dropped by its running-loop guard and the gun stalled a
 -- full itemDelay before the next TouchMoved restarted it -- "shoot once,
 -- then a half-second pause" on every press-and-drag.
-function AimController:StopAutoAttack(keepAttacking: boolean?)
+function AimController.StopAutoAttack(self: typeof(AimController), keepAttacking: boolean?)
 	if not self._autoAttackConnection then
 		return
 	end
@@ -642,7 +661,7 @@ end
 -- doesn't jitter (rationale at WEAPON_RELEASE_FACING_HOLD_SECONDS). Called
 -- by AimThumbstick on TouchEnded after a TAP / HOLD release only (not after
 -- a drag). Rolling: never shortens a hold already running.
-function AimController:HoldFacing(seconds: number?)
+function AimController.HoldFacing(self: typeof(AimController), seconds: number?)
 	local until_ = os.clock() + (seconds or WEAPON_RELEASE_FACING_HOLD_SECONDS)
 	if until_ > self._facingHoldUntil then
 		self._facingHoldUntil = until_
@@ -654,7 +673,7 @@ end
 -- OnMagicActivate(slot, false) path — which owns the indicator cleanup, the
 -- cast lock, and CastMagic's own mana/cooldown gates. Spells
 -- with canAim = false (auras, self-centered bursts) cast with no rotation.
-function AimController:TapMagic(equipSlot: number)
+function AimController.TapMagic(self: typeof(AimController), equipSlot: number)
 	if PlayerStateController:GeneralActionEnabled() == false then
 		return
 	end
@@ -676,43 +695,36 @@ function AimController:TapMagic(equipSlot: number)
 	self.OnMagicActivate:Fire(equipSlot, false)
 end
 
-function AimController:SetTargetFilter(instance: Instance)
+function AimController.SetTargetFilter(_self: typeof(AimController), instance: Instance)
 	mouse.TargetFilter = instance
 end
 
-function AimController:StartKeyboardStepped()
+function AimController.StartKeyboardStepped(self: typeof(AimController))
 	if self._stepped then
 		self:AbortStepped()
 	end
 
 	self._stepped = self._janitor:Add(RunService.Stepped:Connect(function()
-		self:_KeyboardMouseUpdate()
+		self:_keyboardMouseUpdate()
 	end))
 end
 
-function AimController:StartMobileStepped()
+function AimController.StartMobileStepped(self: typeof(AimController))
 	if self._stepped then
 		self:AbortStepped()
 	end
 
 	self._stepped = self._janitor:Add(RunService.Stepped:Connect(function()
-		self:_MobileUpdate()
+		self:_mobileUpdate()
 	end))
 end
 
-function AimController:AbortStepped()
+function AimController.AbortStepped(self: typeof(AimController))
 	self._janitor:Cleanup()
 	self._stepped = nil
 end
 
-function AimController:KnitInit()
-	IsometricCameraController = Knit.GetController("IsometricCameraController")
-	MagicController = Knit.GetController("MagicController")
-	PlayerStateController = Knit.GetController("PlayerStateController")
-	CastModeController = Knit.GetController("CastModeController")
-end
-
-function AimController:KnitStart()
+function AimController.Start(self: typeof(AimController))
 	-- The authoritative end of every aim hold (see ReleaseAllAimHolds).
 	-- Unconditional: no weapon state, no equip check, nothing that can be
 	-- false at the moment the button comes up.
@@ -726,9 +738,7 @@ function AimController:KnitStart()
 	self:SetMoveVectorRotationEnabled(true)
 
 	-- Auto Aim preference: whatever snapshot is already here, then every
-	-- push (the join-time snapshot may land after KnitStart).
-	DataController = Knit.GetController("DataController")
-	SettingsService = Knit.GetService("SettingsService")
+	-- push (the join-time snapshot may land after Start).
 	self:_applyAutoAimProfile(DataController:GetProfileData())
 	DataController.Signals.OnProfileChanged:Connect(function(profile)
 		self:_applyAutoAimProfile(profile)

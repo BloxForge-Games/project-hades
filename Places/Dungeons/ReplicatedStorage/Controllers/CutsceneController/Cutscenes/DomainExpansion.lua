@@ -8,7 +8,7 @@ local TweenService = game:GetService("TweenService")
 local DomainExpansionExecutable = {}
 
 DomainExpansionExecutable.Enabled = true :: boolean
-DomainExpansionExecutable.CutsceneConnection = nil :: Tween
+DomainExpansionExecutable.CutsceneConnection = nil :: Tween?
 DomainExpansionExecutable.CutsceneHashmap = {
 	["Waypoint1"] = {
 		["iteration"] = "1",
@@ -78,8 +78,8 @@ function DomainExpansionExecutable:Play()
 		local waypointData = hashmap["Waypoint" .. i]
 		local tweenInfo = TweenInfo.new(
 			tonumber(waypointData.duration),
-			Enum.EasingStyle[waypointData.easingStyle],
-			Enum.EasingDirection[waypointData.easingDirection],
+			(Enum.EasingStyle :: any)[waypointData.easingStyle],
+			(Enum.EasingDirection :: any)[waypointData.easingDirection],
 			0,
 			false,
 			tonumber(waypointData.delay)

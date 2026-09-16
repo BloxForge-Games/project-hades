@@ -1,18 +1,39 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+-- DamageService requires this module at load (directly or through its parent),
+-- so this side reaches it lazily: required on first use, once both exist.
+local damageServiceLazy: any = nil
+local function getDamageService(): any
+	if damageServiceLazy == nil then
+		damageServiceLazy = (require :: any)(ServerScriptService.Services.DamageService)
+	end
+	return damageServiceLazy
+end
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 
-local DamageService
-Knit.OnStart():andThen(function()
-	DamageService = Knit.GetService("DamageService")
-end)
+type EnemyEntry = { model: Model, distance: number }
 
 local Fireworks = {}
 Fireworks.__index = Fireworks
+
+export type Fireworks = typeof(setmetatable(
+	{} :: {
+		_player: Player,
+		_fireworksCount: number,
+		_relicService: any,
+		_vfxService: any,
+		_ignoreListService: any,
+		_enemyList: { EnemyEntry },
+		_uniqueTargets: { Model },
+	},
+	Fireworks
+))
 
 function Fireworks.new(
 	player: Player,
@@ -20,23 +41,23 @@ function Fireworks.new(
 	relicService: any,
 	vfxService: any,
 	ignoreListService: any
-)
-	local self = setmetatable({}, Fireworks)
-
-	self._player = player
-	self._fireworksCount = fireworksCount
-	self._relicService = relicService
-	self._vfxService = vfxService
-	self._ignoreListService = ignoreListService
-	self._enemyList = {}
-	self._uniqueTargets = {}
+): Fireworks
+	local self = setmetatable({
+		_player = player,
+		_fireworksCount = fireworksCount,
+		_relicService = relicService,
+		_vfxService = vfxService,
+		_ignoreListService = ignoreListService,
+		_enemyList = {} :: { EnemyEntry },
+		_uniqueTargets = {} :: { Model },
+	}, Fireworks)
 
 	return self
 end
 
-function Fireworks:InvokeFireworks()
+function Fireworks.InvokeFireworks(self: Fireworks)
 	task.spawn(function()
-		local hrp = self._player.Character:FindFirstChild("HumanoidRootPart")
+		local hrp = (self._player.Character :: Model):FindFirstChild("HumanoidRootPart") :: BasePart?
 
 		if not hrp then
 			return
@@ -47,7 +68,7 @@ function Fireworks:InvokeFireworks()
 
 		for _, enemy in ipairs(workspace.IgnoreInstances.Zombies:GetChildren()) do
 			if enemy:IsA("Model") then
-				local enemyHRP = enemy:FindFirstChild("HumanoidRootPart")
+				local enemyHRP = enemy:FindFirstChild("HumanoidRootPart") :: BasePart?
 				local humanoid = enemy:FindFirstChildOfClass("Humanoid")
 
 				if enemyHRP and humanoid and humanoid.Health > 0 then
@@ -78,12 +99,12 @@ function Fireworks:InvokeFireworks()
 		end
 
 		for _, targetEnemy in ipairs(self._uniqueTargets) do
-			self._relicService.Client.OnFireworksEffectActivated:FireAll(
-				self._player,
-				targetEnemy,
-				workspace:GetServerTimeNow(),
-				1
-			)
+			RelicNetwork.FireworksEffect.FireAll({
+				Caster = self._player,
+				Target = targetEnemy,
+				StartTime = workspace:GetServerTimeNow(),
+				Duration = 1,
+			})
 
 			task.delay(1, function()
 				self._vfxService:CreateHitbox(
@@ -99,14 +120,14 @@ function Fireworks:InvokeFireworks()
 						-- (those live in onHitboxDamage; this spell's status
 						-- is None and cameraShake false, so nothing is lost).
 						local humanoid = model:FindFirstChild("Humanoid")
-						if not humanoid or not DamageService then
+						if not humanoid or not getDamageService() then
 							return
 						end
 						local config = MagicData[MagicNames["Fireworks Explosion"]]
 						local damageRoll = if config.runtimeDamageCallback
 							then config.runtimeDamageCallback(self._player)
 							else config.damage
-						DamageService:TakeDamage(
+						getDamageService():TakeDamage(
 							self._player,
 							humanoid,
 							damageRoll,

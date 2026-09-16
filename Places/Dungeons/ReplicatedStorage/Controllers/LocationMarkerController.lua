@@ -1,11 +1,12 @@
+--!strict
 --[[
      Author(s):
      Module: LocationMarkerController.lua
-     Description: Knit controller wrapper that initializes the
+     Description: Blitz module that initializes the
                   LocationMarkerSystem library on client start. The library
                   itself lives in Libraries/LocationMarkerSystem and is
                   framework-agnostic; this controller is the glue that wires
-                  it into Knit's startup sequence so the rest of the client
+                  it into the client's startup sequence so the rest of it
                   doesn't have to know about it.
 ]]
 
@@ -15,19 +16,15 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local LocationMarkerSystem = require(ReplicatedStorage.Submodules.Core.Libraries.LocationMarkerSystem)
 
-local LocationMarkerController = Knit.CreateController({
+local LocationMarkerController = {
 	Name = "LocationMarkerController",
-	Client = {},
-})
+}
 
 --[ Initializers ]--
 
-function LocationMarkerController:KnitInit() end
-
-function LocationMarkerController:KnitStart()
+function LocationMarkerController.Start(_self: typeof(LocationMarkerController))
 	LocationMarkerSystem:Init()
 end
 

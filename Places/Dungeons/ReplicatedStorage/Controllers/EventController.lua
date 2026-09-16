@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: EventController.lua
 	Description:
@@ -36,7 +37,21 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicRenderController =
+	require(ReplicatedStorage.Controllers.RelicController.SubControllers.RelicRenderController)
+local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
+local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
+local EncounterIntroController = require(ReplicatedStorage.Controllers.EncounterIntroController)
+local DialogueBillboardInterface =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.DialogueBillboardInterface)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local relicController = require(ReplicatedStorage.Controllers.RelicController)
+local relicInterface = require(ReplicatedStorage.Interfaces.RelicInterfaceController)
+local RelicController = require(ReplicatedStorage.Controllers.RelicController)
+local RelicInterfaceController = require(ReplicatedStorage.Interfaces.RelicInterfaceController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -49,16 +64,6 @@ local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 local UserNotificationSystem = require(ReplicatedStorage.Submodules.Core.Libraries.UserNotificationSystem).Controller
-
-local EventService
-local CoffinEventService
-local RelicRenderController
-local ScreenSizeController
-local ScreenGradientInterfaceController
-local EncounterIntroController
-local DialogueBillboardInterface
-local CinematicInterfaceController
-local CutsceneController
 
 --[ Constants ]--
 
@@ -94,10 +99,31 @@ local STALL_PARTICLE_COLORS = {
 	[ItemRarity.Epic] = Color3.fromRGB(81, 0, 255),
 }
 
+--[ Types ]--
+
+-- One wired stall prompt: which pedestal it sits on and which stall slot
+-- it sells.
+type PedestalRecord = { pedestal: Instance, roomId: number, index: number }
+-- A display clone mid-float: its rest pose plus the hover scale lerp.
+type FloatState = { base: CFrame, phase: number, scale: number, targetScale: number }
+
 --[ Controller ]--
 
-local EventController = Knit.CreateController({
+local EventController = {
 	Name = "EventController",
+	Dependencies = {
+		RelicRenderController,
+		ScreenSizeController,
+		ScreenGradientInterfaceController,
+		EncounterIntroController,
+		DialogueBillboardInterface,
+		CinematicInterfaceController,
+		CutsceneController,
+		relicController,
+		relicInterface,
+		RelicController,
+		RelicInterfaceController,
+	} :: { any },
 
 	Signals = {
 		-- Fired when a merchant dialogue asks for sell mode. The relic
@@ -166,32 +192,34 @@ local EventController = Knit.CreateController({
 	_merchantReadyModels = setmetatable({}, { __mode = "k" }),
 
 	_cutsceneActive = false,
-	_playerControls = nil,
+	_playerControls = nil :: any,
 
 	-- [prompt] = { pedestal, merchant, index, clone } — this client's
 	-- live pedestals. Everything about them is LOCAL: what shows, the
 	-- price on the tag, and whether the stand is already empty.
-	_pedestalsByPrompt = {},
+	_pedestalsByPrompt = {} :: { [ProximityPrompt]: PedestalRecord },
 	-- [roomId] = slots from GetMerchantStalls (relic, price, sold, cframe).
-	_stalls = {},
+	_stalls = {} :: { [number]: { DungeonNetwork.MerchantSlot } },
 	-- ["roomId:index"] = the rendered clone on that stand.
-	_stallClones = {},
+	_stallClones = {} :: { [string]: Model },
 	-- clones being animated: [model] = { base = CFrame, phase = number }
-	_floatingClones = {},
+	_floatingClones = {} :: { [Model]: FloatState },
 	-- [roomModel] = connection — pending fog-reveal listeners for shop
 	-- rooms whose stock unlocked before the room itself was revealed.
-	_revealWatchers = {},
-})
+	_revealWatchers = {} :: { [Model]: RBXScriptConnection },
+	-- The shared hover highlight, created in Start (see _rescuePedestalHighlight).
+	_pedestalHighlight = nil :: Highlight?,
+}
 
 --[ Private ]--
 
-function EventController:_getHumanoid(): Humanoid?
+function EventController._getHumanoid(_self: typeof(EventController)): Humanoid?
 	local character = Players.LocalPlayer.Character
 	return character and character:FindFirstChildOfClass("Humanoid")
 end
 
 -- Same lazy PlayerModule resolution as EncounterIntroController.
-function EventController:_getControls()
+function EventController._getControls(self: typeof(EventController))
 	if self._playerControls then
 		return self._playerControls
 	end
@@ -224,7 +252,7 @@ local VITALS_EVENT_GRAPHS = {
 -- is free (the dialogue session's face-watcher lerps the character
 -- toward the model every frame), and there is deliberately no walk-to
 -- — the player bargains from wherever they stood.
-function EventController:BeginEventCutscene()
+function EventController.BeginEventCutscene(self: typeof(EventController))
 	if self._cutsceneActive then
 		return
 	end
@@ -264,7 +292,7 @@ end
 
 -- Safe from any state; runs on EVERY dialogue close while a cutscene is
 -- active, so leave / give up / death / success all tear down the same way.
-function EventController:EndEventCutscene()
+function EventController.EndEventCutscene(self: typeof(EventController))
 	if not self._cutsceneActive then
 		return
 	end
@@ -307,14 +335,14 @@ end
 -- One server pull attempt. Yields; the graph's "You grip the hilt..."
 -- node calls this from its PreAction, and the three nodes after it read
 -- LastSwordResult from their Conditions.
-function EventController:DoSwordPull()
+function EventController.DoSwordPull(self: typeof(EventController))
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		self.LastSwordResult = "invalid"
 		return
 	end
 	local ok, result = pcall(function()
-		return EventService:AttemptSwordPull(model):expect()
+		return DungeonNetwork.AttemptSwordPull.Invoke(model)
 	end)
 	self.LastSwordResult = if ok then result else "invalid"
 end
@@ -323,7 +351,7 @@ end
 -- emitting, every Light fades out over a second then disables. Local
 -- because the event is per-player — a teammate who hasn't pulled yet
 -- still sees the sword shining.
-function EventController:PlaySwordSuccessVFX()
+function EventController.PlaySwordSuccessVFX(_self: typeof(EventController))
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
@@ -346,14 +374,14 @@ end
 -- lands mid-dialogue, under the billboard. The cursed-relic fan is
 -- still deferred: the server queues it, and the close-path
 -- MarkEventInteracted releases it once the bars are down.
-function EventController:AcceptShrineCurse()
+function EventController.AcceptShrineCurse(self: typeof(EventController))
 	self.ShrineAccepted = true
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
 	end
 	pcall(function()
-		EventService:AcceptCurse(model):expect()
+		DungeonNetwork.AcceptCurse.Invoke(model)
 	end)
 end
 
@@ -361,7 +389,7 @@ end
 -- resets this conversation's choice, and YIELDS on the server's spent
 -- check (the sword's pull sets the precedent for a yielding PreAction) so
 -- the graph's redirect Conditions can route around a spent fountain.
-function EventController:BeginFountainDialogue()
+function EventController.BeginFountainDialogue(self: typeof(EventController))
 	self:BeginEventCutscene()
 	self.FountainChoice = nil
 
@@ -371,7 +399,7 @@ function EventController:BeginFountainDialogue()
 		return
 	end
 	local ok, spent = pcall(function()
-		return EventService:IsFountainSpent(model):expect()
+		return DungeonNetwork.IsFountainSpent.Invoke(model)
 	end)
 	self.FountainSpent = if ok then spent == true else true
 end
@@ -380,32 +408,32 @@ end
 -- here — the fountain is one of the few events whose payoff lands
 -- DURING the dialogue: the outcome line narrates a heal / attunement
 -- that has already happened.
-function EventController:ChooseFountainDrink()
+function EventController.ChooseFountainDrink(self: typeof(EventController))
 	self.FountainChoice = "drink"
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
 	end
 	pcall(function()
-		EventService:DrinkFromFountain(model):expect()
+		DungeonNetwork.DrinkFromFountain.Invoke(model)
 	end)
 end
 
-function EventController:ChooseFountainAttune()
+function EventController.ChooseFountainAttune(self: typeof(EventController))
 	self.FountainChoice = "attune"
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
 	end
 	pcall(function()
-		EventService:AttuneToFountain(model):expect()
+		DungeonNetwork.AttuneToFountain.Invoke(model)
 	end)
 end
 
 -- Greater Shrine, opening node: same shape as the fountain's. The bars
 -- stay DOWN for this one (it is not in VITALS_EVENT_GRAPHS): the shrine
 -- heals through the orbs it drops, not directly.
-function EventController:BeginGreaterShrineDialogue()
+function EventController.BeginGreaterShrineDialogue(self: typeof(EventController))
 	self:BeginEventCutscene()
 	self.GreaterShrineChoice = nil
 
@@ -415,12 +443,12 @@ function EventController:BeginGreaterShrineDialogue()
 		return
 	end
 	local ok, spent = pcall(function()
-		return EventService:IsGreaterShrineSpent(model):expect()
+		return DungeonNetwork.IsGreaterShrineSpent.Invoke(model)
 	end)
 	self.GreaterShrineSpent = if ok then spent == true else true
 
 	local gotOffer, offer = pcall(function()
-		return EventService:GetGreaterShrineOffer(model):expect()
+		return DungeonNetwork.GetGreaterShrineOffer.Invoke(model)
 	end)
 	self.GreaterShrineOffer = if gotOffer and type(offer) == "table" then offer else {}
 
@@ -434,7 +462,7 @@ end
 
 -- Row gate for the dialogue: every blessing has a row, only the ones
 -- in this player's rolled offer pass.
-function EventController:IsBlessingOffered(blessingId: string): boolean
+function EventController.IsBlessingOffered(self: typeof(EventController), blessingId: string): boolean
 	for _, id in self.GreaterShrineOffer do
 		if id == blessingId then
 			return true
@@ -447,14 +475,14 @@ end
 -- the stat lands NOW, mid-dialogue, and the screen pulses in the
 -- blessing's colour. The Healing Orbs and the statue's dimming both
 -- wait for the close path.
-function EventController:ChooseGreaterBlessing(blessing: string)
+function EventController.ChooseGreaterBlessing(self: typeof(EventController), blessing: string)
 	self.GreaterShrineChoice = blessing
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
 	end
 	local ok, result = pcall(function()
-		return EventService:ChooseGreaterBlessing(model, blessing):expect()
+		return DungeonNetwork.ChooseGreaterBlessing.Invoke({ Statue = model, Blessing = blessing })
 	end)
 
 	-- The pulse is the blessing's own, from the config. An entry with no
@@ -474,10 +502,12 @@ end
 -- particles die out on their own), every light fades to nothing over
 -- LIGHT_FADE_SECONDS and then disables. Nothing outside the model is
 -- touched -- the room's own torches and lights are not the shrine's.
-function EventController:_dimGreaterShrine(model: Instance)
+function EventController._dimGreaterShrine(_self: typeof(EventController), model: Instance)
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") or descendant:IsA("Beam") then
-			descendant.Enabled = false
+			-- Both classes have Enabled; the cast is only because the checker
+			-- cannot write a property through a class union.
+			(descendant :: any).Enabled = false
 		elseif descendant:IsA("Light") then
 			local tween = TweenService:Create(descendant, LIGHT_FADE_INFO, { Brightness = 0 })
 			tween.Completed:Once(function()
@@ -490,7 +520,7 @@ end
 
 -- Merchant's "sell" option: force-open the relic tray in sell mode and
 -- park the dialogue on its "..." node until the tray closes.
-function EventController:RequestSellMode()
+function EventController.RequestSellMode(self: typeof(EventController))
 	self.SoldRelicsThisSession = 0
 	self._sellFlowActive = true
 	self.Signals.OnSellModeRequested:Fire()
@@ -499,8 +529,7 @@ end
 -- Does the local player carry ANY relic? The Forge's "Reforge" option
 -- is greyed on false — visible, so the player can see what the anvil
 -- is for, but unselectable because there is nothing to feed it.
-function EventController:HasAnyRelics(): boolean
-	local relicController = Knit.GetController("RelicController")
+function EventController.HasAnyRelics(_self: typeof(EventController)): boolean
 	local owned = relicController and relicController:GetRelicsFromUserId(Players.LocalPlayer.UserId)
 	if not owned then
 		return false
@@ -518,7 +547,7 @@ end
 -- merchant's sell session, closing the tray does NOT advance — the
 -- blacksmith waits for a relic, and the player's own click on the box
 -- is the only other way forward (node 2's PostAction).
-function EventController:RequestReforgeMode()
+function EventController.RequestReforgeMode(self: typeof(EventController))
 	self.ForgeReforgeChosen = true
 	self.ReforgeDone = false
 	self._reforgeFlowActive = true
@@ -530,13 +559,13 @@ end
 -- blacksmith when the conversation closes), so this closes the tray and
 -- drives the dialogue forward itself — the flow flag is cleared FIRST so
 -- the advance's PostAction cannot double-close.
-function EventController:ReforgeRelicViaForge(relicName: string): boolean
+function EventController.ReforgeRelicViaForge(self: typeof(EventController), relicName: string): boolean
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return false
 	end
 	local ok, result = pcall(function()
-		return EventService:ReforgeRelic(model, relicName):expect()
+		return DungeonNetwork.ReforgeRelic.Invoke({ Forge = model, RelicName = relicName })
 	end)
 	if not ok or (result ~= "reforged" and result ~= "none") then
 		return false
@@ -548,7 +577,6 @@ function EventController:ReforgeRelicViaForge(relicName: string): boolean
 	self.ReforgeDone = true
 	self._reforgeFlowActive = false
 
-	local relicInterface = Knit.GetController("RelicInterfaceController")
 	if relicInterface then
 		relicInterface.Signals.SetVisible:Fire(false)
 	end
@@ -563,7 +591,7 @@ end
 -- blacksmith was parked on "...", so closing the window is the player
 -- saying "not this time" and moves the conversation to its backed-out
 -- line. No-ops after a successful reforge, which already advanced.
-function EventController:OnReforgeUIClosed()
+function EventController.OnReforgeUIClosed(self: typeof(EventController))
 	if not self._reforgeFlowActive then
 		return
 	end
@@ -576,12 +604,11 @@ end
 -- The "..." node's PostAction: the player advanced BY HAND without
 -- feeding the anvil. Clear the flow first, then close the tray — the
 -- graph's cancel twin plays off ReforgeDone still being false.
-function EventController:EndReforgeFlowFromDialogue()
+function EventController.EndReforgeFlowFromDialogue(self: typeof(EventController))
 	if not self._reforgeFlowActive then
 		return
 	end
 	self._reforgeFlowActive = false
-	local relicInterface = Knit.GetController("RelicInterfaceController")
 	if relicInterface then
 		relicInterface.Signals.SetVisible:Fire(false)
 	end
@@ -589,9 +616,9 @@ end
 
 -- The tray's sell button lands here (via RelicInterfaceController's
 -- props) so sales are COUNTED for the merchant's parting line.
-function EventController:SellRelicViaMerchant(relicName: string): number
+function EventController.SellRelicViaMerchant(self: typeof(EventController), relicName: string): number
 	local ok, price = pcall(function()
-		return EventService:SellRelic(relicName):expect()
+		return DungeonNetwork.SellRelic.Invoke(relicName)
 	end)
 	if not ok or type(price) ~= "number" then
 		return 0
@@ -605,7 +632,7 @@ end
 -- The tray closed (toggle, scope, or the dialogue's own early-advance
 -- force-close). If the merchant is waiting on "...", advance him — the
 -- engine then resolves the sold / browsed-and-left node off the count.
-function EventController:OnSellUIClosed()
+function EventController.OnSellUIClosed(self: typeof(EventController))
 	if not self._sellFlowActive then
 		return
 	end
@@ -619,12 +646,11 @@ end
 -- The "..." node's PostAction: the player advanced the dialogue BY HAND
 -- while the tray was still open. Clear the flow FIRST (so the tray's
 -- close notification cannot double-advance), then close the tray.
-function EventController:EndSellFlowFromDialogue()
+function EventController.EndSellFlowFromDialogue(self: typeof(EventController))
 	if not self._sellFlowActive then
 		return
 	end
 	self._sellFlowActive = false
-	local relicInterface = Knit.GetController("RelicInterfaceController")
 	if relicInterface then
 		relicInterface.Signals.SetVisible:Fire(false)
 	end
@@ -633,13 +659,13 @@ end
 -- Merchant's "I'm ready to continue": counts this player toward the
 -- event door's early-open. Called from the graph's PostAction, which
 -- runs BEFORE the close — the active model is still resolvable.
-function EventController:MarkMerchantReady()
+function EventController.MarkMerchantReady(self: typeof(EventController))
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if model then
 		self._merchantReadyModels[model] = true
 		task.spawn(function()
 			pcall(function()
-				EventService:MarkEventInteracted(model):expect()
+				DungeonNetwork.MarkEventInteracted.Fire(model)
 			end)
 		end)
 	end
@@ -647,7 +673,7 @@ end
 
 -- Read by the merchant graph: hides "I want to leave" once this player
 -- has taken it at the merchant being talked to.
-function EventController:HasMarkedMerchantReady(): boolean
+function EventController.HasMarkedMerchantReady(self: typeof(EventController)): boolean
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	return model ~= nil and self._merchantReadyModels[model] == true
 end
@@ -656,19 +682,19 @@ end
 
 -- Opening node: cutscene up, then fetch where the offer stands for THIS
 -- player so the graph routes (idle offer / running / over / declined).
-function EventController:BeginCoffinDialogue()
+function EventController.BeginCoffinDialogue(self: typeof(EventController))
 	self:BeginEventCutscene()
 	self.CoffinStatus = "idle"
 	self.CoffinDeclined = false
 	self.CoffinConfirmVisited = false
 	self.CoffinAccepted = false
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
-	if not model or not CoffinEventService then
+	if not model then
 		self.CoffinStatus = "expired"
 		return
 	end
 	local ok, state = pcall(function()
-		return CoffinEventService:GetState(model):expect()
+		return DungeonNetwork.GetCoffinState.Invoke(model)
 	end)
 	if ok and type(state) == "table" then
 		self.CoffinStatus = state.status or "expired"
@@ -679,50 +705,50 @@ function EventController:BeginCoffinDialogue()
 end
 
 -- Confirm node's PostAction (either option).
-function EventController:MarkCoffinConfirmVisited()
+function EventController.MarkCoffinConfirmVisited(self: typeof(EventController))
 	self.CoffinConfirmVisited = true
 end
 
 -- Accept twin's PreAction: yields on the server, which starts the
 -- challenge for the room. A refusal (someone was first) is fine — the
 -- server's cancel closes this conversation either way.
-function EventController:AcceptCoffin()
+function EventController.AcceptCoffin(self: typeof(EventController))
 	self.CoffinAccepted = true
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
-	if not model or not CoffinEventService then
+	if not model then
 		return
 	end
 	pcall(function()
-		CoffinEventService:Accept(model):expect()
+		DungeonNetwork.AcceptCoffin.Invoke(model)
 	end)
 end
 
 -- Decline node's PostAction. Runs BEFORE the close, so the model is
 -- still resolvable; the close handler consumes the prompt off the flag.
-function EventController:DeclineCoffin()
+function EventController.DeclineCoffin(self: typeof(EventController))
 	self.CoffinDeclined = true
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
-	if not model or not CoffinEventService then
+	if not model then
 		return
 	end
 	task.spawn(function()
 		pcall(function()
-			CoffinEventService:Decline(model):expect()
+			DungeonNetwork.DeclineCoffin.Fire(model)
 		end)
 	end)
 end
 
 -- The masked-button toast, through the same pipeline server-sent
 -- notifications ride.
-function EventController:ShowBlockedActionNotification()
+function EventController.ShowBlockedActionNotification(_self: typeof(EventController))
 	UserNotificationSystem:ShowNotification({
 		titleText = "Unavailable",
-		titleTextFont = Enum.Font.SourceSansBold,
+		titleTextFont = Enum.Font.SourceSansBold :: any,
 		titleTextColor3 = Color3.fromRGB(255, 92, 92),
 		titleTextTransparency = 0,
 
 		text = "You cannot perform this action right now",
-		textFont = Enum.Font.SourceSansBold,
+		textFont = Enum.Font.SourceSansBold :: any,
 		textColor3 = Color3.fromRGB(255, 255, 255),
 		textTransparency = 0,
 	})
@@ -737,9 +763,9 @@ end
 -- fight has started — the server withholds locked rooms). Called on
 -- the dungeon-generated signal, on every stock-unlock signal, and once
 -- at start; never on streaming.
-function EventController:RefreshMerchantStalls()
+function EventController.RefreshMerchantStalls(self: typeof(EventController))
 	local ok, stalls = pcall(function()
-		return EventService:GetMerchantStalls():expect()
+		return DungeonNetwork.GetMerchantStalls.Invoke()
 	end)
 	if not ok or type(stalls) ~= "table" then
 		warn("[EventController] GetMerchantStalls failed: " .. tostring(stalls))
@@ -786,7 +812,7 @@ end
 -- One-shot listener: when a fogged shop room is revealed, re-fetch and
 -- render its stands. Keyed per model so repeated refreshes while the
 -- room is still dark do not stack listeners.
-function EventController:_watchRoomReveal(roomModel: Model)
+function EventController._watchRoomReveal(self: typeof(EventController), roomModel: Model)
 	if self._revealWatchers[roomModel] then
 		return
 	end
@@ -805,7 +831,12 @@ function EventController:_watchRoomReveal(roomModel: Model)
 end
 
 -- One floating display clone at the stand's generation-captured CFrame.
-function EventController:_renderStallSlot(roomId: number, index: number, slot: any): boolean
+function EventController._renderStallSlot(
+	self: typeof(EventController),
+	roomId: number,
+	index: number,
+	slot: any
+): boolean
 	local rarity = RelicData[slot.relicName] and RelicData[slot.relicName].rarity
 	local template = rarity and getRelicModelTemplate(slot.relicName, rarity)
 	if not template then
@@ -901,12 +932,12 @@ end
 -- A tagged pedestal streamed in: wire its PROMPT only (the display never
 -- waited for it). Stall data is a generation product, so the wait below
 -- is a join-order formality, bounded by the room's lifetime.
-function EventController:_wirePedestal(pedestal: Instance)
+function EventController._wirePedestal(self: typeof(EventController), pedestal: Instance)
 	local interactables = pedestal.Parent
 	local room = interactables and interactables.Parent
-	local roomId = room and room:GetAttribute("RoomId")
+	local roomId = (room and room:GetAttribute("RoomId")) :: number?
 	local index = tonumber(string.match(pedestal.Name, "%d+$"))
-	if not roomId or not index then
+	if not room or not roomId or not index then
 		warn(
 			("[EventController] Pedestal '%s': missing RoomId attribute or trailing number"):format(
 				pedestal:GetFullName()
@@ -965,7 +996,7 @@ function EventController:_wirePedestal(pedestal: Instance)
 	prompt.UIOffset = Vector2.new(0, 60)
 
 	local promptStyle = "RelicSmall"
-	local descriptionLength = string.len(string.gsub(description, "<[^>]+>", ""))
+	local descriptionLength = string.len((string.gsub(description, "<[^>]+>", "")))
 	if descriptionLength > 34 and descriptionLength <= 62 then
 		promptStyle = "RelicMedium"
 	elseif descriptionLength > 62 then
@@ -988,7 +1019,7 @@ end
 -- clone with the highlight still inside LOCKS the highlight's Parent
 -- ("The Parent property of PedestalRelicHighlight is locked"), which
 -- would break every later pedestal hover for the whole session.
-function EventController:_rescuePedestalHighlight(clone: Model)
+function EventController._rescuePedestalHighlight(self: typeof(EventController), clone: Model)
 	local highlight = self._pedestalHighlight
 	if highlight and highlight.Parent == clone then
 		highlight.FillTransparency = 1
@@ -1000,7 +1031,7 @@ end
 -- The vending pickup's send-off, minus the claim-one teardown: rarity
 -- gradient pulse, then the display fades and shrinks out. The clone
 -- leaves the float loop first so the fade owns its pose.
-function EventController:_playBuyFlourish(clone: Model)
+function EventController._playBuyFlourish(self: typeof(EventController), clone: Model)
 	self._floatingClones[clone] = nil
 
 	local relicName = clone.Name
@@ -1069,13 +1100,13 @@ end
 -- A pedestal prompt fired for the local player: try the buy. "bought"
 -- clears the stand locally; "poor" already showed the server's "Not
 -- enough coins" indicator; anything else quietly re-arms.
-function EventController:_onPedestalPrompt(prompt: ProximityPrompt)
+function EventController._onPedestalPrompt(self: typeof(EventController), prompt: ProximityPrompt)
 	local record = self._pedestalsByPrompt[prompt]
 	if not record then
 		return
 	end
 	local ok, result = pcall(function()
-		return EventService:BuyMerchantRelic(record.roomId, record.index):expect()
+		return DungeonNetwork.BuyMerchantRelic.Invoke({ RoomId = record.roomId, Index = record.index })
 	end)
 	if ok and (result == "bought" or result == "sold") then
 		prompt.Enabled = false
@@ -1112,22 +1143,10 @@ end
 
 --[ Lifecycle ]--
 
-function EventController:KnitInit() end
-
-function EventController:KnitStart()
-	EventService = Knit.GetService("EventService")
-	CoffinEventService = Knit.GetService("CoffinEventService")
-	RelicRenderController = Knit.GetController("RelicRenderController")
-	ScreenSizeController = Knit.GetController("ScreenSizeController")
-	ScreenGradientInterfaceController = Knit.GetController("ScreenGradientInterfaceController")
-	EncounterIntroController = Knit.GetController("EncounterIntroController")
-	DialogueBillboardInterface = Knit.GetController("DialogueBillboardInterface")
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-	CutsceneController = Knit.GetController("CutsceneController")
-
+function EventController.Start(self: typeof(EventController))
 	-- The server closes every coffin conversation when one player accepts
 	-- (or the offer expires). Only OUR open one with THAT coffin.
-	CoffinEventService.OnDialogueCancelled:Connect(function(coffin: Model)
+	DungeonNetwork.CoffinDialogueCancelled.On(function(coffin: Model?)
 		if DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel() == coffin then
 			DialogueBillboardInterface:ForceClose()
 		end
@@ -1168,14 +1187,12 @@ function EventController:KnitStart()
 		-- must not outlive the conversation that opened it.
 		if self._reforgeFlowActive then
 			self._reforgeFlowActive = false
-			local relicInterface = Knit.GetController("RelicInterfaceController")
 			if relicInterface then
 				relicInterface.Signals.SetVisible:Fire(false)
 			end
 		end
 		if self._sellFlowActive then
 			self._sellFlowActive = false
-			local relicInterface = Knit.GetController("RelicInterfaceController")
 			if relicInterface then
 				relicInterface.Signals.SetVisible:Fire(false)
 			end
@@ -1223,7 +1240,7 @@ function EventController:KnitStart()
 			if greaterShrineChoice ~= nil then
 				task.spawn(function()
 					pcall(function()
-						EventService:DropGreaterShrineOrbs(model):expect()
+						DungeonNetwork.DropGreaterShrineOrbs.Invoke(model)
 					end)
 				end)
 			end
@@ -1233,7 +1250,7 @@ function EventController:KnitStart()
 		if graph == "SwordStone" or graph == "CursedShrine" or graph == "HealingFountain" or graph == "Forge" then
 			task.spawn(function()
 				pcall(function()
-					EventService:MarkEventInteracted(model):expect()
+					DungeonNetwork.MarkEventInteracted.Fire(model)
 				end)
 			end)
 
@@ -1267,7 +1284,7 @@ function EventController:KnitStart()
 	-- owns the screen from here, but the controls lock and bars must not
 	-- survive into the respawn.
 	local function watchCharacter(character: Model)
-		local humanoid = character:WaitForChild("Humanoid", 5)
+		local humanoid = character:WaitForChild("Humanoid", 5) :: Humanoid?
 		if humanoid then
 			humanoid.Died:Connect(function()
 				self:EndEventCutscene()
@@ -1284,8 +1301,7 @@ function EventController:KnitStart()
 	-- unowned filter honest). The generation replay and the immediate
 	-- call cover rejoin / late start — both serve whatever is already
 	-- unlocked.
-	local DungeonService = Knit.GetService("DungeonService")
-	DungeonService.OnDungeonGenerated:Connect(function()
+	DungeonNetwork.DungeonGenerated.On(function()
 		task.spawn(function()
 			self:RefreshMerchantStalls()
 		end)
@@ -1296,7 +1312,7 @@ function EventController:KnitStart()
 
 	-- Per-player unlock: YOU just entered a shop, its shelves are now
 	-- rollable server-side for you — fetch and render them.
-	EventService.OnMerchantStockUnlocked:Connect(function(_roomId: number)
+	DungeonNetwork.MerchantStockUnlocked.On(function(_roomId: number)
 		task.spawn(function()
 			self:RefreshMerchantStalls()
 		end)
@@ -1316,7 +1332,7 @@ function EventController:KnitStart()
 	-- Streamed-out pedestals only drop their PROMPT record; the display
 	-- clone is generation-scoped and dies in RefreshMerchantStalls when
 	-- the floor actually regenerates.
-	CollectionService:GetInstanceRemovedSignal(TagList.MerchantPedestal):Connect(function(pedestal)
+	CollectionService:GetInstanceRemovedSignal(TagList.MerchantPedestal):Connect(function(pedestal: Instance)
 		for prompt, record in self._pedestalsByPrompt do
 			if record.pedestal == pedestal then
 				self._pedestalsByPrompt[prompt] = nil
@@ -1362,7 +1378,7 @@ function EventController:KnitStart()
 		end
 		state.targetScale = PEDESTAL_HOVER_SCALE
 		-- The prompt card replaces the nameplate while hovered (drop rule).
-		local nameplate = clone.PrimaryPart and clone.PrimaryPart:FindFirstChild("RelicName")
+		local nameplate = clone.PrimaryPart and clone.PrimaryPart:FindFirstChild("RelicName") :: BillboardGui?
 		if nameplate then
 			nameplate.Enabled = false
 		end
@@ -1389,7 +1405,7 @@ function EventController:KnitStart()
 		if state then
 			state.targetScale = PEDESTAL_BASE_SCALE
 		end
-		local nameplate = clone and clone.PrimaryPart and clone.PrimaryPart:FindFirstChild("RelicName")
+		local nameplate = clone and clone.PrimaryPart and clone.PrimaryPart:FindFirstChild("RelicName") :: BillboardGui?
 		if nameplate then
 			nameplate.Enabled = true
 		end

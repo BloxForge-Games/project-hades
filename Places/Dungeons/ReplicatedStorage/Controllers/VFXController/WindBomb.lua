@@ -1,29 +1,29 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 
-local DodgeController
-local VFXService
-
 local CASTING_HUMANOID_WALK_SPEED = 2
 
-Knit.OnStart():andThen(function()
-	DodgeController = Knit.GetController("DodgeController")
-	VFXService = Knit.GetService("VFXService")
-end)
+-- The Roblox type definitions no longer allow indexing the root part off
+-- the character; the cast keeps a missing one erroring where the old index did.
+local function getRootPart(character: Model): BasePart
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart
+end
 
 return function(player: Player, preload: boolean?)
-	local character = player.Character
+	local character = player.Character :: Model
 
-	character.Humanoid.WalkSpeed = CASTING_HUMANOID_WALK_SPEED
+	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = CASTING_HUMANOID_WALK_SPEED
 
-	local windbombAnimation = character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator"):LoadAnimation(
+	local windbombAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("WindBombAnimation")
 	)
 
@@ -43,31 +43,29 @@ return function(player: Player, preload: boolean?)
 	end
 
 	local windbombVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Wind Bomb"]].CastFX:Clone()
-	windbombVFX.Parent = character["Right Arm"]
+	windbombVFX.Parent = character:FindFirstChild("Right Arm")
 
 	if not preload then
 		local windBombSound = ReplicatedStorage.GameAssets.Sounds.WindBombCast:Clone()
-		windBombSound.Parent = character.HumanoidRootPart
+		windBombSound.Parent = getRootPart(character)
 		windBombSound:Play()
 		Debris:AddItem(windBombSound, 5)
 	end
 
 	task.delay(0.75, function()
 		if player == Players.LocalPlayer and not preload then
-			VFXService:OnVFXHitboxRequested(
-				player,
-				MagicNames["Wind Bomb"],
-				character.HumanoidRootPart.CFrame
-					+ character.HumanoidRootPart.CFrame.LookVector * MagicData[MagicNames["Wind Bomb"]].range
-			)
+			Magic.HitboxRequested.Fire({
+				MagicName = MagicNames["Wind Bomb"],
+				CFrame = getRootPart(character).CFrame
+					+ getRootPart(character).CFrame.LookVector * MagicData[MagicNames["Wind Bomb"]].range,
+			})
 		end
 	end)
 
 	task.delay(0.85, function()
 		local windbombExplosionVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Wind Bomb"]].ExplosionFX:Clone()
 		windbombExplosionVFX.Parent = workspace.IgnoreInstances.MagicSpells
-		windbombExplosionVFX.CFrame = character.HumanoidRootPart.CFrame
-			+ character.HumanoidRootPart.CFrame.LookVector * 5
+		windbombExplosionVFX.CFrame = getRootPart(character).CFrame + getRootPart(character).CFrame.LookVector * 5
 
 		if not preload then
 			windbombExplosionVFX.Explosion:Play()

@@ -1,14 +1,13 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
-local packages: Folder = ReplicatedStorage.Submodules.Core.Packages
-
-local Knit = require(packages.Knit)
-local Janitor = require(packages.Janitor)
+local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
 
 -- Parts of a Building-tagged model (pillars, the static map buildings)
 -- belong to BuildingTransparencyController, which fades the WHOLE model
@@ -30,12 +29,21 @@ end
 
 local camera: Camera = workspace.CurrentCamera
 
-local PlayerEventController
+type Fade = {
+	partTween: Tween?,
+	textureTweens: { [Instance]: Tween },
+	textures: { Texture | Decal },
+}
 
-local WallsTransparencyController = Knit.CreateController({
+local WallsTransparencyController = {
 	Name = "WallsTransparencyController",
-	Client = {},
-})
+	Dependencies = { PlayerEventController } :: { any },
+
+	_janitor = nil :: any,
+	_activeFades = {} :: { [BasePart]: Fade },
+	_originalPartTransparencies = {} :: { [BasePart]: number },
+	_originalTextureTransparencies = {} :: { [Texture | Decal]: number },
+}
 
 local FADE_TIME = 0.25
 local FADED_PART_TRANSPARENCY = 0.75
@@ -45,19 +53,22 @@ local toggled = true
 
 -- Capture-once. Records the part's true transparency the first time we ever
 -- touch it, before any tween starts. Never overwritten by mid-tween reads.
-function WallsTransparencyController:_rememberOriginal(part: BasePart)
+function WallsTransparencyController._rememberOriginal(self: typeof(WallsTransparencyController), part: BasePart)
 	if self._originalPartTransparencies[part] == nil then
 		self._originalPartTransparencies[part] = part.Transparency
 	end
 end
 
-function WallsTransparencyController:_rememberOriginalTexture(obj: Texture | Decal)
+function WallsTransparencyController._rememberOriginalTexture(
+	self: typeof(WallsTransparencyController),
+	obj: Texture | Decal
+)
 	if self._originalTextureTransparencies[obj] == nil then
 		self._originalTextureTransparencies[obj] = obj.Transparency
 	end
 end
 
-function WallsTransparencyController:_fadeOut(part: BasePart)
+function WallsTransparencyController._fadeOut(self: typeof(WallsTransparencyController), part: BasePart)
 	if self._activeFades[part] then
 		return
 	end
@@ -92,7 +103,7 @@ function WallsTransparencyController:_fadeOut(part: BasePart)
 	self._activeFades[part] = fade
 end
 
-function WallsTransparencyController:_fadeIn(part: BasePart)
+function WallsTransparencyController._fadeIn(self: typeof(WallsTransparencyController), part: BasePart)
 	local fade = self._activeFades[part]
 	if not fade then
 		return
@@ -134,7 +145,7 @@ end
 -- mid-tween, and _fadeIn would restore the part to that garbage. Forget
 -- it all; the next time we touch the part, after its tween has settled,
 -- we capture its true value fresh.
-function WallsTransparencyController:_release(part: BasePart)
+function WallsTransparencyController._release(self: typeof(WallsTransparencyController), part: BasePart)
 	local fade = self._activeFades[part]
 	if not fade then
 		return
@@ -154,7 +165,7 @@ function WallsTransparencyController:_release(part: BasePart)
 	end
 end
 
-function WallsTransparencyController:_InitOcclusionThread()
+function WallsTransparencyController._initOcclusionThread(self: typeof(WallsTransparencyController))
 	self._janitor:Cleanup()
 
 	local ignoreList = {
@@ -246,7 +257,7 @@ function WallsTransparencyController:_InitOcclusionThread()
 	end))
 end
 
-function WallsTransparencyController:_StopOcclusionThread()
+function WallsTransparencyController._stopOcclusionThread(self: typeof(WallsTransparencyController))
 	self._janitor:Cleanup()
 
 	for part in self._activeFades do
@@ -254,22 +265,20 @@ function WallsTransparencyController:_StopOcclusionThread()
 	end
 end
 
-function WallsTransparencyController:Toggle(toggle: boolean)
+function WallsTransparencyController.Toggle(_self: typeof(WallsTransparencyController), toggle: boolean)
 	toggled = toggle
 end
 
-function WallsTransparencyController:KnitInit()
+function WallsTransparencyController.Init(self: typeof(WallsTransparencyController))
 	self._janitor = Janitor.new()
 	self._activeFades = {} -- BasePart -> { partTween, textureTweens, textures }
 	self._originalPartTransparencies = {} -- BasePart -> number (captured once)
 	self._originalTextureTransparencies = {} -- Texture|Decal -> number (captured once)
 end
 
-function WallsTransparencyController:KnitStart()
-	PlayerEventController = Knit.GetController("PlayerEventController")
-
+function WallsTransparencyController.Start(self: typeof(WallsTransparencyController))
 	PlayerEventController.OnCharacterLoaded:Connect(function()
-		self:_InitOcclusionThread()
+		self:_initOcclusionThread()
 	end)
 end
 

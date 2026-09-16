@@ -1,0 +1,13 @@
+{
+	"languageMode": "nonstrict",
+	"lint": {
+		"*": true,
+		"LocalUnused": true,
+		"ImportUnused": true
+	},
+	"lintErrors": false,
+	"aliases": {
+		"core": "bfg-core/Source",
+		"packages": "bfg-core/Packages"
+	}
+}

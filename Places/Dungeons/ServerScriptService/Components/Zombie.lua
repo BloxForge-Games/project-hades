@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: Zombie.lua (Component)

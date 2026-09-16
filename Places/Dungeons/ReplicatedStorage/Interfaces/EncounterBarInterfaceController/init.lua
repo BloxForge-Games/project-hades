@@ -1,8 +1,9 @@
+--!strict
 --[[
      Module: EncounterBarInterfaceController.lua
      Description:
      UI root for the encounter HP bar (used by both miniboss and final boss).
-     Observes EncounterService.EncounterData and renders the Container component
+     Observes the replicated EncounterData and renders the Container component
      whenever an encounter is active.
        data == nil                                  → hidden
        { kind, name, level, currentHP, maxHP }      → visible, animates HP
@@ -15,7 +16,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 
@@ -31,38 +33,42 @@ export type EncounterData = {
 	maxHP: number,
 }
 
-local EncounterService
-
-local EncounterBarInterfaceController = Knit.CreateController({
+local EncounterBarInterfaceController = {
 	Name = "EncounterBarInterfaceController",
+}
+
+-- The active encounter's HUD data, nil between encounters (was
+-- EncounterService.EncounterData).
+EncounterBarInterfaceController.EncounterData = RemoteProperty.Client({
+	changed = DungeonNetwork.EncounterDataChanged,
+	get = DungeonNetwork.GetEncounterData,
 })
 
-function EncounterBarInterfaceController:_render()
+function EncounterBarInterfaceController._render(_self: typeof(EncounterBarInterfaceController))
 	return function()
-		local encounterData, setEncounterData = React.useState(nil)
+		local encounterData, setEncounterData = React.useState(nil :: EncounterData?)
 		-- True while a boss phase-change cutscene is playing. The Container
 		-- slides the bar up off-screen for the duration, then back down.
 		local phaseHidden, setPhaseHidden = React.useState(false)
 
 		React.useEffect(function()
-			local observer = EncounterService.EncounterData:Observe(function(data: EncounterData?)
-				setEncounterData(data)
+			-- The wire payload is structural (`kind: string`); EncounterData narrows it.
+			local disconnect = EncounterBarInterfaceController.EncounterData:Observe(function(data)
+				setEncounterData(data :: any)
 			end)
 
 			-- Hide the bar during boss phase-change cutscenes, reveal it after.
-			local phaseStart = EncounterService.EncounterPhaseStart:Connect(function()
+			local phaseStart = DungeonNetwork.EncounterPhaseStart.On(function()
 				setPhaseHidden(true)
 			end)
-			local phaseEnd = EncounterService.EncounterPhaseEnd:Connect(function()
+			local phaseEnd = DungeonNetwork.EncounterPhaseEnd.On(function()
 				setPhaseHidden(false)
 			end)
 
 			return function()
-				if observer then
-					observer:Disconnect()
-				end
-				phaseStart:Disconnect()
-				phaseEnd:Disconnect()
+				disconnect()
+				phaseStart()
+				phaseEnd()
 			end
 		end, {})
 
@@ -85,9 +91,7 @@ end
 
 --[ Lifecycle ]--
 
-function EncounterBarInterfaceController:KnitInit()
-	EncounterService = Knit.GetService("EncounterService")
-
+function EncounterBarInterfaceController.Init(self: typeof(EncounterBarInterfaceController))
 	local root = ReactRoblox.createRoot(Instance.new("Folder"))
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
 end

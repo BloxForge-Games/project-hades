@@ -3,7 +3,7 @@
      Description:
      Renders the local player's lives row. One HeartIcon per slot up to max;
      filled or dimmed based on current. Tracks the previous `current` value
-     across LifeService.LivesData updates so we know which specific heart
+     across LivesData updates so we know which specific heart
      just changed — only that one animates (shrink-fade on loss, pop-in on
      gain), the others sit still.
 
@@ -114,7 +114,7 @@ end
 --[ Container ]--
 
 local function Container(props: any)
-	local LifeService = props.LifeService
+	local LivesData = props.LivesData
 
 	local livesData, setLivesData = React.useState(nil)
 	local prevCurrentRef = React.useRef(nil)
@@ -122,7 +122,7 @@ local function Container(props: any)
 	local justChangedState, setJustChangedState = React.useState(nil)
 
 	React.useEffect(function()
-		local observer = LifeService.LivesData:Observe(function(data: { [any]: any }?)
+		local disconnect = LivesData:Observe(function(data: { [any]: any }?)
 			local localId = Players.LocalPlayer.UserId
 
 			local entry = data and (data[localId] or data[tostring(localId)])
@@ -150,11 +150,7 @@ local function Container(props: any)
 			end
 		end)
 
-		return function()
-			if observer then
-				observer:Disconnect()
-			end
-		end
+		return disconnect
 	end, {})
 
 	-- Hide entirely until the server initializes lives for us.

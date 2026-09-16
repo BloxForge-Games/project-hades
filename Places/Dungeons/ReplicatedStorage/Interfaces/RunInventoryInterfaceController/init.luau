@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: RunInventoryInterfaceController/init.luau
 	Description:
@@ -42,10 +43,14 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local SignalTypes = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
 
@@ -64,21 +69,26 @@ local BACKGROUND_TWEEN_INFO = TweenInfo.new(BACKGROUND_TWEEN_DURATION, Enum.Easi
 
 --[ Controller ]--
 
-local RunInventoryInterfaceController = Knit.CreateController({
+local RunInventoryInterfaceController = {
 	Name = "RunInventoryInterfaceController",
+	Dependencies = { InterfaceManagerController } :: { any },
+}
+
+-- Replicated run escrow, { items, coins } for the local player (was
+-- RunEscrowService.EscrowData). ToolBarInterface reads it from here.
+RunInventoryInterfaceController.EscrowData = RemoteProperty.Client({
+	changed = PlayerNetwork.EscrowDataChanged,
+	get = PlayerNetwork.GetEscrowData,
 })
 
 RunInventoryInterfaceController._visible = false
-RunInventoryInterfaceController._visibilityChanged = Signal.new() :: (visible: boolean) -> ()
+RunInventoryInterfaceController._visibilityChanged = Signal.new() :: SignalTypes.Signal<boolean>
 
 -- Unseen-drop pip, consumed by ToolBarInterface's RunInventory slot.
 RunInventoryInterfaceController._hasNotification = false
 RunInventoryInterfaceController.Signals = {
-	OnNotificationChanged = Signal.new() :: (hasNotification: boolean) -> (),
+	OnNotificationChanged = Signal.new() :: SignalTypes.Signal<boolean>,
 }
-
-local RunEscrowService
-local InterfaceManagerController
 
 -- Stable source name for the manager's reference-counted hide map on the
 -- HUD scope, so it can tell "run inventory is hiding the HUD" apart from
@@ -87,11 +97,14 @@ local HUD_HIDE_SOURCE = "RunInventoryInterface"
 
 --[ Public API ]--
 
-function RunInventoryInterfaceController:HasNotification(): boolean
+function RunInventoryInterfaceController.HasNotification(self: typeof(RunInventoryInterfaceController)): boolean
 	return self._hasNotification
 end
 
-function RunInventoryInterfaceController:_setNotification(hasNotification: boolean)
+function RunInventoryInterfaceController._setNotification(
+	self: typeof(RunInventoryInterfaceController),
+	hasNotification: boolean
+)
 	if self._hasNotification == hasNotification then
 		return
 	end
@@ -99,7 +112,7 @@ function RunInventoryInterfaceController:_setNotification(hasNotification: boole
 	self.Signals.OnNotificationChanged:Fire(hasNotification)
 end
 
-function RunInventoryInterfaceController:Open()
+function RunInventoryInterfaceController.Open(self: typeof(RunInventoryInterfaceController))
 	-- Permission gate. Replaces the old `_locked` flag: the Windows scope
 	-- being closed is what blocks an open now, and the manager warns so a
 	-- swallowed keypress is visible rather than looking like a dead keybind.
@@ -121,7 +134,7 @@ function RunInventoryInterfaceController:Open()
 	InterfaceManagerController:Hide(InterfaceScopes.HUD, HUD_HIDE_SOURCE)
 end
 
-function RunInventoryInterfaceController:Close()
+function RunInventoryInterfaceController.Close(self: typeof(RunInventoryInterfaceController))
 	if not self._visible then
 		return
 	end
@@ -130,7 +143,7 @@ function RunInventoryInterfaceController:Close()
 	InterfaceManagerController:Show(InterfaceScopes.HUD, HUD_HIDE_SOURCE)
 end
 
-function RunInventoryInterfaceController:Toggle()
+function RunInventoryInterfaceController.Toggle(self: typeof(RunInventoryInterfaceController))
 	if self._visible then
 		self:Close()
 	else
@@ -140,7 +153,7 @@ end
 
 -- `SetLocked` is gone. Cutscene locking is now just the Windows scope
 -- closing: InterfaceManagerController hides that scope on OnCinematicStart,
--- which invokes the onClose registered in KnitStart (closing this panel and
+-- which invokes the onClose registered in Start (closing this panel and
 -- releasing its HUD hide source), and blocks :Open until the scope reopens.
 
 --[ React wrapper ]--
@@ -194,7 +207,7 @@ local function App(props: any)
 
 		Container = React.createElement(Container, {
 			Visible = visible,
-			RunEscrowService = props.RunEscrowService,
+			EscrowData = props.EscrowData,
 			onClose = function()
 				controller:Close()
 			end,
@@ -202,7 +215,7 @@ local function App(props: any)
 	})
 end
 
-function RunInventoryInterfaceController:_render()
+function RunInventoryInterfaceController._render(self: typeof(RunInventoryInterfaceController))
 	local controller = self
 	return function()
 		return React.createElement("ScreenGui", {
@@ -214,7 +227,7 @@ function RunInventoryInterfaceController:_render()
 		}, {
 			App = React.createElement(App, {
 				controller = controller,
-				RunEscrowService = RunEscrowService,
+				EscrowData = controller.EscrowData,
 			}),
 		})
 	end
@@ -222,10 +235,7 @@ end
 
 --[ Lifecycle ]--
 
-function RunInventoryInterfaceController:KnitStart()
-	InterfaceManagerController = Knit.GetController("InterfaceManagerController")
-	RunEscrowService = Knit.GetService("RunEscrowService")
-
+function RunInventoryInterfaceController.Start(self: typeof(RunInventoryInterfaceController))
 	-- Windows scope, NON-restoring: closing the scope shuts this panel, but
 	-- reopening the scope must not fling it back open — it only unlocks the
 	-- C keybind / toolbar button so the player can summon it again.
@@ -246,7 +256,7 @@ function RunInventoryInterfaceController:KnitStart()
 	-- shouldn't read as "you have something new". Lives here rather than in
 	-- App so the state survives the toolbar unmounting with the HUD.
 	local lastDropCount = 0
-	RunEscrowService.EscrowData:Observe(function(snapshot: { [string]: any }?)
+	self.EscrowData:Observe(function(snapshot: { [string]: any }?)
 		local count = if snapshot and snapshot.items then #snapshot.items else 0
 		if count > lastDropCount and not self._visible then
 			self:_setNotification(true)
@@ -271,7 +281,5 @@ function RunInventoryInterfaceController:KnitStart()
 	-- whole Windows scope on OnCinematicStart and reopens it on
 	-- OnCinematicEnd, which drives the onClose above and the :Open gate.
 end
-
-function RunInventoryInterfaceController:KnitInit() end
 
 return RunInventoryInterfaceController

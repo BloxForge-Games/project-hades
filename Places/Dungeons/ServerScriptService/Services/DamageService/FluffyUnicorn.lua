@@ -1,15 +1,11 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local RelicService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-end)
+local RelicService = require(ServerScriptService.Services.RelicService)
 
 return function(player: Player, humanoid: Humanoid, damage: number)
 	local fluffyUnicornEffect = RelicService:GetRelicEffect(player, RelicNames["Fluffy Unicorn"]) or 1
@@ -18,7 +14,7 @@ return function(player: Player, humanoid: Humanoid, damage: number)
 		return 0
 	end
 
-	local character = humanoid.Parent
+	local character = humanoid.Parent :: Instance
 	local enemyType = character:GetAttribute(Attributes.EnemyType)
 
 	-- Minibosses + Bosses only. Elite tier USED to be included, but

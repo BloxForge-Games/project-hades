@@ -1,3 +1,4 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -5,9 +6,11 @@ local TweenService = game:GetService("TweenService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
+local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
+local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
@@ -22,15 +25,6 @@ local localPlayer = Players.LocalPlayer
 
 local Y_POS_OFFSET = 3
 local ROTATION_SPEED = 20
-local ScreenGradientInterfaceController
-local ScreenSizeController
-
-Knit.OnStart()
-	:andThen(function()
-		ScreenGradientInterfaceController = Knit.GetController("ScreenGradientInterfaceController")
-		ScreenSizeController = Knit.GetController("ScreenSizeController")
-	end)
-	:catch(warn)
 
 -- GROUND-relic glow. Lives here rather than on the model template on
 -- purpose: this component only runs on relics tagged TagList.Relic — the
@@ -56,12 +50,14 @@ local function ownerUserText(instance: Instance): string
 	return if typeof(name) == "string" and name ~= "" then ("(%s)"):format(name) else ""
 end
 
+local acceptedRouter = InstanceRouter.Client(RelicNetwork.RelicCollectAccepted)
+
 local Relic = Component.new({
 	Tag = TagList.Relic,
-	Extensions = { CommAdder, JanitorAdder },
+	Extensions = { JanitorAdder } :: { any },
 })
 
-function Relic:_HeartbeatUpdate(deltaTime: number)
+function Relic:_onHeartbeat(deltaTime: number)
 	-- Bob + rotation folded into ONE PivotTo so multi-handle relics
 	-- (Handle + Handle2 + …) move and rotate together. The previous
 	-- impl bobbed via PivotTo (OK — moves all parts) but rotated via
@@ -83,9 +79,10 @@ end
 function Relic:Construct()
 	self._amplitude = Random.new():NextNumber(0.01, 0.015)
 	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
-	self._primaryPart = self.Instance.Handle
-	self._onRelicCollected = self._comm:GetSignal("OnRelicCollected")
-	self._onRelicCollectAccepted = self._comm:GetSignal("OnRelicCollectAccepted")
+	-- The Handle can stream in after the tagged Model does; wait for it.
+	local handle = self.Instance:WaitForChild("Handle", 10)
+	assert(handle, "[Relic] Handle never replicated for " .. self.Instance:GetFullName())
+	self._primaryPart = handle
 	self._overlapParams = OverlapParams.new()
 	-- Set overlap params
 	self._overlapParams.FilterDescendantsInstances = {
@@ -113,8 +110,8 @@ function Relic:Construct()
 	self._numberValue.Parent = self.Instance
 	self._connection = nil
 	self._relicParticles = ReplicatedStorage.GameAssets.Particles.RelicParticles:Clone()
-	self._relicParticles.Parent = self.Instance.Handle
-	self._collectedAttachment = self.Instance.Handle.Collected
+	self._relicParticles.Parent = handle
+	self._collectedAttachment = handle:WaitForChild("Collected", 10)
 end
 
 -- The pickup, as EVERY client sees it. The prompt and the floating label
@@ -328,7 +325,7 @@ function Relic:Start()
 			lootSound:PlayLanding()
 
 			self._janitor:Add(RunService.Heartbeat:Connect(function(deltaTime: number)
-				self:_HeartbeatUpdate(deltaTime)
+				self:_onHeartbeat(deltaTime)
 			end))
 
 			local relicName = self.Instance.Name
@@ -347,7 +344,7 @@ function Relic:Start()
 			proximityPrompt.Enabled = false
 
 			local promptStyle = "RelicSmall"
-			local descriptionLength = string.len(string.gsub(relicDescription, "<[^>]+>", ""))
+			local descriptionLength = string.len((string.gsub(relicDescription, "<[^>]+>", "")))
 
 			if descriptionLength > 34 and descriptionLength <= 62 then
 				promptStyle = "RelicMedium"
@@ -374,13 +371,13 @@ function Relic:Start()
 				if not isPublic and player.UserId ~= self.Instance:GetAttribute(Attributes.OwnerId) then
 					return
 				end
-				self._onRelicCollected:Fire(self.Instance.Name)
+				RelicNetwork.RelicCollectRequested.Fire(self.Instance)
 			end)
 
 			-- ACCEPTED by the server, and only ever for the COLLECTOR: their
 			-- own flourish. The disappearance itself — prompt, label, fade —
 			-- rides the Collected attribute instead, so every player sees it.
-			self._janitor:Add(self._onRelicCollectAccepted:Connect(function()
+			self._janitor:Add(acceptedRouter:Bind(self.Instance, function()
 				ScreenGradientInterfaceController.Signals.OnPulseGradient:Fire(rarityColor)
 
 				local collectedBurst = self.Instance.Handle:FindFirstChild("Collected")

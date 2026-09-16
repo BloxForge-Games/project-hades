@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Client/Components/Chest.lua
 	Description:

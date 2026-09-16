@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: AmbientGradientInterfaceController/init.luau
 	Description:
@@ -7,7 +8,7 @@
 	ONE RUNTIME KNOB, and only one: SetStrong(true / false) tweens the
 	vignette between its resting transparency and a stronger one, for
 	cutscene beats (CutsceneController:PlayMagicCutscene). Otherwise it
-	stays as it was: no props, mounted once at KnitInit — which is also
+	stays as it was: no props, mounted once at Init — which is also
 	why the whole interface is a single file.
 	ALWAYS VISIBLE, deliberately: it is NOT registered with
 	InterfaceManagerController, so it does not hide with the HUD scope
@@ -27,10 +28,10 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local SignalTypes = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 
 local INTERFACE_ID = "AmbientGradientInterfaceController"
 
@@ -51,23 +52,22 @@ local STRENGTH_TWEEN_SECONDS = 0.35
 
 --[ Controller ]--
 
-local AmbientGradientInterfaceController = Knit.CreateController({
+local AmbientGradientInterfaceController = {
 	Name = INTERFACE_ID,
-})
+	Signals = {
+		OnSetStrong = Signal.new() :: SignalTypes.Signal<boolean>,
+	},
+}
 
 -- (strong: boolean) — the render tweens the vignette to the matching
 -- transparency. Fired by SetStrong; a signal so the React side owns the
 -- instance and the controller never reaches into the tree.
-AmbientGradientInterfaceController.Signals = {
-	OnSetStrong = Signal.new(),
-}
-
 -- Pull the vignette strong (a cutscene beat) or back to resting.
-function AmbientGradientInterfaceController:SetStrong(strong: boolean)
+function AmbientGradientInterfaceController.SetStrong(self: typeof(AmbientGradientInterfaceController), strong: boolean)
 	self.Signals.OnSetStrong:Fire(strong == true)
 end
 
-function AmbientGradientInterfaceController:_render()
+function AmbientGradientInterfaceController._render(self: typeof(AmbientGradientInterfaceController))
 	return function()
 		local imageRef = React.useRef(nil)
 
@@ -121,7 +121,7 @@ end
 
 --[ Lifecycle ]--
 
-function AmbientGradientInterfaceController:KnitInit()
+function AmbientGradientInterfaceController.Init(self: typeof(AmbientGradientInterfaceController))
 	local root = ReactRoblox.createRoot(Instance.new("Folder"))
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
 end

@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: VFXService.lua
@@ -9,10 +10,17 @@
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
+local MagicService = require(ServerScriptService.Services.MagicService)
+local MagicLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.MagicLoadoutService)
+local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
+local Magic = require(ServerScriptService.Submodules.Core.Source.Network.Magic)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
@@ -51,14 +59,25 @@ local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local toggleWeaponSheath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.toggleWeaponSheath)
 
-local IgnoreListService
-local PlayerEventService
-local CameraShakeService
-local MagicService
-local MagicLoadoutService
-local RelicService
-local ShieldService
-local InvulnerabilityService
+-- RelicService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local relicServiceLazy: any = nil
+local function getRelicService(): any
+	if relicServiceLazy == nil then
+		relicServiceLazy = (require :: any)(ServerScriptService.Services.RelicService)
+	end
+	return relicServiceLazy
+end
+
+-- ShieldService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local shieldServiceLazy: any = nil
+local function getShieldService(): any
+	if shieldServiceLazy == nil then
+		shieldServiceLazy = (require :: any)(ServerScriptService.Services.ShieldService)
+	end
+	return shieldServiceLazy
+end
 
 local BUILDING_FLOOR_STRING = "Floor"
 local BROKEN_BUILDING_MIN_LIFETIME = 2
@@ -92,13 +111,17 @@ local AURA_ACTIVATION_DELAY = 2
 
 local vfxServer = script.VFXServer
 
-local VFXService = Knit.CreateService({
+local VFXService = {
 	Name = "VFXService",
-	Client = {
-		OnVFXReplicated = Knit.CreateSignal(),
-		OnBuildingBroken = Knit.CreateSignal(),
-	},
-})
+	Dependencies = {
+		IgnoreListService,
+		PlayerEventService,
+		CameraShakeService,
+		MagicService,
+		MagicLoadoutService,
+		InvulnerabilityService,
+	} :: { any },
+}
 
 --[ Imports ]--
 
@@ -106,7 +129,10 @@ local VFXService = Knit.CreateService({
 
 --[ Properties ]--
 
-VFXService._playerDetectedPartsRegistry = {}
+-- [userId][vfxName] = the Models this cast already hit (dedupe), plus a
+-- `hitboxCount` for multi-hitbox spells.
+type DetectedParts = { [Model]: boolean, hitboxCount: number? }
+VFXService._playerDetectedPartsRegistry = {} :: { [number]: { [string]: DetectedParts } }
 VFXService._vfxReplicationQueue = {}
 VFXService._vfxAuraRegistry = {}
 VFXService._vfxAttackRegistry = {}
@@ -136,7 +162,7 @@ local function shouldResetHitRegistry(vfxName: string): boolean
 		or vfxName == MagicNames["Domain Expansion"]
 end
 
-function VFXService:_checkVFXOwned(player: Player, vfxName: string): boolean
+function VFXService._checkVFXOwned(_self: typeof(VFXService), player: Player, vfxName: string): boolean
 	local loadout = MagicLoadoutService:GetMagicLoadout(player)
 
 	if not loadout then
@@ -161,12 +187,16 @@ function VFXService:_checkVFXOwned(player: Player, vfxName: string): boolean
 	return true
 end
 
-function VFXService:_toggleWeaponTransparency(player: Player, transparency: number)
-	local equippedWeapon = player.Character:GetAttribute(Attributes.EquippedWeapon)
+function VFXService._toggleWeaponTransparency(_self: typeof(VFXService), player: Player, transparency: number)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local equippedWeapon = character:GetAttribute(Attributes.EquippedWeapon)
 	local toggle = transparency == 0
 	local weaponModel = nil
 
-	for _, weapon in pairs(player.Character:GetChildren()) do
+	for _, weapon in pairs(character:GetChildren()) do
 		-- Weapons are plain Models now (converted from Accessory). Match by
 		-- the Weapon tag + name; skip the Sheathed back-copy so we only
 		-- toggle the in-hand weapon.
@@ -181,13 +211,13 @@ function VFXService:_toggleWeaponTransparency(player: Player, transparency: numb
 	end
 
 	if weaponModel then
-		toggleWeaponSheath(weaponModel, player.Character, toggle)
+		toggleWeaponSheath(weaponModel, character, toggle)
 	end
 end
 
 --[ Public Functions ]--
 
-function VFXService:AuraAttack(player: Player)
+function VFXService.AuraAttack(self: typeof(VFXService), player: Player)
 	if not self._vfxAuraRegistry[player] then
 		return warn("[VFXService] No active aura VFX found for player:", player.Name)
 	end
@@ -209,7 +239,8 @@ function VFXService:AuraAttack(player: Player)
 	self._vfxAuraRegistry[player].attack()
 end
 
-function VFXService:RegisterHitbox(
+function VFXService.RegisterHitbox(
+	self: typeof(VFXService),
 	activePlayer: Player,
 	cframe: CFrame,
 	radius: number,
@@ -294,14 +325,14 @@ function VFXService:RegisterHitbox(
 	end
 
 	if partsTable then
-		self.Client.OnBuildingBroken:FireAll(partsTable)
+		Magic.BuildingsBroken.FireAll(partsTable)
 	end
 end
 
 -- Breaks ONE Destructable part: darken, detach from its assembly, fling
 -- outward from `origin`, fade out and clean up. The caller owns the client
 -- OnBuildingBroken cue (batched for a hit, per piece for a collapse).
-function VFXService:_breakBuildingPart(part: BasePart, origin: Vector3)
+function VFXService._breakBuildingPart(self: typeof(VFXService), part: BasePart, origin: Vector3)
 	self.OnBuildingBroken:Fire(part)
 
 	local hue, saturation = part.Color:ToHSV()
@@ -367,7 +398,7 @@ end
 -- down with it, all in this frame, each flung outward from `origin`, with
 -- ONE client cue for the batch. Parts already broken have left the model,
 -- so a second support going in the same hit just finds fewer pieces.
-function VFXService:_collapseBuilding(model: Model, origin: Vector3)
+function VFXService._collapseBuilding(self: typeof(VFXService), model: Model, origin: Vector3)
 	local remaining = {}
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("BasePart") and descendant.Name ~= BUILDING_FLOOR_STRING then
@@ -381,10 +412,11 @@ function VFXService:_collapseBuilding(model: Model, origin: Vector3)
 	for _, piece in remaining do
 		self:_breakBuildingPart(piece, origin)
 	end
-	self.Client.OnBuildingBroken:FireAll(remaining)
+	Magic.BuildingsBroken.FireAll(remaining)
 end
 
-function VFXService:CreateHitbox(
+function VFXService.CreateHitbox(
+	self: typeof(VFXService),
 	vfxName: string,
 	activePlayer: Player,
 	cframe: CFrame,
@@ -434,31 +466,31 @@ function VFXService:CreateHitbox(
 	self:RegisterHitbox(activePlayer, cframe, radius, overlapParams, targetTag, callback, vfxName, canBreakBuildings)
 end
 
-function VFXService.Client:StartAuraAttack(player)
+function VFXService._onAuraAttackStart(self: typeof(VFXService), player: Player)
 	-- The loop below ENDS on its own when Susanoo drops, leaving a dead
 	-- thread in the registry. Only a LIVE thread means "already attacking";
 	-- a dead one is swept so the next start (a fresh cast under a held
 	-- button) is not refused.
-	local existing = self.Server._vfxAttackRegistry[player]
+	local existing = self._vfxAttackRegistry[player]
 	if existing then
 		if coroutine.status(existing) ~= "dead" then
 			return
 		end
-		self.Server._vfxAttackRegistry[player] = nil
+		self._vfxAttackRegistry[player] = nil
 	end
 
-	self.Server._vfxAttackRegistry[player] = task.spawn(function()
+	self._vfxAttackRegistry[player] = task.spawn(function()
 		while player.Parent and player.Character and player.Character:GetAttribute(Attributes.SusanooEnabled) do
-			self.Server:AuraAttack(player)
+			self:AuraAttack(player)
 			task.wait(AURA_DELAY)
 		end
 	end)
 end
 
-function VFXService.Client:StopAuraAttack(player)
-	if self.Server._vfxAttackRegistry[player] then
-		task.cancel(self.Server._vfxAttackRegistry[player])
-		self.Server._vfxAttackRegistry[player] = nil
+function VFXService._onAuraAttackStop(self: typeof(VFXService), player: Player)
+	if self._vfxAttackRegistry[player] then
+		task.cancel(self._vfxAttackRegistry[player])
+		self._vfxAttackRegistry[player] = nil
 	end
 end
 
@@ -467,9 +499,9 @@ end
 -- EncounterService's chest floor snap), so mobs, spell debris, and the
 -- caster can't become the "floor". No hit (mid-jump over the void) =
 -- no sigil, cast otherwise unaffected.
-function VFXService:_spawnMagicSigil(player: Player)
+function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return
 	end
@@ -538,7 +570,7 @@ function VFXService:_spawnMagicSigil(player: Player)
 	})
 end
 
-function VFXService:_pruneExpiredSigils()
+function VFXService._pruneExpiredSigils(self: typeof(VFXService))
 	local now = tick()
 	for i = #self._activeSigils, 1, -1 do
 		if now >= self._activeSigils[i].expiresAt then
@@ -550,7 +582,7 @@ end
 -- True when `position` is inside ANY live sigil circle. XZ distance
 -- only -- height is ignored so a jumping attacker doesn't drop the
 -- buff. One true is all MysticalSigil.lua needs; overlaps don't stack.
-function VFXService:IsInSigilZone(position: Vector3): boolean
+function VFXService.IsInSigilZone(self: typeof(VFXService), position: Vector3): boolean
 	self:_pruneExpiredSigils()
 	for _, sigil in self._activeSigils do
 		local dx = position.X - sigil.position.X
@@ -562,8 +594,8 @@ function VFXService:IsInSigilZone(position: Vector3): boolean
 	return false
 end
 
-function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cframe: CFrame)
-	if not self.Server:_checkVFXOwned(player, vfxName) then
+function VFXService._onCastRequested(self: typeof(VFXService), player: Player, vfxName: string, cframe: CFrame)
+	if not self:_checkVFXOwned(player, vfxName) then
 		return warn("[VFXService] Player attempted to cast unowned magic:", player)
 	end
 
@@ -574,7 +606,7 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 	--   * Forbidden Box (Cursed): x2 -- "Mana costs from Magic are doubled".
 	--   * Icy Arctic Fowl: x0.65 while Frostburst is up.
 	local manaCostMultiplier = 1
-	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Forbidden Box"]) > 0 then
+	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Forbidden Box"]) > 0 then
 		manaCostMultiplier = manaCostMultiplier * FORBIDDEN_BOX_MANA_MULTIPLIER
 	end
 	do
@@ -583,7 +615,7 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 		if
 			casterHrp
 			and casterHrp:FindFirstChild(AuraNames.Frostburst)
-			and RelicService:GetSpecificRelicRegistry(player, RelicNames["Icy Arctic Fowl"]) > 0
+			and getRelicService():GetSpecificRelicRegistry(player, RelicNames["Icy Arctic Fowl"]) > 0
 		then
 			manaCostMultiplier = manaCostMultiplier * ICY_ARCTIC_FOWL_MANA_MULTIPLIER
 		end
@@ -591,12 +623,13 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 
 	-- Robloxian Battle Shield: every equipped-spell cast grants its owner a
 	-- shield (ShieldService owns the fraction/duration).
-	ShieldService:TryRobloxionShield(player)
-	ShieldService:TrySpartanStonebound(player)
+	getShieldService():TryRobloxionShield(player)
+	getShieldService():TrySpartanStonebound(player)
 
 	local effectiveManaCost = MagicData[vfxName].manaCost * manaCostMultiplier
 
-	if MagicService:GetPlayerMagicData(player).mana - effectiveManaCost < 0 then
+	local magicData = MagicService:GetPlayerMagicData(player)
+	if not magicData or magicData.mana - effectiveManaCost < 0 then
 		warn("[VFXService] Player attempted to cast magic without enough mana:", player)
 		return
 	end
@@ -617,7 +650,7 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 	-- Cooldown reduction: the Mana runes' CDR, stamped as the replicated
 	-- CooldownReductionPercent attribute by PlayerStatsService (Abyss
 	-- doubling included). MUST mirror the client chain in MagicController.
-	local cooldownMultiplier = 1 - (player:GetAttribute("CooldownReductionPercent") or 0)
+	local cooldownMultiplier = 1 - ((player:GetAttribute("CooldownReductionPercent") :: number?) or 0)
 
 	local newCooldown = MagicData[vfxName].cooldown * cooldownMultiplier
 
@@ -627,11 +660,9 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 		newCooldown = math.clamp(newCooldown, MagicData[vfxName].duration, MagicData[vfxName].cooldown)
 	end
 
-	MagicService:SetPlayerMagicData(
-		player,
-		MagicService:GetPlayerMagicData(player).mana - effectiveManaCost,
-		MagicService:GetPlayerMagicData(player).maxMana
-	)
+	-- Re-read: the cooldown checks above may have yielded.
+	local latest = MagicService:GetPlayerMagicData(player) or magicData
+	MagicService:SetPlayerMagicData(player, latest.mana - effectiveManaCost, latest.maxMana)
 	MagicService:SetPlayerMagicLastUsed(player, vfxName, tick())
 	MagicService:SetPlayerMagicCooldown(player, vfxName, newCooldown)
 
@@ -640,19 +671,24 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 	-- only -- relic magic never reaches this remote, same rule as the
 	-- aura procs above. Placed here, not in the proc block, so a cast
 	-- rejected for mana/cooldown can't paint the floor.
-	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Mystical Staff of Cyan"]) > 0 then
-		self.Server:_spawnMagicSigil(player)
+	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Mystical Staff of Cyan"]) > 0 then
+		self:_spawnMagicSigil(player)
 	end
 
-	if self.Server._vfxReplicationQueue[player.UserId] == nil then
-		self.Server._vfxReplicationQueue[player.UserId] = {}
+	if self._vfxReplicationQueue[player.UserId] == nil then
+		self._vfxReplicationQueue[player.UserId] = {}
 	end
 
-	self.Server._vfxReplicationQueue[player.UserId][vfxName] = true
+	self._vfxReplicationQueue[player.UserId][vfxName] = true
 
 	local duration = MagicData[vfxName] and MagicData[vfxName].duration or 1
 
-	player.Character:SetAttribute(Attributes.MagicEnabled, true)
+	-- The caster's character. A cast this far in (mana paid, cooldown
+	-- stamped) has one; the attribute writes below always indexed it
+	-- directly, so a nil here throws exactly as it did before.
+	local character = player.Character :: Model
+
+	character:SetAttribute(Attributes.MagicEnabled, true)
 
 	-- CAST CUTSCENE i-frames. A spell with `cutscene` in MagicData holds
 	-- the caster in a cinematic beat on their client (bars, no control);
@@ -667,16 +703,16 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 	local cutscene = MagicData[vfxName].cutscene
 	if cutscene and cutscene.enabled == true and InvulnerabilityService then
 		local window = (cutscene.duration or DEFAULT_MAGIC_CUTSCENE_SECONDS) + MAGIC_CUTSCENE_INVULNERABLE_GRACE_SECONDS
-		InvulnerabilityService:ApplyTo(player.Character, window)
+		InvulnerabilityService:ApplyTo(character, window)
 	end
 
-	self.Server:_toggleWeaponTransparency(player, 1)
+	self:_toggleWeaponTransparency(player, 1)
 
 	local magicIndexData = MagicData[vfxName]
 	local activePlayer = player
 
 	if magicIndexData.superArmorDuration and magicIndexData.superArmorDuration > 0 then
-		activePlayer.Character:SetAttribute(Attributes.SuperArmor, true)
+		character:SetAttribute(Attributes.SuperArmor, true)
 
 		task.delay(magicIndexData.superArmorDuration, function()
 			if activePlayer.Character then
@@ -687,7 +723,7 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 
 	task.delay(duration, function()
 		if activePlayer.Character then
-			self.Server:_toggleWeaponTransparency(activePlayer, 0)
+			self:_toggleWeaponTransparency(activePlayer, 0)
 
 			activePlayer.Character:SetAttribute(Attributes.MagicEnabled, false)
 		end
@@ -696,13 +732,13 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 	local modifiedVfxName = vfxName:gsub(" ", "")
 
 	if vfxName == MagicNames["Domain Expansion"] then
-		player.Character:SetAttribute(Attributes.DomainExpansionActive, true)
+		character:SetAttribute(Attributes.DomainExpansionActive, true)
 	end
 
 	if vfxServer:FindFirstChild(modifiedVfxName) then
-		local vfxAttack = self.Server._vfxRegistry[modifiedVfxName](activePlayer)
+		local vfxAttack = self._vfxRegistry[modifiedVfxName](activePlayer)
 
-		self.Server._vfxAuraRegistry[activePlayer] = {
+		self._vfxAuraRegistry[activePlayer] = {
 			name = vfxName,
 			attack = vfxAttack,
 			lastAttacked = 0,
@@ -712,24 +748,31 @@ function VFXService.Client:OnVFXRequested(player: Player, vfxName: string, cfram
 		}
 	end
 
-	if (cframe.Position - activePlayer.Character.HumanoidRootPart.Position).Magnitude > 10 then
+	local casterRoot = character:FindFirstChild("HumanoidRootPart") :: BasePart
+	if (cframe.Position - casterRoot.Position).Magnitude > 10 then
 		warn("[VFXService] Player attempted to cast magic too far from their character:", player)
-		cframe = activePlayer.Character.HumanoidRootPart.CFrame
+		cframe = casterRoot.CFrame
 	end
 
 	-- EVERYONE, caster included. The caster's VFXController already ran the
 	-- effect module locally at cast time and skips it here, but other
 	-- listeners on this event (the cast dialogue strip) still need the
 	-- caster's own cast to arrive.
-	self.OnVFXReplicated:FireAll(activePlayer, vfxName, cframe)
+	Magic.CastReplicated.FireAll({ Caster = activePlayer, MagicName = vfxName, CFrame = cframe })
 end
 
-function VFXService.Client:OnVFXHitboxRequested(player: Player, activePlayer: Player, vfxName: string, cframe: CFrame)
+function VFXService._onHitboxRequested(
+	self: typeof(VFXService),
+	player: Player,
+	activePlayer: Player,
+	vfxName: string,
+	cframe: CFrame
+)
 	if
-		not self.Server:_checkVFXOwned(activePlayer, vfxName)
-		or self.Server._vfxReplicationQueue[activePlayer.UserId] == nil
-		or self.Server._vfxReplicationQueue[activePlayer.UserId][vfxName] == nil
-		or self.Server._vfxReplicationQueue[activePlayer.UserId][vfxName] == false
+		not self:_checkVFXOwned(activePlayer, vfxName)
+		or self._vfxReplicationQueue[activePlayer.UserId] == nil
+		or self._vfxReplicationQueue[activePlayer.UserId][vfxName] == nil
+		or self._vfxReplicationQueue[activePlayer.UserId][vfxName] == false
 	then
 		return
 	end
@@ -742,21 +785,18 @@ function VFXService.Client:OnVFXHitboxRequested(player: Player, activePlayer: Pl
 
 	local magicIndexData = MagicData[vfxName] or {}
 
-	self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
 
 	if magicIndexData.hitboxCount and magicIndexData.hitboxCount > 1 then
-		if self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount == nil then
-			self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount = 0
-		end
-
-		self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount += 1
+		local detected = self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName]
+		detected.hitboxCount = (detected.hitboxCount or 0) + 1
 	end
 
-	self.Server:CreateHitbox(
+	self:CreateHitbox(
 		vfxName,
 		activePlayer,
 		cframe,
-		if activePlayer == nil then TagList.Player else TagList.Zombie,
+		if (activePlayer :: Player?) == nil then TagList.Player else TagList.Zombie,
 		IgnoreListService:GetWeaponIgnoreList(),
 		function(model: Model)
 			onHitboxDamage(model, cframe, activePlayer, magicIndexData, true, false)
@@ -766,26 +806,26 @@ function VFXService.Client:OnVFXHitboxRequested(player: Player, activePlayer: Pl
 
 	if magicIndexData.hitboxCount and magicIndexData.hitboxCount > 1 then
 		if
-			self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount
-			== magicIndexData.hitboxCount
+			self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount == magicIndexData.hitboxCount
 		then
-			self.Server._vfxReplicationQueue[player.UserId][vfxName] = false
+			self._vfxReplicationQueue[player.UserId][vfxName] = false
 		end
 	else
-		self.Server._vfxReplicationQueue[player.UserId][vfxName] = false
+		self._vfxReplicationQueue[player.UserId][vfxName] = false
 	end
 end
 
-function VFXService.Client:OnVFXSweepHitboxRequested(
+function VFXService._onSweepHitboxRequested(
+	self: typeof(VFXService),
 	player: Player,
 	activePlayer: Player,
 	vfxName: string,
 	cframe: CFrame
 )
 	if
-		not self.Server:_checkVFXOwned(activePlayer, vfxName)
-		or self.Server._vfxReplicationQueue[activePlayer.UserId] == nil
-		or self.Server._vfxReplicationQueue[activePlayer.UserId][vfxName] ~= true
+		not self:_checkVFXOwned(activePlayer, vfxName)
+		or self._vfxReplicationQueue[activePlayer.UserId] == nil
+		or self._vfxReplicationQueue[activePlayer.UserId][vfxName] ~= true
 	then
 		return
 	end
@@ -801,11 +841,11 @@ function VFXService.Client:OnVFXSweepHitboxRequested(
 	local direction = cframe.LookVector
 
 	-- reset registry for this cast
-	if not self.Server._playerDetectedPartsRegistry[activePlayer.UserId] then
-		self.Server._playerDetectedPartsRegistry[activePlayer.UserId] = {}
+	if not self._playerDetectedPartsRegistry[activePlayer.UserId] then
+		self._playerDetectedPartsRegistry[activePlayer.UserId] = {}
 	end
 
-	self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
 
 	local stepDistance = magicIndexData.stepDistance
 	local travelDistance = magicIndexData.travelDistance
@@ -831,33 +871,25 @@ function VFXService.Client:OnVFXSweepHitboxRequested(
 
 		local stepCFrame = cframe + (direction * distance)
 
-		self.Server:CreateHitbox(
-			vfxName,
-			activePlayer,
-			stepCFrame,
-			TagList.Zombie,
-			overlapIgnoreList,
-			function(model: Model)
-				onHitboxDamage(model, stepCFrame, activePlayer, magicIndexData, true, false)
-			end,
-			magicIndexData.hitboxSize.X,
-			true
-		)
+		self:CreateHitbox(vfxName, activePlayer, stepCFrame, TagList.Zombie, overlapIgnoreList, function(model: Model)
+			onHitboxDamage(model, stepCFrame, activePlayer, magicIndexData, true, false)
+		end, magicIndexData.hitboxSize.X, true)
 	end
 
-	self.Server._vfxReplicationQueue[player.UserId][vfxName] = false
+	self._vfxReplicationQueue[player.UserId][vfxName] = false
 end
 
-function VFXService.Client:OnVFXPersistentHitboxRequested(
+function VFXService._onPersistentHitboxRequested(
+	self: typeof(VFXService),
 	player: Player,
 	activePlayer: Player,
 	vfxName: string,
 	cframe: CFrame
 )
 	if
-		not self.Server:_checkVFXOwned(activePlayer, vfxName)
-		or self.Server._vfxReplicationQueue[activePlayer.UserId] == nil
-		or self.Server._vfxReplicationQueue[activePlayer.UserId][vfxName] ~= true
+		not self:_checkVFXOwned(activePlayer, vfxName)
+		or self._vfxReplicationQueue[activePlayer.UserId] == nil
+		or self._vfxReplicationQueue[activePlayer.UserId][vfxName] ~= true
 	then
 		return
 	end
@@ -869,18 +901,18 @@ function VFXService.Client:OnVFXPersistentHitboxRequested(
 	local magicIndexData = MagicData[vfxName] or {}
 
 	-- reset registry for this cast
-	if not self.Server._playerDetectedPartsRegistry[activePlayer.UserId] then
-		self.Server._playerDetectedPartsRegistry[activePlayer.UserId] = {}
+	if not self._playerDetectedPartsRegistry[activePlayer.UserId] then
+		self._playerDetectedPartsRegistry[activePlayer.UserId] = {}
 	end
 
-	self.Server._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
 
 	local hitboxDuration = magicIndexData.hitboxDuration
 	local elapsed = 0
 
 	task.spawn(function()
 		while elapsed < hitboxDuration do
-			self.Server:CreateHitbox(
+			self:CreateHitbox(
 				vfxName,
 				activePlayer,
 				cframe,
@@ -898,29 +930,45 @@ function VFXService.Client:OnVFXPersistentHitboxRequested(
 		end
 
 		if vfxName == MagicNames["Domain Expansion"] then
-			player.Character:SetAttribute(Attributes.DomainExpansionActive, false)
+			-- Indexed directly before too: a caster gone by now throws here
+			-- and leaves the replication flag set, as it always has.
+			local casterCharacter = player.Character :: Model
+			casterCharacter:SetAttribute(Attributes.DomainExpansionActive, false)
 		end
 
-		self.Server._vfxReplicationQueue[player.UserId][vfxName] = false
+		self._vfxReplicationQueue[player.UserId][vfxName] = false
 	end)
 end
 
 --[ Initializers ]--
 
-function VFXService:KnitStart()
-	IgnoreListService = Knit.GetService("IgnoreListService")
-	PlayerEventService = Knit.GetService("PlayerEventService")
-	CameraShakeService = Knit.GetService("CameraShakeService")
-	MagicService = Knit.GetService("MagicService")
-	MagicLoadoutService = Knit.GetService("MagicLoadoutService")
-	RelicService = Knit.GetService("RelicService")
-	ShieldService = Knit.GetService("ShieldService")
-	InvulnerabilityService = Knit.GetService("InvulnerabilityService")
+function VFXService.Start(self: typeof(VFXService))
+	-- Magic domain requests. Every one is attributed to the SENDER: the
+	-- old methods took an explicit caster from the packet (with a TODO
+	-- about exploiters naming someone else); now the caster is `player`.
+	Magic.CastRequested.On(function(player: Player, payload)
+		self:_onCastRequested(player, payload.MagicName, payload.CFrame)
+	end)
+	Magic.HitboxRequested.On(function(player: Player, payload)
+		self:_onHitboxRequested(player, player, payload.MagicName, payload.CFrame)
+	end)
+	Magic.SweepHitboxRequested.On(function(player: Player, payload)
+		self:_onSweepHitboxRequested(player, player, payload.MagicName, payload.CFrame)
+	end)
+	Magic.PersistentHitboxRequested.On(function(player: Player, payload)
+		self:_onPersistentHitboxRequested(player, player, payload.MagicName, payload.CFrame)
+	end)
+	Magic.AuraAttackStart.On(function(player: Player)
+		self:_onAuraAttackStart(player)
+	end)
+	Magic.AuraAttackStop.On(function(player: Player)
+		self:_onAuraAttackStop(player)
+	end)
 
 	for _, vfxModule in pairs(vfxServer:GetChildren()) do
 		if vfxModule:IsA("ModuleScript") then
 			local vfxName = vfxModule.Name:gsub(" ", "")
-			self._vfxRegistry[vfxName] = require(vfxModule)
+			self._vfxRegistry[vfxName] = (require :: any)(vfxModule)
 		end
 	end
 
@@ -948,7 +996,5 @@ function VFXService:KnitStart()
 	self._weaponOverlapParams.FilterType = Enum.RaycastFilterType.Exclude
 	self._weaponOverlapParams.FilterDescendantsInstances = IgnoreListService:GetWeaponIgnoreList()
 end
-
-function VFXService:KnitInit() end
 
 return VFXService

@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: VFXController.lua
@@ -12,7 +13,7 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 -- local VFXData = require(ReplicatedStorage.Submodules.Core.Shared.Data.VFXData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
@@ -22,12 +23,19 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 -- just dropping a ModuleScript in MobProjectiles/ — no edits here.
 local MobProjectiles = require(script:WaitForChild("MobProjectiles"))
 
-local AimController
-local VFXService
+-- AimController requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local aimControllerLazy: any = nil
+local function getAimController(): any
+	if aimControllerLazy == nil then
+		aimControllerLazy = (require :: any)(ReplicatedStorage.Controllers.AimController)
+	end
+	return aimControllerLazy
+end
 
-local VFXController = Knit.CreateController({
+local VFXController = {
 	Name = "VFXController",
-})
+}
 
 --[ Imports ]--
 
@@ -35,39 +43,39 @@ local VFXController = Knit.CreateController({
 
 --[ Properties ]--
 
-VFXController._vfxRegistry = {}
+VFXController._vfxRegistry = {} :: { [string]: any }
 -- True while the attack button is held. The aura attack must start on
 -- EITHER edge: button pressed while Susanoo is up (the press handlers),
 -- or Susanoo coming up while the button is already held (the attribute
--- watch in KnitStart). Without the second, casting Susanoo mid-fire
+-- watch in Start). Without the second, casting Susanoo mid-fire
 -- never started the attack until the button was released and pressed
 -- again.
 VFXController._auraHeld = false
 
 --[ Private Functions ]--
 
-function VFXController:_startAuraAttack()
+function VFXController._startAuraAttack(self: typeof(VFXController))
 	self._auraHeld = true
 	local char = Players.LocalPlayer.Character
 
 	if char and char:GetAttribute(Attributes.SusanooEnabled) then
-		VFXService:StartAuraAttack() -- 🔹 ONE CALL
+		Magic.AuraAttackStart.Fire()
 	end
 end
 
-function VFXController:_stopAuraAttack()
+function VFXController._stopAuraAttack(self: typeof(VFXController))
 	self._auraHeld = false
-	VFXService:StopAuraAttack() -- 🔹 ONE CALL
+	Magic.AuraAttackStop.Fire()
 end
 
 -- The other edge: Susanoo comes up while the button is already held.
 -- Per character, so a respawn rebinds cleanly.
-function VFXController:_watchAuraRisingEdge()
+function VFXController._watchAuraRisingEdge(self: typeof(VFXController))
 	local player = Players.LocalPlayer
 	local function bind(character: Model)
 		character:GetAttributeChangedSignal(Attributes.SusanooEnabled):Connect(function()
 			if self._auraHeld and character:GetAttribute(Attributes.SusanooEnabled) == true then
-				VFXService:StartAuraAttack()
+				Magic.AuraAttackStart.Fire()
 			end
 		end)
 	end
@@ -79,14 +87,14 @@ end
 
 --[ Public Functions ]--
 
-function VFXController:GetRegistry(): { [string]: table }
+function VFXController.GetRegistry(self: typeof(VFXController)): { [string]: { [any]: any } }
 	return self._vfxRegistry
 end
 
 -- Runs one effect module for `player`. The single entry point for both
 -- paths: the caster's own immediate run (PlayVFX) and everyone else's
 -- replicated one (OnVFXReplicated).
-function VFXController:_runVFXModule(player: Player, vfxName: string, cframe: CFrame)
+function VFXController._runVFXModule(self: typeof(VFXController), player: Player, vfxName: string, cframe: CFrame)
 	local moduleName = vfxName:gsub(" ", "")
 	local vfxFunction = self._vfxRegistry[moduleName]
 	if not vfxFunction then
@@ -109,18 +117,19 @@ end
 -- on the server; MagicController mirrors those checks before it gets here,
 -- so a rejected cast (a desync) is the only way to see an effect that did
 -- not land.
-function VFXController:PlayVFX(vfxName: string)
+function VFXController.PlayVFX(self: typeof(VFXController), vfxName: string)
 	local cframe = Players.LocalPlayer.Character.HumanoidRootPart.CFrame
 	task.spawn(function()
 		self:_runVFXModule(Players.LocalPlayer, vfxName, cframe)
 	end)
-	VFXService:OnVFXRequested(vfxName, cframe)
+	Magic.CastRequested.Fire({ MagicName = vfxName, CFrame = cframe })
 end
 
 -- Mob ranged-attack projectile dispatch. Called by ZombieController
 -- when ZombieService.OnReplicateMobRangedAttack fires. Delegates to
 -- the per-projectile module under MobProjectiles/ keyed by name.
-function VFXController:RunMobProjectile(
+function VFXController.RunMobProjectile(
+	_self: typeof(VFXController),
 	projectileName: string,
 	zombieModel: Model,
 	originCFrame: CFrame,
@@ -133,14 +142,11 @@ end
 
 --[ Initializers ]--
 
-function VFXController:KnitStart()
-	AimController = Knit.GetController("AimController")
-	VFXService = Knit.GetService("VFXService")
-
+function VFXController.Start(self: typeof(VFXController))
 	self:_watchAuraRisingEdge()
 
 	-- Controller signal connections (Potential memory leaks)
-	AimController.OnWeaponActivate:Connect(function(activated: boolean)
+	getAimController().OnWeaponActivate:Connect(function(activated: boolean)
 		if activated then
 			self:_startAuraAttack()
 		else
@@ -152,7 +158,13 @@ function VFXController:KnitStart()
 	-- (the cast dialogue strip) need the caster's own cast too -- but the
 	-- caster's effect module already ran locally in PlayVFX, so THIS client
 	-- skips its own cast here rather than playing it twice.
-	VFXService.OnVFXReplicated:Connect(function(player: Player, vfxName: string, cframe: CFrame)
+	Magic.CastReplicated.On(function(payload)
+		local player = payload.Caster
+		if not player then
+			return
+		end
+		local vfxName = payload.MagicName
+		local cframe = payload.CFrame
 		if player == Players.LocalPlayer then
 			return
 		end
@@ -180,7 +192,7 @@ function VFXController:KnitStart()
 	end)
 end
 
-function VFXController:KnitInit()
+function VFXController.Init(self: typeof(VFXController))
 	for _, vfxModule in script:GetChildren() do
 		-- Skip the MobProjectiles sub-folder — it's its own dispatch
 		-- (required at the top of this file) and isn't a per-player-
@@ -191,7 +203,7 @@ function VFXController:KnitInit()
 		if vfxModule:IsA("ModuleScript") and vfxModule.Name ~= "MobProjectiles" then
 			local vfxName = vfxModule.Name
 
-			self._vfxRegistry[vfxName] = require(vfxModule)
+			self._vfxRegistry[vfxName] = (require :: any)(vfxModule)
 		end
 	end
 end

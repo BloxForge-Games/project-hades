@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: BreakableController.lua
@@ -25,14 +26,13 @@ local TweenService = game:GetService("TweenService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
 
-local BreakableController = Knit.CreateController({
+local BreakableController = {
 	Name = "BreakableController",
-	Client = {},
-})
+}
 
 --[ Imports ]--
 
@@ -58,7 +58,7 @@ BreakableController._activeShakes = {} :: { [Instance]: ShakeState }
 
 --[ Private Functions ]--
 
-function BreakableController:_baseCFrameOf(model: Instance): CFrame
+function BreakableController._baseCFrameOf(_self: typeof(BreakableController), model: Instance): CFrame
 	-- Prefer the cached "rest" CFrame set by the server when the breakable
 	-- was placed. Fall back to the current pivot if no attribute exists.
 	local cached = model:GetAttribute(Attributes.CachedCFrame)
@@ -68,7 +68,7 @@ function BreakableController:_baseCFrameOf(model: Instance): CFrame
 	return (model :: PVInstance):GetPivot()
 end
 
-function BreakableController:_startShake(model: PVInstance, hitCount: number)
+function BreakableController._startShake(self: typeof(BreakableController), model: PVInstance, hitCount: number)
 	if hitCount == 3 then
 		return
 	end
@@ -141,35 +141,33 @@ end
 
 --[ Initializers ]--
 
-function BreakableController:KnitInit() end
-
-function BreakableController:KnitStart()
-	local BreakableService = Knit.GetService("BreakableService")
-
-	BreakableService.OnBreakableDamaged:Connect(
-		function(buildTemplate: Instance, hitCount: number, isMelee: boolean?, hitPosition: Vector3?)
-			if not buildTemplate or not buildTemplate.Parent then
-				return
-			end
-
-			-- Highlight works on any Instance (Model or BasePart).
-			onDamageIndicator(buildTemplate, ATTACK_HIGHLIGHT_NAME)
-
-			-- The HitFX sparks are melee-only. A bullet draws its own BulletImpact
-			-- where it landed, so a second burst here reads as a double impact.
-			-- Magic never fires this signal (it breaks the model outright), so
-			-- "not melee" here means a bullet. Highlight and shake still run.
-			if isMelee then
-				self:_playHitFX(buildTemplate, hitPosition)
-			end
-
-			-- Shake requires GetPivot/PivotTo, which exists on PVInstance (both
-			-- Model and BasePart). Skip anything else just in case.
-			if buildTemplate:IsA("Model") or buildTemplate:IsA("BasePart") then
-				self:_startShake(buildTemplate, hitCount)
-			end
+function BreakableController.Start(self: typeof(BreakableController))
+	Combat.BreakableDamaged.On(function(payload)
+		local buildTemplate = payload.Breakable
+		local hitCount = payload.HitCount
+		local isMelee = payload.IsMelee
+		local hitPosition = payload.HitPosition
+		if not buildTemplate or not buildTemplate.Parent then
+			return
 		end
-	)
+
+		-- Highlight works on any Instance (Model or BasePart).
+		onDamageIndicator(buildTemplate, ATTACK_HIGHLIGHT_NAME)
+
+		-- The HitFX sparks are melee-only. A bullet draws its own BulletImpact
+		-- where it landed, so a second burst here reads as a double impact.
+		-- Magic never fires this signal (it breaks the model outright), so
+		-- "not melee" here means a bullet. Highlight and shake still run.
+		if isMelee then
+			self:_playHitFX(buildTemplate, hitPosition)
+		end
+
+		-- Shake requires GetPivot/PivotTo, which exists on PVInstance (both
+		-- Model and BasePart). Skip anything else just in case.
+		if buildTemplate:IsA("Model") or buildTemplate:IsA("BasePart") then
+			self:_startShake(buildTemplate, hitCount)
+		end
+	end)
 end
 
 -- The melee impact sparks on a breakable: the shared HitFX asset, every
@@ -180,7 +178,11 @@ end
 -- computed by the server from the part it overlapped -- so a crate hit
 -- on its corner sparks on that corner. The pivot is only the fallback
 -- for a caller that has no contact point.
-function BreakableController:_playHitFX(buildTemplate: Instance, hitPosition: Vector3?)
+function BreakableController._playHitFX(
+	_self: typeof(BreakableController),
+	buildTemplate: Instance,
+	hitPosition: Vector3?
+)
 	local partVFX = Instance.new("Part")
 	partVFX.Size = Vector3.new(1, 1, 1)
 	partVFX.Transparency = 1
@@ -190,7 +192,7 @@ function BreakableController:_playHitFX(buildTemplate: Instance, hitPosition: Ve
 	partVFX.CanTouch = false
 	partVFX.CFrame = if hitPosition
 		then CFrame.new(hitPosition)
-		else buildTemplate:GetPivot() + buildTemplate:GetPivot().LookVector * -1
+		else (buildTemplate :: PVInstance):GetPivot() + (buildTemplate :: PVInstance):GetPivot().LookVector * -1
 	partVFX.Parent = workspace.IgnoreInstances.MagicSpells
 
 	local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()

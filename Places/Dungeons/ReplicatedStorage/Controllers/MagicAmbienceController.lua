@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: MagicAmbienceController.lua
 	Description:
@@ -43,11 +44,9 @@ local Lighting = game:GetService("Lighting")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
+local MusicController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.MusicController)
 local ColorCorrectionDefaults = require(ReplicatedStorage.Submodules.Core.Shared.Data.ColorCorrectionDefaults)
-
-local CameraShakeController
-local MusicController
 
 --[ Constants ]--
 
@@ -63,27 +62,40 @@ local TINT_TWEEN_INFO = TweenInfo.new(RELEASE_FADE_SECONDS, Enum.EasingStyle.Qua
 -- The grade to come home to. Never a literal: see ColorCorrectionDefaults.
 local AUTHORED_TINT_COLOR = ColorCorrectionDefaults.TintColor
 
+--[ Types ]--
+
+-- One live claim (see Claim / ClaimAtPosition). `musicSound` is the
+-- takeover clone playing under this claim, when it owns the music channel.
+type Claim = {
+	config: { [string]: any },
+	getPosition: (() -> Vector3?)?,
+	radius: number?,
+	inRange: boolean,
+	musicSound: Sound?,
+}
+
 --[ Controller ]--
 
-local MagicAmbienceController = Knit.CreateController({
+local MagicAmbienceController = {
 	Name = "MagicAmbienceController",
+	Dependencies = { CameraShakeController, MusicController } :: { any },
 
 	-- [id] = { config, getPosition?, radius?, inRange } for every live
 	-- claim, in `_order` so "first claim" is well defined.
-	_claims = {},
-	_order = {},
+	_claims = {} :: { [string]: Claim },
+	_order = {} :: { string },
 	-- The claim id currently DRIVING each channel, or nil when idle.
-	_tintOwner = nil,
-	_musicOwner = nil,
-	_shakeOwner = nil,
-})
+	_tintOwner = nil :: string?,
+	_musicOwner = nil :: string?,
+	_shakeOwner = nil :: string?,
+}
 
 --[ Private ]--
 
 -- Claims that currently count: unconditional ones always, proximity ones
 -- only while the viewer is inside their radius. In claim order.
-function MagicAmbienceController:_activeClaims(): { string }
-	local active = {}
+function MagicAmbienceController._activeClaims(self: typeof(MagicAmbienceController)): { string }
+	local active: { string } = {}
 	for _, id in self._order do
 		local claim = self._claims[id]
 		if claim and (claim.getPosition == nil or claim.inRange) then
@@ -94,7 +106,7 @@ function MagicAmbienceController:_activeClaims(): { string }
 end
 
 -- The first active claim asking for `channel`, or nil.
-function MagicAmbienceController:_ownerFor(channel: string): string?
+function MagicAmbienceController._ownerFor(self: typeof(MagicAmbienceController), channel: string): string?
 	for _, id in self:_activeClaims() do
 		if self._claims[id].config[channel] ~= nil then
 			return id
@@ -103,7 +115,7 @@ function MagicAmbienceController:_ownerFor(channel: string): string?
 	return nil
 end
 
-function MagicAmbienceController:_applyTint(ownerId: string?)
+function MagicAmbienceController._applyTint(self: typeof(MagicAmbienceController), ownerId: string?)
 	if ownerId == self._tintOwner then
 		return
 	end
@@ -112,7 +124,7 @@ function MagicAmbienceController:_applyTint(ownerId: string?)
 	TweenService:Create(Lighting.ColorCorrection, TINT_TWEEN_INFO, { TintColor = target }):Play()
 end
 
-function MagicAmbienceController:_applyMusic(ownerId: string?)
+function MagicAmbienceController._applyMusic(self: typeof(MagicAmbienceController), ownerId: string?)
 	if ownerId == self._musicOwner then
 		return
 	end
@@ -176,7 +188,7 @@ end
 -- re-arming the same preset EXTENDS it rather than restarting, keeping
 -- the oscillation and the fade envelope continuous, and it decays over
 -- the preset's own fade-out once nobody re-arms it.
-function MagicAmbienceController:_applyShake(ownerId: string?)
+function MagicAmbienceController._applyShake(self: typeof(MagicAmbienceController), ownerId: string?)
 	if ownerId == self._shakeOwner then
 		return
 	end
@@ -189,7 +201,7 @@ end
 
 -- Recomputes every channel from the current claims. Cheap and total:
 -- called on claim, on release, and on every poll.
-function MagicAmbienceController:_refresh()
+function MagicAmbienceController._refresh(self: typeof(MagicAmbienceController))
 	self:_applyTint(self:_ownerFor("tint"))
 	self:_applyMusic(self:_ownerFor("music"))
 
@@ -203,7 +215,7 @@ function MagicAmbienceController:_refresh()
 	end
 end
 
-function MagicAmbienceController:_viewerPosition(): Vector3?
+function MagicAmbienceController._viewerPosition(_self: typeof(MagicAmbienceController)): Vector3?
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	return root and (root :: BasePart).Position or nil
@@ -216,7 +228,7 @@ end
 --   music = { soundName = string, volume = number?, startTime = number? }
 --   shake = a CameraShakePresets name, held while the claim holds
 -- Re-claiming a live id replaces its config.
-function MagicAmbienceController:Claim(id: string, config: { [string]: any })
+function MagicAmbienceController.Claim(self: typeof(MagicAmbienceController), id: string, config: { [string]: any })
 	if not self._claims[id] then
 		table.insert(self._order, id)
 	end
@@ -227,7 +239,8 @@ end
 -- A claim that only counts while the viewer is within `radius` studs of
 -- `getPosition()`. `getPosition` returning nil (the shrine was destroyed)
 -- reads as out of range.
-function MagicAmbienceController:ClaimAtPosition(
+function MagicAmbienceController.ClaimAtPosition(
+	self: typeof(MagicAmbienceController),
 	id: string,
 	config: { [string]: any },
 	getPosition: () -> Vector3?,
@@ -240,7 +253,7 @@ function MagicAmbienceController:ClaimAtPosition(
 	self:_poll()
 end
 
-function MagicAmbienceController:Release(id: string)
+function MagicAmbienceController.Release(self: typeof(MagicAmbienceController), id: string)
 	local claim = self._claims[id]
 	if not claim then
 		return
@@ -272,14 +285,16 @@ end
 
 --[ Lifecycle ]--
 
-function MagicAmbienceController:_poll()
+function MagicAmbienceController._poll(self: typeof(MagicAmbienceController))
 	local viewer = self:_viewerPosition()
 	local changed = false
 	for _, id in self._order do
 		local claim = self._claims[id]
 		if claim and claim.getPosition then
 			local position = claim.getPosition()
-			local inRange = viewer ~= nil and position ~= nil and (viewer - position).Magnitude <= claim.radius
+			-- ClaimAtPosition always sets radius alongside getPosition.
+			local radius = claim.radius :: number
+			local inRange = viewer ~= nil and position ~= nil and (viewer - position).Magnitude <= radius
 			if inRange ~= claim.inRange then
 				claim.inRange = inRange
 				changed = true
@@ -294,12 +309,7 @@ function MagicAmbienceController:_poll()
 	end
 end
 
-function MagicAmbienceController:KnitInit() end
-
-function MagicAmbienceController:KnitStart()
-	CameraShakeController = Knit.GetController("CameraShakeController")
-	MusicController = Knit.GetController("MusicController")
-
+function MagicAmbienceController.Start(self: typeof(MagicAmbienceController))
 	local accumulated = 0
 	RunService.Heartbeat:Connect(function(deltaTime: number)
 		accumulated += deltaTime

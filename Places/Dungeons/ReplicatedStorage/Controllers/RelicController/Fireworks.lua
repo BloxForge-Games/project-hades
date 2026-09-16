@@ -27,7 +27,7 @@ function Fireworks.new(
 end
 
 function Fireworks:PlayEffect()
-	local fireworks = getRelicModelTemplate(RelicNames["Summer Fireworks"]):Clone()
+	local fireworks = (getRelicModelTemplate(RelicNames["Summer Fireworks"]) :: Model):Clone()
 	local character = self._character
 	local targetCharacter = self._targetCharacter
 

@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: AuraServer/Blighted.lua
 	Description:
@@ -19,15 +20,10 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
-
-local TextIndicatorService
-
-Knit.OnStart():andThen(function()
-	TextIndicatorService = Knit.GetService("TextIndicatorService")
-end)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -42,7 +38,7 @@ local TORSO_PARTICLES = { "TorsoBlight1", "TorsoBlight2" }
 
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = (marker:GetAttribute(EXPIRY_ATTRIBUTE) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
 		if remaining <= 0 then
 			return
 		end
@@ -99,13 +95,9 @@ return function(player: Player, character: Model, duration: number?)
 	-- Fresh-grant pop, same beat as every other aura (small random delay so
 	-- simultaneous procs stagger instead of stacking on one pixel).
 	task.delay(math.random(1, 15) / 100, function()
-		if TextIndicatorService and character:FindFirstChild("Head") then
-			TextIndicatorService:ShowIndicator(
-				player,
-				character.Head,
-				AuraNames.Blighted .. "!",
-				Color3.fromRGB(255, 255, 255)
-			)
+		local head = character:FindFirstChild("Head") :: BasePart?
+		if TextIndicatorService and head then
+			TextIndicatorService:ShowIndicator(player, head, AuraNames.Blighted .. "!", Color3.fromRGB(255, 255, 255))
 		end
 	end)
 

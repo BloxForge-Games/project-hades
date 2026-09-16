@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: MagicService.lua
@@ -8,24 +9,31 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 
-local MagicService = Knit.CreateService({
+local MagicService = {
 	Name = "MagicService",
-	Client = { MagicData = Knit.CreateProperty() },
+	Dependencies = { PlayerEventService } :: { any },
 
 	_playerMagicRegistry = {},
 	_playerMagicCooldownRegistry = {},
-})
+}
+
+-- Mana / max mana per player, replicated (was a replicated property).
+MagicService._magicDataProperty = RemoteProperty.Server({
+	changed = PlayerNetwork.MagicDataChanged,
+	get = PlayerNetwork.GetMagicData,
+}, nil)
 
 --[ Imports ]--
-
-local PlayerEventService
 
 --[ Constants ]--
 
@@ -50,7 +58,7 @@ local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 
 -- Single shared tick that applies passive regen to every player. One
 -- task.wait loop rather than per-player threads — cheaper and easier
--- to reason about. Fired from KnitStart; loop runs for the lifetime
+-- to reason about. Fired from Start; loop runs for the lifetime
 -- of the server (no shutdown hook needed since it's a daemon thread).
 --
 -- Guards against players whose magic data hasn't been initialized
@@ -71,16 +79,16 @@ local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 -- non-empty), which regenerated anywhere inside an uncleared room —
 -- including well away from the fight, where the relics had already
 -- un-dimmed.
-function MagicService:_isPlayerInCombat(player: Player): boolean
+function MagicService._isPlayerInCombat(_self: typeof(MagicService), player: Player): boolean
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return false
 	end
 	return combatProximity.isNearLivingZombie(hrp.Position)
 end
 
-function MagicService:_runPassiveManaRegenLoop()
+function MagicService._runPassiveManaRegenLoop(self: typeof(MagicService))
 	task.spawn(function()
 		while true do
 			task.wait(PASSIVE_MANA_REGEN_INTERVAL)
@@ -114,7 +122,12 @@ MagicService.BASE_MAX_MANA = 100
 
 --[ Public Functions ]--
 
-function MagicService:SetPlayerMagicLastUsed(player: Player, vfxName: string, lastUsed: number)
+function MagicService.SetPlayerMagicLastUsed(
+	self: typeof(MagicService),
+	player: Player,
+	vfxName: string,
+	lastUsed: number
+)
 	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
 		self._playerMagicCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
@@ -125,7 +138,12 @@ function MagicService:SetPlayerMagicLastUsed(player: Player, vfxName: string, la
 	self._playerMagicCooldownRegistry[player][vfxName].lastUsed = lastUsed
 end
 
-function MagicService:SetPlayerMagicCooldown(player: Player, vfxName: string, cooldown: number)
+function MagicService.SetPlayerMagicCooldown(
+	self: typeof(MagicService),
+	player: Player,
+	vfxName: string,
+	cooldown: number
+)
 	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
 		self._playerMagicCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
@@ -136,7 +154,7 @@ function MagicService:SetPlayerMagicCooldown(player: Player, vfxName: string, co
 	self._playerMagicCooldownRegistry[player][vfxName].cooldown = cooldown
 end
 
-function MagicService:GetPlayerMagicLastUsed(player: Player, vfxName: string)
+function MagicService.GetPlayerMagicLastUsed(self: typeof(MagicService), player: Player, vfxName: string)
 	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
 		self._playerMagicCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
@@ -147,7 +165,7 @@ function MagicService:GetPlayerMagicLastUsed(player: Player, vfxName: string)
 	return self._playerMagicCooldownRegistry[player][vfxName].lastUsed
 end
 
-function MagicService:GetPlayerMagicCooldown(player: Player, vfxName: string)
+function MagicService.GetPlayerMagicCooldown(self: typeof(MagicService), player: Player, vfxName: string)
 	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
 		self._playerMagicCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
@@ -165,16 +183,16 @@ end
 -- Korblox Mage Staff on cast, Lightblox Jar on mana-orb pickup — so
 -- Overcharged is something you build toward rather than something a full
 -- mana bar hands you for free.
-function MagicService:SetPlayerMagicData(player: Player, mana: number, maxMana: number)
-	self.Client.MagicData:SetFor(player, { mana = mana, maxMana = maxMana })
+function MagicService.SetPlayerMagicData(self: typeof(MagicService), player: Player, mana: number, maxMana: number)
+	self._magicDataProperty:SetFor(player, { mana = mana, maxMana = maxMana })
 	self:_stampManaAttributes(player)
 end
 
 -- Mirror the current mana onto the character as replicated attributes so
 -- every client can draw it (ManaBillboardGui). See Attributes.Mana.
-function MagicService:_stampManaAttributes(player: Player)
+function MagicService._stampManaAttributes(self: typeof(MagicService), player: Player)
 	local character = player.Character
-	local data = self.Client.MagicData:GetFor(player)
+	local data = self._magicDataProperty:GetFor(player)
 	if not character or not data then
 		return
 	end
@@ -182,19 +200,22 @@ function MagicService:_stampManaAttributes(player: Player)
 	character:SetAttribute(Attributes.MaxMana, data.maxMana)
 end
 
-function MagicService:GetPlayerMagicData(player: Player): table
-	if self.Client.MagicData:GetFor(player) == nil then
+-- Returns nil before OnPlayerAdded has seeded the player's data. The
+-- declared return type stays non-optional because several callers index
+-- the result directly; nil-check where a mid-join race is possible.
+-- nil until the player's magic data has been seeded (join-frame callers).
+function MagicService.GetPlayerMagicData(self: typeof(MagicService), player: Player): { [any]: any }?
+	local data = self._magicDataProperty:GetFor(player)
+	if data == nil then
 		return nil
 	end
 
-	return table.clone(self.Client.MagicData:GetFor(player))
+	return table.clone(data)
 end
 
 --[ Initializers ]--
 
-function MagicService:KnitStart()
-	PlayerEventService = Knit.GetService("PlayerEventService")
-
+function MagicService.Start(self: typeof(MagicService))
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)
 		self:SetPlayerMagicData(player, self.BASE_MAX_MANA, self.BASE_MAX_MANA)
 
@@ -217,7 +238,5 @@ function MagicService:KnitStart()
 	-- maxMana, so a +Maximum Mana relic speeds up absolute refill too.
 	self:_runPassiveManaRegenLoop()
 end
-
-function MagicService:KnitInit() end
 
 return MagicService

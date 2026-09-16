@@ -1,10 +1,13 @@
+--!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DropService = require(ServerScriptService.Services.DropService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
@@ -12,22 +15,14 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local DESTROY_DELAY = 25
 local MANA_DESTROY_DELAY = 10
 
-local DropService
-
-Knit.OnStart()
-	:andThen(function()
-		DropService = Knit.GetService("DropService")
-	end)
-	:catch(warn)
+local collectedRouter = InstanceRouter.Server(DungeonNetwork.CoinDropCollected)
 
 local Drop = Component.new({
 	Tag = TagList.Drop,
-	Extensions = { CommAdder },
 })
 
 function Drop:Construct()
 	self._playerRegistry = {} :: { [Players]: boolean }
-	self._onCoinCollected = self._comm:CreateSignal("OnCoinCollected")
 	self._dropValue = self.Instance:GetAttribute(Attributes.DropValue)
 	self._dropType = self.Instance:GetAttribute(Attributes.DropType)
 	self._imageId = self.Instance:GetAttribute(Attributes.ImageId)
@@ -48,7 +43,7 @@ function Drop:Start()
 
 	-- Update drop image if updated
 	self.Instance.AttributeChanged:Connect(function(attributeName: string)
-		if not attributeName == Attributes.ImageId then
+		if attributeName ~= Attributes.ImageId then
 			return
 		end
 
@@ -82,7 +77,7 @@ function Drop:Start()
 		end
 	)
 
-	self._onCoinCollected:Connect(function(player: Player)
+	collectedRouter:Bind(self.Instance, function(player: Player)
 		-- PRIVATE drop (chest loot): only its owner banks it. The client
 		-- already hides it from everyone else, but the credit is real
 		-- currency — it gets checked HERE, where it cannot be faked.

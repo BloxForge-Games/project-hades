@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: Breakable.lua
@@ -22,6 +23,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
@@ -29,10 +31,8 @@ local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CollisionGroups)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
-local BreakableService
 
 --[ Constants ]--
 
@@ -46,12 +46,6 @@ local DARKEN_VALUE = 0.35
 local DEBRIS_MIN_LIFETIME = 2
 local DEBRIS_MAX_LIFETIME = 4
 local FADE_TIME = 1
-
-Knit.OnStart()
-	:andThen(function()
-		BreakableService = Knit.GetService("BreakableService")
-	end)
-	:catch(warn)
 
 local Breakable = Component.new({
 	Tag = TagList.Breakable,
@@ -166,7 +160,12 @@ function Breakable:Hit(isMagic: boolean, isMelee: boolean, origin: Vector3, play
 	-- `isMelee` rides along so the client can pick its impact feedback: a
 	-- bullet already draws its own BulletImpact where it landed. Magic
 	-- never reaches here -- it broke the model above.
-	BreakableService.Client.OnBreakableDamaged:FireAll(self.Instance, self._hitCount, isMelee, hitPosition)
+	Combat.BreakableDamaged.FireAll({
+		Breakable = self.Instance,
+		HitCount = self._hitCount,
+		IsMelee = isMelee,
+		HitPosition = hitPosition,
+	})
 
 	if self._hitCount >= MAX_WEAPON_HITS then
 		self:_break(origin, player)

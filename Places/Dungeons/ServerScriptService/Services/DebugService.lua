@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s): 
      Module: DebugService.lua
@@ -6,16 +7,11 @@
 
 --[ Roblox Services ]--
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local DebugService = Knit.CreateService({
+local DebugService = {
 	Name = "DebugService",
-	Client = {},
-})
+}
 
 --[ Imports ]--
 
@@ -28,9 +24,5 @@ local DebugService = Knit.CreateService({
 --[ Public Functions ]--
 
 --[ Initializers ]--
-
-function DebugService:KnitStart() end
-
-function DebugService:KnitInit() end
 
 return DebugService

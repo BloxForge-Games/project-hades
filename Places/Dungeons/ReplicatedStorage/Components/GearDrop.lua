@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: GearDrop.lua (Client-side component)
      Description:
@@ -18,10 +19,12 @@ local TweenService = game:GetService("TweenService")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
+local GearDropsRenderController = require(ReplicatedStorage.Controllers.GearDropsRenderController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local WeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WeaponData)
 local ArmorPieceData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArmorPieceData)
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
@@ -32,15 +35,6 @@ local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 
-local ScreenSizeController
-local GearDropsRenderController
-
-Knit.OnStart()
-	:andThen(function()
-		ScreenSizeController = Knit.GetController("ScreenSizeController")
-		GearDropsRenderController = Knit.GetController("GearDropsRenderController")
-	end)
-	:catch(warn)
 --[ Constants ]--
 
 -- Bezier curve tuning. Same shape as Drop.lua — apex above origin, land
@@ -170,7 +164,7 @@ end
 
 local GearDrop = Component.new({
 	Tag = TagList.GearDrop,
-	Extensions = { JanitorAdder, CommAdder },
+	Extensions = { JanitorAdder } :: { any },
 })
 
 --[ Private helpers ]--
@@ -458,8 +452,9 @@ end
 --[ Component lifecycle ]--
 
 function GearDrop:Construct()
-	self._carrier = self.Instance.PrimaryPart
-	assert(self._carrier, "[GearDrop] Component requires PrimaryPart on the carrier model")
+	-- The parts can stream in after the tagged Model does; wait for them.
+	self._carrier = waitForPrimaryPart(self.Instance)
+	assert(self._carrier, "[GearDrop] PrimaryPart never replicated for " .. self.Instance:GetFullName())
 
 	self._uuid = self.Instance:GetAttribute(ATTR_UUID)
 	assert(self._uuid, "[GearDrop] Component requires GearUuid attribute on the carrier")
@@ -471,11 +466,6 @@ function GearDrop:Construct()
 	-- gets the prompt.
 	self._isOwner = self.Instance:GetAttribute(ATTR_PUBLIC_DROP) == true
 		or self.Instance:GetAttribute(ATTR_OWNER_ID) == Players.LocalPlayer.UserId
-
-	-- Comm signal mirror of Server/Components/GearDrop.lua. Server side
-	-- did `_comm:CreateSignal("OnGearCollected")`; we grab the same
-	-- handle and Fire on prompt Triggered. Server validates and grants.
-	self._onGearCollected = self._comm:GetSignal("OnGearCollected")
 
 	-- Landing burst, cloned per drop (a shared emitter cannot overlap
 	-- itself when a chest spills several items). Parented to the carrier
@@ -545,7 +535,7 @@ function GearDrop:Start()
 				GearDropsRenderController:RefreshBillboardVisibility(self.Instance)
 			end
 			self:_emitPickupBurst()
-			self._onGearCollected:Fire()
+			DungeonNetwork.GearDropCollected.Fire(self.Instance)
 
 			ReplicatedStorage.GameAssets.Sounds.GearCollected:Play()
 

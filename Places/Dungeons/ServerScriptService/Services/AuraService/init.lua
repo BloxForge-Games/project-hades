@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: AuraService.lua
 	Description:
@@ -33,10 +34,11 @@
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
@@ -47,12 +49,10 @@ local Stormcharged = require(script.AuraServer.Stormcharged)
 local Blighted = require(script.AuraServer.Blighted)
 local Stonebound = require(script.AuraServer.Stonebound)
 
-local RelicService
-
-local AuraService = Knit.CreateService({
+local AuraService = {
 	Name = "AuraService",
-	Client = {},
-})
+	Dependencies = { RelicService } :: { any },
+}
 
 --[ Constants ]--
 
@@ -116,7 +116,7 @@ local function playAuraShockwave(character: Model, auraName: string)
 	if not templateName then
 		return
 	end
-	local torso = character:FindFirstChild("HumanoidRootPart")
+	local torso = character:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 	if not torso then
 		return
@@ -153,7 +153,7 @@ end
 -- The OWNER-relic riders on a Stonebound payload. Base magnitudes are
 -- AuraData's; Leland and Spartan enlarge what this owner's Stonebound
 -- gives its users.
-function AuraService:_computeStoneboundPayload(ownerPlayer: Player): (number, number)
+function AuraService._computeStoneboundPayload(_self: typeof(AuraService), ownerPlayer: Player): (number, number)
 	local config = AuraData[AuraNames.Stonebound]
 	local damageBonus = config.damagePercent
 	local damageReduction = config.damageReduction
@@ -179,14 +179,14 @@ end
 
 -- The live Stonebound payload on a character, for the damage pipeline:
 -- (damageBonus, damageReduction), both 0 when the aura isn't up.
-function AuraService:GetStoneboundPayload(character: Model?): (number, number)
+function AuraService.GetStoneboundPayload(_self: typeof(AuraService), character: Model?): (number, number)
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
 	local marker = hrp and hrp:FindFirstChild(AuraNames.Stonebound)
 	if not marker then
 		return 0, 0
 	end
-	return marker:GetAttribute(STONEBOUND_DAMAGE_ATTRIBUTE) or 0,
-		marker:GetAttribute(STONEBOUND_REDUCTION_ATTRIBUTE) or 0
+	return (marker:GetAttribute(STONEBOUND_DAMAGE_ATTRIBUTE) or 0) :: number,
+		(marker:GetAttribute(STONEBOUND_REDUCTION_ATTRIBUTE) or 0) :: number
 end
 
 -- Riot Shield (Earth Rare): a MELEE hit that LANDS has the relic's chance
@@ -200,7 +200,7 @@ end
 -- a cleave through three mobs is ONE roll. It briefly also fired on ranged
 -- hits; the card is "Melee Weapon Damage" again, and a shot has no swing
 -- to latch onto anyway (a shotgun would have rolled per pellet).
-function AuraService:TryRiotShieldStonebound(player: Player)
+function AuraService.TryRiotShieldStonebound(self: typeof(AuraService), player: Player)
 	if not RelicService then
 		return
 	end
@@ -231,8 +231,8 @@ end
 -- a payload shaped by the SOURCE's Leland / Spartan riders rather than
 -- their own, AND it is what marks the grant as a spread so the recipient
 -- does not pass it on again.
-function AuraService:_spreadStonebound(ownerPlayer: Player, ownerCharacter: Model)
-	local hrp = ownerCharacter and ownerCharacter:FindFirstChild("HumanoidRootPart")
+function AuraService._spreadStonebound(self: typeof(AuraService), ownerPlayer: Player, ownerCharacter: Model)
+	local hrp = ownerCharacter and ownerCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
 		return
 	end
@@ -242,7 +242,7 @@ function AuraService:_spreadStonebound(ownerPlayer: Player, ownerCharacter: Mode
 	for _, other in Players:GetPlayers() do
 		if other ~= ownerPlayer then
 			local otherCharacter = other.Character
-			local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+			local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
 			if otherHrp and (otherHrp.Position - hrp.Position).Magnitude <= STONEBOUND_SPREAD_RADIUS then
 				self:SetAura(other, AuraNames.Stonebound, otherCharacter, nil, ownerPlayer)
 			end
@@ -257,7 +257,8 @@ end
 --
 -- EXTEND-ONLY on re-grant: the deadline moves out only when the new one is
 -- LATER, and visuals never respawn (no strobe).
-function AuraService:SetAura(
+function AuraService.SetAura(
+	self: typeof(AuraService),
 	player: Player,
 	auraName: string,
 	character: Model,
@@ -314,8 +315,8 @@ function AuraService:SetAura(
 		local currentOwnerId = marker:GetAttribute(STONEBOUND_OWNER_ATTRIBUTE)
 		if currentOwnerId ~= owner.UserId then
 			local newDamage, newReduction = self:_computeStoneboundPayload(owner)
-			local currentStrength = (marker:GetAttribute(STONEBOUND_DAMAGE_ATTRIBUTE) or 0)
-				+ (marker:GetAttribute(STONEBOUND_REDUCTION_ATTRIBUTE) or 0)
+			local currentStrength = ((marker:GetAttribute(STONEBOUND_DAMAGE_ATTRIBUTE) or 0) :: number)
+				+ (marker:GetAttribute(STONEBOUND_REDUCTION_ATTRIBUTE) or 0) :: number
 			if newDamage + newReduction > currentStrength then
 				-- Stronger: tear the old one down NOW (no fade grace — the
 				-- replacement's rig takes over) and fall through to a fresh
@@ -395,11 +396,5 @@ function AuraService:SetAura(
 end
 
 --[ Initializers ]--
-
-function AuraService:KnitStart()
-	RelicService = Knit.GetService("RelicService")
-end
-
-function AuraService:KnitInit() end
 
 return AuraService

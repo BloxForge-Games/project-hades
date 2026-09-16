@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Server/Services/DamageService/Jail.lua
 	Description:
@@ -33,18 +34,14 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-
-local RelicService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-end)
 
 local JAIL_DURATION = 3
 local JAILED_DEBOUNCE = 5
@@ -76,7 +73,7 @@ return function(player: Player, humanoid: Humanoid, isMagic: boolean)
 		return
 	end
 
-	local mobModel = humanoid.Parent
+	local mobModel = humanoid.Parent :: Model?
 	if not mobModel then
 		return
 	end
@@ -90,7 +87,7 @@ return function(player: Player, humanoid: Humanoid, isMagic: boolean)
 		return
 	end
 
-	local ragdollTrigger = mobModel:FindFirstChild(ValueNames.RagdollTrigger)
+	local ragdollTrigger = mobModel:FindFirstChild(ValueNames.RagdollTrigger) :: BoolValue?
 	if ragdollTrigger and ragdollTrigger.Value == true then
 		return
 	end
@@ -113,7 +110,7 @@ return function(player: Player, humanoid: Humanoid, isMagic: boolean)
 	mobModel:SetAttribute(Attributes.Jailed, true)
 	mobModel:SetAttribute(Attributes.CCDebounce, true)
 
-	RelicService.Client.OnJailEffectActivated:FireAll(mobModel)
+	RelicNetwork.JailEffect.FireAll(mobModel)
 
 	task.delay(JAIL_DURATION, function()
 		if mobModel.Parent then

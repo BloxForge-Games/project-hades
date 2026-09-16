@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: MobBase.lua
 	Description: Base class for every enemy mob. Owns:
@@ -63,11 +64,27 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PathfindingService = game:GetService("PathfindingService")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
 local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local ZombieService = require(ServerScriptService.Services.ZombieService)
+local RagdollService = require(ServerScriptService.Services.RagdollService)
+local DropService = require(ServerScriptService.Services.DropService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local RoundStatisticsService = require(ServerScriptService.Services.RoundStatisticsService)
+local AuraService = require(ServerScriptService.Services.AuraService)
+local VFXService = require(ServerScriptService.Services.VFXService)
+local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
+local GearDropService = require(ServerScriptService.Services.GearDropService)
+local DamageService = require(ServerScriptService.Services.DamageService)
+local StatusConditionService = require(ServerScriptService.Services.StatusConditionService)
+local EncounterService = require(ServerScriptService.Services.EncounterService)
+local DungeonService = require(ServerScriptService.Services.DungeonService)
+local MagicService = require(ServerScriptService.Services.MagicService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
@@ -82,40 +99,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
-
-local AuraService
-local ZombieSpawnService
-local RagdollService
-local ZombieService
-local DropService
-local RelicService
-local RoundStatisticsService
-local VFXService
-local IgnoreListService
-local GearDropService
-local EncounterService
-local DungeonService
-local DamageService
-local StatusConditionService
-
-Knit.OnStart()
-	:andThen(function()
-		ZombieSpawnService = Knit.GetService("ZombieSpawnService")
-		ZombieService = Knit.GetService("ZombieService")
-		RagdollService = Knit.GetService("RagdollService")
-		DropService = Knit.GetService("DropService")
-		RelicService = Knit.GetService("RelicService")
-		RoundStatisticsService = Knit.GetService("RoundStatisticsService")
-		AuraService = Knit.GetService("AuraService")
-		VFXService = Knit.GetService("VFXService")
-		IgnoreListService = Knit.GetService("IgnoreListService")
-		GearDropService = Knit.GetService("GearDropService")
-		DamageService = Knit.GetService("DamageService")
-		StatusConditionService = Knit.GetService("StatusConditionService")
-		EncounterService = Knit.GetService("EncounterService")
-		DungeonService = Knit.GetService("DungeonService")
-	end)
-	:catch(warn)
+local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 
 --[ Constants ]--
 
@@ -256,6 +240,17 @@ end
 
 --[ Class ]--
 
+-- One entry of the unified attack pool (_buildAttackPool / _addAttacks):
+-- `entry` + `genericIndex` for a generic attack, `run` for a unique one.
+type AttackPoolEntry = {
+	kind: string,
+	attackRange: number,
+	recoveryDuration: number?,
+	entry: any?,
+	genericIndex: number?,
+	run: any?,
+}
+
 local MobBase = {}
 MobBase.__index = MobBase
 
@@ -264,7 +259,7 @@ MobBase.__index = MobBase
 -- without reversing into the Component layer. Populated in .new, cleared in
 -- :Stop — weak-keyed so a model destroyed without a clean :Stop can't pin the
 -- instance in memory.
-MobBase._activeByModel = setmetatable({}, { __mode = "k" }) :: { [Model]: any }
+MobBase._activeByModel = setmetatable({} :: { [Model]: any }, { __mode = "k" })
 
 function MobBase.FromModel(model: Model?): any?
 	if not model then
@@ -374,7 +369,7 @@ end
 -- so attack selection + dispatch don't branch on source. See comment
 -- in MobBase.new where this is called.
 function MobBase:_buildAttackPool(data)
-	local pool = {}
+	local pool: { AttackPoolEntry } = {}
 
 	for i, attack in ipairs(data.genericAttacks or {}) do
 		table.insert(pool, {
@@ -597,7 +592,8 @@ function MobBase:_setupListeners()
 		-- nil for minibosses / bosses (see _buildHealthUI).
 		if self._healthInterface then
 			self._healthInterface.Enabled = true
-			self._healthInterface.InnerFrame.RedBar:TweenSize(
+			tweenGui.size(
+				self._healthInterface.InnerFrame.RedBar,
 				UDim2.fromScale(self._humanoid.Health / self._humanoid.MaxHealth, 1.3),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quad,
@@ -1216,7 +1212,8 @@ function MobBase:OnDeath()
 end
 
 function MobBase:_applyDeathImpulse(killer: Player)
-	local direction = (self._rootPart.Position - killer.Character.HumanoidRootPart.Position).Unit
+	local killerRoot = (killer.Character :: Model):FindFirstChild("HumanoidRootPart") :: BasePart
+	local direction = (self._rootPart.Position - killerRoot.Position).Unit
 	direction = Vector3.new(direction.X, 0, direction.Z).Unit
 	self._rootPart:ApplyImpulse((direction + Vector3.new(0, 1, 0)) * self._rootPart.AssemblyMass * (200 * 0.35))
 end
@@ -1260,14 +1257,14 @@ function MobBase:_runPumpkinExplosion(killer: Player)
 			RelicService:SetRelicLimitRegistry(RelicNames["Trick Or Trap"], currentLimit + 1)
 			local targetCFrame = cachedCFrame + Vector3.new(math.random(-5, 5), 0, math.random(-5, 5))
 
-			RelicService.Client.OnPumpkinEffectActivated:FireAll(
-				self._rootPart.Position,
-				targetCFrame.Position,
-				workspace:GetServerTimeNow(),
-				PUMPKIN_DELAY,
-				magicName,
-				RelicNames["Trick Or Trap"]
-			)
+			RelicNetwork.ThrownRelicLaunched.FireAll({
+				Position = self._rootPart.Position,
+				TargetPosition = targetCFrame.Position,
+				StartTime = workspace:GetServerTimeNow(),
+				Duration = PUMPKIN_DELAY,
+				MagicName = magicName,
+				RelicName = RelicNames["Trick Or Trap"],
+			})
 
 			task.delay(PUMPKIN_DELAY + 0.25, function()
 				-- Slot released FIRST, before the blast: this bomb is detonating,
@@ -1295,8 +1292,11 @@ function MobBase:_runPumpkinExplosion(killer: Player)
 						-- "...and burning them": the blast applies Burn outright
 						-- rather than rolling for it, which is what lets Trick Or
 						-- Trap open the Blaze tree on its own.
+						-- The cast: StatusConditionService's own helper signatures
+						-- disagree on Player vs Player?, which fails its self type
+						-- on any method call from a strict file.
 						if StatusConditionService then
-							StatusConditionService:ApplyStatus(killer, model, StatusConditions.Burn)
+							(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Burn)
 						end
 					end,
 					MagicData[magicName].hitboxSize.X
@@ -1345,14 +1345,14 @@ function MobBase:_runFuseBombDrop(killer: Player)
 			RelicService:SetRelicLimitRegistry(RelicNames["Fuse Bomb"], currentLimit + 1)
 			local targetCFrame = cachedCFrame + Vector3.new(math.random(-5, 5), 0, math.random(-5, 5))
 
-			RelicService.Client.OnPumpkinEffectActivated:FireAll(
-				self._rootPart.Position,
-				targetCFrame.Position,
-				workspace:GetServerTimeNow(),
-				PUMPKIN_DELAY,
-				magicName,
-				RelicNames["Fuse Bomb"]
-			)
+			RelicNetwork.ThrownRelicLaunched.FireAll({
+				Position = self._rootPart.Position,
+				TargetPosition = targetCFrame.Position,
+				StartTime = workspace:GetServerTimeNow(),
+				Duration = PUMPKIN_DELAY,
+				MagicName = magicName,
+				RelicName = RelicNames["Fuse Bomb"],
+			})
 
 			task.delay(PUMPKIN_DELAY + 0.25, function()
 				-- Slot released FIRST — see the pumpkin's note above.
@@ -1370,7 +1370,7 @@ function MobBase:_runFuseBombDrop(killer: Player)
 						-- UNTYPED relic lane (isRelicSourced): unqualified
 						-- Damage bonuses scale the blast; Weapon/Magic-typed
 						-- relics and crits never apply.
-						local targetHumanoid = model:FindFirstChild("Humanoid")
+						local targetHumanoid = model:FindFirstChild("Humanoid") :: Humanoid?
 						if not targetHumanoid or not DamageService then
 							return
 						end
@@ -1457,7 +1457,8 @@ function MobBase:_runZombieBombCloud(killer: Player)
 				-- its Status Chance clause in the 2026-08 pass, so the cloud is
 				-- now a guaranteed Poison field rather than a chance to seed one.
 				if StatusConditionService then
-					StatusConditionService:ApplyStatus(killer, model, StatusConditions.Poison, false)
+					-- Cast: see _runPumpkinExplosion.
+					(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Poison, false)
 				end
 			end
 		end
@@ -1534,7 +1535,6 @@ function MobBase:_handleAssists()
 
 		-- Midnight Sword: takedowns restore 5% of Maximum Mana.
 		if RelicService:GetSpecificRelicRegistry(player, RelicNames["Midnight Sword"]) > 0 then
-			local MagicService = Knit.GetService("MagicService")
 			local magicData = MagicService:GetPlayerMagicData(player)
 			if magicData and magicData.maxMana and magicData.mana < magicData.maxMana then
 				local refunded =

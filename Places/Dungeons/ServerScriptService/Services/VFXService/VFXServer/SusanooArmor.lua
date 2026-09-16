@@ -1,24 +1,19 @@
+--!strict
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local VFXService = require(ServerScriptService.Services.VFXService)
+local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 
-local VFXService
-local IgnoreListService
-
-Knit.OnStart():andThen(function()
-	VFXService = Knit.GetService("VFXService")
-	IgnoreListService = Knit.GetService("IgnoreListService")
-end)
-
 return function(player: Player)
 	local character = player.Character or player.CharacterAdded:Wait()
-	local hrp = character:WaitForChild("HumanoidRootPart")
+	local hrp = character:WaitForChild("HumanoidRootPart") :: BasePart
 
 	-- Clone the rig
 	local susanooRig = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].Armor:Clone()
@@ -118,9 +113,9 @@ return function(player: Player)
 		local range = MagicData[MagicNames["Susanoo Armor"]].range
 		local hitboxCFrame = CFrame.new(
 			susanooRig.PrimaryPart.CFrame.Position
-				+ character.HumanoidRootPart.CFrame.LookVector * range
+				+ (character:FindFirstChild("HumanoidRootPart") :: BasePart).CFrame.LookVector * range
 				+ Vector3.new(0, -7.5, 0)
-		) * CFrame.Angles(0, character.HumanoidRootPart.CFrame:ToEulerAnglesYXZ(), 0)
+		) * CFrame.Angles(0, (character:FindFirstChild("HumanoidRootPart") :: BasePart).CFrame:ToEulerAnglesYXZ(), 0)
 
 		attackVFXPart.CFrame = hitboxCFrame
 		attackVFXPart.Parent = workspace.IgnoreInstances.MagicSpells
@@ -157,7 +152,7 @@ return function(player: Player)
 
 		susanooRig.PrimaryPart.SusanooActivate:Play()
 
-		VFXService.Client:StopAuraAttack(player)
+		VFXService:_onAuraAttackStop(player)
 
 		local castVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].CastPart:Clone()
 		castVFX.CFrame = hrp.CFrame

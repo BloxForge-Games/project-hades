@@ -1,3 +1,4 @@
+--!strict
 --[[
      Author(s):
      Module: DungeonService.lua
@@ -29,10 +30,23 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicMachineService = require(ServerScriptService.Services.RelicMachineService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local EncounterService = require(ServerScriptService.Services.EncounterService)
+local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
+local LifeService = require(ServerScriptService.Services.LifeService)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
+local CollisionGroupService = require(ServerScriptService.Submodules.Core.Source.Services.CollisionGroupService)
+local FogOfWarService = require(ServerScriptService.Services.FogOfWarService)
+local eventService = require(ServerScriptService.Services.EventService)
+local EventService = require(ServerScriptService.Services.EventService)
+local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
@@ -43,38 +57,63 @@ local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTyp
 local EventWeights = require(ReplicatedStorage.Submodules.Core.Shared.Data.EventWeights)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
-local ZombieSpawnService -- resolved in KnitStart
-local EncounterService -- resolved in KnitStart
-local FogOfWarService -- resolved in KnitStart
-local UserNotificationService -- resolved in KnitStart
-local LifeService -- resolved in KnitStart
-local PlayerEventService
-local RelicMachineService
-local CollisionGroupService
-local CameraShakeService
-local RelicService
+-- A placed room (see _makeRoom). Everything stamped on it later --
+-- branch, combatSegmentIndex, exitPortal, buildings -- is optional here.
+export type Room = {
+	id: number,
+	roomType: string,
+	segmentId: number,
+	chunkIndex: number,
+	chunkCount: number,
+	isFirstChunk: boolean,
+	isLastChunk: boolean,
+	model: Model,
+	branch: Room?,
+	combatSegmentIndex: number?,
+	exitPortal: Model?,
+	buildings: { Model }?,
+}
 
-local DungeonService = Knit.CreateService({
+export type Dungeon = {
+	id: string,
+	difficulty: string,
+	seed: number,
+	plan: Planner.RoomPlan,
+	startModel: Model,
+	rooms: { Room },
+	roomsById: { [number]: Room },
+}
+
+-- The RUN (see StartRun / AdvanceRun).
+export type Run = {
+	sequence: { string },
+	index: number,
+	difficulty: string,
+	exited: { [Player]: true },
+	originCFrame: CFrame?,
+}
+
+-- EncounterService's signals carry ITS structural mirror of a room (it
+-- reaches this module lazily); the object is one of ours.
+type EncounterRoom = { id: number, model: Model, roomType: string, segmentId: number }
+
+local DungeonService = {
 	Name = "DungeonService",
-	Client = {
-		-- ({ phase = "in"|"out", duration }) run-loop screen fade (LandingController).
-		OnRunTransition = Knit.CreateSignal(),
-		OnDungeonGenerated = Knit.CreateSignal(),
-
-		-- Join landing sequence (server-driven, per player). See
-		-- _runPlayerLanding + the client-side LandingController.
-		OnLandingStart = Knit.CreateSignal(), -- (to one player) fade loading screen + lock controls
-		OnLandingImpact = Knit.CreateSignal(), -- (broadcast) landing-impact VFX hook → (landingPlayer)
-		OnLandingEnd = Knit.CreateSignal(), -- (to one player) restore controls
-
-		-- Dungeon Gate cycle (see _startGateCycle). Visuals are LOCAL:
-		-- every client raises the opened gate; only the crossing player's
-		-- client drops it back down + turns collision on locally.
-		OnGateOpened = Knit.CreateSignal(), -- (broadcast) (gate, riseStuds, tweenSeconds)
-		OnExitPortalRising = Knit.CreateSignal(), -- (broadcast) (portal: Model) -- the boss-room portal starts surfacing
-		OnGateCrossed = Knit.CreateSignal(), -- (to one player) (gate, originalCFrame, tweenSeconds)
-	},
-})
+	Dependencies = {
+		RelicMachineService,
+		RelicService,
+		ZombieSpawnService,
+		EncounterService,
+		UserNotificationService,
+		LifeService,
+		PlayerEventService,
+		CameraShakeService,
+		CollisionGroupService,
+		FogOfWarService,
+		eventService,
+		EventService,
+	} :: { any },
+}
 
 --[ Imports ]--
 
@@ -283,11 +322,11 @@ DungeonService.Signals = {
 	-- only "this room's exit is earned" edge they emit (ExitGateWindService lights the gate off it).
 }
 
-DungeonService._activeDungeon = nil
+DungeonService._activeDungeon = nil :: Dungeon?
 -- The RUN: which DungeonSequence entry we're on, the difficulty shared by
 -- every dungeon in it, and who has already extracted through a portal (out
 -- of the vote's required count, never re-landed).
-DungeonService._run = nil :: { sequence: { string }, index: number, difficulty: string, exited: { [Player]: true } }?
+DungeonService._run = nil :: Run?
 DungeonService._exitPortal = nil :: Model?
 DungeonService._transitioning = false
 -- Players frozen (HRP anchored) for the map swap; released at their teleport.
@@ -295,15 +334,15 @@ DungeonService._transitionFrozen = {} :: { [Player]: true }
 -- Set for the duration of GenerateDungeon so prefab lookups resolve the
 -- dungeon being built (before _activeDungeon flips over to it).
 DungeonService._generatingDungeonId = nil :: string?
-DungeonService._playerRoomCursor = {} -- [Player]: number
-DungeonService._openedSegments = {} -- [segmentId]: true
+DungeonService._playerRoomCursor = {} :: { [Player]: number }
+DungeonService._openedSegments = {} :: { [number]: true } -- [segmentId]: true
 -- EVENT HOLD SUSPENSION (see SuspendEventHold). [roomId]: billboard text
 -- while suspended; [roomId]: true once released.
 DungeonService._suspendedEventHolds = {} :: { [number]: any }
 DungeonService._releasedEventHolds = {} :: { [number]: true }
 DungeonService._nextGateMarker = nil :: Model?
-DungeonService._readyForLanding = {} -- [Player]: true — client preload finished (per join)
-DungeonService._landed = {} -- [Player]: true — already landed in the CURRENT dungeon
+DungeonService._readyForLanding = {} :: { [Player]: true } -- client preload finished (per join)
+DungeonService._landed = {} :: { [Player]: Dungeon } -- the dungeon the player already landed in
 -- Buildings moved out of this floor's chunks (see _relocateChunkBuildings);
 -- Map.Buildings sits outside the runtime folder, so teardown destroys these
 -- explicitly or they pile up across floors.
@@ -316,7 +355,7 @@ DungeonService._floorBuildings = {} :: { Model }
 -- Start). Resolves the dungeon being GENERATED (or the active one), and
 -- falls back to the flat DungeonRooms folder with a warn so an unauthored
 -- dungeon still generates rather than asserting.
-function DungeonService:_getPrefabRoot(): Folder?
+function DungeonService._getPrefabRoot(self: typeof(DungeonService)): Folder?
 	local gameAssets = ServerStorage:FindFirstChild("GameAssets")
 	local root = gameAssets and gameAssets:FindFirstChild(PREFAB_FOLDER_NAME)
 	if not root then
@@ -335,20 +374,20 @@ function DungeonService:_getPrefabRoot(): Folder?
 	return root
 end
 
-function DungeonService:_pickPrefab(poolName: string, rng: Random): Model
+function DungeonService._pickPrefab(self: typeof(DungeonService), poolName: string, rng: Random): Model
 	local root = self:_getPrefabRoot()
 	assert(root, "[DungeonService] Missing ServerStorage.GameAssets." .. PREFAB_FOLDER_NAME)
 	local folder = root:FindFirstChild(poolName)
 	assert(folder, "[DungeonService] Missing prefab pool folder: " .. poolName)
 	local prefabs = folder:GetChildren()
 	assert(#prefabs > 0, "[DungeonService] Empty prefab pool: " .. poolName)
-	return prefabs[rng:NextInteger(1, #prefabs)]
+	return prefabs[rng:NextInteger(1, #prefabs)] :: Model
 end
 
 -- Picks a prefab from the pool, skipping any in `excluded`. Returns nil if
 -- every variant has been tried.
 -- Exact-name lookup in a pool folder, for Planner-forced prefabs.
-function DungeonService:_findPrefabByName(poolName: string, prefabName: string): Model?
+function DungeonService._findPrefabByName(self: typeof(DungeonService), poolName: string, prefabName: string): Model?
 	local root = self:_getPrefabRoot()
 	if not root then
 		return nil
@@ -367,7 +406,12 @@ end
 -- remaining prefabs by their authored ratios rather than falling back
 -- to uniform. Weights are drawn from the SAME seeded rng as every other
 -- layout roll, so a seed still reproduces its floor exactly.
-function DungeonService:_pickPrefabExcluding(poolName: string, excluded: { [Model]: true }, rng: Random): Model?
+function DungeonService._pickPrefabExcluding(
+	self: typeof(DungeonService),
+	poolName: string,
+	excluded: { [Model]: true },
+	rng: Random
+): Model?
 	local root = self:_getPrefabRoot()
 	if not root then
 		return nil
@@ -376,10 +420,11 @@ function DungeonService:_pickPrefabExcluding(poolName: string, excluded: { [Mode
 	if not folder then
 		return nil
 	end
-	local available = {}
+	local available: { Model } = {}
 	for _, prefab in folder:GetChildren() do
-		if not excluded[prefab] then
-			table.insert(available, prefab)
+		local prefabModel = prefab :: Model
+		if not excluded[prefabModel] then
+			table.insert(available, prefabModel)
 		end
 	end
 	if #available == 0 then
@@ -409,7 +454,7 @@ function DungeonService:_pickPrefabExcluding(poolName: string, excluded: { [Mode
 	return available[#available]
 end
 
-function DungeonService:_getRoomFloors(model: Model): { BasePart }
+function DungeonService._getRoomFloors(_self: typeof(DungeonService), model: Model): { BasePart }
 	local floors = {}
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("BasePart") and descendant.Name == FLOOR_NAME then
@@ -419,13 +464,17 @@ function DungeonService:_getRoomFloors(model: Model): { BasePart }
 	return floors
 end
 
-function DungeonService:_floorsOverlapAny(candidateFloors: { BasePart }, placedFloors: { BasePart }): boolean
+function DungeonService._floorsOverlapAny(
+	_self: typeof(DungeonService),
+	candidateFloors: { BasePart },
+	placedFloors: { BasePart }
+): boolean
 	if #placedFloors == 0 then
 		return false
 	end
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = placedFloors
+	params.FilterDescendantsInstances = placedFloors :: { any }
 	params.MaxParts = 1
 
 	for _, floor in candidateFloors do
@@ -438,7 +487,7 @@ function DungeonService:_floorsOverlapAny(candidateFloors: { BasePart }, placedF
 end
 
 -- World CFrame for either a BasePart (CFrame) or an Attachment (WorldCFrame).
-function DungeonService:_anchorCFrame(anchor: Instance): CFrame?
+function DungeonService._anchorCFrame(_self: typeof(DungeonService), anchor: Instance): CFrame?
 	if anchor:IsA("BasePart") then
 		return anchor.CFrame
 	elseif anchor:IsA("Attachment") then
@@ -447,7 +496,11 @@ function DungeonService:_anchorCFrame(anchor: Instance): CFrame?
 	return nil
 end
 
-function DungeonService:_findAllAnchors(instance: Instance, anchorName: string): { Instance }
+function DungeonService._findAllAnchors(
+	self: typeof(DungeonService),
+	instance: Instance,
+	anchorName: string
+): { Instance }
 	local matches = {}
 	for _, descendant in instance:GetDescendants() do
 		if descendant.Name == anchorName and self:_anchorCFrame(descendant) then
@@ -457,7 +510,12 @@ function DungeonService:_findAllAnchors(instance: Instance, anchorName: string):
 	return matches
 end
 
-function DungeonService:_findAnchor(instance: Instance, anchorName: string, optional: boolean?): Instance?
+function DungeonService._findAnchor(
+	self: typeof(DungeonService),
+	instance: Instance,
+	anchorName: string,
+	optional: boolean?
+): Instance?
 	local direct = instance:FindFirstChild(anchorName)
 	if direct and self:_anchorCFrame(direct) then
 		return direct
@@ -502,7 +560,8 @@ function DungeonService:_findAnchor(instance: Instance, anchorName: string, opti
 	return nil
 end
 
-function DungeonService:_snapPrefab(
+function DungeonService._snapPrefab(
+	self: typeof(DungeonService),
 	prefab: Model,
 	anchorOnNew: string,
 	targetAnchorCFrame: CFrame,
@@ -564,7 +623,7 @@ end
 -- template — e.g. eight spike pads across a Combat room — and have
 -- each run feel different without authoring eight separate chunk
 -- variants.
-function DungeonService:_randomizeChunkTraps(chunk: Model)
+function DungeonService._randomizeChunkTraps(_self: typeof(DungeonService), chunk: Model)
 	local trapsFolder = chunk:FindFirstChild(TRAPS_FOLDER_NAME)
 	if not trapsFolder then
 		return
@@ -582,7 +641,7 @@ end
 -- layout is a random subset of the designer's positions. Runs before the
 -- chunk parents, and before _relocateChunkBuildings moves the survivors
 -- out to Map.Buildings.
-function DungeonService:_randomizeChunkBuildings(chunk: Model)
+function DungeonService._randomizeChunkBuildings(_self: typeof(DungeonService), chunk: Model)
 	local buildingsFolder = chunk:FindFirstChild(BUILDINGS_FOLDER_NAME)
 	if not buildingsFolder then
 		return
@@ -595,7 +654,7 @@ function DungeonService:_randomizeChunkBuildings(chunk: Model)
 	end
 end
 
-function DungeonService:_ensureRuntimeFolder(): Folder
+function DungeonService._ensureRuntimeFolder(_self: typeof(DungeonService)): Folder
 	local map = workspace.IgnoreInstances:FindFirstChild("Map")
 	assert(map, "[DungeonService] workspace.IgnoreInstances.Map is missing")
 	local folder = map:FindFirstChild(RUNTIME_FOLDER_NAME)
@@ -607,7 +666,7 @@ function DungeonService:_ensureRuntimeFolder(): Folder
 	return folder
 end
 
-function DungeonService:_makeRoom(node, model: Model)
+function DungeonService._makeRoom(_self: typeof(DungeonService), node: Planner.RoomNode, model: Model): Room
 	model:SetAttribute(ROOM_ATTRIBUTE, node.id)
 	return {
 		id = node.id,
@@ -622,7 +681,7 @@ function DungeonService:_makeRoom(node, model: Model)
 	}
 end
 
-function DungeonService:_placeGateBarricade(roomModel: Instance, gate: BasePart)
+function DungeonService._placeGateBarricade(_self: typeof(DungeonService), roomModel: Model, gate: BasePart)
 	local breakablesFolder = ReplicatedStorage:FindFirstChild("GameAssets")
 		and ReplicatedStorage.GameAssets:FindFirstChild("Breakables")
 	local template = breakablesFolder and breakablesFolder:FindFirstChild(BARRICADE_PREFAB_NAME)
@@ -663,7 +722,12 @@ function DungeonService:_placeGateBarricade(roomModel: Instance, gate: BasePart)
 	barricade.Parent = workspace.IgnoreInstances.Map.DungeonRooms
 end
 
-function DungeonService:_setupGateTrigger(model: Instance, nextRoomId: number, placeBarricade: boolean?)
+function DungeonService._setupGateTrigger(
+	self: typeof(DungeonService),
+	model: Model,
+	nextRoomId: number,
+	placeBarricade: boolean?
+)
 	local gate = model:FindFirstChild(EXIT_GATE_NAME)
 	if not gate or not gate:IsA("BasePart") then
 		return
@@ -674,7 +738,8 @@ function DungeonService:_setupGateTrigger(model: Instance, nextRoomId: number, p
 	gate.Transparency = 1
 
 	for _, texture in pairs(gate:GetDescendants()) do
-		if texture:IsA("Texture") or texture:IsA("Decal") then
+		-- Texture inherits from Decal, so the one IsA covers both.
+		if texture:IsA("Decal") then
 			texture.Transparency = 1
 		end
 	end
@@ -741,7 +806,7 @@ end
 -- all-crossed check.
 local function isGateEligible(player: Player): (boolean, Model?, BasePart?)
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 	if not (character and hrp and humanoid) or humanoid.Health <= 0 then
 		return false
@@ -791,7 +856,7 @@ end
 -- Horizontal unit vector pointing from `gate` toward the room's center —
 -- the side players approach from. The crossing check's "past the gate"
 -- direction is the negation.
-function DungeonService:_gatePlayerSide(roomModel: Instance, gate: BasePart): Vector3
+function DungeonService._gatePlayerSide(_self: typeof(DungeonService), roomModel: Model, gate: BasePart): Vector3
 	local roomCenter = roomModel:GetPivot().Position
 	local towardCenter = (roomCenter - gate.Position) * Vector3.new(1, 0, 1)
 	if towardCenter.Magnitude <= 0 then
@@ -803,7 +868,7 @@ end
 -- First player through the opened Dungeon Gate: spawn the next CombatRoom's
 -- wave and advance every player's cursor — the same commitment the old
 -- gate-touch trigger used to make.
-function DungeonService:_onGateFirstCrossing(nextRoomId: number)
+function DungeonService._onGateFirstCrossing(self: typeof(DungeonService), nextRoomId: number)
 	local dungeon = self._activeDungeon
 	local nextRoom = dungeon and dungeon.rooms[nextRoomId]
 
@@ -853,7 +918,12 @@ end
 -- Nil = the classic relic-shopping hold. The event exit uses this so a
 -- shop between two combat rooms behaves EXACTLY like a combat gate
 -- once its own 60s / all-interacted hold resolves.
-function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdownOverride: any?)
+function DungeonService._startGateCycle(
+	self: typeof(DungeonService),
+	lastChunk: Room,
+	nextRoomId: number,
+	countdownOverride: any?
+)
 	local gate = lastChunk.model:FindFirstChild(EXIT_GATE_NAME)
 	if not gate or not gate:IsA("BasePart") then
 		return
@@ -897,7 +967,8 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 		warn("[DungeonService] Missing ReplicatedStorage.GameAssets.VFX." .. ACTION_HIGHLIGHT_NAME)
 	end
 
-	local actionText = billboard and billboard:FindFirstChild("Frame") and billboard.Frame:FindFirstChild("ActionText")
+	local billboardFrame = billboard and billboard:FindFirstChild("Frame")
+	local actionText = billboardFrame and billboardFrame:FindFirstChild("ActionText") :: TextLabel?
 	if actionText then
 		actionText.Text =
 			GATE_BILLBOARD_ACTION_TEXT:format((countdownOverride and countdownOverride.seconds) or GATE_WAIT_SECONDS)
@@ -999,7 +1070,11 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 
 	gate.CanCollide = false
 	gate:SetAttribute("GateState", "open")
-	self.Client.OnGateOpened:FireAll(gate, gate.Size.Y + GATE_RISE_EXTRA_STUDS, GATE_OPEN_TWEEN_SECONDS)
+	DungeonNetwork.GateOpened.FireAll({
+		Gate = gate,
+		RiseStuds = gate.Size.Y + GATE_RISE_EXTRA_STUDS,
+		TweenSeconds = GATE_OPEN_TWEEN_SECONDS,
+	})
 
 	local desyncedFolder = workspace:FindFirstChild(DESYNCED_PLAYERS_FOLDER_NAME)
 	if not desyncedFolder then
@@ -1045,7 +1120,7 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 
 		for _, player in Players:GetPlayers() do
 			local ok, character, hrp = isGateEligible(player)
-			if not ok then
+			if not ok or not character or not hrp then
 				continue
 			end
 
@@ -1070,7 +1145,11 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 				-- One-way, LOCALLY: only this player's client drops the
 				-- gate and turns collision on. Everyone still behind keeps
 				-- an open gate on their screen.
-				self.Client.OnGateCrossed:Fire(player, gate, gate.CFrame, GATE_CLOSE_TWEEN_SECONDS)
+				DungeonNetwork.GateCrossed.Fire(player, {
+					Gate = gate,
+					OriginalCFrame = gate.CFrame,
+					TweenSeconds = GATE_CLOSE_TWEEN_SECONDS,
+				})
 				-- ...and, a beat after the slam, everything behind that gate
 				-- goes dark for them (the whole cleared trail, not just this
 				-- segment: idempotent on the client).
@@ -1105,12 +1184,11 @@ function DungeonService:_startGateCycle(lastChunk, nextRoomId: number, countdown
 				if ok and crossed[player.UserId] and hrp and not isPastGatePlane(hrp.Position) then
 					crossed[player.UserId] = nil
 					verified = false
-					self.Client.OnGateOpened:Fire(
-						player,
-						gate,
-						gate.Size.Y + GATE_RISE_EXTRA_STUDS,
-						GATE_OPEN_TWEEN_SECONDS
-					)
+					DungeonNetwork.GateOpened.Fire(player, {
+						Gate = gate,
+						RiseStuds = gate.Size.Y + GATE_RISE_EXTRA_STUDS,
+						TweenSeconds = GATE_OPEN_TWEEN_SECONDS,
+					})
 				end
 			end
 			if verified then
@@ -1149,17 +1227,17 @@ end
 -- the room's hold starts.
 -- `text` may be a STRING or a FUNCTION returning one, re-read every poll
 -- (the Coffin's line carries its live seconds).
-function DungeonService:SuspendEventHold(roomId: number, text: (string | () -> string)?)
+function DungeonService.SuspendEventHold(self: typeof(DungeonService), roomId: number, text: (string | () -> string)?)
 	self._suspendedEventHolds[roomId] = text or "Challenge in progress..."
 end
 
-function DungeonService:ReleaseEventHold(roomId: number)
+function DungeonService.ReleaseEventHold(self: typeof(DungeonService), roomId: number)
 	print(("[DungeonService] Event hold RELEASED for room %s"):format(tostring(roomId)))
 	self._suspendedEventHolds[roomId] = nil
 	self._releasedEventHolds[roomId] = true
 end
 
-function DungeonService:_startEventGateHold(eventRoom)
+function DungeonService._startEventGateHold(self: typeof(DungeonService), eventRoom: Room)
 	local gate = eventRoom.model and eventRoom.model:FindFirstChild(EXIT_GATE_NAME)
 	if not gate or not gate:IsA("BasePart") then
 		warn(("[DungeonService] Event room '%s' has no ExitGate — hold skipped"):format(tostring(eventRoom.model)))
@@ -1175,7 +1253,6 @@ function DungeonService:_startEventGateHold(eventRoom)
 
 	-- EventService owns the interacted-registry. Resolved here (not at
 	-- module scope) to keep the service graph acyclic.
-	local eventService = Knit.GetService("EventService")
 
 	-- Event —> COMBAT: the exit must be a REAL combat gate — crossing
 	-- watch, per-player one-way close, first-crossing wave spawn — so
@@ -1230,7 +1307,8 @@ function DungeonService:_startEventGateHold(eventRoom)
 			billboard.Parent = gate
 		end
 	end
-	local actionText = billboard and billboard:FindFirstChild("Frame") and billboard.Frame:FindFirstChild("ActionText")
+	local billboardFrame = billboard and billboard:FindFirstChild("Frame")
+	local actionText = billboardFrame and billboardFrame:FindFirstChild("ActionText") :: TextLabel?
 	if actionText then
 		actionText.Text = GATE_BILLBOARD_ACTION_TEXT:format(EVENT_GATE_WAIT_SECONDS)
 	end
@@ -1315,7 +1393,7 @@ function DungeonService:_startEventGateHold(eventRoom)
 			})
 		end
 		if EncounterService then
-			EncounterService:StartEncounter(nextRoom.roomType, nextRoom, gate.CFrame)
+			EncounterService:StartEncounter(nextRoom.roomType :: EncounterService.EncounterKind, nextRoom, gate.CFrame)
 		end
 	else
 		-- Sequence edge (an Event not followed by Miniboss/Boss): just
@@ -1323,11 +1401,15 @@ function DungeonService:_startEventGateHold(eventRoom)
 		-- follows an event room today.
 		gate.CanCollide = false
 		gate:SetAttribute("GateState", "open")
-		self.Client.OnGateOpened:FireAll(gate, gate.Size.Y + GATE_RISE_EXTRA_STUDS, GATE_OPEN_TWEEN_SECONDS)
+		DungeonNetwork.GateOpened.FireAll({
+			Gate = gate,
+			RiseStuds = gate.Size.Y + GATE_RISE_EXTRA_STUDS,
+			TweenSeconds = GATE_OPEN_TWEEN_SECONDS,
+		})
 	end
 end
 
-function DungeonService:_areSegmentZombiesCleared(segmentId: number): boolean
+function DungeonService._areSegmentZombiesCleared(self: typeof(DungeonService), segmentId: number): boolean
 	local dungeon = self._activeDungeon
 	if not dungeon or not ZombieSpawnService then
 		return false
@@ -1355,7 +1437,7 @@ end
 -- Stamps every Trap model in the room's chunk as disabled: the server Trap
 -- component reads the attribute at proc time and stays quiet. Idempotent;
 -- called when a segment's gate opens and when an arena's encounter falls.
-function DungeonService:_disableRoomTraps(room)
+function DungeonService._disableRoomTraps(_self: typeof(DungeonService), room: Room?)
 	local model = room and room.model
 	if not model then
 		return
@@ -1368,7 +1450,7 @@ function DungeonService:_disableRoomTraps(room)
 end
 
 -- Finds the last chunk of the given segment.
-function DungeonService:_getSegmentLastChunk(segmentId: number)
+function DungeonService._getSegmentLastChunk(self: typeof(DungeonService), segmentId: number): Room?
 	local dungeon = self._activeDungeon
 	if not dungeon then
 		return nil
@@ -1387,14 +1469,20 @@ end
 -- player opening theirs, so the classic relic-shopping hold (which
 -- only ends early on a vending-machine relic pickup that no longer
 -- happens) would otherwise sit the full GATE_WAIT_SECONDS.
-function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect: boolean?, countdownOverride: any?)
+function DungeonService.OpenSegmentGate(
+	self: typeof(DungeonService),
+	segmentId: number,
+	skipDungeonDoneEffect: boolean?,
+	countdownOverride: any?
+)
 	if self._openedSegments[segmentId] then
 		return
 	end
 
+	local dungeon = self._activeDungeon
 	local lastChunk = self:_getSegmentLastChunk(segmentId)
 
-	if not lastChunk then
+	if not lastChunk or not dungeon then
 		return
 	end
 
@@ -1403,7 +1491,7 @@ function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect
 	-- The segment is done: its traps go inert (Attributes.TrapDisabled).
 	-- Every chunk of the segment, not just the last -- a player walking
 	-- back through a cleared chamber should not eat spikes.
-	for _, room in self._activeDungeon.rooms do
+	for _, room in dungeon.rooms do
 		if room.segmentId == segmentId then
 			self:_disableRoomTraps(room)
 		end
@@ -1447,8 +1535,7 @@ function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect
 		return
 	end
 
-	local dungeon = self._activeDungeon
-	local nextRoom = dungeon and dungeon.rooms[lastChunk.id + 1]
+	local nextRoom = dungeon.rooms[lastChunk.id + 1]
 
 	task.delay(0.5, function()
 		for _, player in pairs(Players:GetPlayers()) do
@@ -1490,7 +1577,7 @@ function DungeonService:OpenSegmentGate(segmentId: number, skipDungeonDoneEffect
 		local gate = lastChunk.model:FindFirstChild(EXIT_GATE_NAME)
 		local gateCFrame = (gate and gate:IsA("BasePart") and gate.CFrame) or lastChunk.model:GetPivot()
 		if EncounterService then
-			EncounterService:StartEncounter(nextRoom.roomType, nextRoom, gateCFrame)
+			EncounterService:StartEncounter(nextRoom.roomType :: EncounterService.EncounterKind, nextRoom, gateCFrame)
 		end
 		self.Signals.OnSegmentCleared:Fire(self._activeDungeon, lastChunk)
 		return
@@ -1524,8 +1611,8 @@ end
 
 -- Every mainline room up to and including `roomId` -- the trail behind a
 -- player who just left room `roomId`. For FogOfWarService:LeaveRoomsBehind.
-function DungeonService:_roomsUpTo(roomId: number): { any }
-	local out = {}
+function DungeonService._roomsUpTo(self: typeof(DungeonService), roomId: number): { Room }
+	local out: { Room } = {}
 	local dungeon = self._activeDungeon
 	if not dungeon then
 		return out
@@ -1544,7 +1631,7 @@ end
 -- GateState (the ExitGateParticlePart rig) can fade out -- OpenSegmentGate
 -- never gives it the "open" stamp. Called on OnEncounterIntroStarted, while
 -- the party is still standing on the pad in front of it.
-function DungeonService:_markApproachGatePassed(arenaRoom)
+function DungeonService._markApproachGatePassed(self: typeof(DungeonService), arenaRoom: Room?)
 	local dungeon = self._activeDungeon
 	if not dungeon or not arenaRoom or not arenaRoom.id then
 		return
@@ -1565,7 +1652,7 @@ end
 --
 -- Recorded on `room.buildings` so FogOfWarService hides / reveals them with
 -- the room they left, and on _floorBuildings so teardown destroys them.
-function DungeonService:_relocateChunkBuildings(room, chunkModel: Instance)
+function DungeonService._relocateChunkBuildings(self: typeof(DungeonService), room: Room, chunkModel: Model)
 	local folder = chunkModel:FindFirstChild(BUILDINGS_FOLDER_NAME)
 	if not folder then
 		return
@@ -1582,7 +1669,8 @@ function DungeonService:_relocateChunkBuildings(room, chunkModel: Instance)
 		destination.Parent = map
 	end
 
-	room.buildings = room.buildings or {}
+	local buildings = room.buildings or {}
+	room.buildings = buildings
 	for _, building in folder:GetChildren() do
 		if not building:IsA("Model") then
 			continue
@@ -1591,16 +1679,16 @@ function DungeonService:_relocateChunkBuildings(room, chunkModel: Instance)
 		if CollisionGroupService then
 			CollisionGroupService:SetupBuilding(building)
 		end
-		table.insert(room.buildings, building)
+		table.insert(buildings, building)
 		table.insert(self._floorBuildings, building)
 	end
 
 	folder:Destroy()
 end
 
-function DungeonService:_teleportPlayerToStart(dungeon, player): CFrame?
+function DungeonService._teleportPlayerToStart(self: typeof(DungeonService), dungeon: Dungeon, player: Player): CFrame?
 	local marker = self:_findAnchor(dungeon.startModel, START_SPAWN_NAME, true)
-	local spawnCFrame
+	local spawnCFrame: CFrame
 	if marker then
 		spawnCFrame = self:_anchorCFrame(marker) :: CFrame
 	else
@@ -1642,7 +1730,7 @@ function DungeonService:_teleportPlayerToStart(dungeon, player): CFrame?
 	-- Reparent FIRST so the CFrame write is the last thing to touch the root.
 	character.Parent = workspace.Players
 
-	local hrp = character:FindFirstChild("HumanoidRootPart")
+	local hrp = character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if hrp then
 		hrp.AssemblyLinearVelocity = Vector3.zero
 		hrp.CFrame = targetCFrame
@@ -1658,11 +1746,12 @@ end
 -- mobile aim -- all gated client-side now, this is the safety net) would
 -- otherwise win. Horizontal only: the humanoid settles vertically onto the
 -- floor by itself and must not be fought.
-function DungeonService:_holdLandingPosition(
+function DungeonService._holdLandingPosition(
+	self: typeof(DungeonService),
 	character: Model,
 	hrp: BasePart,
 	targetCFrame: CFrame,
-	dungeon,
+	dungeon: Dungeon,
 	seconds: number
 )
 	task.spawn(function()
@@ -1683,7 +1772,7 @@ end
 
 --[ Join landing ]--
 
-function DungeonService:_runPlayerLanding(player: Player)
+function DungeonService._runPlayerLanding(self: typeof(DungeonService), player: Player)
 	local dungeon = self._activeDungeon
 	if not dungeon then
 		return
@@ -1698,7 +1787,7 @@ function DungeonService:_runPlayerLanding(player: Player)
 	end
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not character or not humanoid or not hrp then
 		return
 	end
@@ -1821,7 +1910,7 @@ function DungeonService:_runPlayerLanding(player: Player)
 		-- Reveal: fade the joiner's loading screen (or the transition black)
 		-- + lock controls. Carries the landing CFrame: the client OWNS its
 		-- root, so its own snap to it is the authoritative one.
-		self.Client.OnLandingStart:Fire(player, targetCFrame)
+		DungeonNetwork.LandingStart.Fire(player, targetCFrame)
 
 		-- Drop: resume the animation from the frozen +25 pose down to the ground.
 		if landAnimationTrack then
@@ -1835,7 +1924,7 @@ function DungeonService:_runPlayerLanding(player: Player)
 				return
 			end
 			self:_onLandingImpact(player)
-			self.Client.OnLandingImpact:FireAll(player)
+			DungeonNetwork.LandingImpact.FireAll(player)
 		end)
 
 		-- End — unanchor + restore controls, then drop the relic machine.
@@ -1845,7 +1934,7 @@ function DungeonService:_runPlayerLanding(player: Player)
 			if character.Parent then
 				character:SetAttribute(Attributes.Landing, nil)
 			end
-			self.Client.OnLandingEnd:Fire(player)
+			DungeonNetwork.LandingEnd.Fire(player)
 			-- Server-side twin of OnLandingEnd, for services that need the
 			-- player's settled position rather than a client cue.
 			self.Signals.OnPlayerLanded:Fire(player)
@@ -1868,8 +1957,12 @@ function DungeonService:_runPlayerLanding(player: Player)
 	end)
 end
 
-function DungeonService:_onLandingImpact(player: Player)
-	local root = player.Character.HumanoidRootPart
+function DungeonService._onLandingImpact(_self: typeof(DungeonService), player: Player)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not root then
+		return
+	end
 
 	local dodgeVFX = ReplicatedStorage.GameAssets.VFX.Dodge.Dodge:Clone()
 	dodgeVFX:PivotTo(CFrame.new(root.Position) - Vector3.new(0, 3, 0))
@@ -1889,7 +1982,7 @@ end
 -- Marks a player ready (their client finished preloading) and lands them if a
 -- dungeon already exists. If not (they joined during the auto-gen window) they
 -- stay queued and OnDungeonGenerated lands every ready player.
-function DungeonService:_markReadyAndMaybeLand(player: Player)
+function DungeonService._markReadyAndMaybeLand(self: typeof(DungeonService), player: Player)
 	self._readyForLanding[player] = true
 	if self._activeDungeon then
 		self:_runPlayerLanding(player)
@@ -1898,7 +1991,7 @@ end
 
 --[ Next-gate marker ]--
 
-function DungeonService:_getNextGate(): BasePart?
+function DungeonService._getNextGate(self: typeof(DungeonService)): BasePart?
 	local dungeon = self._activeDungeon
 	if not dungeon then
 		return nil
@@ -1937,7 +2030,7 @@ end
 -- Lazily creates the next-gate marker model (an invisible Part with an
 -- "Indicator" Attachment) under workspace.IgnoreInstances.MapMarkers so the
 -- LocationMarkerSystem picks it up.
-function DungeonService:_ensureNextGateMarker(): Model
+function DungeonService._ensureNextGateMarker(self: typeof(DungeonService)): Model
 	if self._nextGateMarker and self._nextGateMarker.Parent then
 		return self._nextGateMarker
 	end
@@ -1974,7 +2067,7 @@ end
 
 -- Snaps the marker to the next gate, or destroys it if there is no next gate.
 -- Safe to call from anywhere — idempotent and self-creating.
-function DungeonService:_updateNextGateMarker()
+function DungeonService._updateNextGateMarker(self: typeof(DungeonService))
 	local gate = self:_getNextGate()
 	if not gate then
 		self:_destroyNextGateMarker()
@@ -1983,17 +2076,20 @@ function DungeonService:_updateNextGateMarker()
 
 	local marker = self:_ensureNextGateMarker()
 
-	marker.PrimaryPart.Position = (gate.Position + gate.CFrame.LookVector) + Vector3.new(0, -2, 0)
+	local primary = marker.PrimaryPart
+	if primary then
+		primary.Position = (gate.Position + gate.CFrame.LookVector) + Vector3.new(0, -2, 0)
+	end
 end
 
-function DungeonService:_destroyNextGateMarker()
+function DungeonService._destroyNextGateMarker(self: typeof(DungeonService))
 	if self._nextGateMarker then
 		self._nextGateMarker:Destroy()
 		self._nextGateMarker = nil
 	end
 end
 
-function DungeonService:_emitDungeonDoneEffect(roomModel: Model?, colorOverride: Color3?)
+function DungeonService._emitDungeonDoneEffect(_self: typeof(DungeonService), roomModel: Model?, colorOverride: Color3?)
 	if not roomModel then
 		return
 	end
@@ -2039,9 +2135,15 @@ end
 
 --[ Public Functions ]--
 
-function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, seed: number?, originCFrame: CFrame?)
-	seed = seed or (os.time() + math.random(1, 1_000_000))
-	originCFrame = originCFrame or CFrame.new(0, 0, 0)
+function DungeonService.GenerateDungeon(
+	self: typeof(DungeonService),
+	dungeonId: string,
+	difficulty: string,
+	seed: number?,
+	originCFrame: CFrame?
+)
+	local resolvedSeed: number = seed or (os.time() + math.random(1, 1_000_000))
+	local resolvedOrigin: CFrame = originCFrame or CFrame.new(0, 0, 0)
 
 	local dungeonConfig = DungeonData[dungeonId]
 	assert(dungeonConfig, "[DungeonService] Unknown dungeon: " .. tostring(dungeonId))
@@ -2056,18 +2158,18 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 	-- Miniboss — players start coin-less, so an early shop sells to nobody.
 	-- Later floors (and no-run Studio generates read index 1 too, matching
 	-- the real game-start experience) roll it anywhere.
-	local plan = Planner.plan(dungeonId, difficulty, seed, self:GetRunDungeonIndex() <= 1)
-	local rng = Random.new(seed)
+	local plan = Planner.Plan(dungeonId, difficulty, resolvedSeed, self:GetRunDungeonIndex() <= 1)
+	local rng = Random.new(resolvedSeed)
 	local runtimeFolder = self:_ensureRuntimeFolder()
 
 	-- Place start room
 	local prefabRoot = self:_getPrefabRoot()
 	assert(prefabRoot, "[DungeonService] Missing ServerStorage.GameAssets." .. PREFAB_FOLDER_NAME)
-	local startPrefab = prefabRoot:FindFirstChild(dungeonConfig.startPrefabName)
+	local startPrefab = prefabRoot:FindFirstChild(dungeonConfig.startPrefabName) :: Model?
 	assert(startPrefab, "[DungeonService] Missing start prefab: " .. dungeonConfig.startPrefabName)
 
 	local startModel = startPrefab:Clone()
-	startModel:PivotTo(originCFrame)
+	startModel:PivotTo(resolvedOrigin)
 	startModel.Name = "Start"
 	startModel.Parent = runtimeFolder
 
@@ -2077,8 +2179,8 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		end
 	end
 
-	local roomsList = {}
-	local roomsById = {}
+	local roomsList: { Room } = {}
+	local roomsById: { [number]: Room } = {}
 	local startExitAnchor = self:_findAnchor(startModel, EXIT_ANCHOR_NAME)
 	assert(startExitAnchor, "[DungeonService] Start prefab missing BasePart/Attachment named " .. EXIT_ANCHOR_NAME)
 
@@ -2190,7 +2292,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		end
 
 		-- Where does this slot snap from?
-		local prevExitAnchor
+		local prevExitAnchor: Instance?
 		if slotIdx == 1 then
 			prevExitAnchor = startExitAnchor
 		else
@@ -2215,7 +2317,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		-- the guarantee degrades gracefully instead of wedging generation.
 		local placed = false
 		while true do
-			local prefab
+			local prefab: Model?
 			if forcedPrefabName then
 				local forced = self:_findPrefabByName(node.prefabPool, forcedPrefabName)
 				if forced and not slot.tried[forced] then
@@ -2324,16 +2426,18 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 				-- Last resort: any prefab -- but never a SECOND shop. The
 				-- bare uniform pick below ignored the one-shop rule, and a
 				-- floor that backtracked this far could seat two merchants.
-				local shopOnly = {}
+				local shopOnly: { [Model]: true } = {}
 				local merchant = self:_findPrefabByName(node.prefabPool, MERCHANT_SHOP_PREFAB_NAME)
 				if merchant and slot.tried[merchant] then
 					shopOnly[merchant] = true
 				end
 				fp = self:_pickPrefabExcluding(node.prefabPool, shopOnly, rng) or self:_pickPrefab(node.prefabPool, rng)
 			end
-			slot.model = self:_snapPrefab(fp, ENTRY_ANCHOR_NAME, exitAnchorCFrame, runtimeFolder)
-			slot.prefabName = fp.Name
-			slot.floors = self:_getRoomFloors(slot.model :: Model)
+			local forcedPrefab = fp :: Model
+			local forcedModel = self:_snapPrefab(forcedPrefab, ENTRY_ANCHOR_NAME, exitAnchorCFrame, runtimeFolder)
+			slot.model = forcedModel
+			slot.prefabName = forcedPrefab.Name
+			slot.floors = self:_getRoomFloors(forcedModel)
 			for _, f in slot.floors do
 				table.insert(placedFloors, f)
 			end
@@ -2391,8 +2495,9 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 				end
 			end
 
-			if slot.branchModel:FindFirstChild(ENTRY_ANCHOR_NAME) then
-				slot.branchModel:FindFirstChild(ENTRY_ANCHOR_NAME):Destroy()
+			local branchEntryAnchor = placedBranchModel:FindFirstChild(ENTRY_ANCHOR_NAME)
+			if branchEntryAnchor then
+				branchEntryAnchor:Destroy()
 			end
 
 			-- The host room had a BranchWall blocking the doorway to the branch.
@@ -2413,16 +2518,11 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 
 		self:_relocateChunkBuildings(room, slot.model)
 
-		if slot.model:FindFirstChild(ENTRY_ANCHOR_NAME) then
-			slot.model:FindFirstChild(ENTRY_ANCHOR_NAME):Destroy()
-		end
-
-		if slot.model:FindFirstChild(EXIT_ANCHOR_NAME) then
-			slot.model:FindFirstChild(EXIT_ANCHOR_NAME):Destroy()
-		end
-
-		if slot.model:FindFirstChild(BRANCH_ANCHOR_NAME) then
-			slot.model:FindFirstChild(BRANCH_ANCHOR_NAME):Destroy()
+		for _, anchorName in { ENTRY_ANCHOR_NAME, EXIT_ANCHOR_NAME, BRANCH_ANCHOR_NAME } do
+			local anchor = placedModel:FindFirstChild(anchorName)
+			if anchor then
+				anchor:Destroy()
+			end
 		end
 
 		-- Inner chunks' ExitGates serve as touch-triggers: when a player touches
@@ -2445,8 +2545,9 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		roomsById[node.id] = room
 	end
 
-	if startModel:FindFirstChild(EXIT_ANCHOR_NAME) then
-		startModel:FindFirstChild(EXIT_ANCHOR_NAME):Destroy()
+	local startExitAnchorInstance = startModel:FindFirstChild(EXIT_ANCHOR_NAME)
+	if startExitAnchorInstance then
+		startExitAnchorInstance:Destroy()
 	end
 
 	-- Start room's ExitGate is also a touch trigger: walking out of Start
@@ -2466,7 +2567,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		warn(
 			"[DungeonService] No MerchantShop this floor: the forced Event slot could not fit the prefab "
 				.. "and no later Event slot could take it (seed "
-				.. tostring(seed)
+				.. tostring(resolvedSeed)
 				.. ")"
 		)
 	end
@@ -2476,7 +2577,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 			dungeonId,
 			difficulty,
 			#roomsList,
-			seed,
+			resolvedSeed,
 			backtracks,
 			collisionsForced
 		)
@@ -2498,7 +2599,7 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 	-- moving on). Non-Combat rooms between chunks are skipped without
 	-- disturbing the run, since lastSegmentId only updates inside the branch.
 	local combatSegmentOrdinal = 0
-	local lastCombatSegmentId = nil
+	local lastCombatSegmentId: number? = nil
 	for _, room in roomsList do
 		if room.roomType == RoomTypes.Combat then
 			if room.segmentId ~= lastCombatSegmentId then
@@ -2509,10 +2610,10 @@ function DungeonService:GenerateDungeon(dungeonId: string, difficulty: string, s
 		end
 	end
 
-	local dungeon = {
+	local dungeon: Dungeon = {
 		id = dungeonId,
 		difficulty = difficulty,
-		seed = seed,
+		seed = resolvedSeed,
 		plan = plan,
 		startModel = startModel,
 		rooms = roomsList,
@@ -2561,27 +2662,27 @@ end
 
 --[ Run loop ]--
 
-function DungeonService:GetRun()
+function DungeonService.GetRun(self: typeof(DungeonService)): Run?
 	return self._run
 end
 
-function DungeonService:GetRunDungeonIndex(): number
+function DungeonService.GetRunDungeonIndex(self: typeof(DungeonService)): number
 	return self._run and self._run.index or 1
 end
 
-function DungeonService:IsFinalDungeon(): boolean
+function DungeonService.IsFinalDungeon(self: typeof(DungeonService)): boolean
 	local run = self._run
 	return run ~= nil and run.index >= #run.sequence
 end
 
-function DungeonService:IsPlayerExited(player: Player): boolean
+function DungeonService.IsPlayerExited(self: typeof(DungeonService), player: Player): boolean
 	local run = self._run
 	return run ~= nil and run.exited[player] == true
 end
 
 -- Starts a fresh RUN at DungeonSequence[1] with `difficulty` for every
 -- dungeon in it. The de-facto game start; called by the auto-generate below.
-function DungeonService:StartRun(difficulty: string, originCFrame: CFrame?)
+function DungeonService.StartRun(self: typeof(DungeonService), difficulty: string, originCFrame: CFrame?)
 	local sequence = table.clone(DungeonSequence)
 	assert(#sequence > 0, "[DungeonService] DungeonSequence is empty")
 	self._run = {
@@ -2601,7 +2702,7 @@ end
 -- new rooms take those ids), machines, markers, then the room models --
 -- Walls live in a shared, cached folder, so its CHILDREN are cleared and
 -- the folder itself kept.
-function DungeonService:_teardownDungeon()
+function DungeonService._teardownDungeon(self: typeof(DungeonService))
 	local dungeon = self._activeDungeon
 	self._activeDungeon = nil -- staleness token for every in-flight thread
 
@@ -2662,7 +2763,7 @@ end
 -- Vote passed (or nobody left to vote against it): fade everyone to black,
 -- swap the map, land everyone alive in the next dungeon. Idempotent while a
 -- transition is already running.
-function DungeonService:AdvanceRun()
+function DungeonService.AdvanceRun(self: typeof(DungeonService))
 	local run = self._run
 	if not run or self._transitioning then
 		return
@@ -2677,7 +2778,7 @@ function DungeonService:AdvanceRun()
 	self.Signals.OnRunAdvancing:Fire(fromDungeon, nextId)
 
 	task.spawn(function()
-		self.Client.OnRunTransition:FireAll({ phase = "in", duration = RUN_TRANSITION_FADE_SECONDS })
+		DungeonNetwork.RunTransition.FireAll({ Phase = "in", Duration = RUN_TRANSITION_FADE_SECONDS })
 		task.wait(RUN_TRANSITION_FADE_SECONDS + RUN_TRANSITION_BLACK_HOLD_SECONDS)
 
 		-- The floor is about to vanish under everyone: freeze alive players in
@@ -2685,7 +2786,7 @@ function DungeonService:AdvanceRun()
 		table.clear(self._transitionFrozen)
 		for _, player in Players:GetPlayers() do
 			local character = player.Character
-			local hrp = character and character:FindFirstChild("HumanoidRootPart")
+			local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 			if hrp and not hrp.Anchored then
 				hrp.Anchored = true
 				self._transitionFrozen[player] = true
@@ -2713,20 +2814,20 @@ function DungeonService:AdvanceRun()
 				or (character and character:GetAttribute(Attributes.Death) == true)
 			if dead or self:IsPlayerExited(player) then
 				self:_releaseTransitionFreeze(player)
-				self.Client.OnRunTransition:Fire(player, { phase = "out", duration = RUN_TRANSITION_FADE_SECONDS })
+				DungeonNetwork.RunTransition.Fire(player, { Phase = "out", Duration = RUN_TRANSITION_FADE_SECONDS })
 			end
 		end
 		self._transitioning = false
 	end)
 end
 
-function DungeonService:_releaseTransitionFreeze(player: Player)
+function DungeonService._releaseTransitionFreeze(self: typeof(DungeonService), player: Player)
 	if not self._transitionFrozen[player] then
 		return
 	end
 	self._transitionFrozen[player] = nil
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if hrp then
 		hrp.Anchored = false
 	end
@@ -2738,7 +2839,7 @@ end
 -- anchor it, and record its resting pivot + Y extent so the raise can rise
 -- it by exactly its own height. Missing model = warn once; the room simply
 -- has no portal (the vote still runs, players can still descend).
-function DungeonService:_prepareExitPortal(room)
+function DungeonService._prepareExitPortal(_self: typeof(DungeonService), room: Room)
 	local portal = room.model and room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
 	if not portal or not portal:IsA("Model") then
 		warn(
@@ -2778,7 +2879,7 @@ function DungeonService:_prepareExitPortal(room)
 	room.exitPortal = portal
 end
 
-function DungeonService:_destroyExitPortal()
+function DungeonService._destroyExitPortal(self: typeof(DungeonService))
 	-- The portal belongs to its Boss room model and dies with the room on
 	-- teardown; this only drops the rise-loop token.
 	self._exitPortal = nil
@@ -2790,29 +2891,25 @@ end
 -- interaction -- never a touch) fires OnPlayerExtracted (bank escrow in that
 -- hook) and sends that player to the lobby place; they drop out of the
 -- vote's required count.
-function DungeonService:_raiseExitPortal(room)
+function DungeonService._raiseExitPortal(self: typeof(DungeonService), room: Room)
 	-- Re-resolve from the room MODEL: robust to the room table reaching us
 	-- through EncounterService being a different reference than the one
 	-- _prepareExitPortal annotated.
-	local portal: Model? = room and room.model and room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
+	local portal = room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
 	if not portal or not portal:IsA("Model") or not portal.Parent then
 		warn("[DungeonService] _raiseExitPortal: boss room has no ExitPortal model")
 		return
 	end
 	-- Rise by the model's own Y extent from its authored (underground) rest
 	-- pose. Prepared rooms have both stored; anything else measures now.
-	local restCFrame: CFrame? = portal:GetAttribute("ExitPortalRestCFrame")
-	local riseHeight: number? = portal:GetAttribute("ExitPortalRiseHeight")
-	if typeof(restCFrame) ~= "CFrame" then
-		restCFrame = portal:GetPivot()
-	end
-	if typeof(riseHeight) ~= "number" then
-		riseHeight = portal:GetExtentsSize().Y
-	end
+	local restAttribute = portal:GetAttribute("ExitPortalRestCFrame")
+	local riseAttribute = portal:GetAttribute("ExitPortalRiseHeight")
+	local restCFrame: CFrame = if typeof(restAttribute) == "CFrame" then restAttribute else portal:GetPivot()
+	local riseHeight: number = if typeof(riseAttribute) == "number" then riseAttribute else portal:GetExtentsSize().Y
 	local targetCFrame = restCFrame + Vector3.new(0, riseHeight, 0)
 	self._exitPortal = portal
 	-- Every client plays the gate-open sound on the portal locally.
-	self.Client.OnExitPortalRising:FireAll(portal)
+	DungeonNetwork.ExitPortalRising.FireAll(portal)
 	-- Server-side twin: MusicService fades in the extraction theme.
 	self.Signals.OnExitPortalRising:Fire(portal)
 
@@ -2820,7 +2917,7 @@ function DungeonService:_raiseExitPortal(room)
 		local origin = targetCFrame.Position
 		for _, player in Players:GetPlayers() do
 			local character = player.Character
-			local hrp = character and character:FindFirstChild("HumanoidRootPart")
+			local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 			if hrp and (hrp.Position - origin).Magnitude <= EXIT_PORTAL_SHAKE_RADIUS then
 				CameraShakeService:Shake(player, CameraShakePresets.MediumLong)
 			end
@@ -2859,14 +2956,14 @@ function DungeonService:_raiseExitPortal(room)
 	end)
 end
 
-function DungeonService:_extractPlayer(player: Player)
+function DungeonService._extractPlayer(self: typeof(DungeonService), player: Player)
 	local run = self._run
 	if not run or run.exited[player] then
 		return
 	end
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 or character:GetAttribute(Attributes.Death) == true then
+	if not character or not humanoid or humanoid.Health <= 0 or character:GetAttribute(Attributes.Death) == true then
 		return
 	end
 	-- Bank / record hook FIRST, then the teleport (the player is still fully
@@ -2891,7 +2988,7 @@ end
 
 -- Boss rewards have dropped (EncounterService outro done). Final dungeon:
 -- fire the hook, spawn nothing. Otherwise: portal + vote pad after a beat.
-function DungeonService:_onBossRewardsDropped(room)
+function DungeonService._onBossRewardsDropped(self: typeof(DungeonService), room: Room?)
 	local run = self._run
 	local dungeon = self._activeDungeon
 	if not run or not dungeon or not room or not room.model then
@@ -2917,13 +3014,13 @@ function DungeonService:_onBossRewardsDropped(room)
 	end)
 end
 
-function DungeonService:GetActiveDungeon()
+function DungeonService.GetActiveDungeon(self: typeof(DungeonService)): Dungeon?
 	return self._activeDungeon
 end
 
 -- Returns the room the player is currently in, or nil if they're at the Start
 -- room / not in any dungeon room yet.
-function DungeonService:GetPlayerRoom(player: Player)
+function DungeonService.GetPlayerRoom(self: typeof(DungeonService), player: Player): Room?
 	local dungeon = self._activeDungeon
 
 	if not dungeon then
@@ -2936,14 +3033,14 @@ function DungeonService:GetPlayerRoom(player: Player)
 end
 
 -- Returns the player's current cursor index (0 = Start, 1..N = room index).
-function DungeonService:GetPlayerRoomIndex(player: Player): number
+function DungeonService.GetPlayerRoomIndex(self: typeof(DungeonService), player: Player): number
 	return self._playerRoomCursor[player] or 0
 end
 
 -- Directly sets a player's cursor. Fires OnRoomLeft for the previous room and
 -- OnRoomEntered for the new room. Use this for initial placement; prefer
 -- AdvancePlayer for normal progression. Index 0 = Start room.
-function DungeonService:SetPlayerRoom(player: Player, roomIdx: number)
+function DungeonService.SetPlayerRoom(self: typeof(DungeonService), player: Player, roomIdx: number)
 	local dungeon = self._activeDungeon
 	if not dungeon then
 		return
@@ -2970,7 +3067,7 @@ function DungeonService:SetPlayerRoom(player: Player, roomIdx: number)
 	self:_updateNextGateMarker()
 end
 
-function DungeonService:AdvancePlayer(player: Player)
+function DungeonService.AdvancePlayer(self: typeof(DungeonService), player: Player): Room?
 	local dungeon = self._activeDungeon
 	if not dungeon then
 		return nil
@@ -3003,7 +3100,7 @@ end
 
 -- Resets all player cursors to 0 (Start). Called automatically by
 -- GenerateDungeon; call manually if you regenerate without going through it.
-function DungeonService:ResetPlayerCursors()
+function DungeonService.ResetPlayerCursors(self: typeof(DungeonService))
 	for player in self._playerRoomCursor do
 		self._playerRoomCursor[player] = 0
 	end
@@ -3011,31 +3108,19 @@ end
 
 --[ Initializers ]--
 
-function DungeonService:KnitInit() end
-
-function DungeonService:KnitStart()
-	RelicMachineService = Knit.GetService("RelicMachineService")
-	RelicService = Knit.GetService("RelicService")
-	ZombieSpawnService = Knit.GetService("ZombieSpawnService")
-	EncounterService = Knit.GetService("EncounterService")
-	UserNotificationService = Knit.GetService("UserNotificationService")
-	LifeService = Knit.GetService("LifeService")
-	PlayerEventService = Knit.GetService("PlayerEventService")
-	CameraShakeService = Knit.GetService("CameraShakeService")
-	CollisionGroupService = Knit.GetService("CollisionGroupService")
-	FogOfWarService = Knit.GetService("FogOfWarService")
-
+function DungeonService.Start(self: typeof(DungeonService))
 	-- Run loop: the boss's rewards have dropped -> portal + vote (or the
 	-- final-dungeon hook).
-	EncounterService.OnEncounterOutroFinished:Connect(function(kind: string, room, _mob: Model?)
+	EncounterService.OnEncounterOutroFinished:Connect(function(kind: string, room: EncounterRoom?, _mob: Model?)
 		if kind == RoomTypes.Boss then
-			self:_onBossRewardsDropped(room)
+			self:_onBossRewardsDropped(room :: Room?)
 		end
 	end)
 
 	-- The party is about to be pulled into the arena: the approach gate
 	-- behind them is done (see _markApproachGatePassed).
-	EncounterService.OnEncounterIntroStarted:Connect(function(_kind: string, room)
+	EncounterService.OnEncounterIntroStarted:Connect(function(_kind: string, encounterRoom: EncounterRoom?)
+		local room = encounterRoom :: Room?
 		self:_markApproachGatePassed(room)
 		-- The whole party is pulled into the arena: everything before it
 		-- goes dark for everyone, once the fade-to-black has them inside.
@@ -3047,12 +3132,12 @@ function DungeonService:KnitStart()
 	-- The arena is won: its traps go inert right away, not only when the
 	-- gate opens later (the miniboss gate waits on chests / a countdown,
 	-- the boss gate never opens), so looting the arena is safe.
-	EncounterService.OnEncounterDefeated:Connect(function(_kind: string, room)
-		self:_disableRoomTraps(room)
+	EncounterService.OnEncounterDefeated:Connect(function(_kind: string, room: EncounterRoom?)
+		self:_disableRoomTraps(room :: Room?)
 	end)
 
 	self.Signals.OnDungeonGenerated:Connect(function()
-		self.Client.OnDungeonGenerated:FireAll()
+		DungeonNetwork.DungeonGenerated.FireAll()
 
 		-- New dungeon → everyone re-lands at the new start. Land every player
 		-- whose client already finished preloading; the rest land when their
@@ -3071,7 +3156,7 @@ function DungeonService:KnitStart()
 	-- per-player "ready" cue — no extra delay needed. If the dungeon isn't
 	-- generated yet the player is queued and lands on OnDungeonGenerated.
 	PlayerEventService.OnPlayerAdded:Connect(function(player)
-		self.Client.OnDungeonGenerated:Fire(player)
+		DungeonNetwork.DungeonGenerated.Fire(player)
 		self:_markReadyAndMaybeLand(player)
 	end)
 
@@ -3090,7 +3175,7 @@ function DungeonService:KnitStart()
 			return
 		end
 		local roomId = zombie:GetAttribute(ROOM_ATTRIBUTE)
-		if not roomId then
+		if type(roomId) ~= "number" then
 			return
 		end
 		local room = dungeon.roomsById[roomId]

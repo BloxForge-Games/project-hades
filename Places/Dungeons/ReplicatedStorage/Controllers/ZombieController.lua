@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: ZombieController.lua
 	Description:
@@ -44,16 +45,15 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local VFXController = require(ReplicatedStorage.Controllers.VFXController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
+local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
-local ZombieService
-local VFXController
-
-local ZombieController = Knit.CreateController({
+local ZombieController = {
 	Name = "ZombieController",
-	Client = {},
-})
+	Dependencies = { VFXController } :: { any },
+}
 
 --[ Constants ]--
 
@@ -97,7 +97,7 @@ local HITBOX_PARENT = workspace.IgnoreInstances.MagicSpells
 -- Time-based rather than attribute-based because the death flow never
 -- stamps CutscenePlaying (only scripted cutscenes / boss intros / the
 -- landing do) — there is no attribute that marks exactly this window.
--- localDeathStartedAt is stamped by the Death listener in KnitStart.
+-- localDeathStartedAt is stamped by the Death listener in Start.
 local DEATH_CINEMATIC_SUPPRESS_SECONDS = 4
 local localDeathStartedAt = 0
 
@@ -114,13 +114,20 @@ end
 -- Set of in-flight hitbox-flash states, so a boss phase change / outro
 -- cutscene can abort every active telegraph at once (abortAllHitboxFlashes).
 -- States add themselves on spawn and remove on fade/completion.
+type FlashState = {
+	model: Model,
+	parts: { BasePart },
+	aborted: boolean,
+	diedConn: RBXScriptConnection?,
+}
+
 local activeFlashes: { [any]: boolean } = {}
 
 -- Cancels the in-flight flash and fades every part on the hitbox to
 -- transparency 1. Idempotent. Called either from the death listener
 -- (zombie killed mid-attack) or from the initial check below if the
 -- zombie was already dead when the attack event arrived.
-local function fadeOutHitbox(state)
+local function fadeOutHitbox(state: FlashState)
 	if state.aborted then
 		return
 	end
@@ -162,7 +169,7 @@ end
 --
 -- state.aborted is checked at every yield point so a mid-flash death
 -- cleanly hands off to fadeOutHitbox.
-local function runHitboxFlash(state, windUpDuration: number, hitFrameDuration: number)
+local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFrameDuration: number)
 	if state.aborted or not state.model.Parent then
 		return
 	end
@@ -316,7 +323,7 @@ local function spawnHitboxFlash(
 		end
 	end
 
-	local state = {
+	local state: FlashState = {
 		model = clonedHitbox,
 		parts = parts,
 		aborted = false,
@@ -360,7 +367,7 @@ end
 
 --[ Initializers ]--
 
-function ZombieController:KnitStart()
+function ZombieController.Start(_self: typeof(ZombieController))
 	-- Stamps the death-cinematic suppression window (see
 	-- isLocalDeathCinematicPlaying above). Re-wired per character so a
 	-- respawn's fresh instance gets its own listener.
@@ -380,39 +387,48 @@ function ZombieController:KnitStart()
 	end
 	Players.LocalPlayer.CharacterAdded:Connect(watchDeathAttribute)
 
-	ZombieService = Knit.GetService("ZombieService")
-	VFXController = Knit.GetController("VFXController")
-
-	ZombieService.OnReplicateMobAttack:Connect(spawnHitboxFlash)
+	Combat.MobAttack.On(function(payload)
+		if not payload.Mob then
+			return
+		end
+		spawnHitboxFlash(
+			payload.Mob,
+			payload.HitboxName,
+			payload.CFrame,
+			payload.WindUpDuration,
+			payload.HitFrameDuration
+		)
+	end)
 
 	-- Abort any lingering hitbox telegraphs when a boss phase change / outro
 	-- cutscene begins — the frozen (or dead) mob shouldn't show a danger zone
 	-- mid-scene. The server already cancelled the matching damage hitbox +
 	-- lunge (ZombieService AttackInterrupted); this clears the client visual.
-	local EncounterService = Knit.GetService("EncounterService")
-	EncounterService.EncounterPhaseStart:Connect(abortAllHitboxFlashes)
-	EncounterService.EncounterOutroStart:Connect(abortAllHitboxFlashes)
+	DungeonNetwork.EncounterPhaseStart.On(abortAllHitboxFlashes)
+	DungeonNetwork.EncounterOutroStart.On(abortAllHitboxFlashes)
 
 	-- Lunge tween: cosmetic only. Fires only for attacks with
 	-- lungeDistance > 0. Server already PivotTo'd authoritatively;
 	-- this just smooths the visual jump on the client.
-	ZombieService.OnReplicateZombieAttack:Connect(
-		function(zombieModel: Model, _startCFrame: CFrame, goalCFrame: CFrame, _timeStamp: number)
-			if isLocalDeathCinematicPlaying() then
-				return
-			end
-
-			local root = zombieModel:FindFirstChild("HumanoidRootPart")
-			if not root then
-				warn("[ZombieController] Replicated zombie model is missing HumanoidRootPart.")
-				return
-			end
-
-			TweenService
-				:Create(root, TweenInfo.new(LUNGE_TWEEN_DURATION, Enum.EasingStyle.Cubic), { CFrame = goalCFrame })
-				:Play()
+	Combat.MobLunge.On(function(payload)
+		local zombieModel = payload.Mob
+		local goalCFrame = payload.GoalCFrame
+		if not zombieModel then
+			return
 		end
-	)
+		if isLocalDeathCinematicPlaying() then
+			return
+		end
+
+		local root = zombieModel:FindFirstChild("HumanoidRootPart")
+		if not root then
+			warn("[ZombieController] Replicated zombie model is missing HumanoidRootPart.")
+			return
+		end
+
+		TweenService:Create(root, TweenInfo.new(LUNGE_TWEEN_DURATION, Enum.EasingStyle.Cubic), { CFrame = goalCFrame })
+			:Play()
+	end)
 
 	-- Ranged projectile cast. Delegates to VFXController's
 	-- MobProjectiles dispatcher — each projectile type has its own
@@ -420,30 +436,33 @@ function ZombieController:KnitStart()
 	-- full client-side trajectory + impact callback. ZombieController
 	-- stays a thin plumbing layer; the actual VFX logic lives co-
 	-- located with the player magic spell modules under VFXController/.
-	ZombieService.OnReplicateMobRangedAttack:Connect(
-		function(
-			zombieModel: Model,
-			projectileName: string,
-			originCFrame: CFrame,
-			targetPosition: Vector3,
-			castUuid: string,
-			attackConfig: { speed: number, lifetime: number, hitRadius: number }
-		)
-			if isLocalDeathCinematicPlaying() then
-				return
-			end
-			VFXController:RunMobProjectile(
-				projectileName,
-				zombieModel,
-				originCFrame,
-				targetPosition,
-				castUuid,
-				attackConfig
-			)
+	Combat.MobRangedAttack.On(function(payload)
+		local zombieModel = payload.Mob
+		if not zombieModel then
+			return
 		end
-	)
+		local projectileName = payload.ProjectileName
+		local originCFrame = payload.OriginCFrame
+		local targetPosition = payload.TargetPosition
+		local castUuid = payload.CastUuid
+		local attackConfig = {
+			speed = payload.Speed,
+			lifetime = payload.Lifetime,
+			hitRadius = payload.HitRadius,
+			explosionRadius = payload.ExplosionRadius,
+		}
+		if isLocalDeathCinematicPlaying() then
+			return
+		end
+		VFXController:RunMobProjectile(
+			projectileName,
+			zombieModel,
+			originCFrame,
+			targetPosition,
+			castUuid,
+			attackConfig
+		)
+	end)
 end
-
-function ZombieController:KnitInit() end
 
 return ZombieController

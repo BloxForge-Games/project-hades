@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: StatusConditionService.lua
 	Description:
@@ -57,10 +58,16 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local DamageService = require(ServerScriptService.Services.DamageService)
+local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local RelicService = require(ServerScriptService.Services.RelicService)
+local AuraService = require(ServerScriptService.Services.AuraService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
@@ -69,16 +76,43 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 
-local DataService
-local DamageService
-local DamageIndicatorService
-local RelicService
-local AuraService
+-- One relic's tweak to a status application (StatusConditionData
+-- `relicModifiers` rows and GLOBAL_RELIC_MODIFIERS).
+type RelicModifier = {
+	requiresAura: string?,
+	durationMultiplier: number?,
+	bonusDuration: number?,
+	dotMultiplier: number?,
+	bonusSlowFraction: number?,
+	bonusWeaken: number?,
+}
 
-local StatusConditionService = Knit.CreateService({
+-- A StatusConditionData row, as this service reads it.
+type StatusConfig = {
+	auraName: string,
+	displayName: string?,
+	soundName: string?,
+	hitVFXName: string?,
+	applyVFXName: string?,
+	duration: number,
+	tickInterval: number?,
+	stackLimit: number?,
+	dotPercentOfMaxHealth: number?,
+	dotTickCapPerLevel: number?,
+	slowFraction: number?,
+	outgoingDamageMultiplier: number?,
+	incomingDamageMultiplier: number?,
+	relicModifiers: { [string]: RelicModifier }?,
+	color: Color3,
+}
+
+-- One refcounted status rig on a mob (see _visuals).
+type VisualSlot = { count: number, emitters: { ParticleEmitter } }
+
+local StatusConditionService = {
 	Name = "StatusConditionService",
-	Client = {},
-})
+	Dependencies = { DataService, DamageIndicatorService } :: { any },
+}
 
 --[ Constants ]--
 
@@ -123,7 +157,7 @@ local POISON_WEAKEN_CAP = 0.50
 -- and Burn's Enflamed clause went in the 2026-09 legendary un-gating pass.
 -- Owning the relic is the whole condition, so each upgrade is available
 -- from the moment the relic is picked up. The `aura` seam is kept.
-local STATUS_REDIRECTS = {
+local STATUS_REDIRECTS: { [string]: { to: string, relicName: string, aura: string? } } = {
 	[StatusConditions.Burn] = {
 		to = StatusConditions.BlackFlame,
 		relicName = RelicNames["Flame Ronin Katana"],
@@ -165,7 +199,7 @@ StatusConditionService._active = {}
 -- Refcounted visuals per mob: [model] = { [visualKey] = { count, emitters } }.
 -- visualKey is the GameAssets.Auras folder name ("Burn", "BlackFlame",
 -- "Poison", "NoxiousPoison", ...). Four burn stacks = one rig at count 4.
-StatusConditionService._visuals = {}
+StatusConditionService._visuals = {} :: { [Model]: { [string]: VisualSlot } }
 
 --[ Private Functions ]--
 
@@ -183,14 +217,14 @@ end
 -- its card is now a Weaken relic rather than a duration one. Kept because
 -- the resolver reads it unconditionally and a future global modifier
 -- belongs here rather than in every status entry.
-local GLOBAL_RELIC_MODIFIERS = {}
+local GLOBAL_RELIC_MODIFIERS: { [string]: RelicModifier } = {}
 
 -- Resolves the effective duration / magnitudes for THIS application from
 -- the base config plus the applier's owned-relic modifiers. Mods with
 -- `requiresAura` only count while the APPLIER has that aura up (Foul
 -- Poison Fowl's Blighted gate).
-function StatusConditionService:_resolveApplication(sourcePlayer: Player, config)
-	local duration = config.duration
+function StatusConditionService:_resolveApplication(sourcePlayer: Player, config: StatusConfig)
+	local duration: number = config.duration
 	local dotMultiplier = 1
 	local slowFraction = config.slowFraction or 0
 	local weakenFraction = 1 - (config.outgoingDamageMultiplier or 1)
@@ -225,7 +259,7 @@ end
 
 -- Per-tick DoT cap, resolved once per application/refresh (cap follows the
 -- APPLIER's level).
-function StatusConditionService:_resolveTickCap(sourcePlayer: Player, config): number
+function StatusConditionService:_resolveTickCap(sourcePlayer: Player, config: StatusConfig): number
 	local profile = DataService and DataService:GetProfileData(sourcePlayer)
 	local playerLevel = (profile and profile.Level) or 1
 	return playerLevel * (config.dotTickCapPerLevel or 25)
@@ -298,7 +332,7 @@ end
 -- corpse keeps its auras and MobBase's despawn sweep owns the fade.
 function StatusConditionService:_decrementVisual(model: Model, visualKey: string, keepEmitters: boolean?)
 	local visuals = self._visuals[model]
-	local slot = visuals and visuals[visualKey]
+	local slot: VisualSlot? = visuals and visuals[visualKey]
 	if not slot then
 		return
 	end
@@ -389,15 +423,18 @@ local function playStatusSound(status: string, soundName: string?, hrp: BasePart
 	end
 	lastSoundPlayAt[status] = now
 
-	local sound = hrp:FindFirstChild(soundName)
-	if sound == nil then
+	local existing = hrp:FindFirstChild(soundName) :: Sound?
+	local sound: Sound
+	if existing then
+		sound = existing
+	else
 		local soundsFolder = ReplicatedStorage.GameAssets:FindFirstChild("Sounds")
 		local template = soundsFolder and soundsFolder:FindFirstChild(soundName)
 		if not template then
 			warn("[StatusConditionService] Missing ReplicatedStorage.GameAssets.Sounds." .. soundName)
 			return
 		end
-		sound = template:Clone()
+		sound = template:Clone() :: Sound
 		sound.Parent = hrp
 	end
 
@@ -596,34 +633,44 @@ end
 -- the single source of truth. `chance` remains ONLY for relics whose
 -- callback means something else (Magenta Paintball Gun's is its Painted
 -- damage multiplier, so its apply chance must live here).
-local RELIC_HIT_STATUSES = {
-	-- The four tree status enablers (NC).
-	{ relicName = RelicNames["Ye Olde Fire Breath Potion"], status = StatusConditions.Burn },
-	{ relicName = RelicNames["Frozen Blue Ice Crossbow"], status = StatusConditions.Chill },
-	{ relicName = RelicNames["Zombie Axe"], status = StatusConditions.Poison },
-	{ relicName = RelicNames["Static Shock Sheep"], status = StatusConditions.Shock },
-	-- Deluxe Coil Gun's applier half. Its OTHER half is the Shock ->
-	-- Coil Shocked redirect above; this row is what lets an NC pickup
-	-- actually produce the Shock it then upgrades.
-	{ relicName = RelicNames["Deluxe Coil Gun"], status = StatusConditions.Shock },
-	-- Skeletal Scythe's applier half: +10% Poison chance on every hit
-	-- (the roll-time callback read), so the NC pickup PRODUCES the
-	-- Poison it then upgrades — Deluxe Coil Gun's exact pattern.
-	{ relicName = RelicNames["Skeletal Scythe"], status = StatusConditions.Poison },
-	-- The four aura-gated chance boosters that used to live here (Faux
-	-- Firebrand, Blizzard Wand, Lightning Wand, Overseer's Short Sword)
-	-- are all gone: the 2026-08 pass turned the first three into damage
-	-- relics, and Short Sword's boost now covers EVERY elemental status
-	-- rather than Poison alone, so it lives in _getStatusChanceBonus.
-	-- Magenta Paintball Gun: EVERY ranged weapon hit Paints (was 35%).
+local RELIC_HIT_STATUSES: {
 	{
-		relicName = RelicNames["Magenta Paintball Gun"],
-		status = StatusConditions.Paint,
-		chance = 1,
-		weaponOnly = true,
-		rangedOnly = true,
-	},
-}
+		relicName: string,
+		status: string,
+		chance: number?,
+		weaponOnly: boolean?,
+		rangedOnly: boolean?,
+		auraGate: string?,
+	}
+} =
+	{
+		-- The four tree status enablers (NC).
+		{ relicName = RelicNames["Ye Olde Fire Breath Potion"], status = StatusConditions.Burn },
+		{ relicName = RelicNames["Frozen Blue Ice Crossbow"], status = StatusConditions.Chill },
+		{ relicName = RelicNames["Zombie Axe"], status = StatusConditions.Poison },
+		{ relicName = RelicNames["Static Shock Sheep"], status = StatusConditions.Shock },
+		-- Deluxe Coil Gun's applier half. Its OTHER half is the Shock ->
+		-- Coil Shocked redirect above; this row is what lets an NC pickup
+		-- actually produce the Shock it then upgrades.
+		{ relicName = RelicNames["Deluxe Coil Gun"], status = StatusConditions.Shock },
+		-- Skeletal Scythe's applier half: +10% Poison chance on every hit
+		-- (the roll-time callback read), so the NC pickup PRODUCES the
+		-- Poison it then upgrades — Deluxe Coil Gun's exact pattern.
+		{ relicName = RelicNames["Skeletal Scythe"], status = StatusConditions.Poison },
+		-- The four aura-gated chance boosters that used to live here (Faux
+		-- Firebrand, Blizzard Wand, Lightning Wand, Overseer's Short Sword)
+		-- are all gone: the 2026-08 pass turned the first three into damage
+		-- relics, and Short Sword's boost now covers EVERY elemental status
+		-- rather than Poison alone, so it lives in _getStatusChanceBonus.
+		-- Magenta Paintball Gun: EVERY ranged weapon hit Paints (was 35%).
+		{
+			relicName = RelicNames["Magenta Paintball Gun"],
+			status = StatusConditions.Paint,
+			chance = 1,
+			weaponOnly = true,
+			rangedOnly = true,
+		},
+	}
 
 -- Relic -> on-hit AURA grants, rolled at the damage entry points (per HIT
 -- per TARGET — a fireball clipping three mobs rolls three times; DoT ticks
@@ -634,10 +681,11 @@ local RELIC_HIT_STATUSES = {
 -- Lightning Orb is deliberately NOT here: its trigger is CRITICAL HITS
 -- (any instance, either damage side), which only DamageService can see —
 -- it rolls from _postDamage's crit branch instead.
-local RELIC_HIT_AURAS = {
-	{ relicName = RelicNames["Flaming Bo Staff"], aura = AuraNames.Enflamed, weaponOnly = true },
-	{ relicName = RelicNames["Korblox Spell Book"], aura = AuraNames.Frostburst, magicOnly = true },
-}
+local RELIC_HIT_AURAS: { { relicName: string, aura: string, chance: number?, weaponOnly: boolean?, magicOnly: boolean? } } =
+	{
+		{ relicName = RelicNames["Flaming Bo Staff"], aura = AuraNames.Enflamed, weaponOnly = true },
+		{ relicName = RelicNames["Korblox Spell Book"], aura = AuraNames.Frostburst, magicOnly = true },
+	}
 
 -- Status Chance: percentage points added to EVERY status the player
 -- already has at least one qualifying applier row for. Owning no appliers
@@ -849,7 +897,7 @@ function StatusConditionService:_startInstanceThreads(
 	model: Model,
 	humanoid: Humanoid,
 	status: string,
-	config,
+	config: StatusConfig,
 	record,
 	userId: number?
 )
@@ -980,7 +1028,7 @@ function StatusConditionService:ApplyStatus(
 	end
 
 	local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
-	local hrp = targetModel:FindFirstChild("HumanoidRootPart")
+	local hrp = targetModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not humanoid or not hrp or humanoid.Health <= 0 then
 		return
 	end
@@ -996,7 +1044,9 @@ function StatusConditionService:ApplyStatus(
 
 	local duration, dotMultiplier, slowFraction, weakenFraction = self:_resolveApplication(sourcePlayer, config)
 	local isStackable = STACKABLE[status] == true
-	local userId = sourcePlayer.UserId
+	-- `sourcePlayer` is a plain Player; the Abyss guard's `sourcePlayer and`
+	-- above leaves the checker thinking it may be nil.
+	local userId = (sourcePlayer :: Player).UserId
 	local stackLimit = config.stackLimit or 1
 
 	local entry = self._active[targetModel]
@@ -1131,10 +1181,10 @@ function StatusConditionService:_tryIceBreakerShatter(sourcePlayer: Player, targ
 		self:_expireInstance(targetModel, StatusConditions.Chill, nil, chillRecord)
 	end
 
-	local hrp = targetModel:FindFirstChild("HumanoidRootPart")
+	local hrp = targetModel:FindFirstChild("HumanoidRootPart") :: BasePart?
 
-	if hrp and RelicService.Client and RelicService.Client.OnShatterActivated then
-		RelicService.Client.OnShatterActivated:FireAll(hrp.Position, 1)
+	if hrp then
+		RelicNetwork.ShatterEffect.FireAll({ Position = hrp.Position, Scale = 1 })
 	end
 
 	local function dealShatter(targetHumanoid: Humanoid, model: Model)
@@ -1157,13 +1207,5 @@ function StatusConditionService:_tryIceBreakerShatter(sourcePlayer: Player, targ
 end
 
 --[ Initializers ]--
-
-function StatusConditionService:KnitStart()
-	DataService = Knit.GetService("DataService")
-	DamageService = Knit.GetService("DamageService")
-	DamageIndicatorService = Knit.GetService("DamageIndicatorService")
-	RelicService = Knit.GetService("RelicService")
-	AuraService = Knit.GetService("AuraService")
-end
 
 return StatusConditionService

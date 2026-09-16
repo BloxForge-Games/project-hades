@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: GearDropsRenderController.lua
      Description:
@@ -18,15 +19,15 @@ local CollectionService = game:GetService("CollectionService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local RelicRenderController =
+	require(ReplicatedStorage.Controllers.RelicController.SubControllers.RelicRenderController)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
 
--- Cross-controller reference, resolved in KnitStart. The mirror of the
+-- Cross-controller reference, resolved in Start. The mirror of the
 -- one RelicRenderController holds on THIS controller: hovering a gear
 -- drop dims every relic, rune and vending machine, exactly as hovering a
 -- relic dims every gear drop. Only one pickup is ever lit at a time.
-local RelicRenderController
 
 --[ Constants ]--
 
@@ -84,10 +85,10 @@ local BILLBOARD_TEXT_DIMMED_TRANSPARENCY = 0.8
 
 --[ Controller ]--
 
-local GearDropsRenderController = Knit.CreateController({
+local GearDropsRenderController = {
 	Name = "GearDropsRenderController",
-	Client = {},
-})
+	Dependencies = { RelicRenderController } :: { any },
+}
 
 --[ Private helpers ]--
 
@@ -97,7 +98,7 @@ local GearDropsRenderController = Knit.CreateController({
 -- the visualModel as the highlight adornee scopes the highlight to the
 -- visible mesh parts; adorning the outer Model would also touch the
 -- invisible carrier geometry, which can produce a small stray outline.
-function GearDropsRenderController:_findVisualModel(model: Model): Model?
+function GearDropsRenderController._findVisualModel(_self: typeof(GearDropsRenderController), model: Model): Model?
 	for _, child in model:GetChildren() do
 		if child:IsA("Model") then
 			return child
@@ -115,7 +116,11 @@ end
 --   * BaseParts already at Transparency 1 (carrier, hidden Handle on
 --     weapon drops, artist-authored invisible markers). Tweening those
 --     would expose geometry that's meant to stay invisible.
-function GearDropsRenderController:_tweenDropTransparency(model: Instance, targetTransparency: number)
+function GearDropsRenderController._tweenDropTransparency(
+	_self: typeof(GearDropsRenderController),
+	model: Instance,
+	targetTransparency: number
+)
 	for _, descendant in model:GetDescendants() do
 		-- The billboard's labels / strokes have their OWN dim value
 		-- (_tweenDropBillboardText); tweening them here too made the last
@@ -142,7 +147,11 @@ end
 -- Brightness instantly — feels more responsive than a fade on
 -- particle intensity, which the eye reads as "the dimming finished
 -- between frames" anyway.
-function GearDropsRenderController:_setDropParticleBrightness(model: Instance, dimmed: boolean)
+function GearDropsRenderController._setDropParticleBrightness(
+	_self: typeof(GearDropsRenderController),
+	model: Instance,
+	dimmed: boolean
+)
 	for _, descendant in model:GetDescendants() do
 		if not descendant:IsA("ParticleEmitter") then
 			continue
@@ -159,7 +168,11 @@ end
 
 -- Flips BillboardGui.AlwaysOnTop on every billboard inside a drop.
 -- Direct write (not tween) — boolean property.
-function GearDropsRenderController:_setDropBillboardAlwaysOnTop(model: Instance, alwaysOnTop: boolean)
+function GearDropsRenderController._setDropBillboardAlwaysOnTop(
+	_self: typeof(GearDropsRenderController),
+	model: Instance,
+	alwaysOnTop: boolean
+)
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("BillboardGui") then
 			descendant.AlwaysOnTop = alwaysOnTop
@@ -171,7 +184,11 @@ end
 -- strokes alike). The relic side dims NameText / RarityText by name;
 -- walking every TextLabel instead covers the owner line as well and
 -- needs no update when the prefab gains another row.
-function GearDropsRenderController:_tweenDropBillboardText(model: Instance, targetTransparency: number)
+function GearDropsRenderController._tweenDropBillboardText(
+	_self: typeof(GearDropsRenderController),
+	model: Instance,
+	targetTransparency: number
+)
 	for _, descendant in model:GetDescendants() do
 		if not descendant:IsA("BillboardGui") then
 			continue
@@ -198,7 +215,7 @@ end
 -- label back up for a moment over a drop that was already gone. Asking
 -- "what should be true right now" has no ordering to get wrong: whoever
 -- changes a flag calls this, and the last word always matches the state.
-function GearDropsRenderController:RefreshBillboardVisibility(model: Instance)
+function GearDropsRenderController.RefreshBillboardVisibility(self: typeof(GearDropsRenderController), model: Instance)
 	local hidden = model:GetAttribute(ATTR_PROMPT_SHOWN) == true
 		or model:GetAttribute(ATTR_PICKUP_PENDING) == true
 		or model:GetAttribute(ATTR_EXPIRED) == true
@@ -210,7 +227,11 @@ end
 -- compete with the ProximityPrompt UI). Direct write — instant on/off
 -- mirrors `model.PrimaryPart.RelicName.Enabled = false` in the relic
 -- path.
-function GearDropsRenderController:_setDropBillboardEnabled(model: Instance, enabled: boolean)
+function GearDropsRenderController._setDropBillboardEnabled(
+	_self: typeof(GearDropsRenderController),
+	model: Instance,
+	enabled: boolean
+)
 	for _, descendant in model:GetDescendants() do
 		if descendant:IsA("BillboardGui") then
 			descendant.Enabled = enabled
@@ -232,7 +253,11 @@ end
 --     owner-hovers can fire PromptShown anyway, so the dim only ever
 --     needs to touch the local player's own siblings.
 local localUserId = Players.LocalPlayer.UserId
-function GearDropsRenderController:_applyOthersDim(hoveredModel: Model, dim: boolean)
+function GearDropsRenderController._applyOthersDim(
+	self: typeof(GearDropsRenderController),
+	hoveredModel: Model,
+	dim: boolean
+)
 	local targetTransparency = dim and DIMMED_TRANSPARENCY or 0
 	local alwaysOnTop = not dim
 	for _, otherModel in CollectionService:GetTagged(TagList.GearDrop) do
@@ -262,7 +287,11 @@ end
 -- GearDrop component listens to that NumberValue's Changed signal and
 -- calls Model:ScaleTo, so this single tween drives the whole scale
 -- animation. If the NumberValue is missing (race during build), no-op.
-function GearDropsRenderController:_tweenHoveredScale(model: Model, targetScale: number)
+function GearDropsRenderController._tweenHoveredScale(
+	_self: typeof(GearDropsRenderController),
+	model: Model,
+	targetScale: number
+)
 	local carrier = model.PrimaryPart
 	if not carrier then
 		return
@@ -283,7 +312,7 @@ end
 -- minimal (highlight + scale only, see PromptShown below) so we don't
 -- mirror back into the relic side. Only RELIC hover triggers the
 -- cross-system dim; GEAR hover stays self-contained.
-function GearDropsRenderController:SetExternalHover(active: boolean)
+function GearDropsRenderController.SetExternalHover(self: typeof(GearDropsRenderController), active: boolean)
 	-- _applyOthersDim treats `hoveredModel == nil` as "no exclusion" —
 	-- the `if otherModel == hoveredModel then continue end` check is
 	-- never true when hoveredModel is nil, so every owned drop gets
@@ -295,7 +324,10 @@ end
 -- Returns the GearDrop-tagged ancestor Model of the prompt, or nil if
 -- the prompt isn't on a gear drop. Centralizes the filter so the
 -- two event handlers stay symmetric.
-function GearDropsRenderController:_resolveDropModelFromPrompt(prompt: ProximityPrompt): Model?
+function GearDropsRenderController._resolveDropModelFromPrompt(
+	_self: typeof(GearDropsRenderController),
+	prompt: ProximityPrompt
+): Model?
 	local model = prompt:FindFirstAncestorOfClass("Model")
 	if model and CollectionService:HasTag(model, TagList.GearDrop) then
 		return model
@@ -305,11 +337,10 @@ end
 
 --[ Lifecycle ]--
 
-function GearDropsRenderController:KnitStart()
+function GearDropsRenderController.Start(self: typeof(GearDropsRenderController))
 	-- Resolved here rather than at module scope: the two render
 	-- controllers reference each other, so a require-time lookup would be
 	-- circular.
-	RelicRenderController = Knit.GetController("RelicRenderController")
 
 	-- Single shared Highlight. Reparented between hovered drops; sits
 	-- detached (Parent = nil) when nothing is hovered.
@@ -347,7 +378,8 @@ function GearDropsRenderController:KnitStart()
 		end
 
 		-- Scale up the hovered drop.
-		local idleScale = getGearIdleScale(model:GetAttribute(ATTR_NAME), model:GetAttribute(ATTR_TYPE))
+		local idleScale =
+			getGearIdleScale(model:GetAttribute(ATTR_NAME) :: string?, model:GetAttribute(ATTR_TYPE) :: string?)
 		local hoverScale = idleScale * HOVER_SCALE_MULTIPLIER
 		self:_tweenHoveredScale(model, hoverScale)
 
@@ -378,7 +410,8 @@ function GearDropsRenderController:KnitStart()
 		self._highlight.Parent = nil
 
 		-- Scale back to idle.
-		local idleScale = getGearIdleScale(model:GetAttribute(ATTR_NAME), model:GetAttribute(ATTR_TYPE))
+		local idleScale =
+			getGearIdleScale(model:GetAttribute(ATTR_NAME) :: string?, model:GetAttribute(ATTR_TYPE) :: string?)
 		self:_tweenHoveredScale(model, idleScale)
 
 		-- Label back, unless something else still says otherwise — a
@@ -391,7 +424,5 @@ function GearDropsRenderController:KnitStart()
 		end
 	end)
 end
-
-function GearDropsRenderController:KnitInit() end
 
 return GearDropsRenderController

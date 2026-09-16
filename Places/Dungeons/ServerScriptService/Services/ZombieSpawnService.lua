@@ -1,13 +1,26 @@
+--!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
+
+-- DungeonService requires this module at load, so this side reaches it
+-- lazily: required on first use, once both modules exist.
+local dungeonServiceLazy: any = nil
+local function getDungeonService(): any
+	if dungeonServiceLazy == nil then
+		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
+	end
+	return dungeonServiceLazy
+end
 
 local SPAWN_DELAY = 0.5
 
@@ -83,39 +96,41 @@ local MAX_MINIBOSS_WAVE_ZOMBIES = 8
 local MINIBOSS_SPAWN_POINT_NAME = "MinibossSpawnPoint"
 local MINIBOSS_WAVE_INTERVAL = 45
 
-local DungeonService
-
-local ZombieSpawnService = Knit.CreateService({
+local ZombieSpawnService = {
 	Name = "ZombieSpawnService",
+
 	_zombiePlan = LootPlan.new("single"), -- rebuilt per dungeon (BuildZombiePlanForDungeon)
 	_zombiePlanDungeonId = nil :: string?,
 	_zombiesRegistry = {},
 	_zombiesByRoom = {}, -- [roomId]: { Model, ... } — populated by the room queue
 	_roomQueues = {}, -- [roomId]: { remaining: number, concurrentCap: number } — see SpawnZombiesInRoom
 	_activeMinibossWaves = {}, -- [roomId]: thread — running wave spawner per miniboss room
-	_minibossWavesPaused = {}, -- [roomId]: true — wave spawner frozen (boss phase cutscene)
+	_minibossWavesPaused = {}, -- [roomId]: true — wave spawner frozen (boss phase cutscene),
+}
 
-	Client = {
-		ZombieRegistry = Knit.CreateProperty({}),
-	},
-})
+-- The live mob models, replicated for the build placement system's
+-- collision checks (was a replicated property).
+ZombieSpawnService._registryProperty = RemoteProperty.Server({
+	changed = Combat.ZombieRegistryChanged,
+	get = Combat.GetZombieRegistry,
+}, {})
 
 ZombieSpawnService.OnZombieSpawn = Signal.new()
 ZombieSpawnService.OnZombieDespawn = Signal.new()
 
-function ZombieSpawnService:GetZombieRegistry(): { Model }
+function ZombieSpawnService.GetZombieRegistry(self: typeof(ZombieSpawnService)): { Model }
 	return self._zombiesRegistry
 end
 
-function ZombieSpawnService:IncrementZombieCount(zombie: Model)
+function ZombieSpawnService.IncrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
 	self.OnZombieSpawn:Fire(zombie)
 
 	table.insert(self._zombiesRegistry, zombie)
 
-	self.Client.ZombieRegistry:Set(self._zombiesRegistry)
+	self:_publishRegistry()
 end
 
-function ZombieSpawnService:DecrementZombieCount(zombie: Model)
+function ZombieSpawnService.DecrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
 	-- Update all registries BEFORE firing the signal so every listener observes
 	-- a fully-consistent post-death state (e.g. DungeonService's segment-clear
 	-- check would otherwise see the dying zombie still in _zombiesByRoom and
@@ -136,7 +151,7 @@ function ZombieSpawnService:DecrementZombieCount(zombie: Model)
 		table.remove(self._zombiesRegistry, index)
 	end
 
-	self.Client.ZombieRegistry:Set(self._zombiesRegistry)
+	self:_publishRegistry()
 
 	self.OnZombieDespawn:Fire(zombie)
 end
@@ -147,7 +162,7 @@ end
 -- own folder of mob templates. Falls back to the flat Zombies folder (with
 -- a warn) so a missing folder degrades to "same mobs everywhere" instead
 -- of a dead dungeon.
-function ZombieSpawnService:_zombieFolder(dungeonId: string?): Instance
+function ZombieSpawnService._zombieFolder(_self: typeof(ZombieSpawnService), dungeonId: string?): Instance
 	local root = ReplicatedStorage.GameAssets.Zombies
 	if dungeonId then
 		local folder = root:FindFirstChild(dungeonId)
@@ -159,17 +174,17 @@ function ZombieSpawnService:_zombieFolder(dungeonId: string?): Instance
 	return root
 end
 
-function ZombieSpawnService:_activeDungeonId(): string?
-	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+function ZombieSpawnService._activeDungeonId(_self: typeof(ZombieSpawnService)): string?
+	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
 	return dungeon and dungeon.id or nil
 end
 
 -- Template for `zombieName` in the ACTIVE dungeon's pool (nil + warn if
 -- absent -- a name that isn't in this dungeon's folder is a data error, not
 -- a reason to spawn a mob from another dungeon).
-function ZombieSpawnService:_zombieTemplate(zombieName: string): Model?
+function ZombieSpawnService._zombieTemplate(self: typeof(ZombieSpawnService), zombieName: string): Model?
 	local folder = self:_zombieFolder(self:_activeDungeonId())
-	local template = folder:FindFirstChild(zombieName)
+	local template = folder:FindFirstChild(zombieName) :: Model?
 	if not template then
 		warn(("[ZombieSpawnService] No zombie template '%s' under %s"):format(zombieName, folder:GetFullName()))
 		return nil
@@ -179,7 +194,7 @@ end
 
 -- Queue tuning for the active dungeon (DungeonData[id].zombieQueue), with
 -- the module defaults filling any gap.
-function ZombieSpawnService:_queueTuning()
+function ZombieSpawnService._queueTuning(self: typeof(ZombieSpawnService))
 	local dungeonId = self:_activeDungeonId()
 	local config = dungeonId and DungeonData[dungeonId]
 	local tuning = config and config.zombieQueue or {}
@@ -199,7 +214,7 @@ end
 -- must ALSO have a template in the dungeon's GameAssets.Zombies folder --
 -- checked here so a typo warns at generation, not on the first spawn.
 -- Called by DungeonService on every generation.
-function ZombieSpawnService:BuildZombiePlanForDungeon(dungeonId: string)
+function ZombieSpawnService.BuildZombiePlanForDungeon(self: typeof(ZombieSpawnService), dungeonId: string)
 	local plan = LootPlan.new("single")
 	local added = 0
 	local config = DungeonData[dungeonId]
@@ -247,7 +262,7 @@ end
 -- _roomQueues[1] from dungeon 1 would make dungeon 2's room 1 read as
 -- "already activated" and never spawn. Queue threads still running notice
 -- their room model is gone and drain themselves.
-function ZombieSpawnService:ResetForNewDungeon()
+function ZombieSpawnService.ResetForNewDungeon(self: typeof(ZombieSpawnService))
 	for _, waveThread in pairs(table.clone(self._activeMinibossWaves)) do
 		if typeof(waveThread) == "thread" then
 			pcall(task.cancel, waveThread)
@@ -265,12 +280,12 @@ function ZombieSpawnService:ResetForNewDungeon()
 		zombie:Destroy()
 	end
 	table.clear(self._zombiesRegistry)
-	self.Client.ZombieRegistry:Set(self._zombiesRegistry)
+	self:_publishRegistry()
 end
 
 -- Collect every Attachment under the room's "SpawnPoints" folder. Each
 -- attachment is a deterministic spawn location for one zombie.
-function ZombieSpawnService:_GetRoomSpawnPoints(roomModel: Model): { Attachment }
+function ZombieSpawnService._getRoomSpawnPoints(_self: typeof(ZombieSpawnService), roomModel: Model): { Attachment }
 	local folder = roomModel:FindFirstChild(SPAWN_POINTS_FOLDER_NAME)
 	if not folder then
 		return {}
@@ -317,12 +332,12 @@ end
 -- segmentId), each with its spawn points + floors cached, ordered by
 -- chunkIndex. Empty for a first chunk, for rooms with no segment stamp
 -- (hand-placed test rooms), or when no dungeon is active.
-function ZombieSpawnService:_GetPreviousChunks(room): { any }
+function ZombieSpawnService._getPreviousChunks(self: typeof(ZombieSpawnService), room): { any }
 	local previous = {}
 	if room.segmentId == nil or room.chunkIndex == nil then
 		return previous
 	end
-	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
 	if not dungeon then
 		return previous
 	end
@@ -334,7 +349,7 @@ function ZombieSpawnService:_GetPreviousChunks(room): { any }
 			and candidate.segmentId == room.segmentId
 			and (candidate.chunkIndex or 0) < room.chunkIndex
 		then
-			local spawnPoints = self:_GetRoomSpawnPoints(candidate.model)
+			local spawnPoints = self:_getRoomSpawnPoints(candidate.model)
 			if #spawnPoints > 0 then
 				table.insert(previous, {
 					room = candidate,
@@ -351,7 +366,7 @@ function ZombieSpawnService:_GetPreviousChunks(room): { any }
 end
 
 -- Previous chunks that at least one ALIVE player is physically standing in.
-function ZombieSpawnService:_GetOccupiedChunks(previousChunks: { any }): { any }
+function ZombieSpawnService._getOccupiedChunks(_self: typeof(ZombieSpawnService), previousChunks: { any }): { any }
 	local occupied = {}
 	if #previousChunks == 0 then
 		return occupied
@@ -384,7 +399,7 @@ end
 -- random reuse — attachments host any number of spawns over the room's
 -- lifetime). Tagged with the room's id and registered under
 -- _zombiesByRoom[room.id] so :GetZombiesInRoom returns them in O(1).
-function ZombieSpawnService:_SpawnQueuedZombie(room, spawnPoints: { Attachment })
+function ZombieSpawnService._spawnQueuedZombie(self: typeof(ZombieSpawnService), room, spawnPoints: { Attachment })
 	local attachment = spawnPoints[math.random(#spawnPoints)]
 
 	local zombieName = self._zombiePlan:GetRandomLoot(1)
@@ -401,7 +416,7 @@ function ZombieSpawnService:_SpawnQueuedZombie(room, spawnPoints: { Attachment }
 	end
 
 	task.delay(0.5, function()
-		local particle = attachment:FindFirstChild("SpawnParticle")
+		local particle = attachment:FindFirstChild("SpawnParticle") :: ParticleEmitter?
 		if particle then
 			particle:Emit(35)
 		end
@@ -423,7 +438,7 @@ end
 -- players leaving the room by design — an abandoned queue keeps spawning
 -- and its zombies hunt the party (skipping ahead is punished; the
 -- segment gate stays locked either way).
-function ZombieSpawnService:SpawnZombiesInRoom(room)
+function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService), room)
 	if not room or not room.model then
 		warn("[ZombieSpawnService] SpawnZombiesInRoom called with nil room or no model")
 		return
@@ -433,7 +448,7 @@ function ZombieSpawnService:SpawnZombiesInRoom(room)
 		return -- already activated
 	end
 
-	local spawnPoints = self:_GetRoomSpawnPoints(room.model)
+	local spawnPoints = self:_getRoomSpawnPoints(room.model)
 	if #spawnPoints == 0 then
 		warn(
 			("[ZombieSpawnService] Room %s has no Attachments under '%s' folder"):format(
@@ -466,7 +481,7 @@ function ZombieSpawnService:SpawnZombiesInRoom(room)
 	-- Anti-kite placement state (see the FLOOR_NAME constants block).
 	-- previousChunks is fixed for the room's lifetime; which of them are
 	-- OCCUPIED is re-read per spawn.
-	local previousChunks = self:_GetPreviousChunks(room)
+	local previousChunks = self:_getPreviousChunks(room)
 	local firstWaveDone = false
 	local roundRobinIndex = 1
 
@@ -501,7 +516,7 @@ function ZombieSpawnService:SpawnZombiesInRoom(room)
 				local placementPoints = spawnPoints
 				if firstWaveDone then
 					local candidates = { spawnPoints }
-					for _, chunk in self:_GetOccupiedChunks(previousChunks) do
+					for _, chunk in self:_getOccupiedChunks(previousChunks) do
 						table.insert(candidates, chunk.spawnPoints)
 					end
 					if roundRobinIndex > #candidates then
@@ -511,7 +526,7 @@ function ZombieSpawnService:SpawnZombiesInRoom(room)
 					roundRobinIndex += 1
 				end
 
-				self:_SpawnQueuedZombie(room, placementPoints)
+				self:_spawnQueuedZombie(room, placementPoints)
 
 				-- The wave is 'down' the moment the chunk first reaches its cap
 				-- (or the queue runs dry before it can).
@@ -536,13 +551,18 @@ end
 -- combat queue, and a re-run just replaces the queue — and it does no
 -- anti-kite placement: the room is sealed, everyone is inside. Returns
 -- the total it will spawn, or nil when the room has no SpawnPoints.
-function ZombieSpawnService:StartChallengeQueue(room, waves: number, concurrentCap: number): number?
+function ZombieSpawnService.StartChallengeQueue(
+	self: typeof(ZombieSpawnService),
+	room,
+	waves: number,
+	concurrentCap: number
+): number?
 	if not room or not room.model then
 		warn("[ZombieSpawnService] StartChallengeQueue called with nil room or no model")
 		return nil
 	end
 
-	local spawnPoints = self:_GetRoomSpawnPoints(room.model)
+	local spawnPoints = self:_getRoomSpawnPoints(room.model)
 	if #spawnPoints == 0 then
 		warn(
 			("[ZombieSpawnService] Room %s has no Attachments under '%s' folder"):format(
@@ -574,7 +594,7 @@ function ZombieSpawnService:StartChallengeQueue(room, waves: number, concurrentC
 				and #workspace.IgnoreInstances.Zombies:GetChildren() < MAX_ACTIVE_ZOMBIES
 			then
 				queue.remaining -= 1
-				self:_SpawnQueuedZombie(room, spawnPoints)
+				self:_spawnQueuedZombie(room, spawnPoints)
 				task.wait(SPAWN_DELAY)
 			else
 				task.wait(QUEUE_POLL_SECONDS)
@@ -589,7 +609,7 @@ end
 -- is fully CLEARED when this is true AND :GetZombiesInRoom is empty —
 -- DungeonService:_areSegmentZombiesCleared checks both, so the exit gate
 -- can never open while a queue still holds unspawned zombies.
-function ZombieSpawnService:IsRoomQueueExhausted(room): boolean
+function ZombieSpawnService.IsRoomQueueExhausted(self: typeof(ZombieSpawnService), room): boolean
 	if not room then
 		return false
 	end
@@ -599,7 +619,7 @@ end
 
 -- Remaining unspawned zombies in the room's queue (0 if exhausted or
 -- never activated). Exposed for future UI ("X zombies remaining").
-function ZombieSpawnService:GetRoomQueueRemaining(room): number
+function ZombieSpawnService.GetRoomQueueRemaining(self: typeof(ZombieSpawnService), room): number
 	if not room then
 		return 0
 	end
@@ -609,7 +629,7 @@ end
 
 -- Returns the list of zombies currently alive in the given room. Updates
 -- automatically as zombies die (cleaned up on OnZombieDespawn).
-function ZombieSpawnService:GetZombiesInRoom(room): { Model }
+function ZombieSpawnService.GetZombiesInRoom(self: typeof(ZombieSpawnService), room): { Model }
 	if not room then
 		return {}
 	end
@@ -619,7 +639,7 @@ end
 -- Returns true if SpawnZombiesInRoom has activated this room's queue at
 -- least once (regardless of how many zombies are currently alive). Used
 -- by segment clear-checks to tell "never spawned" apart from "all dead".
-function ZombieSpawnService:WasRoomSpawned(room): boolean
+function ZombieSpawnService.WasRoomSpawned(self: typeof(ZombieSpawnService), room): boolean
 	if not room then
 		return false
 	end
@@ -629,7 +649,7 @@ end
 --[ Miniboss fight ]--
 
 -- Finds the MinibossSpawnPoint attachment in the room's SpawnPoints folder.
-function ZombieSpawnService:_GetMinibossSpawnPoint(roomModel: Model): Attachment?
+function ZombieSpawnService._getMinibossSpawnPoint(_self: typeof(ZombieSpawnService), roomModel: Model): Attachment?
 	local folder = roomModel:FindFirstChild(SPAWN_POINTS_FOLDER_NAME)
 	if not folder then
 		return nil
@@ -643,7 +663,10 @@ end
 
 -- Returns every Attachment under SpawnPoints EXCEPT MinibossSpawnPoint. Used
 -- for the regular wave spawning during a miniboss fight.
-function ZombieSpawnService:_GetRoomRegularSpawnPoints(roomModel: Model): { Attachment }
+function ZombieSpawnService._getRoomRegularSpawnPoints(
+	_self: typeof(ZombieSpawnService),
+	roomModel: Model
+): { Attachment }
 	local folder = roomModel:FindFirstChild(SPAWN_POINTS_FOLDER_NAME)
 	if not folder then
 		return {}
@@ -660,13 +683,18 @@ end
 -- Spawns the named zombie at the room's MinibossSpawnPoint, tags it with
 -- IsMiniboss for downstream detection, and registers it in _zombiesByRoom.
 -- Returns the miniboss model, or nil if the room is missing the attachment.
-function ZombieSpawnService:SpawnMinibossInRoom(room, minibossName: string, isBoss: boolean?): Model?
+function ZombieSpawnService.SpawnMinibossInRoom(
+	self: typeof(ZombieSpawnService),
+	room,
+	minibossName: string,
+	isBoss: boolean?
+): Model?
 	if not room or not room.model then
 		warn("[ZombieSpawnService] SpawnMinibossInRoom: nil room or no model")
 		return nil
 	end
 
-	local attachment = self:_GetMinibossSpawnPoint(room.model)
+	local attachment = self:_getMinibossSpawnPoint(room.model)
 
 	if not attachment then
 		warn(
@@ -696,7 +724,7 @@ function ZombieSpawnService:SpawnMinibossInRoom(room, minibossName: string, isBo
 		miniboss:SetAttribute(Attributes.IsMiniBoss, true)
 	end
 
-	local hrp = miniboss:FindFirstChild("HumanoidRootPart")
+	local hrp = miniboss:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if hrp then
 		hrp.CFrame = CFrame.new(attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0))
 	end
@@ -713,7 +741,7 @@ end
 -- MINIBOSS_WAVE_INTERVAL seconds, spawns one zombie at each regular
 -- SpawnPoint attachment (skipping MinibossSpawnPoint). Stops when
 -- StopMinibossWaves is called or the room model is destroyed.
-function ZombieSpawnService:StartMinibossWaves(room)
+function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService), room)
 	if not room or not room.model then
 		return
 	end
@@ -742,7 +770,7 @@ function ZombieSpawnService:StartMinibossWaves(room)
 				continue
 			end
 
-			local points = self:_GetRoomRegularSpawnPoints(room.model)
+			local points = self:_getRoomRegularSpawnPoints(room.model)
 
 			for _, attachment in points do
 				if #workspace.IgnoreInstances.Zombies:GetChildren() >= MAX_ACTIVE_ZOMBIES then
@@ -769,7 +797,7 @@ function ZombieSpawnService:StartMinibossWaves(room)
 
 				task.delay(0.5, function()
 					if attachment.Parent then
-						local particle = attachment:FindFirstChild("SpawnParticle")
+						local particle = attachment:FindFirstChild("SpawnParticle") :: ParticleEmitter?
 						if particle then
 							particle:Emit(35)
 						end
@@ -786,7 +814,7 @@ function ZombieSpawnService:StartMinibossWaves(room)
 	end)
 end
 
-function ZombieSpawnService:StopMinibossWaves(room)
+function ZombieSpawnService.StopMinibossWaves(self: typeof(ZombieSpawnService), room)
 	if not room then
 		return
 	end
@@ -802,13 +830,13 @@ end
 -- Used to halt add spawns during a boss phase-change cutscene: the spawner
 -- exits any in-progress wave early and skips new waves while paused, then
 -- resumes cleanly afterward.
-function ZombieSpawnService:PauseMinibossWaves(room)
+function ZombieSpawnService.PauseMinibossWaves(self: typeof(ZombieSpawnService), room)
 	if room then
 		self._minibossWavesPaused[room.id] = true
 	end
 end
 
-function ZombieSpawnService:ResumeMinibossWaves(room)
+function ZombieSpawnService.ResumeMinibossWaves(self: typeof(ZombieSpawnService), room)
 	if room then
 		self._minibossWavesPaused[room.id] = nil
 	end
@@ -819,7 +847,7 @@ end
 -- clean up wave minions when the miniboss is defeated, and to clear adds on a
 -- boss phase change. Pass `exceptModel` to spare one mob (the boss itself
 -- during a phase cutscene).
-function ZombieSpawnService:DespawnZombiesInRoom(room, exceptModel: Model?)
+function ZombieSpawnService.DespawnZombiesInRoom(self: typeof(ZombieSpawnService), room, exceptModel: Model?)
 	if not room then
 		return
 	end
@@ -849,14 +877,22 @@ function ZombieSpawnService:DespawnZombiesInRoom(room, exceptModel: Model?)
 	end
 end
 
-function ZombieSpawnService:KnitInit()
+-- Pushes the registry. LIVE models only: a destroyed mob in the payload
+-- would fail to serialise and drop the whole update on every client.
+function ZombieSpawnService._publishRegistry(self: typeof(ZombieSpawnService))
+	local live = {}
+	for _, zombie in self._zombiesRegistry do
+		if zombie.Parent then
+			table.insert(live, zombie)
+		end
+	end
+	self._registryProperty:Set(live)
+end
+
+function ZombieSpawnService.Init(_self: typeof(ZombieSpawnService))
 	-- The spawn plan is built PER DUNGEON from that dungeon's zombie folder
 	-- (BuildZombiePlanForDungeon, called by DungeonService on generation).
 	-- Nothing static here.
-end
-
-function ZombieSpawnService:KnitStart()
-	DungeonService = Knit.GetService("DungeonService")
 end
 
 return ZombieSpawnService

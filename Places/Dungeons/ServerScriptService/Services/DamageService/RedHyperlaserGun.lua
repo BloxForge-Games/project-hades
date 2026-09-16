@@ -1,3 +1,4 @@
+--!strict
 -- Red Hyperlaser Gun (Rare): deal more damage the LESS health you have
 -- -- scaling linearly from +0% at full HP to +35% when nearly dead, per
 -- the card. HIGHER ceiling than Hyperlaser Gun's +25% (the risk axis
@@ -9,15 +10,10 @@
 -- += this(...)` sum picks it up identically to Linked Sword + friends.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-
-local RelicService
-
-Knit.OnStart():andThen(function()
-	RelicService = Knit.GetService("RelicService")
-end)
+local RelicService = require(ServerScriptService.Services.RelicService)
 
 return function(player: Player, damage: number, _isMagic: boolean)
 	-- No damage-type gate — the bonus applies to weapon AND magic; the

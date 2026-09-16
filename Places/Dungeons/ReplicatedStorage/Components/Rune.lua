@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Client/Components/Rune.lua
 	Description:
@@ -27,9 +28,11 @@ local TweenService = game:GetService("TweenService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local CommAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.CommAdder)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
+local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
+local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
+local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RuneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneData)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
@@ -41,15 +44,6 @@ local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.
 
 local Y_POS_OFFSET = 3
 local ROTATION_SPEED = 20
-local ScreenGradientInterfaceController
-local ScreenSizeController
-
-Knit.OnStart()
-	:andThen(function()
-		ScreenGradientInterfaceController = Knit.GetController("ScreenGradientInterfaceController")
-		ScreenSizeController = Knit.GetController("ScreenSizeController")
-	end)
-	:catch(warn)
 
 -- The prompt card's UserText line: "(name)" of the player who DROPPED this
 -- item from their tray (DroppedByName, stamped by DropService /
@@ -64,12 +58,14 @@ local function ownerUserText(instance: Instance): string
 	return if typeof(name) == "string" and name ~= "" then ("(%s)"):format(name) else ""
 end
 
+local acceptedRouter = InstanceRouter.Client(RelicNetwork.RuneCollectAccepted)
+
 local Rune = Component.new({
 	Tag = TagList.Rune,
-	Extensions = { CommAdder, JanitorAdder },
+	Extensions = { JanitorAdder } :: { any },
 })
 
-function Rune:_HeartbeatUpdate(deltaTime: number)
+function Rune:_onHeartbeat(deltaTime: number)
 	-- Bob + rotation folded into ONE PivotTo, same as Relic — moves the
 	-- whole model (Handle + PrimaryPart) together.
 	local bobY = self._amplitude * math.sin((tick() * 2) * (math.pi / self._durationPerCycle))
@@ -82,9 +78,10 @@ end
 function Rune:Construct()
 	self._amplitude = Random.new():NextNumber(0.01, 0.015)
 	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
-	self._primaryPart = self.Instance.Handle
-	self._onRuneCollected = self._comm:GetSignal("OnRuneCollected")
-	self._onRuneCollectAccepted = self._comm:GetSignal("OnRuneCollectAccepted")
+	-- The Handle can stream in after the tagged Model does; wait for it.
+	local handle = self.Instance:WaitForChild("Handle", 10)
+	assert(handle, "[Rune] Handle never replicated for " .. self.Instance:GetFullName())
+	self._primaryPart = handle
 	self._canPickup = false
 	self._consumed = false
 	self._originPosition = self.Instance:GetPivot().Position
@@ -106,8 +103,8 @@ function Rune:Construct()
 	self._numberValue.Name = "RelicScale"
 	self._numberValue.Parent = self.Instance
 	self._relicParticles = ReplicatedStorage.GameAssets.Particles.RelicParticles:Clone()
-	self._relicParticles.Parent = self.Instance.Handle
-	self._collectedAttachment = self.Instance.Handle:FindFirstChild("Collected")
+	self._relicParticles.Parent = handle
+	self._collectedAttachment = handle:WaitForChild("Collected", 10)
 end
 
 function Rune:Start()
@@ -221,7 +218,7 @@ function Rune:Start()
 			self._relicParticles:Emit(15)
 
 			self._janitor:Add(RunService.Heartbeat:Connect(function(deltaTime: number)
-				self:_HeartbeatUpdate(deltaTime)
+				self:_onHeartbeat(deltaTime)
 			end))
 
 			-- The ROLLED TIER's stat is the whole description — the tier
@@ -239,7 +236,7 @@ function Rune:Start()
 			proximityPrompt.Enabled = false
 
 			local promptStyle = "RelicSmall"
-			local descriptionLength = string.len(string.gsub(runeDescription, "<[^>]+>", ""))
+			local descriptionLength = string.len((string.gsub(runeDescription, "<[^>]+>", "")))
 
 			if descriptionLength > 34 and descriptionLength <= 62 then
 				promptStyle = "RelicMedium"
@@ -263,11 +260,11 @@ function Rune:Start()
 				if player.UserId ~= self.Instance:GetAttribute(Attributes.OwnerId) then
 					return
 				end
-				self._onRuneCollected:Fire(self.Instance.Name)
+				RelicNetwork.RuneCollectRequested.Fire(self.Instance)
 			end)
 
 			-- ACCEPTED by the server: play the pickup across the whole pull.
-			self._janitor:Add(self._onRuneCollectAccepted:Connect(function()
+			self._janitor:Add(acceptedRouter:Bind(self.Instance, function()
 				if self._consumed then
 					return
 				end

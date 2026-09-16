@@ -1,10 +1,11 @@
+--!strict
 --[[
      Module: LifeController.lua
      Description:
      Client-side glue for LifeService. Subscribes to the three server
      visual-callback signals and re-emits them through local Signal objects
      so client systems (VFX, audio, screen flashes, etc.) can hook in
-     without needing to know about Knit / RemoteSignals.
+     without needing to know about the network layer.
 
      For now (Chunk A) the local handlers only print — Chunks C/D wire
      real visuals + spectate behavior. The signal surface is forwards-
@@ -23,7 +24,21 @@ local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local CharacterHighlightController = require(ReplicatedStorage.Controllers.CharacterHighlightController)
+local ScreenFadeInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.ScreenFadeInterfaceController)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
+local GameOverGradientInterfaceController = require(ReplicatedStorage.Interfaces.GameOverGradientInterfaceController)
+local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
+local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local LivesInterfaceController = require(ReplicatedStorage.Interfaces.LivesInterfaceController)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
+local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -39,7 +54,6 @@ local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data
 -- onDeathIndicator highlight was never destroyed, so from the first down
 -- on it owned the character's one rendering slot and the through-wall
 -- outline never drew again for that life.
-local CharacterHighlightController
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 
 -- Hide source held on the HUD scope for the death → revive window. Named so
@@ -47,25 +61,40 @@ local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.I
 -- or a manual CloseInterface is still holding the same scope.
 local HUD_DEATH_SOURCE = "Death"
 
-local ScreenGradientInterfaceController
-local GameOverGradientInterfaceController
-local CameraShakeController
-local LifeService
-local ScreenFadeInterfaceController
-local CinematicInterfaceController
-local CutsceneController
-local SpectateService
-
 -- HUD interface controllers we drive via their SetVisible signals during
 -- the death + revive lifecycle. We never reach into PlayerGui to flip
 -- ScreenGui.Enabled on these directly — each interface owns its own
 -- visibility state and exposes a Signal as the public toggle.
-local InterfaceManagerController
-local LivesInterfaceController
-local MobileActionButtonInterface
+local MobileActionButtonInterface: any = nil
 
-local LifeController = Knit.CreateController({
+local LifeController = {
 	Name = "LifeController",
+	Dependencies = {
+		CharacterHighlightController,
+		ScreenFadeInterfaceController,
+		CinematicInterfaceController,
+		ScreenGradientInterfaceController,
+		GameOverGradientInterfaceController,
+		CameraShakeController,
+		CutsceneController,
+		InterfaceManagerController,
+		LivesInterfaceController,
+	} :: { any },
+}
+
+-- Replicated lives snapshot, { [userId] = { current, max } } (was
+-- LifeService.LivesData). Owned here so every consumer shares one
+-- subscription; LivesInterfaceController observes it.
+LifeController.LivesData = RemoteProperty.Client({
+	changed = PlayerNetwork.LivesDataChanged,
+	get = PlayerNetwork.GetLivesData,
+})
+
+-- Replicated death snapshot, keyed by userId (was LifeService.DeathState).
+-- TombstoneController observes it too.
+LifeController.DeathState = RemoteProperty.Client({
+	changed = PlayerNetwork.DeathStateChanged,
+	get = PlayerNetwork.GetDeathState,
 })
 
 -- Death cinematic timings — sourced from Shared/Data/DeathCinematicData so
@@ -195,8 +224,15 @@ local function _fadeRootAndCache(
 	end
 
 	for _, part in root:GetDescendants() do
-		if part:IsA("BasePart") or part:IsA("Decal") or part:IsA("Texture") then
-			table.insert(cachedTransparency, { part = part, transparency = part.Transparency })
+		-- Texture is a Decal subclass, so the Decal branch covers both. Two
+		-- identical branches on purpose: the old solver cannot write a
+		-- property through a union of Instance classes.
+		-- selene: allow(if_same_then_else)
+		if part:IsA("BasePart") then
+			table.insert(cachedTransparency, { part = part :: Instance, transparency = part.Transparency })
+			part.Transparency = 1
+		elseif part:IsA("Decal") then
+			table.insert(cachedTransparency, { part = part :: Instance, transparency = part.Transparency })
 			part.Transparency = 1
 		elseif part:IsA("BillboardGui") then
 			table.insert(screenGuis, { part = part, enabled = part.Enabled })
@@ -232,7 +268,7 @@ LifeController.OnSpectateStateChanged = Signal.new() -- (isSpectating: boolean)
 -- Cached PlayerModule:GetControls() handle. Same lazy-load pattern as
 -- EncounterIntroController so we don't take a require dependency on
 -- PlayerScripts at controller boot.
-LifeController._playerControls = nil
+LifeController._playerControls = nil :: any
 
 -- True while we currently hold the controls lock. Tracked so we don't
 -- redundantly Disable/Enable across rapid DeathState toggles, and so we
@@ -280,7 +316,7 @@ end
 -- pattern exactly so the two locks are interchangeable.
 -- The red impact frame. Snaps IN on one frame — a hit does not ease in
 -- — then eases OUT over the decay. Local-only: Lighting is per client.
-function LifeController:_playDeathImpact()
+function LifeController._playDeathImpact(self: typeof(LifeController))
 	self._deathImpactToken += 1
 	local token = self._deathImpactToken
 	local colorCorrection = Lighting.ColorCorrection
@@ -329,7 +365,7 @@ function LifeController:_playDeathImpact()
 	end)
 end
 
-function LifeController:_getPlayerControls()
+function LifeController._getPlayerControls(self: typeof(LifeController))
 	if self._playerControls then
 		return self._playerControls
 	end
@@ -354,7 +390,7 @@ end
 -- PlayerStateController checking Attributes.Death — both are set by the
 -- server-replicated attribute, so this controller doesn't need to touch them.
 -- Idempotent.
-function LifeController:_lockControls()
+function LifeController._lockControls(self: typeof(LifeController))
 	if self._controlsLocked then
 		warn("[LifeController] Controls already locked; skipping redundant lock")
 		return
@@ -384,7 +420,7 @@ end
 -- Reverses _lockControls. Only Enables if we previously Disabled — won't
 -- step on a lock held by another controller (e.g. EncounterIntroController
 -- during an encounter cinematic that happens to overlap a revive).
-function LifeController:_unlockControls()
+function LifeController._unlockControls(self: typeof(LifeController))
 	if not self._controlsLocked then
 		return
 	end
@@ -413,7 +449,7 @@ end
 
 -- Updates the local spectating state + fires OnSpectateStateChanged.
 -- No-op when value matches current (debounces duplicate sets).
-function LifeController:_setSpectatingState(value: boolean)
+function LifeController._setSpectatingState(self: typeof(LifeController), value: boolean)
 	if self._isLocalSpectating == value then
 		return
 	end
@@ -435,7 +471,7 @@ end
 
 -- Synchronous getter — used by UIs that mount AFTER the signal has
 -- already fired and need to seed their initial state.
-function LifeController:IsLocalSpectating(): boolean
+function LifeController.IsLocalSpectating(self: typeof(LifeController)): boolean
 	return self._isLocalSpectating
 end
 
@@ -445,10 +481,10 @@ end
 -- "go hidden" / "come back". Add a new HUD-while-dead interface here AND
 -- give that interface its own SetVisible signal; no PlayerGui scanning.
 --
--- Each ref is nil-guarded because KnitStart wires them in order; if the
+-- Each ref is nil-guarded because Start wires them in order; if the
 -- controller resolution ever races (or a controller is missing from the
 -- build), we want a warn-less no-op rather than a hard crash.
-function LifeController:_setHudVisible(visible: boolean)
+function LifeController._setHudVisible(_self: typeof(LifeController), visible: boolean)
 	-- PlayerVitals and ToolBar are registered in InterfaceManagerController's
 	-- HUD scope, so death goes through it as a named hide source rather than
 	-- firing their SetVisible signals directly. That keeps the manager the
@@ -480,30 +516,16 @@ end
 
 --[ Lifecycle ]--
 
-function LifeController:KnitInit()
-	LifeService = Knit.GetService("LifeService")
-end
+function LifeController.Start(self: typeof(LifeController))
+	MobileActionButtonInterface = Blitz.OptionalController("MobileActionButtonInterface")
 
-function LifeController:KnitStart()
-	CharacterHighlightController = Knit.GetController("CharacterHighlightController")
-	ScreenFadeInterfaceController = Knit.GetController("ScreenFadeInterfaceController")
-	CinematicInterfaceController = Knit.GetController("CinematicInterfaceController")
-	ScreenGradientInterfaceController = Knit.GetController("ScreenGradientInterfaceController")
-	GameOverGradientInterfaceController = Knit.GetController("GameOverGradientInterfaceController")
-	CameraShakeController = Knit.GetController("CameraShakeController")
-	CutsceneController = Knit.GetController("CutsceneController")
-	SpectateService = Knit.GetService("SpectateService")
-
-	InterfaceManagerController = Knit.GetController("InterfaceManagerController")
-	LivesInterfaceController = Knit.GetController("LivesInterfaceController")
-	MobileActionButtonInterface = Knit.GetController("MobileActionButtonInterface")
-
-	LifeService.OnLifeLost:Connect(function(userId: number)
+	PlayerNetwork.LifeLost.On(function(userId: number)
 		print(("[LifeController] %s lost a life"):format(nameFor(userId)))
 		self.OnLifeLost:Fire(userId)
 	end)
 
-	LifeService.OnPlayerDied:Connect(function(userId: number, isWipe: boolean?)
+	PlayerNetwork.PlayerDied.On(function(payload: { UserId: number, IsWipe: boolean })
+		local userId, isWipe = payload.UserId, payload.IsWipe
 		print(("[LifeController] %s died (wipe=%s)"):format(nameFor(userId), tostring(isWipe == true)))
 		self.OnPlayerDied:Fire(userId)
 
@@ -706,7 +728,17 @@ function LifeController:KnitStart()
 				return
 			end
 
-			SpectateService:OnDeathStateReplicated()
+			-- Individual death: the screen is fully black here, so this is
+			-- the one moment the Game Over overlay (title, subtitle, bar) can
+			-- go without being seen. Its gameOver pulse never self-clears (it
+			-- assumes a teleport), so without this the spectating player sat
+			-- under "Eternal Damnation" the whole time -- and the pulse latch
+			-- stayed set, which also swallowed the real wipe screen later.
+			if GameOverGradientInterfaceController then
+				GameOverGradientInterfaceController.Signals.OnClearGradient:Fire()
+			end
+
+			PlayerNetwork.SpectateRequested.Fire()
 
 			self:_setSpectatingState(true)
 
@@ -717,9 +749,9 @@ function LifeController:KnitStart()
 	end)
 
 	-- Revive VFX hook. The fade + teleport itself is server-orchestrated
-	-- via LifeService.RevivalFade — we just print the animation hook here
+	-- via PlayerNetwork.RevivalFade — we just print the animation hook here
 	-- so any client VFX code has a single subscribe point.
-	LifeService.OnPlayerRevived:Connect(function(userId: number)
+	PlayerNetwork.PlayerRevived.On(function(userId: number)
 		print(("[LifeController] %s revived"):format(nameFor(userId)))
 		self.OnPlayerRevived:Fire(userId)
 
@@ -779,15 +811,15 @@ function LifeController:KnitStart()
 		self._characterFadeCaches[userId] = nil
 	end)
 
-	LifeService.RevivalFade:Connect(function(payload: { phase: string, duration: number }?)
-		if not payload or not ScreenFadeInterfaceController then
+	PlayerNetwork.RevivalFade.On(function(payload: { Phase: string, Duration: number })
+		if not ScreenFadeInterfaceController then
 			return
 		end
-		local duration = payload.duration or DEATH_FADE_DURATION
-		if payload.phase == "in" then
+		local duration = payload.Duration
+		if payload.Phase == "in" then
 			self:_setSpectatingState(false)
 			ScreenFadeInterfaceController.Signals.FadeIn:Fire(duration)
-		elseif payload.phase == "out" then
+		elseif payload.Phase == "out" then
 			ScreenFadeInterfaceController.Signals.FadeOut:Fire(duration)
 
 			task.delay(duration, function()
@@ -798,7 +830,7 @@ function LifeController:KnitStart()
 		end
 	end)
 
-	LifeService.OnTeleportToLobby:Connect(function()
+	PlayerNetwork.TeleportToLobby.On(function()
 		-- self:_setSpectatingState(false)
 		-- self:_setHudVisible(false)
 
@@ -807,7 +839,7 @@ function LifeController:KnitStart()
 		-- end
 	end)
 
-	LifeService.OnGameOver:Connect(function()
+	PlayerNetwork.GameOver.On(function()
 		print("[LifeController] Game Over — wipe broadcast received")
 
 		self._isGameOver = true
@@ -851,7 +883,7 @@ function LifeController:KnitStart()
 		end
 	end)
 
-	LifeService.DeathState:Observe(function(deathState: { [any]: any }?)
+	self.DeathState:Observe(function(deathState: { [any]: any }?)
 		local localId = Players.LocalPlayer.UserId
 		local localEntry = deathState and (deathState[localId] or deathState[tostring(localId)])
 		if localEntry then

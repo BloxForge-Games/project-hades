@@ -1,5 +1,6 @@
+--!strict
 --[[
-	Module: CameraShakeService.lua
+	Module: Services/CameraShakeService.lua
 	Description:
 	Server relay for the custom camera shake system. The actual shake math
 	lives client-side in CameraShakeController; presets (Small / Medium /
@@ -12,27 +13,30 @@
 	                                  -- signal form of the same (loose
 	                                     coupling for services that don't
 	                                     want a hard reference)
-	  OnGetBoundsInShakeRadius:Fire(sourceModel, cframe, range)
+	  OnGetBoundsInShakeRadius:Fire(sourceModel, cframe, range, preset?)
 	                                  -- AoE impact: every player whose
 	                                     character is inside range ×
 	                                     DETECTION_RANGE_SCALAR gets the
-	                                     same Small shake. Binary on
-	                                     purpose — in range or not, no
-	                                     distance falloff — so any given
-	                                     impact always feels identical.
-	                                     Fired by onHitboxDamage (magic AoE)
-	                                     and VFXService.
+	                                     same shake. Binary on purpose --
+	                                     in range or not, no distance
+	                                     falloff -- so any given impact
+	                                     always feels identical. Fired by
+	                                     onHitboxDamage (magic AoE) and
+	                                     VFXService.
+
+	A Blitz module with no dependencies.
 ]]
 
 --[ Roblox Services ]--
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
-local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local Signal = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 
 --[ Constants ]--
@@ -41,33 +45,30 @@ local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enum
 -- impact you didn't take.
 local DETECTION_RANGE_SCALAR = 2.5
 
---[ Service ]--
+--[ Module ]--
 
-local CameraShakeService = Knit.CreateService({
+local CameraShakeService = {
 	Name = "CameraShakeService",
-	Client = {
-		OnShakeRequested = Knit.CreateSignal(), -- (preset: string)
-	},
-})
 
-CameraShakeService.OnGetBoundsInShakeRadius = Signal.new() -- (sourceModel, cframe, range)
-CameraShakeService.OnShakeRequested = Signal.new() -- (player, preset)
+	OnGetBoundsInShakeRadius = Signal.new() :: Signal.Signal<Model?, CFrame, number, string?>,
+	OnShakeRequested = Signal.new() :: Signal.Signal<Player, string>,
+}
 
 --[ Public API ]--
 
-function CameraShakeService:Shake(player: Player, preset: string)
-	self.Client.OnShakeRequested:Fire(player, preset)
+function CameraShakeService.Shake(_self: typeof(CameraShakeService), player: Player, preset: string)
+	Combat.CameraShake.Fire(player, preset)
 end
 
 --[ Lifecycle ]--
 
-function CameraShakeService:KnitStart()
+function CameraShakeService.Start(self: typeof(CameraShakeService))
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterDescendantsInstances =
 		{ workspace.IgnoreInstances, workspace.Terrain, workspace.PlayerBaseplates, workspace.CurrentCamera }
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
-	self.OnGetBoundsInShakeRadius:Connect(function(_sourceModel: Model, cframe: CFrame, range: number, preset: string?)
+	self.OnGetBoundsInShakeRadius:Connect(function(_sourceModel: Model?, cframe: CFrame, range: number, preset: string?)
 		-- Emitters may pass their own preset (magic explosions send
 		-- Medium); anything that doesn't falls back to Small.
 		local resolvedPreset = preset or CameraShakePresets.Small
@@ -89,7 +90,5 @@ function CameraShakeService:KnitStart()
 		self:Shake(player, preset)
 	end)
 end
-
-function CameraShakeService:KnitInit() end
 
 return CameraShakeService

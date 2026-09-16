@@ -1,3 +1,4 @@
+--!strict
 --[[
 	Module: Client/Controllers/CastModeController.lua
 	Description:
@@ -52,14 +53,12 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Imports ]--
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local MagicController = require(ReplicatedStorage.Controllers.MagicController)
+local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateController)
+local InputPlatformController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.InputPlatformController)
+local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DataController)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
-
-local MagicController
-local PlayerStateController
-local InputPlatformController
-local DataController
-local SettingsService
 
 --[ Constants ]--
 
@@ -68,9 +67,10 @@ local DEFAULT_QUICK_CAST = true
 
 --[ Controller ]--
 
-local CastModeController = Knit.CreateController({
+local CastModeController = {
 	Name = "CastModeController",
-})
+	Dependencies = { MagicController, PlayerStateController, InputPlatformController, DataController } :: { any },
+}
 
 CastModeController.Signals = {
 	-- Fires (quickCast: boolean) whenever the mode flips.
@@ -84,17 +84,17 @@ CastModeController._aimWatch = nil :: RBXScriptConnection?
 
 --[ Public: mode ]--
 
-function CastModeController:IsQuickCast(): boolean
+function CastModeController.IsQuickCast(self: typeof(CastModeController)): boolean
 	return self._quickCast
 end
 
 -- True while a Normal Cast aim is open (indicator up, waiting on release
 -- / click). Weapons read this so the firing left-click doesn't ALSO swing.
-function CastModeController:IsAiming(): boolean
+function CastModeController.IsAiming(self: typeof(CastModeController)): boolean
 	return self._aimingSlot ~= nil
 end
 
-function CastModeController:SetQuickCast(enabled: boolean)
+function CastModeController.SetQuickCast(self: typeof(CastModeController), enabled: boolean)
 	if self._quickCast == enabled then
 		return
 	end
@@ -108,25 +108,23 @@ function CastModeController:SetQuickCast(enabled: boolean)
 
 	self.Signals.OnCastModeChanged:Fire(enabled)
 
-	if SettingsService then
-		SettingsService:SetQuickCast(enabled):catch(warn)
-	end
+	PlayerNetwork.SetQuickCast.Fire(enabled)
 end
 
-function CastModeController:ToggleQuickCast()
+function CastModeController.ToggleQuickCast(self: typeof(CastModeController))
 	self:SetQuickCast(not self._quickCast)
 end
 
 --[ Private ]--
 
 -- Normal Cast input only exists on keyboard + mouse.
-function CastModeController:_normalCastActive(): boolean
+function CastModeController._normalCastActive(self: typeof(CastModeController)): boolean
 	return not self._quickCast and not InputPlatformController:IsMobilePlatform()
 end
 
 -- Indicator show/hide, isolated so a marker/asset mismatch for one spell
 -- can never strand aim mode (it warns and the aim proceeds without it).
-function CastModeController:_setIndicator(slot: number, visible: boolean)
+function CastModeController._setIndicator(_self: typeof(CastModeController), slot: number, visible: boolean)
 	local ok, err = pcall(function()
 		MagicController:ToggleMobileIndicator(visible, slot)
 	end)
@@ -141,7 +139,7 @@ end
 -- held until a left-click fires it or something cancels it. Any spell input
 -- while an aim is already open -- the SAME slot again or a DIFFERENT one --
 -- is a cancel, never a switch: the player re-presses the spell they want.
-function CastModeController:BeginAim(slot: number)
+function CastModeController.BeginAim(self: typeof(CastModeController), slot: number)
 	if self._aimingSlot ~= nil then
 		self:CancelAim()
 		return
@@ -166,7 +164,7 @@ function CastModeController:BeginAim(slot: number)
 	end)
 end
 
-function CastModeController:_closeAim()
+function CastModeController._closeAim(self: typeof(CastModeController)): number?
 	local slot = self._aimingSlot
 	if slot == nil then
 		return nil
@@ -180,13 +178,13 @@ function CastModeController:_closeAim()
 	return slot
 end
 
-function CastModeController:CancelAim()
+function CastModeController.CancelAim(self: typeof(CastModeController))
 	self:_closeAim()
 end
 
 -- Fires the aimed spell. CastMagic re-runs the gates itself, so a spell
 -- that became uncastable during the aim is still refused there.
-function CastModeController:FireAim()
+function CastModeController.FireAim(self: typeof(CastModeController))
 	local slot = self:_closeAim()
 	if slot ~= nil then
 		MagicController:CastMagic(slot)
@@ -196,7 +194,7 @@ end
 --[ Public: input entry points ]--
 
 -- Spell key pressed / released (from UserInputController's 3 / 4 binds).
-function CastModeController:OnSpellKey(slot: number, inputState: Enum.UserInputState)
+function CastModeController.OnSpellKey(self: typeof(CastModeController), slot: number, inputState: Enum.UserInputState)
 	if not self:_normalCastActive() then
 		if inputState == Enum.UserInputState.Begin then
 			MagicController:CastMagic(slot)
@@ -216,7 +214,7 @@ end
 -- here was on UI, so it can't double as the firing click) -- or cancels an
 -- open aim, same as a spell key. The next left-click on the world fires.
 -- Otherwise: plain cast, as always.
-function CastModeController:OnToolbarSlotClicked(slot: number)
+function CastModeController.OnToolbarSlotClicked(self: typeof(CastModeController), slot: number)
 	if self:_normalCastActive() then
 		self:BeginAim(slot)
 	else
@@ -226,7 +224,7 @@ end
 
 --[ Lifecycle ]--
 
-function CastModeController:_applyProfile(profile: { [string]: any }?)
+function CastModeController._applyProfile(self: typeof(CastModeController), profile: { [string]: any }?)
 	local settings = profile and profile.Settings
 	local saved = settings and settings.QuickCast
 	if typeof(saved) ~= "boolean" then
@@ -238,15 +236,9 @@ function CastModeController:_applyProfile(profile: { [string]: any }?)
 	end
 end
 
-function CastModeController:KnitStart()
-	MagicController = Knit.GetController("MagicController")
-	PlayerStateController = Knit.GetController("PlayerStateController")
-	InputPlatformController = Knit.GetController("InputPlatformController")
-	DataController = Knit.GetController("DataController")
-	SettingsService = Knit.GetService("SettingsService")
-
+function CastModeController.Start(self: typeof(CastModeController))
 	-- Saved preference: whatever snapshot is already here, then every push
-	-- (the join-time snapshot may land after KnitStart).
+	-- (the join-time snapshot may land after Start).
 	self:_applyProfile(DataController:GetProfileData())
 	DataController.Signals.OnProfileChanged:Connect(function(profile)
 		self:_applyProfile(profile)
@@ -273,7 +265,5 @@ function CastModeController:KnitStart()
 		end
 	end)
 end
-
-function CastModeController:KnitInit() end
 
 return CastModeController

@@ -1,3 +1,4 @@
+--!strict
 --[[
      Module: SpectateInterfaceController.lua
      Description:
@@ -6,7 +7,7 @@
        - "Now Viewing: <PlayerName>" centered near the top with left/right
          arrow hints (cycle via arrow keys, wired in SpectateController)
        - A REVIVE button in the bottom-right corner that calls
-         LifeService:PromptRevivePurchase → MarketplaceService prompt
+         PlayerNetwork.PromptRevivePurchase → MarketplaceService prompt
 
      Auto-hides the moment the local player's DeathState entry clears
      (revive successful).
@@ -15,7 +16,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
-local Knit = require(ReplicatedStorage.Submodules.Core.Packages.Knit)
+local LifeController = require(ReplicatedStorage.Controllers.LifeController)
+local SpectateController = require(ReplicatedStorage.Controllers.SpectateController)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 
@@ -23,15 +25,12 @@ local Container = require(script.ReactComponents.Container)
 
 local INTERFACE_ID = "SpectateInterfaceController"
 
-local LifeService
-local LifeController
-local SpectateService
-
-local SpectateInterfaceController = Knit.CreateController({
+local SpectateInterfaceController = {
 	Name = "SpectateInterfaceController",
-})
+	Dependencies = { LifeController, SpectateController } :: { any },
+}
 
-function SpectateInterfaceController:_render()
+function SpectateInterfaceController._render(_self: typeof(SpectateInterfaceController))
 	return function()
 		return React.createElement("ScreenGui", {
 			ResetOnSpawn = false,
@@ -45,9 +44,8 @@ function SpectateInterfaceController:_render()
 			ClipToDeviceSafeArea = true,
 		}, {
 			Container = React.createElement(Container, {
-				LifeService = LifeService,
 				LifeController = LifeController,
-				SpectateService = SpectateService,
+				SpectateTargets = SpectateController.SpectateTargets,
 			}),
 		})
 	end
@@ -55,17 +53,11 @@ end
 
 --[ Lifecycle ]--
 
-function SpectateInterfaceController:KnitInit()
-	LifeService = Knit.GetService("LifeService")
-	SpectateService = Knit.GetService("SpectateService")
-end
-
-function SpectateInterfaceController:KnitStart()
+function SpectateInterfaceController.Start(self: typeof(SpectateInterfaceController))
 	-- LifeController is needed for the OnSpectateStateChanged signal that
 	-- gates visibility (visible only after the death-fade completes).
-	-- Resolved in KnitStart because controller-to-controller deps aren't
-	-- safe to read during KnitInit.
-	LifeController = Knit.GetController("LifeController")
+	-- Resolved in Start because controller-to-controller deps aren't
+	-- safe to read during Init.
 
 	local root = ReactRoblox.createRoot(Instance.new("Folder"))
 	root:render(ReactRoblox.createPortal(React.createElement(self:_render()), Players.LocalPlayer.PlayerGui))
