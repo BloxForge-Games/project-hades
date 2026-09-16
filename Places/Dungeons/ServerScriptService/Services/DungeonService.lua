@@ -3164,6 +3164,7 @@ function DungeonService.Start(self: typeof(DungeonService))
 		self._playerRoomCursor[player] = nil
 		self._readyForLanding[player] = nil
 		self._landed[player] = nil
+		self._transitionFrozen[player] = nil
 		if self._run then
 			self._run.exited[player] = nil
 		end

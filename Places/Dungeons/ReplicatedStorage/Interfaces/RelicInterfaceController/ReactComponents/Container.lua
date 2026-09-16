@@ -280,39 +280,54 @@ local function Container(props: any)
 	end, { visible })
 
 	React.useEffect(function()
+		-- Stopped on unmount; the loop used to outlive the component.
+		local cancelled = false
 		task.spawn(function()
-			while task.wait(1) do
-				TweenService:Create(
-					notificationButtonRef.current,
-					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Rotation = 15 }
-				):Play()
+			while not cancelled and task.wait(1) do
+				local button = notificationButtonRef.current
+				if not button then
+					continue
+				end
+				TweenService
+					:Create(
+						button,
+						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{ Rotation = 15 }
+					)
+					:Play()
 				task.wait(0.15)
 				TweenService:Create(
-					notificationButtonRef.current,
+					button,
 					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 					{ Rotation = -15 }
 				):Play()
 				task.wait(0.15)
-				TweenService:Create(
-					notificationButtonRef.current,
-					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Rotation = 15 }
-				):Play()
+				TweenService
+					:Create(
+						button,
+						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{ Rotation = 15 }
+					)
+					:Play()
 				task.wait(0.15)
 				TweenService:Create(
-					notificationButtonRef.current,
+					button,
 					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 					{ Rotation = -15 }
 				):Play()
 				task.wait(0.15)
-				TweenService:Create(
-					notificationButtonRef.current,
-					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Rotation = 0 }
-				):Play()
+				TweenService
+					:Create(
+						button,
+						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{ Rotation = 0 }
+					)
+					:Play()
 			end
 		end)
+		return function()
+			cancelled = true
+		end
 	end, {})
 
 	-- Resolve the description for the currently-hovered relic ONCE per

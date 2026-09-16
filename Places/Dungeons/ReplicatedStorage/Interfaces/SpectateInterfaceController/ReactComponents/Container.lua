@@ -119,7 +119,7 @@ local function Container(props: any)
 			local tween = TweenService:Create(current, SPECTATE_FADE_TWEEN_INFO, {
 				GroupTransparency = 1,
 			})
-			tween.Completed:Connect(function()
+			tween.Completed:Once(function()
 				if fadeTokenRef.current ~= token then
 					return -- a new fade started; let it own the Visible flip
 				end

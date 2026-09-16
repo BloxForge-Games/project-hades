@@ -1280,6 +1280,11 @@ function DamageService.Start(self: typeof(DamageService))
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		self._onHitRegistry[player.UserId] = nil
+		self._lightningStrikeLast[player.UserId] = nil
+		self._shurikenLastRefund[player.UserId] = nil
+		-- Holds the last mob Model this player hit.
+		self._lastHitDamage[player.UserId] = nil
+		self._recentDamageTaken[player.UserId] = nil
 	end)
 end
 

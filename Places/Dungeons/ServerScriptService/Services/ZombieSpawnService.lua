@@ -3,8 +3,6 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
-local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
@@ -108,13 +106,6 @@ local ZombieSpawnService = {
 	_minibossWavesPaused = {}, -- [roomId]: true — wave spawner frozen (boss phase cutscene),
 }
 
--- The live mob models, replicated for the build placement system's
--- collision checks (was a replicated property).
-ZombieSpawnService._registryProperty = RemoteProperty.Server({
-	changed = Combat.ZombieRegistryChanged,
-	get = Combat.GetZombieRegistry,
-}, {})
-
 ZombieSpawnService.OnZombieSpawn = Signal.new()
 ZombieSpawnService.OnZombieDespawn = Signal.new()
 
@@ -126,8 +117,6 @@ function ZombieSpawnService.IncrementZombieCount(self: typeof(ZombieSpawnService
 	self.OnZombieSpawn:Fire(zombie)
 
 	table.insert(self._zombiesRegistry, zombie)
-
-	self:_publishRegistry()
 end
 
 function ZombieSpawnService.DecrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
@@ -150,8 +139,6 @@ function ZombieSpawnService.DecrementZombieCount(self: typeof(ZombieSpawnService
 	if index then
 		table.remove(self._zombiesRegistry, index)
 	end
-
-	self:_publishRegistry()
 
 	self.OnZombieDespawn:Fire(zombie)
 end
@@ -280,7 +267,6 @@ function ZombieSpawnService.ResetForNewDungeon(self: typeof(ZombieSpawnService))
 		zombie:Destroy()
 	end
 	table.clear(self._zombiesRegistry)
-	self:_publishRegistry()
 end
 
 -- Collect every Attachment under the room's "SpawnPoints" folder. Each
@@ -875,18 +861,6 @@ function ZombieSpawnService.DespawnZombiesInRoom(self: typeof(ZombieSpawnService
 			humanoid.Health = 0
 		end
 	end
-end
-
--- Pushes the registry. LIVE models only: a destroyed mob in the payload
--- would fail to serialise and drop the whole update on every client.
-function ZombieSpawnService._publishRegistry(self: typeof(ZombieSpawnService))
-	local live = {}
-	for _, zombie in self._zombiesRegistry do
-		if zombie.Parent then
-			table.insert(live, zombie)
-		end
-	end
-	self._registryProperty:Set(live)
 end
 
 function ZombieSpawnService.Init(_self: typeof(ZombieSpawnService))

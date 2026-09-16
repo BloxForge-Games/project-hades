@@ -51,6 +51,16 @@ function Volleyball:PlayEffect()
 	local connection
 
 	connection = RunService.RenderStepped:Connect(function()
+		-- Target gone mid-flight (mob died / despawned): stop and drop the
+		-- model. Indexing the missing root threw every frame instead, so the
+		-- connection and the model were never released.
+		local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if not targetRoot or not volleyball.Parent then
+			connection:Disconnect()
+			volleyball:Destroy()
+			return
+		end
+
 		local now = workspace:GetServerTimeNow()
 		local alpha = math.clamp((now - self._startTime) / self._duration, 0, 1)
 
@@ -58,7 +68,7 @@ function Volleyball:PlayEffect()
 			alpha,
 			originPosition,
 			intermediatePosition,
-			targetCharacter.HumanoidRootPart.Position
+			targetRoot.Position
 		)
 
 		volleyball:PivotTo(CFrame.new(pos))

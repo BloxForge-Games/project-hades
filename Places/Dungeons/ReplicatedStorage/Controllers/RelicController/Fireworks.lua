@@ -52,6 +52,16 @@ function Fireworks:PlayEffect()
 	local lastPos = originPosition
 
 	connection = RunService.RenderStepped:Connect(function()
+		-- Target gone mid-flight (mob died / despawned): stop and drop the
+		-- model. Indexing the missing root threw every frame instead, so the
+		-- connection and the model were never released.
+		local targetRoot = targetCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+		if not targetRoot or not fireworks.Parent then
+			connection:Disconnect()
+			fireworks:Destroy()
+			return
+		end
+
 		local now = workspace:GetServerTimeNow()
 		local alpha = math.clamp((now - self._startTime) / self._duration, 0, 1)
 
@@ -59,7 +69,7 @@ function Fireworks:PlayEffect()
 			alpha,
 			originPosition,
 			intermediatePosition,
-			targetCharacter.HumanoidRootPart.Position
+			targetRoot.Position
 		)
 
 		-- Calculate trajectory direction
@@ -84,7 +94,7 @@ function Fireworks:PlayEffect()
 			fireworks.PrimaryPart.Trail2.Enabled = false
 
 			local explosionVFX = ReplicatedStorage.GameAssets.VFX["Fireworks Explosion"].Explosion:Clone()
-			explosionVFX:PivotTo(CFrame.new(targetCharacter.HumanoidRootPart.Position))
+			explosionVFX:PivotTo(CFrame.new(targetRoot.Position))
 			explosionVFX.Parent = workspace.IgnoreInstances.MagicSpells
 
 			explosionVFX.Explosion:Play()

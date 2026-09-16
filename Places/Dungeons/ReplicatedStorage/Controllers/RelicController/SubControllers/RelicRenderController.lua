@@ -655,12 +655,106 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 	relicHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	relicHighlight.Parent = nil
 
+	-- The relic (or rune) whose prompt is up right now, and the watchers
+	-- that end the hover if the relic goes away by any route other than
+	-- the prompt service's own PromptHidden. Disabling a shown prompt does
+	-- fire PromptHidden, but a model destroyed or untagged under a live
+	-- hover does not -- and a Collected relic must lose its hover THIS
+	-- frame on every screen, not whenever the prompt service gets round to
+	-- it. Whichever path fires first wins; the rest are no-ops.
+	local hoveredModel: Model? = nil
+	local hoverWatchers: { RBXScriptConnection } = {}
+
+	local function endHover(model: Model)
+		if hoveredModel ~= model then
+			return
+		end
+		hoveredModel = nil
+		for _, connection in hoverWatchers do
+			connection:Disconnect()
+		end
+		table.clear(hoverWatchers)
+
+		self:SetPromptState(false)
+
+		relicHighlight.Adornee = nil
+		relicHighlight.Parent = nil
+
+		-- A CLAIMED relic keeps its label off and its scale where it is:
+		-- the pickup disables the prompt, which lands us here, and putting
+		-- the label back would float a name over a relic that is fading
+		-- out from under it.
+		local collected = model:GetAttribute(Attributes.Collected) == true
+		local primaryPart = model.PrimaryPart
+		local relicName = if primaryPart then primaryPart:FindFirstChild("RelicName") :: BillboardGui? else nil
+		if not collected and relicName then
+			relicName.Enabled = true
+
+			local relicScale = model:FindFirstChild("RelicScale") :: NumberValue?
+			if relicScale then
+				TweenService:Create(
+					relicScale,
+					TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
+					{ Value = 1.5 }
+				):Play()
+			end
+		end
+
+		relicHighlight.FillTransparency = 1
+
+		self:_setOwnedMachinesDimmed(false)
+
+		-- Restore every owned ground relic. No skip -- original
+		-- restore behavior walked the full set (the now-unhovered
+		-- model is restored alongside everything else; its
+		-- RelicName.Enabled = true is set inline above).
+		self:_applyGroundRelicsDim(nil :: any, false)
+
+		-- Cross-system: restore the gear-drop side.
+		if getGearDropsRenderController() then
+			getGearDropsRenderController():SetExternalHover(false)
+		end
+	end
+
 	ProximityPromptService.PromptShown:Connect(function(prompt: ProximityPrompt)
 		local model = prompt:FindFirstAncestorOfClass("Model")
 
 		-- Runes share the whole relic hover treatment (billboard hidden,
 		-- highlight, scale-up) -- they are relics as far as presentation goes.
 		if model and (model:HasTag("Relic") or model:HasTag("Rune")) then
+			-- Already claimed: nothing here is takeable, so no hover. A
+			-- disabled prompt cannot be shown, but the attribute can land in
+			-- the same step as the prompt service's decision.
+			if model:GetAttribute(Attributes.Collected) == true then
+				return
+			end
+
+			-- One hover at a time. The prompt service normally hides the old
+			-- prompt before showing the next, but a missed PromptHidden must
+			-- not leave the previous relic's ambience stuck on.
+			if hoveredModel and hoveredModel ~= model then
+				endHover(hoveredModel)
+			end
+			hoveredModel = model
+
+			-- The explicit "relic gone" routes: claimed (Collected replicates
+			-- to every client the instant someone takes it, and the pull's
+			-- other offers are marked with it), destroyed, or untagged.
+			table.insert(
+				hoverWatchers,
+				model:GetAttributeChangedSignal(Attributes.Collected):Connect(function()
+					if model:GetAttribute(Attributes.Collected) == true then
+						endHover(model)
+					end
+				end)
+			)
+			table.insert(
+				hoverWatchers,
+				model.Destroying:Connect(function()
+					endHover(model)
+				end)
+			)
+
 			self:SetPromptState(true)
 
 			local handle = assert(model:FindFirstChild("Handle"), "Relic model has no Handle")
@@ -688,7 +782,7 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 			self:_setOwnedMachinesDimmed(true)
 
 			-- Dim every OTHER owned ground relic. Skips `model` (the
-			-- hovered one) — its RelicName was already Enabled=false
+			-- hovered one) -- its RelicName was already Enabled=false
 			-- via the inline block above.
 			self:_applyGroundRelicsDim(model, true)
 
@@ -705,44 +799,19 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 		local model = prompt:FindFirstAncestorOfClass("Model")
 
 		if model and (model:HasTag("Relic") or model:HasTag("Rune")) then
-			self:SetPromptState(false)
-
-			relicHighlight.Adornee = nil
-			relicHighlight.Parent = nil
-
-			-- A CLAIMED relic keeps its label off and its scale where it is:
-			-- the pickup disables the prompt, which lands us here, and putting
-			-- the label back would float a name over a relic that is fading
-			-- out from under it.
-			local collected = model:GetAttribute(Attributes.Collected) == true
-			local primaryPart = model.PrimaryPart
-			local relicName = if primaryPart then primaryPart:FindFirstChild("RelicName") :: BillboardGui? else nil
-			if not collected and relicName then
-				relicName.Enabled = true
-
-				TweenService:Create(
-					model:FindFirstChild("RelicScale") :: NumberValue,
-					TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-					{ Value = 1.5 }
-				):Play()
-			end
-
-			relicHighlight.FillTransparency = 1
-
-			self:_setOwnedMachinesDimmed(false)
-
-			-- Restore every owned ground relic. No skip — original
-			-- restore behavior walked the full set (the now-unhovered
-			-- model is restored alongside everything else; its
-			-- RelicName.Enabled = true is set inline above).
-			self:_applyGroundRelicsDim(nil :: any, false)
-
-			-- Cross-system: restore the gear-drop side.
-			if getGearDropsRenderController() then
-				getGearDropsRenderController():SetExternalHover(false)
-			end
+			endHover(model)
 		end
 	end)
+
+	-- Untagged under a live hover (the component's teardown, or a relic
+	-- re-purposed by its own logic): same exit as a destroy.
+	for _, tag in { "Relic", "Rune" } do
+		CollectionService:GetInstanceRemovedSignal(tag):Connect(function(obj)
+			if obj:IsA("Model") then
+				endHover(obj)
+			end
+		end)
+	end
 end
 
 return RelicRenderController

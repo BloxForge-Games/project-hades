@@ -344,6 +344,17 @@ function MagicController.Start(self: typeof(MagicController))
 		-- Direct child index as before: a rig with no root throws here.
 		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart
 
+		-- Respawn: the previous character's markers sit in MagicSpells welded
+		-- to a dead root. Replace them instead of stacking one set per life.
+		if self._arrowBeamPart then
+			self._arrowBeamPart:Destroy()
+			self._arrowBeamPart = nil
+		end
+		for name, marker in self._studMarkers do
+			marker:Destroy()
+			self._studMarkers[name] = nil
+		end
+
 		self._arrowBeamPart = ReplicatedStorage.GameAssets.MobileHitMarkers.ArrowBeamPart:Clone()
 		self._arrowBeamPart.CFrame = humanoidRootPart.CFrame * CFrame.Angles(0, math.rad(180), 0)
 		self._arrowBeamPart.ArrowBeam.Enabled = false

@@ -1276,6 +1276,7 @@ function RelicService.Start(self: typeof(RelicService))
 		self._relicRegistry[player.UserId] = nil
 		self._incrementalRegistry[player.UserId] = nil
 		self._relicsList[player.UserId] = nil
+		self._relicOrigins[player.UserId] = nil
 
 		RelicNetwork.RelicsReplicated.FireAll({
 			UserId = player.UserId,

@@ -123,8 +123,11 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 			local torsoAttachment = shrineModel.Torso:FindFirstChildOfClass("Attachment")
 
+			-- The Attachment is a captured local, so it never goes nil on its
+			-- own: stop when the shrine is destroyed (Debris, below) or this
+			-- thread spins every frame for the rest of the session.
 			task.spawn(function()
-				while torsoAttachment do
+				while torsoAttachment and torsoAttachment.Parent do
 					torsoAttachment.Orientation += Vector3.new(0, 0.75, 0)
 					task.wait()
 				end

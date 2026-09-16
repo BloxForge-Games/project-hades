@@ -46,6 +46,10 @@ local WallsTransparencyController = {
 }
 
 local FADE_TIME = 0.25
+-- The capture-once maps are keyed by wall parts and never released on the
+-- restore path (by design), so a floor's destroyed walls must fall out on
+-- their own: weak keys.
+local WEAK_KEYS = { __mode = "k" }
 local FADED_PART_TRANSPARENCY = 0.75
 local FADED_TEXTURE_TRANSPARENCY = 0.95
 
@@ -272,8 +276,8 @@ end
 function WallsTransparencyController.Init(self: typeof(WallsTransparencyController))
 	self._janitor = Janitor.new()
 	self._activeFades = {} -- BasePart -> { partTween, textureTweens, textures }
-	self._originalPartTransparencies = {} -- BasePart -> number (captured once)
-	self._originalTextureTransparencies = {} -- Texture|Decal -> number (captured once)
+	self._originalPartTransparencies = setmetatable({}, WEAK_KEYS) :: any -- BasePart -> number (captured once)
+	self._originalTextureTransparencies = setmetatable({}, WEAK_KEYS) :: any -- Texture|Decal -> number (captured once)
 end
 
 function WallsTransparencyController.Start(self: typeof(WallsTransparencyController))

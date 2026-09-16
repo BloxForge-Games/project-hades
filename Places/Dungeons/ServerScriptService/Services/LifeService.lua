@@ -302,6 +302,18 @@ function LifeService.IsDeathState(self: typeof(LifeService), player: Player): bo
 	return self._deathState[player.UserId] ~= nil
 end
 
+-- Where the player's HumanoidRootPart was when they entered the death
+-- state, for callers that need the corpse's spot after the character is
+-- gone (RunEscrowService spills run gear there). nil when not in the
+-- death state, or when no root part could be read at the time of death.
+function LifeService.GetDeathPosition(self: typeof(LifeService), player: Player): Vector3?
+	local state = self._deathState[player.UserId]
+	if not state or state.deathPosition == Vector3.zero then
+		return nil
+	end
+	return state.deathPosition
+end
+
 -- Alias for IsDeathState — no longer distinguishes "in window" vs "fully
 -- dead" since there's no timed window anymore. Kept for any external
 -- code that still calls IsFullyDead.

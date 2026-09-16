@@ -8,9 +8,11 @@
 
 	  * BANK (all escrow → profile): walking out through the exit portal,
 	    via :ClaimRewards. Killing the boss does NOT bank — see below.
-	  * DISCARD (escrow lost): entering the death state (out of lives),
-	    or leaving the server mid-run. Knowledge is the only thing the
-	    Spire can't take back.
+	  * SPILL (gear leaves the escrow, hits the floor): a single death.
+	    Every run item drops from the corpse as a public gear drop that a
+	    teammate, or the player after a revive, can pick up. Coins stay.
+	  * DISCARD (escrow lost): a party wipe, or leaving the server
+	    mid-run. Knowledge is the only thing the Spire can't take back.
 
 	Beating the boss is not the same as getting out. The escrow stays
 	full and visible in the Spire's Bounty panel after the boss dies, and
@@ -77,6 +79,10 @@ RunEscrowService._escrowProperty = RemoteProperty.Server({
 -- (15 slots = 5 wide × 3 tall), so the grid IS the cap and a full grid
 -- of tiles reads as "no more room".
 local MAX_RUN_ITEMS = 15
+
+-- Seconds between successive items spilling out of a corpse (see
+-- DropAllOnDeath) -- a quick stream rather than a single burst.
+local DEATH_DROP_INTERVAL = 0.05
 
 --[ Properties ]--
 
@@ -315,27 +321,57 @@ function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player
 	self:_replicate(player)
 end
 
--- Player-initiated DROP from the run inventory: the item leaves the
--- escrow and lands on the floor around them as a PUBLIC gear drop that
--- anyone can pick up, the dropper included. Nothing is paid and nothing
--- is destroyed -- the item keeps its uuid, quality and enchantment
--- across the round trip (GearDropService holds the entry until pickup).
+-- Takes the escrow item at `index` out of the player's run inventory and
+-- lands it on the floor around `origin` as a PUBLIC gear drop that anyone
+-- can pick up, the dropper included. Nothing is paid and nothing is
+-- destroyed -- the item keeps its uuid, quality and enchantment across
+-- the round trip (GearDropService holds the entry until pickup).
 --
 -- The escrow write happens FIRST so a duplicate request cannot drop the
--- same item twice, and is undone if the drop fails to spawn.
+-- same item twice, and is undone if the drop fails to spawn. Shared by
+-- the player-initiated drop and the on-death drop so both put exactly the
+-- same thing on the floor and update the run inventory UI the same way.
+function RunEscrowService._dropItemAt(
+	self: typeof(RunEscrowService),
+	player: Player,
+	index: number,
+	origin: Vector3
+): boolean
+	if not GearDropService then
+		return false
+	end
+
+	local entry = self:_getOrCreate(player)
+	local dropped = table.remove(entry.items, index) :: EscrowItem?
+	if not dropped then
+		return false
+	end
+	self:_replicate(player)
+
+	if not GearDropService:DropExistingGear(player, origin, dropped) then
+		-- Nothing spawned (missing prefab): give it back rather than
+		-- deleting the player's item.
+		table.insert(entry.items, math.min(index, #entry.items + 1), dropped)
+		self:_replicate(player)
+		return false
+	end
+	return true
+end
+
+-- Player-initiated DROP from the run inventory, by uuid.
 -- PlayerNetwork.DropRunItem handler (was a client-callable method).
-function RunEscrowService._onDropItem(_self: typeof(RunEscrowService), player: Player, uuid: string): boolean
+function RunEscrowService._onDropItem(self: typeof(RunEscrowService), player: Player, uuid: string): boolean
 	if typeof(uuid) ~= "string" or uuid == "" then
 		return false
 	end
 
 	local character = player.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not hrp or not GearDropService then
+	if not hrp then
 		return false
 	end
 
-	local entry = RunEscrowService:_getOrCreate(player)
+	local entry = self:_getOrCreate(player)
 	local index = nil
 	for position, escrowItem in entry.items do
 		if type(escrowItem.item) == "table" and escrowItem.item.uuid == uuid then
@@ -347,17 +383,61 @@ function RunEscrowService._onDropItem(_self: typeof(RunEscrowService), player: P
 		return false
 	end
 
-	local dropped = table.remove(entry.items, index) :: EscrowItem
-	RunEscrowService:_replicate(player)
+	return self:_dropItemAt(player, index, hrp.Position)
+end
 
-	if not GearDropService:DropExistingGear(player, hrp.Position, dropped) then
-		-- Nothing spawned (missing prefab): give it back rather than
-		-- deleting the player's item.
-		table.insert(entry.items, index, dropped)
-		RunEscrowService:_replicate(player)
-		return false
+-- DEATH drop: every run-bound item leaves the escrow and spills out of
+-- the corpse, Minecraft-style -- one item every DEATH_DROP_INTERVAL,
+-- each landing at its own random scatter around the body (the same
+-- ±LANDING_XZ_SCATTER pick loot uses), as PUBLIC drops that a teammate,
+-- or the player after a revive, can walk over and take.
+--
+-- Origin is the corpse's HumanoidRootPart; if the character is already
+-- gone, LifeService's recorded death position stands in. No position at
+-- all = nothing drops (the items stay in the escrow for a revive) and a
+-- warn says so. Coins are untouched: they are cargo, not gear.
+--
+-- Drops through _dropItemAt so a wipe or a disconnect mid-spill (which
+-- empty / remove the escrow) ends the loop on its own -- the loop reads
+-- the live escrow each step instead of a snapshot.
+function RunEscrowService.DropAllOnDeath(self: typeof(RunEscrowService), player: Player)
+	local entry = self._escrow[player.UserId]
+	if not entry or #entry.items == 0 then
+		return
 	end
-	return true
+
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local origin: Vector3? = hrp and hrp.Position or nil
+	if not origin then
+		origin = LifeService:GetDeathPosition(player)
+	end
+	if not origin then
+		warn(
+			("[RunEscrowService] %s died with %d run items but has no character or death position — nothing dropped"):format(
+				player.Name,
+				#entry.items
+			)
+		)
+		return
+	end
+	local dropOrigin: Vector3 = origin
+
+	local droppedCount = 0
+	while self._escrow[player.UserId] == entry and #entry.items > 0 and player.Parent ~= nil do
+		if self:_dropItemAt(player, 1, dropOrigin) then
+			droppedCount += 1
+		else
+			-- Could not spawn this one (it went back into the escrow).
+			-- Leave it and everything behind it rather than spinning on it.
+			break
+		end
+		if #entry.items > 0 then
+			task.wait(DEATH_DROP_INTERVAL)
+		end
+	end
+
+	print(("[RunEscrowService] %s died — dropped %d run items from the body"):format(player.Name, droppedCount))
 end
 
 --[ Lifecycle ]--
@@ -367,20 +447,27 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 		return self:_onDropItem(player, uuid)
 	end)
 
+	-- A single death SPILLS the run gear out of the corpse as public
+	-- drops (DropAllOnDeath): a teammate can carry it on, and the player
+	-- can pick it back up after a revive. The coins stay in the escrow.
+	--
 	-- DISCARD only on a WIPE: every player down, the run over, the lobby
-	-- teleport following. A single death KEEPS the escrow — a teammate
-	-- can still revive the player, and losing the run's coins and
-	-- Runbound loot on the way down made that revive worth nothing. The
-	-- wipe fires on the LAST death only, so every player's escrow goes
-	-- here, not just the one who died last. (Death Defiance charges absorb
-	-- earlier hits without firing this at all.)
-	LifeService.OnPlayerDied:Connect(function(_player: Player, isWipe: boolean?)
-		if not isWipe then
+	-- teleport following. Nobody is left standing to collect a drop, so
+	-- nothing is spilled; every player's escrow is discarded here, not
+	-- just the one who died last. (Death Defiance charges absorb earlier
+	-- hits without firing this at all.)
+	LifeService.OnPlayerDied:Connect(function(player: Player, isWipe: boolean?)
+		if isWipe then
+			for _, otherPlayer in Players:GetPlayers() do
+				self:Discard(otherPlayer, "wipe")
+			end
 			return
 		end
-		for _, player in Players:GetPlayers() do
-			self:Discard(player, "wipe")
-		end
+		-- Spawned off the signal: the spill waits between items, and
+		-- LifeService's death flow must not stall behind it.
+		task.spawn(function()
+			self:DropAllOnDeath(player)
+		end)
 	end)
 
 	-- NOT hooked to OnDungeonCompleted. Boss defeat used to bank here

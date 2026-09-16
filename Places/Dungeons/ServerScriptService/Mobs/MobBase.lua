@@ -683,9 +683,17 @@ function MobBase:_fadeInOnSpawn()
 	end
 
 	task.delay(MODEL_LOAD_DURATION, function()
+		-- Bail once the mob is gone: death destroys the RaycastHitbox and
+		-- despawn destroys the model, so a mob that died inside the load
+		-- window could never satisfy the condition and this polled forever.
 		repeat
 			task.wait(MODEL_LOAD_DURATION)
-		until self._model:FindFirstChild("RaycastHitbox") and self._model:FindFirstChild("Humanoid")
+		until (self._model:FindFirstChild("RaycastHitbox") and self._model:FindFirstChild("Humanoid"))
+			or self._state == STATE_DEAD
+			or not self._model.Parent
+		if self._state == STATE_DEAD or not self._model.Parent then
+			return
+		end
 
 		for _, part in self._model:GetDescendants() do
 			if
@@ -1623,6 +1631,9 @@ function MobBase:_deferEncounterRewards(killer)
 		end
 		conn:Disconnect()
 	end)
+	-- Bounded by the corpse: Stop's janitor Destroy drops it if this mob's
+	-- own outro never fires (floor torn down first, run advanced).
+	self._janitor:Add(conn, "Disconnect")
 end
 
 -- GUARANTEED on every mob (design call — the old 25% roll is gone;

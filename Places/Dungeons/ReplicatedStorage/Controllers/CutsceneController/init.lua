@@ -20,10 +20,16 @@ local IsometricCameraController =
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local AmbientGradientInterfaceController = require(ReplicatedStorage.Interfaces.AmbientGradientInterfaceController)
+local ZombieController = require(ReplicatedStorage.Controllers.ZombieController)
 
 local CutsceneController = {
 	Name = "CutsceneController",
-	Dependencies = { CinematicInterfaceController, IsometricCameraController, AmbientGradientInterfaceController } :: { any },
+	Dependencies = {
+		CinematicInterfaceController,
+		IsometricCameraController,
+		AmbientGradientInterfaceController,
+		ZombieController,
+	} :: { any },
 }
 
 --[ Constants ]--
@@ -259,7 +265,10 @@ end
 -- length: that is what empties the world of billboards
 -- (CutsceneBillboardController) and swallows damage / text indicators, and
 -- it is deliberately NOT CutscenePlaying, which every other cinematic
--- takes and which dresses the screen differently.
+-- takes and which dresses the screen differently. Over the same window
+-- every mob is held semi-transparent on this client
+-- (ZombieController.SetCutsceneDim), bracketed here rather than keyed off
+-- the attribute so the dim is reference-counted across an overlap.
 function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), magicName: string)
 	local data = MagicData[magicName]
 	local config = data and data.cutscene
@@ -291,9 +300,11 @@ function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), 
 	end
 
 	character:SetAttribute(Attributes.MagicCutscenePlaying, true)
+	ZombieController:SetCutsceneDim(true)
 	if typeof(config.path) == "string" then
 		-- PlayCutscene yields for the whole camera path.
 		self:PlayCutscene(config.path)
+		ZombieController:SetCutsceneDim(false)
 		character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 		return
 	end
@@ -318,6 +329,7 @@ function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), 
 		character:SetAttribute(Attributes.CutscenePlaying, false)
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
+	ZombieController:SetCutsceneDim(false)
 	character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 end
 

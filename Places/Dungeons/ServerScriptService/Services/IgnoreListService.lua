@@ -248,6 +248,31 @@ function IgnoreListService._initProximityRayIgnoreList(self: typeof(IgnoreListSe
 	self:SetProximityRayIgnoreList(proximityRayIgnoreList)
 end
 
+-- Drops every entry whose instance has left the game. Reverse iteration:
+-- table.remove inside a forward loop skips the element after each hit.
+local function removeDestroyed(list: { Instance })
+	for i = #list, 1, -1 do
+		if list[i].Parent == nil then
+			table.remove(list, i)
+		end
+	end
+end
+
+-- No yields between each Get and Set (see the note in Start).
+function IgnoreListService._pruneDestroyedEntries(self: typeof(IgnoreListService))
+	local weaponIgnoreList = self:GetWeaponIgnoreList()
+	removeDestroyed(weaponIgnoreList)
+	self:SetWeaponIgnoreList(weaponIgnoreList)
+
+	local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
+	removeDestroyed(magicSpellIgnoreList)
+	self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
+
+	local proximityRayList = self:GetProximityRayIgnoreList()
+	removeDestroyed(proximityRayList)
+	self:SetProximityRayIgnoreList(proximityRayList)
+end
+
 function IgnoreListService.Start(self: typeof(IgnoreListService))
 	self:_initWeaponIgnoreList()
 	self:_initBuildingTransparencyIgnoreList()
@@ -300,36 +325,14 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 		end
 	end)
 
+	-- Sweep destroyed characters out of the lists. On leave, and on every
+	-- respawn: OnPlayerAdded fires once per join, so the previous life's
+	-- (destroyed) character stayed in all three lists otherwise.
 	PlayerEventService.OnPlayerRemoved:Connect(function(_: Player)
-		local weaponIgnoreList = self:GetWeaponIgnoreList()
-
-		for i, value in weaponIgnoreList do
-			if value.Parent == nil then
-				table.remove(weaponIgnoreList, i)
-			end
-		end
-
-		self:SetWeaponIgnoreList(weaponIgnoreList)
-
-		local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
-
-		for i, value in magicSpellIgnoreList do
-			if value.Parent == nil then
-				table.remove(magicSpellIgnoreList, i)
-			end
-		end
-
-		self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
-
-		local proximityRayList = self:GetProximityRayIgnoreList()
-
-		for i, value in proximityRayList do
-			if value.Parent == nil then
-				table.remove(proximityRayList, i)
-			end
-		end
-
-		self:SetProximityRayIgnoreList(proximityRayList)
+		self:_pruneDestroyedEntries()
+	end)
+	PlayerEventService.OnCharacterAdded:Connect(function(_player: Player, _character: Model)
+		self:_pruneDestroyedEntries()
 	end)
 end
 

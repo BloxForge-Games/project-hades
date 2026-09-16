@@ -97,6 +97,9 @@ function Jail:PlayEffect()
 	connection = RunService.RenderStepped:Connect(function(dt: number)
 		if not self.targetCharacter or not self.targetCharacter:FindFirstChild("HumanoidRootPart") then
 			connection:Disconnect()
+			-- Only the completion path released the model; a target that
+			-- died mid-drop left it standing in MagicSpells forever.
+			jail:Destroy()
 			return
 		end
 

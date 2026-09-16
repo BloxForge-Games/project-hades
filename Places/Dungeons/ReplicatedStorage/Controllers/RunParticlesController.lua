@@ -31,6 +31,10 @@ function RunParticlesController.Start(self: typeof(RunParticlesController))
 	PlayerNetwork.RunParticlesCreate.Fire()
 
 	PlayerEventController.OnCharacterLoaded:Connect(function(character: Model)
+		-- One pair of listeners per character: without this the janitor
+		-- grows by two dead entries every respawn.
+		self._janitor:Cleanup()
+
 		local humanoid = character:WaitForChild("Humanoid") :: Humanoid
 
 		self._janitor:Add(humanoid.Running:Connect(function(speed: number)

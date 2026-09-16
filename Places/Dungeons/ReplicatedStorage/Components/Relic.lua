@@ -133,6 +133,10 @@ function Relic:_playCollectedFade()
 	-- plus the effects that do not ride Transparency and would otherwise
 	-- outlive the mesh (a Light leaves a lit patch of floor under an
 	-- invisible relic; emitters keep spitting particles from nothing).
+	-- Disabling a SHOWN prompt fires PromptHidden, which is what takes the
+	-- description card and RelicRenderController's hover down; a relic not
+	-- yet landed has no prompt here, and its landing checks _consumed so it
+	-- never grows one.
 	for _, descendant in self.Instance:GetDescendants() do
 		if
 			descendant:IsA("ProximityPrompt")
@@ -319,6 +323,18 @@ function Relic:Start()
 		if alpha >= 1 then
 			self._connection:Disconnect()
 
+			-- Claimed while still in the air: the pull's offers drop 0.25 s
+			-- apart and fly for ~1 s, so a quick pick of the first one to
+			-- land marks the rest Collected before they touch down. The
+			-- Collected fade has already run on this model, and the code
+			-- below would build it a fresh, ENABLED prompt over that fade --
+			-- which is exactly how a claimed offer kept showing its card and
+			-- hover until the server destroyed it. Nothing to land.
+			if self._consumed then
+				self._primaryPart.DropAttachment.DropParticles.Enabled = false
+				return
+			end
+
 			self._primaryPart.DropAttachment.DropParticles.Enabled = false
 
 			self._relicParticles:Emit(15)
@@ -358,8 +374,12 @@ function Relic:Start()
 
 			proximityPrompt.Parent = self.Instance.Handle
 
+			-- Re-checked at fire time: a claim that lands inside this grace
+			-- window must not switch the prompt back on behind the fade.
 			task.delay(0.25, function()
-				proximityPrompt.Enabled = true
+				if not self._consumed then
+					proximityPrompt.Enabled = true
+				end
 			end)
 
 			-- REQUEST ONLY. The server owns the relic-cap decision, so nothing

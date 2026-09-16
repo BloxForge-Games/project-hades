@@ -106,6 +106,10 @@ function DomainExpansionExecutable:Play()
 
 	workspace.CurrentCamera.CameraType = previousCameraType
 	workspace.CurrentCamera.FieldOfView = previousCameraFieldOfView
+
+	-- The waypoint rig is only needed while the tweens read it; without this
+	-- every play left one more clone in MagicSpells.
+	waypointModel:Destroy()
 end
 
 --- Stops any existing cutscenes that resembles the passed hashmap.

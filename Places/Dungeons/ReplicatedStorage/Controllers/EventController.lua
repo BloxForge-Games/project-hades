@@ -780,6 +780,14 @@ function EventController.RefreshMerchantStalls(self: typeof(EventController))
 		self._stallClones[key] = nil
 	end
 	table.clear(self._stalls)
+	-- Reveal watchers for rooms the previous floor destroyed: the connection
+	-- died with the model, the Model key did not.
+	for roomModel, connection in self._revealWatchers do
+		if not roomModel.Parent then
+			connection:Disconnect()
+			self._revealWatchers[roomModel] = nil
+		end
+	end
 
 	local rendered = 0
 	for _, stall in stalls do

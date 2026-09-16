@@ -170,6 +170,9 @@ return function(player: Player)
 
 		task.delay(1, function()
 			susanooRig:Destroy()
+			-- The follow target lives on the CHARACTER, not the rig: every
+			-- cast left one more Attachment on the root part.
+			targetAttachment:Destroy()
 		end)
 	end)
 

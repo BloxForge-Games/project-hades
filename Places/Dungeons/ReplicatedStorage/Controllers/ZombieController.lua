@@ -27,6 +27,13 @@
 	    constant — the lunge is purely visual, server-side position is
 	    set authoritatively via PivotTo.
 
+	It also owns the MAGIC-CUTSCENE DIM (SetCutsceneDim): for the length
+	of a magic cutscene every mob under workspace.IgnoreInstances.Zombies
+	-- regular, miniboss, boss, and any that spawn meanwhile -- is held
+	semi-transparent on this client only, and put back exactly where it
+	was when the cutscene ends. CutsceneController.PlayMagicCutscene is
+	the caller. See the "Cutscene dim" section for the rules.
+
 	==========================================================
 	Memory note (kept from prior refactor)
 	==========================================================
@@ -80,6 +87,51 @@ local HITBOX_Y_JITTER_MAX = 0.05
 -- hitbox clones live. Same folder the prior implementation used so
 -- LifeController's clearZombieHitboxes sweep still picks them up.
 local HITBOX_PARENT = workspace.IgnoreInstances.MagicSpells
+
+--[ Cutscene dim ]--
+
+-- Transparency every mob body part is held at while a magic cutscene runs
+-- (SetCutsceneDim). The dim only ever makes a part MORE transparent: one
+-- already at or past this value -- the invisible HumanoidRootPart, the
+-- hitbox parts, a corpse mid-fade -- is left exactly where it is.
+local CUTSCENE_DIM_TRANSPARENCY = 0.75
+
+-- Everything under a mob model that carries a Transparency the dim
+-- touches: BaseParts and Decals (Texture inherits Decal, so the face and
+-- any skin textures ride along with the part they sit on).
+type Fadeable = BasePart | Decal
+
+local function isFadeable(instance: Instance): boolean
+	return instance:IsA("BasePart") or instance:IsA("Decal")
+end
+
+-- Reads go through the union fine; a WRITE needs the concrete class, so
+-- every Transparency write the dim makes goes through here.
+local function setTransparency(fadeable: Fadeable, value: number)
+	if fadeable:IsA("BasePart") then
+		fadeable.Transparency = value
+	else
+		(fadeable :: Decal).Transparency = value
+	end
+end
+
+-- How many SetCutsceneDim(true) calls are outstanding. Overlapping
+-- cutscenes dim once (0 -> 1) and restore once (1 -> 0).
+ZombieController._cutsceneDimDepth = 0
+
+-- What each tracked part looked like before the dim -- the value it goes
+-- back to. STRONG keys, deliberately: a server-replicated mob part that
+-- no client script references is only kept alive in Lua by a strong
+-- reference, so a weak-keyed table would silently drop entries (and
+-- their restore) mid-cutscene. Cleared on restore, so nothing is
+-- retained past the window.
+ZombieController._cutsceneDimOriginals = {} :: { [Fadeable]: number }
+
+-- One Transparency-changed connection per tracked part, plus the
+-- DescendantAdded watch on the mob folder that catches parts arriving
+-- mid-cutscene (a mob spawning, a late-replicating accessory).
+ZombieController._cutsceneDimConnections = {} :: { RBXScriptConnection }
+ZombieController._cutsceneDimArrival = nil :: RBXScriptConnection?
 
 --[ Local-player death gate ]--
 
@@ -363,6 +415,114 @@ local function spawnHitboxFlash(
 	task.spawn(function()
 		runHitboxFlash(state, windUpDuration, hitFrameDuration)
 	end)
+end
+
+--[ Cutscene dim ]--
+
+-- Takes one part under the dim: remembers what it looks like, dims it,
+-- and follows every later write to it for as long as the dim lasts.
+--
+-- A write this client did not make is the new truth. The server's spawn
+-- fade-in (1 -> 0 over 0.75s, MobBase._fadeInOnSpawn) and death fade-out
+-- (-> 1, MobBase / Miniboss) both replicate per tween step and land on top
+-- of the local value; each such step replaces the remembered original and
+-- is dimmed again if it dropped below the dim. That is what keeps a mob
+-- that spawns mid-cutscene dim as it fades in (and restores it to the
+-- opaque value the fade ended on, not the transparent one it started at),
+-- and what lets a corpse fade out through the cutscene without snapping
+-- back to solid when it ends. Our own write is recognised by its value
+-- and ignored, so the re-dim inside the handler cannot loop.
+function ZombieController._trackCutsceneDim(self: typeof(ZombieController), instance: Instance)
+	if not isFadeable(instance) then
+		return
+	end
+	local fadeable = instance :: Fadeable
+	if self._cutsceneDimOriginals[fadeable] ~= nil then
+		return
+	end
+	self._cutsceneDimOriginals[fadeable] = fadeable.Transparency
+
+	table.insert(
+		self._cutsceneDimConnections,
+		fadeable:GetPropertyChangedSignal("Transparency"):Connect(function()
+			local current = fadeable.Transparency
+			if current == CUTSCENE_DIM_TRANSPARENCY then
+				return
+			end
+			self._cutsceneDimOriginals[fadeable] = current
+			if current < CUTSCENE_DIM_TRANSPARENCY then
+				setTransparency(fadeable, CUTSCENE_DIM_TRANSPARENCY)
+			end
+		end)
+	)
+
+	if fadeable.Transparency < CUTSCENE_DIM_TRANSPARENCY then
+		setTransparency(fadeable, CUTSCENE_DIM_TRANSPARENCY)
+	end
+end
+
+-- Dims every part of every live mob now, then every part that arrives
+-- under the mob folder for as long as the dim lasts. The folder, not the
+-- Zombie tag, because it is exactly the set of LIVE mobs (a corpse leaves
+-- it for DeadZombies on death, keeping its tag) and is the same source
+-- CharacterHighlightController reads.
+function ZombieController._startCutsceneDim(self: typeof(ZombieController))
+	local zombiesFolder = workspace.IgnoreInstances.Zombies
+	for _, descendant in zombiesFolder:GetDescendants() do
+		self:_trackCutsceneDim(descendant)
+	end
+	self._cutsceneDimArrival = zombiesFolder.DescendantAdded:Connect(function(descendant: Instance)
+		self:_trackCutsceneDim(descendant)
+	end)
+end
+
+-- Drops every watch, then puts back only the parts still showing OUR
+-- value. A part someone else has written since -- a corpse that faded
+-- out, a part whose replicated value moved past the dim -- already shows
+-- the truth and is left alone. A part destroyed or unparented
+-- mid-cutscene has nothing to come back to.
+function ZombieController._stopCutsceneDim(self: typeof(ZombieController))
+	if self._cutsceneDimArrival then
+		self._cutsceneDimArrival:Disconnect()
+		self._cutsceneDimArrival = nil
+	end
+	for _, connection in self._cutsceneDimConnections do
+		connection:Disconnect()
+	end
+	table.clear(self._cutsceneDimConnections)
+
+	for fadeable, original in self._cutsceneDimOriginals do
+		if fadeable.Parent and fadeable.Transparency == CUTSCENE_DIM_TRANSPARENCY then
+			setTransparency(fadeable, original)
+		end
+	end
+	table.clear(self._cutsceneDimOriginals)
+end
+
+-- Public: renders every mob semi-transparent for the LOCAL player while a
+-- magic cutscene runs (active = true) and restores them when it ends
+-- (active = false). Reference-counted, so two overlapping cutscenes dim
+-- once and restore once, when the last of them releases; a release with
+-- nothing outstanding is a no-op. Local-only -- nothing here replicates,
+-- and no other client system tweens mob body parts, so there is no
+-- second writer to fight (CharacterHighlightController drives the mob
+-- Highlight, never part Transparency).
+function ZombieController.SetCutsceneDim(self: typeof(ZombieController), active: boolean)
+	if active then
+		self._cutsceneDimDepth += 1
+		if self._cutsceneDimDepth == 1 then
+			self:_startCutsceneDim()
+		end
+		return
+	end
+
+	if self._cutsceneDimDepth == 0 then
+		return
+	end
+	self._cutsceneDimDepth -= 1
+	if self._cutsceneDimDepth == 0 then
+		self:_stopCutsceneDim()
+	end
 end
 
 --[ Initializers ]--
