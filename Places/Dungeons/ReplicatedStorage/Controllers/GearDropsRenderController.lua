@@ -246,10 +246,10 @@ end
 --     own _fadeOutAndDestroy is driving transparency to 1; we'd
 --     fight that.
 --   * Skips drops the local player doesn't own. Non-owned drops are
---     hidden on this client (the client component's _hideForNonOwner
---     sets Transparency=1 + disables particles + disables billboard);
---     tweening their transparency from 1 → 0.5 would partially
---     un-hide other players' loot. Owner-only drops also means only
+--     invisible on this client (spawned hidden by the server, see
+--     privateDropVisibility, and never revealed here); tweening their
+--     transparency from 1 → 0.5 would partially un-hide other players'
+--     loot. Owner-only drops also means only
 --     owner-hovers can fire PromptShown anyway, so the dim only ever
 --     needs to touch the local player's own siblings.
 local localUserId = Players.LocalPlayer.UserId

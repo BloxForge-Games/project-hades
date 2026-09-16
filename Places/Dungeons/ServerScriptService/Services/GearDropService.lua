@@ -20,6 +20,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
 local resolveArcLanding = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.resolveArcLanding)
+local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 local WeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WeaponData)
 local ArmorPieceData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArmorPieceData)
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
@@ -706,6 +707,12 @@ end
 -- returned model is parented under workspace.IgnoreInstances.GearDrops
 -- and tagged, which auto-attaches the server + client GearDrop
 -- components.
+--
+-- `public`: a player dropped this from their run inventory, so ANYONE may
+-- take it. It is stamped (PublicDrop) and left visible here, BEFORE the
+-- model is parented, because everything else is owner-locked and spawns
+-- invisible (privateDropVisibility) -- a client that saw the model before
+-- the flag would have hidden it for good.
 function GearDropService._buildDropModel(
 	self: typeof(GearDropService),
 	uuid: string,
@@ -717,7 +724,8 @@ function GearDropService._buildDropModel(
 	landingPosition: Vector3,
 	ownerId: number,
 	level: number,
-	fromChest: boolean?
+	fromChest: boolean?,
+	public: boolean?
 ): Model?
 	local assetFolder = self:_resolveAssetFolder(gearType)
 	if not assetFolder then
@@ -855,11 +863,25 @@ function GearDropService._buildDropModel(
 	if armorSlot then
 		model:SetAttribute(ATTR_SLOT, armorSlot)
 	end
+	if public then
+		-- OwnerId stays stamped (the drop still knows who threw it) but
+		-- PublicDrop is what both components actually read, and it opens
+		-- the pickup to everyone.
+		model:SetAttribute(ATTR_PUBLIC_DROP, true)
+	else
+		-- Owner-locked: spawned invisible, and only the owner's client
+		-- GearDrop component reveals it. Everyone else never sees it.
+		privateDropVisibility.hide(model)
+	end
 
 	-- Tag LAST so both server + client component Construct against a
 	-- fully-built model (PrimaryPart set, gear welded, attributes
 	-- populated).
 	CollectionService:AddTag(model, TagList.GearDrop)
+	-- Atomic: the client component needs the carrier and its attachments
+	-- the moment the tagged Model streams in (see DropService). Without
+	-- this the Model could replicate before Carrier.DropAttachment did.
+	model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 	model.Parent = self:_ensureDropFolder()
 
 	return model
@@ -1105,7 +1127,9 @@ function GearDropService.DropExistingGear(
 		landingPosition,
 		player.UserId,
 		item.level or 1,
-		false
+		false,
+		-- PUBLIC: stamped inside the builder, before the model replicates.
+		true
 	)
 	if not model then
 		return false
@@ -1113,10 +1137,6 @@ function GearDropService.DropExistingGear(
 	if bouncePosition then
 		model:SetAttribute(ATTR_BOUNCE_POSITION, bouncePosition)
 	end
-	-- OwnerId stays stamped (the drop still knows who threw it) but
-	-- PublicDrop is what both components actually read, and it opens the
-	-- pickup to everyone.
-	model:SetAttribute(ATTR_PUBLIC_DROP, true)
 
 	-- ORIGINAL owner, not the last one to let go of it. The first player
 	-- to drop this item stamps their name onto the ITEM, and every drop

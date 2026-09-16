@@ -284,6 +284,9 @@ local function placeChestAtRest(player: Player, chest: Model): boolean
 		flatTarget = landingPosition + Vector3.new(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z)
 	end
 	chest:PivotTo(CFrame.lookAt(landingPosition, flatTarget))
+	-- Atomic: the client component needs the grafted prompt, billboard and
+	-- landing FX the moment the tagged Model streams in (see DropService).
+	chest.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
 	chest.Parent = workspace.IgnoreInstances.Map.RelicMachines
 	return true
 end

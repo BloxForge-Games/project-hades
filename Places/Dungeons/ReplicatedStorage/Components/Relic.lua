@@ -5,6 +5,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
 local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
@@ -20,11 +21,14 @@ local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Fun
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
+local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 
 local localPlayer = Players.LocalPlayer
 
 local Y_POS_OFFSET = 3
 local ROTATION_SPEED = 20
+-- How long Construct waits for a streamed-in descendant before giving up.
+local STREAM_WAIT_SECONDS = 10
 
 -- GROUND-relic glow. Lives here rather than on the model template on
 -- purpose: this component only runs on relics tagged TagList.Relic — the
@@ -77,11 +81,47 @@ function Relic:_onHeartbeat(deltaTime: number)
 end
 
 function Relic:Construct()
+	self._gone = false
 	self._amplitude = Random.new():NextNumber(0.01, 0.015)
 	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
-	-- The Handle can stream in after the tagged Model does; wait for it.
-	local handle = self.Instance:WaitForChild("Handle", 10)
-	assert(handle, "[Relic] Handle never replicated for " .. self.Instance:GetFullName())
+	-- The parts can stream in after the tagged Model does; wait for them.
+	-- PrimaryPart is the invisible anchor (billboard adornee, particle
+	-- rig); the Handle is the visible mesh Start flies and fades.
+	local anchor = waitForPrimaryPart(self.Instance)
+	if not anchor then
+		-- Taken / expired while still streaming in: nothing to build, and
+		-- Start checks _gone. Anything else is a real failure.
+		if self.Instance.Parent == nil then
+			self._gone = true
+			return
+		end
+		error("[Relic] PrimaryPart never replicated for " .. self.Instance:GetFullName())
+	end
+	-- Start (and what runs after it) reads these directly. The server
+	-- spawns the model atomic, so they normally arrive with it; the waits
+	-- cover an asset that is not, and turn a random "not a valid member"
+	-- crash into a clear timeout. Nil only when the model left the
+	-- DataModel mid-wait (taken / expired while streaming in): Construct
+	-- then bails and Start checks _gone.
+	local function need(parent: Instance?, name: string): Instance?
+		if parent == nil or self._gone then
+			return nil
+		end
+		local child = parent:WaitForChild(name, STREAM_WAIT_SECONDS)
+		if child == nil and self.Instance.Parent == nil then
+			self._gone = true
+			return nil
+		end
+		assert(child, ("[Relic] %s never replicated under %s"):format(name, parent:GetFullName()))
+		return child
+	end
+	local handle = need(self.Instance, "Handle")
+	self._relicParticleAttachment = need(anchor, "RelicParticleAttachment")
+	self._dropParticles = need(need(handle, "DropAttachment"), "DropParticles")
+	self._collectedAttachment = need(handle, "Collected")
+	if self._gone then
+		return
+	end
 	self._primaryPart = handle
 	self._overlapParams = OverlapParams.new()
 	-- Set overlap params
@@ -111,7 +151,6 @@ function Relic:Construct()
 	self._connection = nil
 	self._relicParticles = ReplicatedStorage.GameAssets.Particles.RelicParticles:Clone()
 	self._relicParticles.Parent = handle
-	self._collectedAttachment = handle:WaitForChild("Collected", 10)
 end
 
 -- The pickup, as EVERY client sees it. The prompt and the floating label
@@ -175,6 +214,21 @@ function Relic:_playCollectedFade()
 end
 
 function Relic:Start()
+	if self._gone then
+		return
+	end
+	-- A PUBLIC drop (tray Drop button) is everyone's: no fade, no owner
+	-- lock, and claiming it consumes only itself. Anything else is
+	-- owner-locked: the server spawned it invisible (privateDropVisibility
+	-- .hide) and only the owner's client reveals it.
+	local isPublic = self.Instance:GetAttribute(Attributes.PublicDrop) == true
+	local isOwner = isPublic or Players.LocalPlayer.UserId == self.Instance:GetAttribute(Attributes.OwnerId)
+	if isOwner then
+		-- Authored look back FIRST, so the anchor enforcement and the
+		-- fade-in below start from the real values. Skips itself on a
+		-- relic already Collected (claimed while it was streaming in).
+		privateDropVisibility.reveal(self.Instance)
+	end
 	-- PrimaryPart is a control / anchor part for animations + the
 	-- BillboardGui adornee — never meant to render. Enforce
 	-- Transparency=1 here so a missed template authoring doesn't
@@ -198,18 +252,17 @@ function Relic:Start()
 		return
 	end
 
-	-- A PUBLIC drop (tray Drop button) is everyone's: no fade, no owner
-	-- lock, and claiming it consumes only itself. Anything else fades for
-	-- everyone but its OwnerId and is claimed as a fan.
-	local isPublic = self.Instance:GetAttribute(Attributes.PublicDrop) == true
-	if not isPublic and Players.LocalPlayer.UserId ~= self.Instance:GetAttribute(Attributes.OwnerId) then
+	-- Someone else's owner-locked relic (claimed as a fan by its owner).
+	-- Already invisible from the server; the local hide below is only the
+	-- fallback for a spawn path that forgot to pre-hide.
+	if not isOwner then
 		warn("Local player is not the owner of this relic. Cannot enable pickup.")
 
-		-- Fade EVERY BasePart in the model EXCEPT PrimaryPart. Without
-		-- the skip, the prior multi-handle fix made PrimaryPart visible
-		-- as an orange box (it tweened to Transparency=1 here but other
-		-- code paths re-tweened it visible — and tweening it 1→1 also
-		-- briefly overwrites the enforced 1 above).
+		-- Every BasePart in the model EXCEPT PrimaryPart. Without the
+		-- skip, the prior multi-handle fix made PrimaryPart visible as an
+		-- orange box (it tweened to Transparency=1 here but other code
+		-- paths re-tweened it visible — and tweening it 1→1 also briefly
+		-- overwrites the enforced 1 above).
 		for _, descendant in self.Instance:GetDescendants() do
 			if descendant:IsA("BasePart") and descendant ~= self.Instance.PrimaryPart then
 				TweenService:Create(
@@ -220,7 +273,7 @@ function Relic:Start()
 			end
 		end
 
-		for _, particle in self.Instance.PrimaryPart.RelicParticleAttachment:GetChildren() do
+		for _, particle in self._relicParticleAttachment:GetChildren() do
 			if particle.Name == "Shine" then
 				particle.Enabled = false
 				continue
@@ -280,7 +333,7 @@ function Relic:Start()
 
 	relicBillboardGui.Frame.RarityText.TextColor3 = rarityColor
 
-	self._primaryPart.DropAttachment.DropParticles.Color = ColorSequence.new(rarityColor)
+	self._dropParticles.Color = ColorSequence.new(rarityColor)
 
 	-- One light on the primary Handle, tinted via the glow-specific
 	-- palette (RarityColors:GetGlow — purer hues than the text tint; the
@@ -331,11 +384,11 @@ function Relic:Start()
 			-- which is exactly how a claimed offer kept showing its card and
 			-- hover until the server destroyed it. Nothing to land.
 			if self._consumed then
-				self._primaryPart.DropAttachment.DropParticles.Enabled = false
+				self._dropParticles.Enabled = false
 				return
 			end
 
-			self._primaryPart.DropAttachment.DropParticles.Enabled = false
+			self._dropParticles.Enabled = false
 
 			self._relicParticles:Emit(15)
 			lootSound:PlayLanding()
@@ -400,19 +453,16 @@ function Relic:Start()
 			self._janitor:Add(acceptedRouter:Bind(self.Instance, function()
 				ScreenGradientInterfaceController.Signals.OnPulseGradient:Fire(rarityColor)
 
-				local collectedBurst = self.Instance.Handle:FindFirstChild("Collected")
-				if collectedBurst then
-					for _, emitter in collectedBurst:GetChildren() do
-						if emitter:IsA("ParticleEmitter") then
-							emitter:Emit(1)
-						end
+				for _, emitter in self._collectedAttachment:GetChildren() do
+					if emitter:IsA("ParticleEmitter") then
+						emitter:Emit(1)
 					end
 				end
 			end))
 		end
 	end)
 
-	self.Instance.PrimaryPart.RelicParticleAttachment.Parent = self._primaryPart
+	self._relicParticleAttachment.Parent = self._primaryPart
 end
 
 return Relic

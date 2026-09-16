@@ -23,6 +23,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local chestLidSwing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.chestLidSwing)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
@@ -38,6 +39,11 @@ local Chest = Component.new({
 })
 
 function Chest:Construct()
+	-- The parts can stream in after the tagged Model does; the open reads
+	-- PrimaryPart (the thud's emitter, the lid's hinge body), so wait for
+	-- it. No assert: the open path is nil-safe, and a chest opened the
+	-- instant it replicates (a late joiner) should still show its end state.
+	waitForPrimaryPart(self.Instance)
 	self._openPlayed = false
 end
 

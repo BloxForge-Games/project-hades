@@ -607,10 +607,27 @@ function DungeonService._snapPrefab(
 	-- prefabs that don't ship a Traps folder.
 	self:_randomizeChunkTraps(clone)
 	self:_randomizeChunkBuildings(clone)
+	self:_atomizeComponentModels(clone)
 
 	clone.Parent = parentFolder
 
 	return clone
+end
+
+-- Stamps every Trap / Chest model in the chunk Atomic so each replicates
+-- in one go: their client components read parts (the spikes, the chest's
+-- PrimaryPart) that could otherwise stream in after the tagged Model
+-- does. The same treatment the drop services give their models. Called
+-- BEFORE parenting, like the trap randomisation.
+function DungeonService._atomizeComponentModels(_self: typeof(DungeonService), chunk: Model)
+	for _, descendant in chunk:GetDescendants() do
+		if
+			descendant:IsA("Model")
+			and (CollectionService:HasTag(descendant, TRAP_TAG) or CollectionService:HasTag(descendant, TagList.Chest))
+		then
+			descendant.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+		end
+	end
 end
 
 -- Randomly destroys children of the chunk's "Traps" folder so each
@@ -2171,6 +2188,7 @@ function DungeonService.GenerateDungeon(
 	local startModel = startPrefab:Clone()
 	startModel:PivotTo(resolvedOrigin)
 	startModel.Name = "Start"
+	self:_atomizeComponentModels(startModel)
 	startModel.Parent = runtimeFolder
 
 	for _, wall in startModel:GetChildren() do

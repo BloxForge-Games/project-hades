@@ -33,6 +33,7 @@ local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
+local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 
 --[ Constants ]--
@@ -71,6 +72,9 @@ local DEFAULT_GEAR_LEVEL = 1
 
 -- Fade-out duration on expire.
 local FADE_DURATION = 0.5
+
+-- How long Construct waits for a streamed-in descendant before giving up.
+local STREAM_WAIT_SECONDS = 10
 
 -- Idle scale resolver now lives in
 -- Shared/Functions/Gear/getGearIdleScale. The component still applies
@@ -255,7 +259,7 @@ function GearDrop:_playBezierFlight()
 
 	-- Landed: the trail stops and the rarity burst fires, matching the
 	-- relic drop's landing beat.
-	self.Instance.PrimaryPart.DropAttachment.DropParticles.Enabled = false
+	self._dropParticles.Enabled = false
 	self:_emitLandingBurst()
 	lootSound:PlayLanding()
 end
@@ -278,35 +282,28 @@ function GearDrop:_emitPickupBurst()
 	if not self._carrier then
 		return
 	end
-	local collected = self._carrier:FindFirstChild(COLLECTED_ATTACHMENT_NAME)
-	if not collected then
-		return
-	end
-	for _, child in collected:GetChildren() do
+	for _, child in self._collected:GetChildren() do
 		if child:IsA("ParticleEmitter") then
 			child:Emit(COLLECTED_EMIT_COUNT)
 		end
 	end
 end
 
--- Hides every visible element on the drop so non-owner clients see
--- nothing where someone else's loot lives. The model still exists
--- (it's server-spawned + replicated), but everything that would
--- render is muted client-side:
+-- Someone else's drop. The server already spawned it invisible
+-- (privateDropVisibility.hide) and only the owner reveals it, so this
+-- client never sees a frame of it. This local pass is the fallback for a
+-- spawn path that forgot, and it also catches what the CLIENT built
+-- (the billboard from _buildBillboard) -- everything that would render:
 --
 --   * BasePart.Transparency       → 1 (mesh parts invisible)
 --   * Decal / Texture.Transparency → 1 (surface decoration invisible)
 --   * ParticleEmitter.Enabled     → false (no rarity glow / drop stream)
 --   * BillboardGui.Enabled        → false (no "Lvl. N Name" label)
 --
--- The carrier is already Transparency = 1 from the server-side build,
--- but the loop hits it anyway harmlessly.
---
--- Local-only writes — the server's replicated state is unchanged, so
--- the owner's client still sees their drop with full visuals. The
--- GearDropsRenderController also skips non-owned drops in its
--- hover-dim loop so a passing owner-drop hover doesn't accidentally
--- tween these parts back toward visible.
+-- Local-only writes — the server's replicated state is unchanged. The
+-- GearDropsRenderController also skips non-owned drops in its hover-dim
+-- loop so a passing owner-drop hover doesn't tween these parts back
+-- toward visible.
 function GearDrop:_hideForNonOwner()
 	for _, descendant in self.Instance:GetDescendants() do
 		if descendant:IsA("BasePart") or descendant:IsA("Decal") or descendant:IsA("Texture") then
@@ -452,9 +449,41 @@ end
 --[ Component lifecycle ]--
 
 function GearDrop:Construct()
+	self._gone = false
 	-- The parts can stream in after the tagged Model does; wait for them.
 	self._carrier = waitForPrimaryPart(self.Instance)
-	assert(self._carrier, "[GearDrop] PrimaryPart never replicated for " .. self.Instance:GetFullName())
+	if not self._carrier then
+		-- Taken / expired while still streaming in: nothing to build, and
+		-- Start checks _gone. Anything else is a real failure.
+		if self.Instance.Parent == nil then
+			self._gone = true
+			return
+		end
+		error("[GearDrop] PrimaryPart never replicated for " .. self.Instance:GetFullName())
+	end
+	-- Start (and what runs after it) reads these directly. The server
+	-- spawns the model atomic, so they normally arrive with it; the waits
+	-- cover an asset that is not, and turn a random "not a valid member"
+	-- crash into a clear timeout. Nil only when the model left the
+	-- DataModel mid-wait (taken / expired while streaming in): Construct
+	-- then bails and Start checks _gone.
+	local function need(parent: Instance?, name: string): Instance?
+		if parent == nil or self._gone then
+			return nil
+		end
+		local child = parent:WaitForChild(name, STREAM_WAIT_SECONDS)
+		if child == nil and self.Instance.Parent == nil then
+			self._gone = true
+			return nil
+		end
+		assert(child, ("[GearDrop] %s never replicated under %s"):format(name, parent:GetFullName()))
+		return child
+	end
+	self._dropParticles = need(need(self._carrier, "DropAttachment"), "DropParticles")
+	self._collected = need(self._carrier, COLLECTED_ATTACHMENT_NAME)
+	if self._gone then
+		return
+	end
 
 	self._uuid = self.Instance:GetAttribute(ATTR_UUID)
 	assert(self._uuid, "[GearDrop] Component requires GearUuid attribute on the carrier")
@@ -508,8 +537,10 @@ function GearDrop:Construct()
 end
 
 function GearDrop:Start()
-	self.Instance.PrimaryPart.DropAttachment.DropParticles.Color =
-		ColorSequence.new(RarityColors:Get(self.Instance:GetAttribute(ATTR_RARITY)))
+	if self._gone then
+		return
+	end
+	self._dropParticles.Color = ColorSequence.new(RarityColors:Get(self.Instance:GetAttribute(ATTR_RARITY)))
 
 	self._janitor:Add(self.Instance:GetAttributeChangedSignal(ATTR_EXPIRED):Connect(function()
 		if self.Instance:GetAttribute(ATTR_EXPIRED) == true then
@@ -558,6 +589,15 @@ function GearDrop:Start()
 
 	if not self._isOwner then
 		return
+	end
+
+	-- Ours: the server spawned it invisible (privateDropVisibility.hide);
+	-- put the authored look back before the flight, so the expire fade
+	-- later tweens from the real values. Already claimed (Expired is set
+	-- on pickup) means it stays hidden: there is nothing left to show.
+	-- A no-op on a public drop, which was never hidden.
+	if self.Instance:GetAttribute(ATTR_EXPIRED) ~= true then
+		privateDropVisibility.reveal(self.Instance)
 	end
 
 	-- Owner-only: scale infrastructure + bezier + resting loop.

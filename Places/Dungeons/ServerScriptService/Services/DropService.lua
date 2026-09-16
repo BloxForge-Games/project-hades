@@ -23,6 +23,7 @@ local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.Rarit
 local RuneRarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneRarityColors)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local resolveArcLanding = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.resolveArcLanding)
+local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 
 -- Coin landing scatter (studs, each axis) around the dead mob. Picked
 -- HERE rather than per client — it used to be, so every player watched
@@ -233,7 +234,8 @@ function DropService.Start(self: typeof(DropService))
 			if bounce then
 				drop:SetAttribute(Attributes.BouncePosition, bounce)
 			end
-			if options and options.public then
+			local isPublic = options ~= nil and options.public == true
+			if isPublic then
 				-- No OwnerId at all: the owner lock and the fan-wide claim
 				-- (client + server Relic components) both key off it. The
 				-- ORIGINAL owner's name rides along instead, purely for the
@@ -255,6 +257,11 @@ function DropService.Start(self: typeof(DropService))
 			-- world position, so only one boot appeared at the drop
 			-- site and the other one was stranded at 0,0,0.
 			drop:PivotTo(CFrame.new(originalPosition))
+			if not isPublic then
+				-- Owner-locked: spawned invisible, and only the owner's
+				-- Relic component reveals it. Everyone else never sees it.
+				privateDropVisibility.hide(drop)
+			end
 			-- Atomic: the client component needs the Handle and its attachments
 			-- the moment the tagged Model streams in.
 			drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
@@ -327,6 +334,9 @@ function DropService.Start(self: typeof(DropService))
 			-- Spawn at the machine's mouth; the client's bezier carries it to
 			-- the fan position (PivotTo so multi-part models move as one).
 			drop:PivotTo(CFrame.new(originalPosition))
+			-- Always owner-locked: spawned invisible, and only the owner's
+			-- Rune component reveals it.
+			privateDropVisibility.hide(drop)
 			-- Atomic: the client component needs the Handle and its attachments
 			-- the moment the tagged Model streams in.
 			drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
@@ -352,8 +362,9 @@ function DropService.Start(self: typeof(DropService))
 				local drop = game.ReplicatedStorage.GameAssets.Drops.Default:Clone()
 				drop:SetAttribute(Attributes.IsBoss, isBoss or false)
 				if ownerId then
-					-- Private drop: the client hides it from everyone else and
-					-- the server refuses their collect (Server/Components/Drop).
+					-- Private drop: spawned invisible (below), revealed only by
+					-- the owner's Drop component, and the server refuses anyone
+					-- else's collect (Server/Components/Drop).
 					drop:SetAttribute(Attributes.OwnerId, ownerId)
 				end
 				if fromChest then
@@ -376,6 +387,9 @@ function DropService.Start(self: typeof(DropService))
 					drop:SetAttribute(Attributes.BouncePosition, bounce)
 				end
 				drop.PrimaryPart.Position = basePart.Position
+				if ownerId then
+					privateDropVisibility.hide(drop)
+				end
 				-- Atomic: the client component needs the Handle and its attachments
 				-- the moment the tagged Model streams in.
 				drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic

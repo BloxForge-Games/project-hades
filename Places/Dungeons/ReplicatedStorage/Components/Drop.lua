@@ -15,6 +15,7 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
+local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 local RelicController = require(ReplicatedStorage.Controllers.RelicController)
 
 local MAX_STUD_RAYCAST_DIST = 8
@@ -38,6 +39,8 @@ local PICKUP_DELAY = 0.25
 local DEFAULT_X_Z_DISTANCE = 8
 local BOSS_X_Z_DISTANCE = 20
 local Y_POS_OFFSET = -1
+-- How long Construct waits for a streamed-in descendant before giving up.
+local STREAM_WAIT_SECONDS = 10
 
 local Drop = Component.new({
 	Tag = TagList.Drop,
@@ -89,7 +92,7 @@ function Drop:_onHeartbeat()
 		end
 	end
 
-	for _, v in pairs(self.Instance.PrimaryPart:FindFirstChild("Collected"):GetChildren()) do
+	for _, v in pairs(self._collected:GetChildren()) do
 		v:Emit(1)
 	end
 
@@ -100,7 +103,7 @@ function Drop:_onHeartbeat()
 	)
 
 	local coinImageTransparencyTween = TweenService:Create(
-		self.Instance.PrimaryPart.BillboardGui.Image,
+		self._billboardImage,
 		TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.25),
 		{ ImageTransparency = 1 }
 	)
@@ -116,11 +119,44 @@ function Drop:_onHeartbeat()
 end
 
 function Drop:Construct()
+	self._gone = false
 	self._amplitude = Random.new():NextNumber(0.01, 0.015)
 	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
 	-- The parts can stream in after the tagged Model does; wait for them.
 	self._primaryPart = waitForPrimaryPart(self.Instance)
-	assert(self._primaryPart, "[Drop] PrimaryPart never replicated for " .. self.Instance:GetFullName())
+	if not self._primaryPart then
+		-- Taken / expired while still streaming in: nothing to build, and
+		-- Start checks _gone. Anything else is a real failure.
+		if self.Instance.Parent == nil then
+			self._gone = true
+			return
+		end
+		error("[Drop] PrimaryPart never replicated for " .. self.Instance:GetFullName())
+	end
+	-- Start (and what runs after it) reads these directly. The server
+	-- spawns the model atomic, so they normally arrive with it; the waits
+	-- cover an asset that is not, and turn a random "not a valid member"
+	-- crash into a clear timeout. Nil only when the model left the
+	-- DataModel mid-wait (taken / expired while streaming in): Construct
+	-- then bails and Start checks _gone.
+	local function need(parent: Instance?, name: string): Instance?
+		if parent == nil or self._gone then
+			return nil
+		end
+		local child = parent:WaitForChild(name, STREAM_WAIT_SECONDS)
+		if child == nil and self.Instance.Parent == nil then
+			self._gone = true
+			return nil
+		end
+		assert(child, ("[Drop] %s never replicated under %s"):format(name, parent:GetFullName()))
+		return child
+	end
+	self._dropParticles = need(need(self._primaryPart, "DropAttachment"), "DropParticles")
+	self._collected = need(self._primaryPart, "Collected")
+	self._billboardImage = need(need(self._primaryPart, "BillboardGui"), "Image")
+	if self._gone then
+		return
+	end
 	self._overlapParams = OverlapParams.new()
 	-- Set overlap params
 	self._overlapParams.FilterDescendantsInstances = {
@@ -165,9 +201,13 @@ function Drop:Construct()
 end
 
 function Drop:Start()
-	-- Someone else's private loot: hide it outright rather than leaving
-	-- coins on the floor that this player can walk over but never pick
-	-- up. Local-only, so it never touches the owner's view.
+	if self._gone then
+		return
+	end
+	-- Someone else's private loot. The server spawned it invisible
+	-- (privateDropVisibility.hide) and only the owner reveals it, so there
+	-- is nothing to do here; the local hide below is a fallback for a spawn
+	-- path that forgot, so at worst a coin flashes rather than lingers.
 	if not self._isMine then
 		for _, descendant in self.Instance:GetDescendants() do
 			if descendant:IsA("BasePart") then
@@ -178,6 +218,10 @@ function Drop:Start()
 		end
 		return
 	end
+
+	-- Ours: put the authored look back before the flight. A no-op on a
+	-- shared drop, which was never hidden.
+	privateDropVisibility.reveal(self.Instance)
 
 	if self.Instance:GetAttribute(CHEST_DROP_ATTRIBUTE) then
 		lootSound:PlayCoin()
@@ -191,7 +235,7 @@ function Drop:Start()
 		self._primaryPart.Position = self._arc(i)
 	end
 
-	self._primaryPart.DropAttachment.DropParticles.Enabled = false
+	self._dropParticles.Enabled = false
 
 	task.delay(PICKUP_DELAY, function()
 		self._canPickup = true

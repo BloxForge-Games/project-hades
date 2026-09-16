@@ -41,9 +41,12 @@ local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Scree
 local getRuneDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rune.getRuneDescription)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
+local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 
 local Y_POS_OFFSET = 3
 local ROTATION_SPEED = 20
+-- How long Construct waits for a streamed-in descendant before giving up.
+local STREAM_WAIT_SECONDS = 10
 
 -- The prompt card's UserText line: "(name)" of the player who DROPPED this
 -- item from their tray (DroppedByName, stamped by DropService /
@@ -76,11 +79,36 @@ function Rune:_onHeartbeat(deltaTime: number)
 end
 
 function Rune:Construct()
+	self._gone = false
 	self._amplitude = Random.new():NextNumber(0.01, 0.015)
 	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
-	-- The Handle can stream in after the tagged Model does; wait for it.
-	local handle = self.Instance:WaitForChild("Handle", 10)
-	assert(handle, "[Rune] Handle never replicated for " .. self.Instance:GetFullName())
+	-- The Handle and its attachments can stream in after the tagged Model
+	-- does; wait for them. (No PrimaryPart wait: a rune prefab may not set
+	-- one, and every PrimaryPart read below is already nil-safe.)
+	-- Start (and what runs after it) reads these directly. The server
+	-- spawns the model atomic, so they normally arrive with it; the waits
+	-- cover an asset that is not, and turn a random "not a valid member"
+	-- crash into a clear timeout. Nil only when the model left the
+	-- DataModel mid-wait (taken / expired while streaming in): Construct
+	-- then bails and Start checks _gone.
+	local function need(parent: Instance?, name: string): Instance?
+		if parent == nil or self._gone then
+			return nil
+		end
+		local child = parent:WaitForChild(name, STREAM_WAIT_SECONDS)
+		if child == nil and self.Instance.Parent == nil then
+			self._gone = true
+			return nil
+		end
+		assert(child, ("[Rune] %s never replicated under %s"):format(name, parent:GetFullName()))
+		return child
+	end
+	local handle = need(self.Instance, "Handle")
+	self._dropParticles = need(need(handle, "DropAttachment"), "DropParticles")
+	self._collectedAttachment = need(handle, "Collected")
+	if self._gone then
+		return
+	end
 	self._primaryPart = handle
 	self._canPickup = false
 	self._consumed = false
@@ -104,10 +132,20 @@ function Rune:Construct()
 	self._numberValue.Parent = self.Instance
 	self._relicParticles = ReplicatedStorage.GameAssets.Particles.RelicParticles:Clone()
 	self._relicParticles.Parent = handle
-	self._collectedAttachment = handle:WaitForChild("Collected", 10)
 end
 
 function Rune:Start()
+	if self._gone then
+		return
+	end
+	-- Every rune is owner-locked: the server spawned it invisible
+	-- (privateDropVisibility.hide) and only the owner's client reveals it.
+	local isOwner = Players.LocalPlayer.UserId == self.Instance:GetAttribute(Attributes.OwnerId)
+	if isOwner then
+		-- Authored look back FIRST, so the anchor enforcement and the
+		-- fade-in below start from the real values.
+		privateDropVisibility.reveal(self.Instance)
+	end
 	-- PrimaryPart is a control/anchor part + billboard adornee — never
 	-- meant to render.
 	if self.Instance.PrimaryPart then
@@ -116,9 +154,10 @@ function Rune:Start()
 
 	local rarity = self.Instance:GetAttribute("RuneRarity")
 
-	if Players.LocalPlayer.UserId ~= self.Instance:GetAttribute(Attributes.OwnerId) then
-		-- Not ours: fade every visible part and mute the rarity particles,
-		-- same treatment the Relic component gives other owners' offers.
+	if not isOwner then
+		-- Not ours: already invisible from the server. The local hide is
+		-- the fallback for a spawn path that forgot to pre-hide, the same
+		-- treatment the Relic component gives other owners' offers.
 		for _, descendant in self.Instance:GetDescendants() do
 			if descendant:IsA("BasePart") and descendant ~= self.Instance.PrimaryPart then
 				TweenService:Create(
@@ -190,10 +229,7 @@ function Rune:Start()
 
 	runeBillboardGui.Parent = self.Instance.PrimaryPart
 
-	local dropAttachment = self._primaryPart:FindFirstChild("DropAttachment")
-	if dropAttachment and dropAttachment:FindFirstChild("DropParticles") then
-		dropAttachment.DropParticles.Color = ColorSequence.new(particleColor)
-	end
+	self._dropParticles.Color = ColorSequence.new(particleColor)
 
 	if ScreenSizeController:GetScreenSizeData().name == ScreenSizes.Mobile then
 		runeBillboardGui.Frame.NameText.TextSize = 12
@@ -211,9 +247,7 @@ function Rune:Start()
 		if alpha >= 1 then
 			self._connection:Disconnect()
 
-			if dropAttachment and dropAttachment:FindFirstChild("DropParticles") then
-				dropAttachment.DropParticles.Enabled = false
-			end
+			self._dropParticles.Enabled = false
 
 			self._relicParticles:Emit(15)
 
