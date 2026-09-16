@@ -7,6 +7,7 @@
 
 --[ Roblox Services ]--
 
+local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -30,6 +31,9 @@ local CutsceneController = {
 		AmbientGradientInterfaceController,
 		ZombieController,
 	} :: { any },
+	-- Magic-cutscene exposure drop: nesting depth and the value to restore.
+	_magicExposureDepth = 0 :: number,
+	_magicExposureBase = 0 :: number,
 }
 
 --[ Constants ]--
@@ -269,6 +273,30 @@ end
 -- every mob is held semi-transparent on this client
 -- (ZombieController.SetCutsceneDim), bracketed here rather than keyed off
 -- the attribute so the dim is reference-counted across an overlap.
+-- Magic cutscenes darken the frame a touch: Lighting.ExposureCompensation
+-- drops by this much for the cutscene's length (client-local, so only the
+-- caster sees it). Reference-counted like the mob dim, so overlapping casts
+-- apply it once and the LAST one to end restores the value that was there.
+local MAGIC_CUTSCENE_EXPOSURE_DROP = 0.1
+
+function CutsceneController._setMagicExposure(self: typeof(CutsceneController), active: boolean)
+	if active then
+		self._magicExposureDepth += 1
+		if self._magicExposureDepth == 1 then
+			self._magicExposureBase = Lighting.ExposureCompensation
+			Lighting.ExposureCompensation = self._magicExposureBase - MAGIC_CUTSCENE_EXPOSURE_DROP
+		end
+		return
+	end
+	if self._magicExposureDepth == 0 then
+		return
+	end
+	self._magicExposureDepth -= 1
+	if self._magicExposureDepth == 0 then
+		Lighting.ExposureCompensation = self._magicExposureBase
+	end
+end
+
 function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), magicName: string)
 	local data = MagicData[magicName]
 	local config = data and data.cutscene
@@ -301,10 +329,12 @@ function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), 
 
 	character:SetAttribute(Attributes.MagicCutscenePlaying, true)
 	ZombieController:SetCutsceneDim(true)
+	self:_setMagicExposure(true)
 	if typeof(config.path) == "string" then
 		-- PlayCutscene yields for the whole camera path.
 		self:PlayCutscene(config.path)
 		ZombieController:SetCutsceneDim(false)
+		self:_setMagicExposure(false)
 		character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 		return
 	end
@@ -330,6 +360,7 @@ function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), 
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
 	ZombieController:SetCutsceneDim(false)
+	self:_setMagicExposure(false)
 	character:SetAttribute(Attributes.MagicCutscenePlaying, false)
 end
 

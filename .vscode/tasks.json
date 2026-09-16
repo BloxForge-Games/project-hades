@@ -23,8 +23,8 @@
 		},
 
 		{
-			"label": "update project-hades submodules",
-			"detail": "Force update all submodules used under the PZ Monorepo",
+			"label": "update submodules",
+			"detail": "Force update all submodules (bfg-core, bfg-debug) to their remote heads",
 			"type": "shell",
 			"command": "git submodule update --remote --force --init --recursive",
 			"group": { "kind": "build" },
@@ -33,7 +33,7 @@
 		},
 
 		{
-			"label": "build project-hades wally packages",
+			"label": "build wally packages",
 			"detail": "Install bfg-core's Wally packages (Packages/ and ServerPackages/ are not tracked)",
 			"type": "shell",
 			"command": "cd bfg-core ; wally install",
@@ -43,10 +43,10 @@
 		},
 
 		{
-			"label": "sourcemap: dungeons",
-			"detail": "Regenerate sourcemap.json for luau-lsp from the Dungeons place (the default the editor uses)",
+			"label": "regenerate all",
+			"detail": "Rebuild both sourcemaps (Dungeons -> sourcemap.json for the editor, Lobby -> sourcemap.lobby.json). The editor rebuilds the Dungeons one itself; run this if the Problems panel fills with Unknown require after a rename or package reinstall",
 			"type": "shell",
-			"command": "rojo sourcemap dungeons.project.json -o sourcemap.json --include-non-scripts",
+			"command": "rojo sourcemap dungeons.project.json -o sourcemap.json --include-non-scripts && rojo sourcemap lobby.project.json -o sourcemap.lobby.json --include-non-scripts",
 			"group": { "kind": "build", "isDefault": true },
 			"options": { "cwd": "${workspaceFolder}" },
 			"presentation": { "reveal": "silent" },
@@ -54,13 +54,13 @@
 		},
 
 		{
-			"label": "sourcemap: lobby",
-			"detail": "Regenerate sourcemap.json from the Lobby place, to analyse the Lobby's view of the modules",
+			"label": "typecheck: all",
+			"detail": "Type check everything: core + Dungeons through sourcemap.json, then Lobby through sourcemap.lobby.json. The one to run before a push",
 			"type": "shell",
-			"command": "rojo sourcemap lobby.project.json -o sourcemap.json --include-non-scripts",
-			"group": { "kind": "build" },
+			"command": "mkdir -p tools/luau && { [ -f tools/luau/globalTypes.d.luau ] || curl -sSfL -o tools/luau/globalTypes.d.luau https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/1.69.0/scripts/globalTypes.d.luau; } && echo '== Dungeons view (core + Dungeons) ==' && rojo sourcemap dungeons.project.json -o sourcemap.json --include-non-scripts && luau-lsp analyze --definitions tools/luau/globalTypes.d.luau --sourcemap sourcemap.json --no-strict-dm-types --ignore '**/Packages/**' --ignore '**/_Index/**' --ignore '**/Source/*/Network/**' --ignore '**/Libraries/AfterImage/**' --ignore '**/Libraries/HyperText/**' --ignore '**/Libraries/LocationMarkerSystem/**' --ignore '**/Libraries/LootPlan/**' --ignore '**/Libraries/ProfileService/**' --ignore '**/Libraries/RaycastHitbox/**' --ignore '**/Libraries/Shime.luau' --ignore '**/Libraries/ViewportModel/**' --ignore '**/Libraries/WindShake/**' bfg-core/Source bfg-core/Libraries/IsometricCamera bfg-core/Libraries/ProjectileCast bfg-core/Libraries/UserNotificationSystem Places/Dungeons && echo '== Lobby view (Lobby) ==' && rojo sourcemap lobby.project.json -o sourcemap.lobby.json --include-non-scripts && luau-lsp analyze --definitions tools/luau/globalTypes.d.luau --sourcemap sourcemap.lobby.json --no-strict-dm-types --ignore '**/Packages/**' --ignore '**/_Index/**' --ignore '**/Source/*/Network/**' --ignore '**/Libraries/AfterImage/**' --ignore '**/Libraries/HyperText/**' --ignore '**/Libraries/LocationMarkerSystem/**' --ignore '**/Libraries/LootPlan/**' --ignore '**/Libraries/ProfileService/**' --ignore '**/Libraries/RaycastHitbox/**' --ignore '**/Libraries/Shime.luau' --ignore '**/Libraries/ViewportModel/**' --ignore '**/Libraries/WindShake/**' Places/Lobby && echo 'TYPE CHECK CLEAN: both places'",
+			"group": { "kind": "test", "isDefault": true },
 			"options": { "cwd": "${workspaceFolder}" },
-			"presentation": { "reveal": "silent" },
+			"presentation": { "reveal": "always", "focus": true },
 			"problemMatcher": []
 		},
 
@@ -80,7 +80,7 @@
 			"detail": "Static boot check for both places: unresolved registry lookups, broken core requires",
 			"type": "shell",
 			"command": "python tools/verify_places.py",
-			"group": { "kind": "test", "isDefault": true },
+			"group": { "kind": "test" },
 			"options": { "cwd": "${workspaceFolder}" },
 			"presentation": { "reveal": "always", "focus": true },
 			"problemMatcher": []

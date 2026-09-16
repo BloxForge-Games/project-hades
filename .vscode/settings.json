@@ -26,7 +26,7 @@
 	// instance-path requires this codebase uses (ReplicatedStorage.
 	// Submodules.Core...). It is generated from ONE place's project file at
 	// a time; Dungeons is the default because it mounts the superset of
-	// modules. Run the "sourcemap: lobby" task to check the Lobby view.
+	// modules (the verifier checks the Lobby view; never point this at lobby).
 	"luau-lsp.sourcemap.enabled": true,
 	"luau-lsp.sourcemap.autogenerate": true,
 	"luau-lsp.sourcemap.rojoProjectFile": "dungeons.project.json",

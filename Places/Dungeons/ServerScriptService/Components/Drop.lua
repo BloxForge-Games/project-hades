@@ -11,6 +11,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
+local LifeService = require(ServerScriptService.Services.LifeService)
 
 local DESTROY_DELAY = 25
 local MANA_DESTROY_DELAY = 10
@@ -78,6 +79,11 @@ function Drop:Start()
 	)
 
 	collectedRouter:Bind(self.Instance, function(player: Player)
+		-- A dead player collects nothing: the run gear that spilled out of the
+		-- corpse is for the living (or for this player after a revive).
+		if LifeService:IsDeathState(player) then
+			return
+		end
 		-- PRIVATE drop (chest loot): only its owner banks it. The client
 		-- already hides it from everyone else, but the credit is real
 		-- currency — it gets checked HERE, where it cannot be faked.

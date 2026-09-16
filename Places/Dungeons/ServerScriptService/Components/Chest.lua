@@ -8,6 +8,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local ChestCoinData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ChestCoinData)
 local PlaceIdData = require(ReplicatedStorage.Submodules.Core.Shared.Data.PlaceIdData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
+local LifeService = require(ServerScriptService.Services.LifeService)
 
 local INTERACT_PROXIMITY_PROMPT_DURATION = 0
 
@@ -61,6 +62,11 @@ function Chest:Start()
 	self._proximityPrompt:SetAttribute("Style", "DefaultCustom")
 
 	self._proximityPrompt.Triggered:Connect(function(playerWhoTriggered: Player)
+		-- A dead player collects nothing: the run gear that spilled out of the
+		-- corpse is for the living (or for this player after a revive).
+		if LifeService:IsDeathState(playerWhoTriggered) then
+			return
+		end
 		if self._playerRegistry[playerWhoTriggered] then
 			return
 		end

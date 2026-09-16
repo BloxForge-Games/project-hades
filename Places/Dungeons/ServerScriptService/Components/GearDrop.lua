@@ -39,6 +39,7 @@ local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+local LifeService = require(ServerScriptService.Services.LifeService)
 
 -- Weapon-drop enchantment roll: ENCHANTMENT_CHANCE of rolling one at all,
 -- then a uniform pick from the pool. Looter only — the status
@@ -263,6 +264,11 @@ end
 
 function GearDrop:Start()
 	collectedRouter:Bind(self.Instance, function(player: Player)
+		-- A dead player collects nothing: the run gear that spilled out of the
+		-- corpse is for the living (or for this player after a revive).
+		if LifeService:IsDeathState(player) then
+			return
+		end
 		-- Idempotency — drops the second click on the floor.
 		if self._collected then
 			return

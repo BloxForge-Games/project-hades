@@ -328,6 +328,17 @@ end
 -- landed on). Re-rolls the scatter up to LANDING_ATTEMPTS times, then tries
 -- straight under the origin (the mob was standing on floor), then falls
 -- back to the origin height so the drop still spawns somewhere.
+-- A caller-chosen landing spot, snapped to the floor under it. Falls back
+-- to the random scatter around `origin` when that spot has no floor (off a
+-- ledge, inside a wall).
+function GearDropService._snapLandingPosition(self: typeof(GearDropService), origin: Vector3, target: Vector3): Vector3
+	local floor = findFloorBelow(target.X, target.Z, origin.Y + LANDING_RAYCAST_UP, LANDING_RAYCAST_DEPTH)
+	if floor then
+		return Vector3.new(target.X, floor.Y + LANDING_Y_ABOVE_GROUND, target.Z)
+	end
+	return self:_pickLandingPosition(origin)
+end
+
 function GearDropService._pickLandingPosition(_self: typeof(GearDropService), origin: Vector3): Vector3
 	local fromY = origin.Y + LANDING_RAYCAST_UP
 	for _ = 1, LANDING_ATTEMPTS do
@@ -1052,11 +1063,15 @@ end
 --
 -- Returns false having spawned nothing when the model cannot be built,
 -- so the caller can put the item back in the escrow.
+-- `requestedLanding` (optional): where the item should land, chosen by the
+-- caller (the death spill lays its items out in a ring). Snapped to the
+-- floor; nil means the usual random scatter around `originPosition`.
 function GearDropService.DropExistingGear(
 	self: typeof(GearDropService),
 	player: Player,
 	originPosition: Vector3,
-	escrowItem: { [string]: any }
+	escrowItem: { [string]: any },
+	requestedLanding: Vector3?
 ): boolean
 	local item = escrowItem and escrowItem.item
 	local gearType = escrowItem and escrowItem.gearType
@@ -1073,7 +1088,9 @@ function GearDropService.DropExistingGear(
 	local gearData = self:_getGearData(item.name, gearType)
 	local description = (gearData and gearData.description) or ""
 
-	local landingPosition = self:_pickLandingPosition(originPosition)
+	local landingPosition = if requestedLanding
+		then self:_snapLandingPosition(originPosition, requestedLanding)
+		else self:_pickLandingPosition(originPosition)
 	local bouncePosition
 	landingPosition, bouncePosition =
 		resolveArcLanding(originPosition, landingPosition, { floorOffset = LANDING_Y_ABOVE_GROUND })

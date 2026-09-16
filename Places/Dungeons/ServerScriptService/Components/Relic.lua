@@ -12,6 +12,7 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
+local LifeService = require(ServerScriptService.Services.LifeService)
 
 -- The pickup fade, mirrored by the client's PICKUP_FADE_SECONDS, plus a
 -- margin before the instance goes so the tween is never cut short.
@@ -38,6 +39,11 @@ end
 
 function Relic:Start()
 	collectRouter:Bind(self.Instance, function(player: Player)
+		-- A dead player collects nothing: the run gear that spilled out of the
+		-- corpse is for the living (or for this player after a revive).
+		if LifeService:IsDeathState(player) then
+			return
+		end
 		if self._playerRegistry[player] or self._claimed then
 			return
 		end

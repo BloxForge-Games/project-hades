@@ -34,6 +34,7 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local RuneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneData)
+local LifeService = require(ServerScriptService.Services.LifeService)
 
 local collectRouter = InstanceRouter.Server(RelicNetwork.RuneCollectRequested)
 
@@ -54,6 +55,11 @@ end
 
 function Rune:Start()
 	collectRouter:Bind(self.Instance, function(player: Player)
+		-- A dead player collects nothing: the run gear that spilled out of the
+		-- corpse is for the living (or for this player after a revive).
+		if LifeService:IsDeathState(player) then
+			return
+		end
 		if self._claimed then
 			return
 		end

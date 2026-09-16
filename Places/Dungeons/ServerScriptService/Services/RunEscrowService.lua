@@ -8,11 +8,13 @@
 
 	  * BANK (all escrow → profile): walking out through the exit portal,
 	    via :ClaimRewards. Killing the boss does NOT bank — see below.
-	  * SPILL (gear leaves the escrow, hits the floor): a single death.
-	    Every run item drops from the corpse as a public gear drop that a
-	    teammate, or the player after a revive, can pick up. Coins stay.
-	  * DISCARD (escrow lost): a party wipe, or leaving the server
-	    mid-run. Knowledge is the only thing the Spire can't take back.
+	  * SPILL (gear leaves the escrow, hits the floor): EVERY death, wipe
+	    or not. Every run item drops from the corpse as a public gear drop
+	    that a teammate, or the player after a revive, can pick up. Coins
+	    stay. (Solo, a death is always a wipe; the loot still spills.)
+	  * DISCARD (escrow lost): what is left after the spill on a party
+	    wipe (the coins), or leaving the server mid-run. Knowledge is the
+	    only thing the Spire can't take back.
 
 	Beating the boss is not the same as getting out. The escrow stays
 	full and visible in the Spire's Bounty panel after the boss dies, and
@@ -82,6 +84,13 @@ local MAX_RUN_ITEMS = 15
 
 -- Seconds between successive items spilling out of a corpse (see
 -- DropAllOnDeath) -- a quick stream rather than a single burst.
+-- Death spill ring: items land between MIN and MAX studs from the corpse,
+-- each inside its own wedge of the circle; JITTER is how much of the wedge
+-- an item may wander from the wedge's centre (0 = perfectly even, 1 = may
+-- touch its neighbours' wedges).
+local DEATH_SPILL_MIN_RADIUS = 3
+local DEATH_SPILL_MAX_RADIUS = 5
+local DEATH_SPILL_ANGLE_JITTER = 0.6
 local DEATH_DROP_INTERVAL = 0.05
 
 --[ Properties ]--
@@ -335,7 +344,8 @@ function RunEscrowService._dropItemAt(
 	self: typeof(RunEscrowService),
 	player: Player,
 	index: number,
-	origin: Vector3
+	origin: Vector3,
+	landing: Vector3?
 ): boolean
 	if not GearDropService then
 		return false
@@ -348,7 +358,7 @@ function RunEscrowService._dropItemAt(
 	end
 	self:_replicate(player)
 
-	if not GearDropService:DropExistingGear(player, origin, dropped) then
+	if not GearDropService:DropExistingGear(player, origin, dropped, landing) then
 		-- Nothing spawned (missing prefab): give it back rather than
 		-- deleting the player's item.
 		table.insert(entry.items, math.min(index, #entry.items + 1), dropped)
@@ -423,9 +433,23 @@ function RunEscrowService.DropAllOnDeath(self: typeof(RunEscrowService), player:
 	end
 	local dropOrigin: Vector3 = origin
 
+	-- Ring layout: the circle around the corpse is cut into one wedge per
+	-- item, each item lands inside its own wedge at a random angle within
+	-- it and a random radius, so the spill reads as an even ring that is
+	-- still never the same twice (and never a clump, which pure random
+	-- scatter gives about a third of the time).
+	local total = #entry.items
+	local wedge = (2 * math.pi) / total
+	local ringStart = math.random() * 2 * math.pi
+	local slot = 0
+
 	local droppedCount = 0
 	while self._escrow[player.UserId] == entry and #entry.items > 0 and player.Parent ~= nil do
-		if self:_dropItemAt(player, 1, dropOrigin) then
+		local angle = ringStart + slot * wedge + (math.random() - 0.5) * wedge * DEATH_SPILL_ANGLE_JITTER
+		local radius = DEATH_SPILL_MIN_RADIUS + math.random() * (DEATH_SPILL_MAX_RADIUS - DEATH_SPILL_MIN_RADIUS)
+		local landing = dropOrigin + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+		slot += 1
+		if self:_dropItemAt(player, 1, dropOrigin, landing) then
 			droppedCount += 1
 		else
 			-- Could not spawn this one (it went back into the escrow).
@@ -447,26 +471,26 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 		return self:_onDropItem(player, uuid)
 	end)
 
-	-- A single death SPILLS the run gear out of the corpse as public
-	-- drops (DropAllOnDeath): a teammate can carry it on, and the player
-	-- can pick it back up after a revive. The coins stay in the escrow.
+	-- EVERY death SPILLS the run gear out of the corpse as public drops
+	-- (DropAllOnDeath): a teammate can carry it on, and the player can
+	-- pick it back up after a revive. The coins stay in the escrow.
 	--
-	-- DISCARD only on a WIPE: every player down, the run over, the lobby
-	-- teleport following. Nobody is left standing to collect a drop, so
-	-- nothing is spilled; every player's escrow is discarded here, not
-	-- just the one who died last. (Death Defiance charges absorb earlier
-	-- hits without firing this at all.)
+	-- A WIPE (every player down, the run over, the lobby teleport
+	-- following) spills too -- solo, every death is a wipe, and the loot
+	-- falling out of the corpse is part of dying -- and THEN discards every
+	-- player's escrow (the coins, and anything a spill left behind). The
+	-- discard waits for the spill so it cannot empty the escrow first.
+	-- (Death Defiance charges absorb earlier hits without firing this.)
 	LifeService.OnPlayerDied:Connect(function(player: Player, isWipe: boolean?)
-		if isWipe then
-			for _, otherPlayer in Players:GetPlayers() do
-				self:Discard(otherPlayer, "wipe")
-			end
-			return
-		end
 		-- Spawned off the signal: the spill waits between items, and
 		-- LifeService's death flow must not stall behind it.
 		task.spawn(function()
 			self:DropAllOnDeath(player)
+			if isWipe then
+				for _, otherPlayer in Players:GetPlayers() do
+					self:Discard(otherPlayer, "wipe")
+				end
+			end
 		end)
 	end)
 

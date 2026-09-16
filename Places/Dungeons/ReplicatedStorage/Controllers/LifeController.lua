@@ -280,6 +280,7 @@ LifeController._controlsLocked = false
 -- :IsLocalSpectating() (used by UIs to seed their React state on mount,
 -- since they might mount after the signal has already fired).
 LifeController._isLocalSpectating = false
+LifeController._isLocalDead = false
 
 -- Per-userId cache + race token for the body-fade. The cache holds the
 -- pre-fade transparency of every BasePart/Decal/Texture on the dying
@@ -466,7 +467,18 @@ function LifeController._setSpectatingState(self: typeof(LifeController), value:
 	-- Cheaper than gating each of the three per-prompt Triggered
 	-- handlers (GearDrop, RelicMachine, Relic) individually and
 	-- covers any future prompts automatically.
-	ProximityPromptService.Enabled = not value
+	self:_refreshPromptGate()
+end
+
+-- Proximity prompts are gated for this client while it is DEAD or
+-- SPECTATING. ProximityPromptService.Enabled is client-local: flipping it
+-- affects no other player and not the server, it just stops every prompt
+-- from taking input for a character that no longer acts. Dead comes first:
+-- the corpse lies there for a moment before spectate begins, and the run
+-- gear spilling out of it must not be collectable by the body it fell from.
+-- The server refuses a dead player's pickup too; this is the UX half.
+function LifeController._refreshPromptGate(self: typeof(LifeController))
+	ProximityPromptService.Enabled = not self._isLocalDead and not self._isLocalSpectating
 end
 
 -- Synchronous getter — used by UIs that mount AFTER the signal has
@@ -886,6 +898,8 @@ function LifeController.Start(self: typeof(LifeController))
 	self.DeathState:Observe(function(deathState: { [any]: any }?)
 		local localId = Players.LocalPlayer.UserId
 		local localEntry = deathState and (deathState[localId] or deathState[tostring(localId)])
+		self._isLocalDead = localEntry ~= nil
+		self:_refreshPromptGate()
 		if localEntry then
 			self:_lockControls()
 			self:_setHudVisible(false)

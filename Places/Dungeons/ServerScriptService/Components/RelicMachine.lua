@@ -29,6 +29,7 @@ local RuneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RuneNam
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
+local LifeService = require(ServerScriptService.Services.LifeService)
 
 --[ Component Root ]--
 
@@ -265,6 +266,11 @@ function RelicMachine:Start()
 	self._relics = RelicService:GetPlayerAvailableRelics(Players:GetPlayerByUserId(self._ownerId))
 
 	promptRouter:Bind(self.Instance, function(player: Player, payload: { CFrame: CFrame })
+		-- A dead player collects nothing: the run gear that spilled out of the
+		-- corpse is for the living (or for this player after a revive).
+		if LifeService:IsDeathState(player) then
+			return
+		end
 		local cframe = payload.CFrame
 		if self._ownerId == player.UserId and self._canClick then
 			self._proximityPrompt.Enabled = false
