@@ -1,9 +1,9 @@
 name: CI
 
+# Every push on every branch, so a feature branch gets the check without a
+# PR; pull_request covers forks.
 on:
   push:
-    branches:
-      - main
   pull_request:
 
 jobs:
