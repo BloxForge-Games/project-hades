@@ -12,7 +12,9 @@ multiple_statements = "warn"
 mismatched_arg_count = "warn"
 parenthese_conditions = "warn"
 roblox_incorrect_color3_new_bounds = "warn"
-roblox_incorrect_roact_usage = "warn"
+# React-lua names ScreenGuis through an explicit `Name` prop on purpose (the
+# InterfaceManager looks them up by name); the Roact-era rule flags that.
+roblox_incorrect_roact_usage = "allow"
 shadowing = "warn"
 incorrect_standard_library_use = "warn"
 suspicious_reverse_loop = "warn"

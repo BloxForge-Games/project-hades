@@ -1,0 +1,35 @@
+name: CI
+
+# Lint and format the place code only. bfg-core has its own workflow for
+# its Source; nothing here checks out the submodules, so the automatic
+# GITHUB_TOKEN (created per run, read access to this repo only) is enough.
+# The two actions use it just to download their tool releases.
+on: [push, pull_request]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install rokit
+        uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Selene
+        run: selene Places
+
+  style:
+    name: Styling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: StyLua
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2.1.0
+          args: --syntax Luau --check Places

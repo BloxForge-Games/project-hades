@@ -38,3 +38,17 @@ luac.out
 *.i*86
 *.x86_64
 *.hex
+
+# luau-lsp sourcemap (generated per place by the VS Code task)
+sourcemap.json
+
+# luau-lsp CLI type-check input (optional local use)
+tools/luau/globalTypes.d.luau
+
+# Python bytecode from tools/
+__pycache__/
+
+# Studio place saves live in Studio / the cloud, never in git (Rojo syncs code in)
+*.rbxl
+*.rbxlx
+*.rbxl.lock

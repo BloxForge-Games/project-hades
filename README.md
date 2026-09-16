@@ -19,12 +19,11 @@
 6. [Magic System](#6-magic-system)
 7. [Relic System](#7-relic-system)
 8. [Enemy Design](#8-enemy-design)
-9. [Build System](#9-build-system)
-10. [Room & Dungeon Structure](#10-room--dungeon-structure)
-11. [Progression & Data](#11-progression--data)
-12. [UI & Feedback](#12-ui--feedback)
-13. [Multiplayer](#13-multiplayer)
-14. [Planned / Stub Systems](#14-planned--stub-systems)
+9. [Room & Dungeon Structure](#9-room--dungeon-structure)
+10. [Progression & Data](#10-progression--data)
+11. [UI & Feedback](#11-ui--feedback)
+12. [Multiplayer](#12-multiplayer)
+13. [Planned / Stub Systems](#13-planned--stub-systems)
 
 ---
 
@@ -35,7 +34,6 @@ Project Hades is a co-op isometric roguelike on Roblox. Players clear rooms of z
 The game blends:
 - **Roguelike itemization** (stackable relics with set bonuses)
 - **Action combat** (directional dodges, melee combos, ranged weapons)
-- **Tower defense layer** (placeable barricades, spike traps, turrets)
 - **Anime-inspired spectacle** (Jujutsu Kaisen–themed legendary abilities with cutscenes)
 
 ---
@@ -52,7 +50,7 @@ Combat is not just "click enemy." The dodge system rewards timing (Perfect Dodge
 Each cleared room presents a relic machine (vending machine) offering new relics. Players spend coins earned from combat to acquire them. Building out toward a set bonus is a risk — spending coins on stacks of one relic means forgoing others.
 
 ### 2.4 Cooperative, Not Competitive
-Enemy HP scales with player count. Shared room-clear rewards (relic machines appear at each player's position). The build system is per-player (barricades, traps, turrets are owned by the builder). Assists count toward progression statistics.
+Enemy HP scales with player count. Shared room-clear rewards (relic machines appear at each player's position). Assists count toward progression statistics.
 
 ---
 
@@ -70,7 +68,7 @@ Spawn → Clear Room → Collect Drops (coins/mana) → Relic Machine Appears
 ### 3.1 In-Room Loop
 1. Players enter a room; the `RoomService` registers their `ActiveRoom` attribute and fires entry bonuses (Pot of Gold coin grant, Teddy Bloxpin heal).
 2. Zombies spawn continuously up to a per-player cap (`MAX_ZOMBIE_COUNT_PER_PLAYER = 6`). Spawn locations are chosen within 60 studs of a random player.
-3. Players fight using weapons, magic, and buildables.
+3. Players fight using weapons and magic.
 4. When all zombies are eliminated, a relic machine drops at each player's position.
 5. Players spend coins to buy relics, then move to the next room.
 
@@ -101,7 +99,7 @@ After certain rooms, a dungeon event triggers:
 
 | Currency | Earned By | Spent On |
 |----------|-----------|----------|
-| Coins | Killing enemies, room entry (Pot of Gold relic) | Relics, builds |
+| Coins | Killing enemies, room entry (Pot of Gold relic) | Relics |
 | Gems | Meta-progression (shop/unlock purchases) | Cosmetics, unlocks |
 | Tickets | Dragon Lantern relic (+50% gain) | TBD |
 
@@ -115,7 +113,6 @@ Starting coins: 100. Starting gems: 25.
 | Secondary Weapon | 2 | Melee or ranged |
 | Magic Slot A | 3 | Spell |
 | Magic Slot B | 4 | Spell |
-| Build | B | Barricade / Trap / Turret |
 
 ### 4.4 Dodge
 
@@ -311,7 +308,7 @@ Miniboss and Boss types are defined in the enum system but not yet implemented a
 ### 8.3 AI Behavior
 
 - Pathfinding via Roblox `PathfindingService`.
-- Targets **both players and buildables** (barricades, turrets, traps).
+- Targets players.
 - Custom hitbox functions prevent server-side hit registration abuse.
 - Enemies drop coins and EXP on death via the `LootPlan` weighted loot system.
 - Death triggers drop rolls: 10% chance of a healing orb, remaining split between coins and mana orbs.
@@ -324,34 +321,9 @@ Miniboss and Boss types are defined in the enum system but not yet implemented a
 
 ---
 
-## 9. Build System
+## 9. Room & Dungeon Structure
 
-The build system adds a tower defense layer to combat. Players toggle build mode with **B**.
-
-### 9.1 Buildables
-
-| Build | Cost | Max Owned | Max HP | Function |
-|-------|------|-----------|--------|----------|
-| Barricade | 500 coins | 4 | 25 HP | Blocks zombie pathfinding routes, repairable |
-| Spike Trap | 750 coins | 3 | 50 HP | Deals 50 base damage on trigger, multi-trigger |
-| Turret | 1,000 coins | 2 | 25 HP | Auto-targets and shoots nearby zombies |
-
-### 9.2 Placement
-
-- Build mode shows a grid overlay. Player's own builds are highlighted.
-- Placement is **server-validated** (collision checks prevent overlapping or illegal placements).
-- Each build stores an `OwnerId` attribute (per-player ownership).
-- Zombie AI detects buildables as valid targets.
-
-### 9.3 Build Persistence
-
-Build levels load from player data on join (`DataTemplate`). Players can invest in builds across sessions (planned upgrade path).
-
----
-
-## 10. Room & Dungeon Structure
-
-### 10.1 Room Types
+### 9.1 Room Types
 
 | Type | Description |
 |------|-------------|
@@ -360,13 +332,13 @@ Build levels load from player data on join (`DataTemplate`). Players can invest 
 | Miniboss | Features a Miniboss enemy (planned) |
 | Boss | End-of-dungeon boss encounter (planned) |
 
-### 10.2 Room Entry Effects
+### 9.2 Room Entry Effects
 
 On entering a room, the following fire immediately:
 - **Pot of Gold** relic: grants bonus coins per stack.
 - **Teddy Bloxpin** relic: heals % max HP per stack.
 
-### 10.3 Workspace Layout
+### 9.3 Workspace Layout
 
 The game world uses a structured folder hierarchy:
 
@@ -374,7 +346,7 @@ The game world uses a structured folder hierarchy:
 workspace/
   Map/
     Buildings/        -- Environmental structures
-    Buildables/       -- Player-placed buildables
+    Buildables/       -- Legacy folder, still listed in raycast ignore lists
     RelicMachines/    -- Post-room relic vendors
     Events/           -- Dungeon event zones
     SpawnLocations/   -- Zombie spawn points
@@ -386,7 +358,7 @@ workspace/
     Zombies/          -- Live zombie models
 ```
 
-### 10.4 Camera
+### 9.4 Camera
 
 The game uses a **fixed isometric camera** (not the default Roblox follow cam) implemented via a custom `IsometricCamera` library. Jump power is set to 0 — no jumping; the camera framing would break. The camera supports shake (CameraShaker) on hits and magic casts.
 
@@ -394,9 +366,9 @@ Walls and buildings between the camera and the player **auto-become transparent*
 
 ---
 
-## 11. Progression & Data
+## 10. Progression & Data
 
-### 11.1 Per-Run Tracking
+### 10.1 Per-Run Tracking
 
 | Stat | Tracked |
 |------|---------|
@@ -407,7 +379,7 @@ Walls and buildings between the camera and the player **auto-become transparent*
 | Deaths | Yes |
 | Coins collected | Yes |
 
-### 11.2 Persistent Data (ProfileService / DataStore)
+### 10.2 Persistent Data (ProfileService / DataStore)
 
 | Field | Type | Default |
 |-------|------|---------|
@@ -417,7 +389,6 @@ Walls and buildings between the camera and the player **auto-become transparent*
 | CurrentExp | int | 0 |
 | TotalExp | int | 100 |
 | Level | int | 1 |
-| Builds | table | {} |
 | Weapon inventory | table | {} |
 | Magic inventory | table | {} |
 | Pets | table | {} |
@@ -426,7 +397,7 @@ Walls and buildings between the camera and the player **auto-become transparent*
 
 DataStore key: `TestData-098` (test key; must change before production launch).
 
-### 11.3 Item Schema
+### 10.3 Item Schema
 
 Each weapon/magic item stores:
 - `name` — item identifier
@@ -437,21 +408,20 @@ Each weapon/magic item stores:
 
 ---
 
-## 12. UI & Feedback
+## 11. UI & Feedback
 
-All UI is built with **React (Lua port) + ReactRoblox**, managed via Knit controllers.
+All UI is built with **React (Lua port) + ReactRoblox**, mounted by Blitz interface modules.
 
-### 12.1 HUD Elements
+### 11.1 HUD Elements
 
 | Element | Description |
 |---------|-------------|
 | Player Vitals | HP bar and mana bar (ValueBar component) |
 | Relic Interface | Currently held relics with stack counts (top-level HUD) |
-| Build Toolbar | Buildable selection in build mode |
 | Mobile Action Buttons | On-screen dodge and action buttons for mobile |
 | Preload Screen | Loading screen before gameplay begins |
 
-### 12.2 Feedback Systems
+### 11.2 Feedback Systems
 
 | System | Trigger | Output |
 |--------|---------|--------|
@@ -462,56 +432,52 @@ All UI is built with **React (Lua port) + ReactRoblox**, managed via Knit contro
 | Camera Shake | Taking damage, casting magic | Screen trauma shake |
 | AfterImage | Dodging | Ghost trail on character |
 
-### 12.3 Mobile Support
+### 11.3 Mobile Support
 
 The `InputPlatformController` detects the platform (PC vs mobile). Mobile players get on-screen action buttons. Certain spells have `uniqueMobileIndicator` flags for touch-compatible targeting UI.
 
 ---
 
-## 13. Multiplayer
+## 12. Multiplayer
 
 - Co-op focused; all players share the same room and fight together.
 - Enemy HP scales linearly with player count.
 - Relic machines spawn at **each individual player's position** (no competition for drops).
-- Build system is per-player (no sharing or griefing of others' structures).
 - Round stats (kills, assists) are tracked per-player for post-run screens.
 - All server-side; no peer-to-peer. Authority lives entirely on the server.
 
 ---
 
-## 14. Planned / Stub Systems
+## 13. Planned / Stub Systems
 
 The following systems have enum definitions, collision groups, or partial service stubs indicating planned but unimplemented content:
 
-### 14.1 Enemy Types
+### 13.1 Enemy Types
 - **Miniboss** — enum defined, no data or AI implemented yet.
 - **Boss** — enum defined, no data or AI implemented yet.
 - **PotHead** — data exists, not yet registered in the spawn service.
 
-### 14.2 Dungeon Events
+### 13.2 Dungeon Events
 - **Treasure Hunt** — enum defined, not implemented.
 - **Wheel of Fortune** — enum defined, not implemented.
 - **Corrupted Mobs** — enum defined, not implemented.
 
-### 14.3 Build Upgrades
-- Build levels are stored in `DataTemplate`. An upgrade system is implied but not yet wired up.
-
-### 14.4 Escort Missions
+### 13.3 Escort Missions
 - `EscortObject` collision group defined in the collision setup. Suggests a future escort mission room type.
 
-### 14.5 Lobby System
+### 13.4 Lobby System
 - A separate Lobby place (`lobby.project.json`) exists with `Places/Lobby/` scripts but minimal content. Planned as a hub between runs.
 
-### 14.6 Cosmetics & Pets
+### 13.5 Cosmetics & Pets
 - Both `Pets` and `Cosmetics` fields exist in the DataTemplate, no system implemented yet.
 
-### 14.7 Missions
+### 13.6 Missions
 - `Missions` field in DataTemplate; no mission service exists yet.
 
-### 14.8 Twitter Codes
+### 13.7 Twitter Codes
 - `TwitterCodes` field in DataTemplate; code redemption service not implemented.
 
-### 14.9 Relic Set Bonuses (Partially Implemented)
+### 13.8 Relic Set Bonuses (Partially Implemented)
 Many relic set bonuses are described but their callback logic hasn't been connected. Priority completions:
 - Bloxy Cola × 5 bonus
 - Cheeseburger × 5 bonus

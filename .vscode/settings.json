@@ -1,8 +1,68 @@
 {
 	"[lua]": {
-   		"editor.defaultFormatter": "JohnnyMorganz.stylua",
-		"editor.formatOnSave": true,
+		"editor.defaultFormatter": "JohnnyMorganz.stylua",
+		"editor.formatOnSave": true
 	},
-
+	"[luau]": {
+		"editor.defaultFormatter": "JohnnyMorganz.stylua",
+		"editor.formatOnSave": true
+	},
+	// Vendored package sources and generated files are not ours; keep them out
+	// of workspace search (Ctrl+F) so a codebase-wide search reflects our code.
+	"search.exclude": {
+		"**/Packages/**": true,
+		"**/ServerPackages/**": true,
+		"**/_Index/**": true,
+		"**/sourcemap.json": true,
+		"**/*.rbxl": true,
+		"**/*.rbxm": true
+	},
+	"files.associations": {
+		"*.luau": "luau"
+	},
 	"stylua.targetReleaseVersion": "latest",
-}	
+
+	// luau-lsp. The sourcemap is what lets the analyzer resolve the
+	// instance-path requires this codebase uses (ReplicatedStorage.
+	// Submodules.Core...). It is generated from ONE place's project file at
+	// a time; Dungeons is the default because it mounts the superset of
+	// modules. Run the "sourcemap: lobby" task to check the Lobby view.
+	"luau-lsp.sourcemap.enabled": true,
+	"luau-lsp.sourcemap.autogenerate": true,
+	"luau-lsp.sourcemap.rojoProjectFile": "dungeons.project.json",
+	"luau-lsp.sourcemap.includeNonScripts": true,
+	"luau-lsp.sourcemap.sourcemapFile": "sourcemap.json",
+	"luau-lsp.platform.type": "roblox",
+	// Third-party sources: analysed for types, but their own diagnostics are
+	// not ours to fix. Project-authored libraries (IsometricCamera,
+	// UserNotificationSystem, ProjectileCast) are NOT listed: they are checked
+	// like the rest of the code.
+	"luau-lsp.ignoreGlobs": [
+		// luau-lsp's definitions file lands here when the CLI checker is used;
+		// it is declaration syntax, not a script.
+		"**/tools/luau/**",
+		"**/Packages/**",
+		"**/ServerPackages/**",
+		"**/_Index/**",
+		"**/Source/Server/Network/**",
+		"**/Source/Client/Network/**",
+		"**/Source/Shared/Network/**",
+		"**/Libraries/AfterImage/**",
+		"**/Libraries/HyperText/**",
+		"**/Libraries/LocationMarkerSystem/**",
+		"**/Libraries/LootPlan/**",
+		"**/Libraries/ProfileService/**",
+		"**/Libraries/RaycastHitbox/**",
+		"**/Libraries/Shime.luau",
+		"**/Libraries/ViewportModel/**",
+		"**/Libraries/WindShake/**"
+	],
+	"luau-lsp.diagnostics.strictDatamodelTypes": false,
+	// Check EVERY file in the workspace, not only the open ones, so the
+	// Problems panel is the whole project.
+	"luau-lsp.diagnostics.workspace": true,
+	"luau-lsp.completion.imports.enabled": true,
+	"luau-lsp.completion.imports.suggestServices": true,
+	"rojo.releaseBranch": "7.x",
+	"rojo.showAftmanSuggestion": false
+}

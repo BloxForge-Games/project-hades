@@ -1,0 +1,260 @@
+--!strict
+--[[
+	Module: LobbyLandingController
+	Description:
+	Client half of the Lobby join "landing" -- the Dungeons LandingController
+	on the same structure, driven by LobbyLandingService instead of
+	DungeonService:
+
+	  1. Character loads -> controls locked, loading screen up (PreloadInterface
+	     shows itself at Init; only a PLACE controller ever hides it).
+	  2. PreloadController preloads GameAssets (skipped in Studio -- see
+	     PRELOAD_IN_STUDIO in PreloadController; the bar reads 0/0 there).
+	  3. PlayerEventController calls the server's SetupCharacter; the server
+	     stages the character in the landing pose over LobbySpawnPoint, then:
+	       OnLandingStart  -> lock controls + drop the loading screen (the
+	                          player sees themselves fall in)
+	       OnLandingImpact -> (broadcast) VFX hook, not consumed here
+	       OnLandingEnd    -> restore controls
+	  4. Fallback: FALLBACK_SECONDS after preload completes with no cue, reveal
+	     + unlock anyway so a fault never strands the player behind the loader.
+
+	The cinematic bars slide in 0.75s after the reveal and out 1s after the
+	landing ends, same timing as the Dungeons landing (CinematicInterfaceController
+	is core). No relic hiding: relics are a Dungeons-place system.
+]]
+
+--[ Roblox Services ]--
+
+local ContentProvider = game:GetService("ContentProvider")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+--[ Imports ]--
+
+local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
+local PreloadController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PreloadController)
+local PreloadInterface = require(ReplicatedStorage.Submodules.Core.Source.Interfaces.PreloadInterface)
+local CinematicInterfaceController =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
+
+--[ Constants ]--
+
+-- The landing pose the SERVER freezes you in. A server-played track
+-- replicates its playback, but this client still has to download the
+-- animation ASSET before it can render the pose; the preloader covers
+-- Animations but is bypassed in Studio, so this warms the one animation
+-- that matters on every character regardless.
+local ANIMATIONS_FOLDER_NAME = "Animations"
+local LANDING_ANIMATION_NAME = "LandingAnimation"
+
+-- Hard ceiling on how long the loading screen may stay up after preload
+-- completes without the server cue (same value as the Dungeons place).
+local FALLBACK_SECONDS = 15
+
+-- InterfaceManagerController hide source held on the HUD scope from join
+-- until the landing cutscene ends, so the toolbar (and the rest of the HUD)
+-- never appears and tweens away in front of the cutscene. Released together
+-- with OnCinematicEnd, and by the fallback. Same as Dungeons.
+local LANDING_SOURCE = "Landing"
+
+-- Horizontal drift from the server's landing CFrame past which this client
+-- snaps its own root onto it at OnLandingStart (see _snapToLanding).
+local LANDING_SNAP_TOLERANCE_STUDS = 2
+
+--[ Controller ]--
+
+local LobbyLandingController = {
+	Name = "LobbyLandingController",
+	Dependencies = {
+		PlayerEventController,
+		PreloadController,
+		PreloadInterface,
+		CinematicInterfaceController,
+		InterfaceManagerController,
+	} :: { any },
+}
+
+-- Cached PlayerModule:GetControls() handle (lazy). Resolved on first lock.
+LobbyLandingController._playerControls = nil :: any
+-- True once the loading screen has been dismissed (server cue or fallback).
+LobbyLandingController._revealed = false
+
+--[ Private Functions ]--
+
+function LobbyLandingController._getPlayerControls(self: typeof(LobbyLandingController))
+	if self._playerControls then
+		return self._playerControls
+	end
+	local playerScripts = Players.LocalPlayer:FindFirstChild("PlayerScripts")
+	local moduleScript = playerScripts and playerScripts:FindFirstChild("PlayerModule")
+	if not moduleScript then
+		return nil
+	end
+	local ok, playerModule = pcall(require, moduleScript)
+	if not ok or not playerModule then
+		return nil
+	end
+	self._playerControls = playerModule:GetControls()
+	return self._playerControls
+end
+
+-- `barsDelay` = seconds until the cinematic bars slide in (nil = the join
+-- default); `false` = don't touch the bars (the pre-reveal lock, where the
+-- loading screen still covers everything). Same contract as Dungeons.
+function LobbyLandingController._lockControls(self: typeof(LobbyLandingController), barsDelay: (number | boolean)?)
+	local character = Players.LocalPlayer.Character
+
+	local controls = self:_getPlayerControls()
+	if controls then
+		controls:Disable()
+	end
+
+	if barsDelay ~= false then
+		local delay = if typeof(barsDelay) == "number" then barsDelay else 0.75
+		task.delay(delay, function()
+			CinematicInterfaceController.Signals.OnCinematicStart:Fire()
+		end)
+	end
+
+	if character then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			-- Clear any residual MoveDirection so the character doesn't drift
+			-- while the ControlScript is disabled.
+			humanoid:Move(Vector3.zero, false)
+		end
+		-- Same flag the Dungeons landing sets; blocks dodge / abilities that
+		-- read it while the character is mid-fall.
+		character:SetAttribute(Attributes.CutscenePlaying, true)
+	end
+end
+
+function LobbyLandingController._unlockControls(self: typeof(LobbyLandingController))
+	local character = Players.LocalPlayer.Character
+
+	local controls = self:_getPlayerControls()
+	if controls then
+		controls:Enable()
+	end
+
+	if character then
+		-- Bars out + lock flag cleared a beat after touchdown, as in Dungeons.
+		task.delay(1, function()
+			CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
+
+			character:SetAttribute(Attributes.CutscenePlaying, false)
+		end)
+	end
+
+	-- Same beat as the bars going out: the HUD comes up once, after the
+	-- cutscene.
+	task.delay(1, function()
+		InterfaceManagerController:Show(InterfaceScopes.HUD, LANDING_SOURCE)
+	end)
+end
+
+-- The server's landing teleport is a CFrame write on a root THIS client owns;
+-- OnLandingStart carries the target so the owner can make the authoritative
+-- write itself if anything left it off the spot.
+function LobbyLandingController._snapToLanding(_self: typeof(LobbyLandingController), targetCFrame: CFrame?)
+	if typeof(targetCFrame) ~= "CFrame" then
+		return
+	end
+	local character = Players.LocalPlayer.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+	local offset = hrp.Position - targetCFrame.Position
+	if Vector3.new(offset.X, 0, offset.Z).Magnitude > LANDING_SNAP_TOLERANCE_STUDS then
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.CFrame = targetCFrame
+	end
+end
+
+-- Dismisses the loading screen. Idempotent: safe to call from both the
+-- server cue and the fallback.
+function LobbyLandingController._reveal(self: typeof(LobbyLandingController))
+	if self._revealed then
+		return
+	end
+	self._revealed = true
+
+	PreloadInterface:ToggleInterface(false)
+end
+
+--[ Lifecycle ]--
+
+function LobbyLandingController.Init(_self: typeof(LobbyLandingController))
+	-- Init, not Start: the HUD interfaces mount during their own
+	-- Init and read this scope for their initial state.
+	InterfaceManagerController:Hide(InterfaceScopes.HUD, LANDING_SOURCE)
+end
+
+function LobbyLandingController.Start(self: typeof(LobbyLandingController))
+	-- First character only: respawns after the reveal keep their controls.
+	-- No bars here -- the loading screen still covers the view; they come in
+	-- with the reveal on OnLandingStart.
+	PlayerEventController.OnCharacterLoaded:Connect(function()
+		if not self._revealed then
+			self:_lockControls(false)
+		end
+	end)
+
+	DungeonNetwork.LandingStart.On(function(targetCFrame: CFrame?)
+		self:_snapToLanding(targetCFrame)
+		self:_lockControls()
+		self:_reveal()
+	end)
+
+	DungeonNetwork.LandingEnd.On(function()
+		self:_unlockControls()
+	end)
+
+	-- Warm the landing pose for THIS character before the server can ask
+	-- for it: fetch the asset, and load a track on our own Animator so the
+	-- keyframes are resident. The track is never played -- the server's
+	-- own track drives the pose.
+	local function warmLandingPose(character: Model)
+		task.spawn(function()
+			local animations = ReplicatedStorage.GameAssets:FindFirstChild(ANIMATIONS_FOLDER_NAME)
+			local landing = animations and animations:FindFirstChild(LANDING_ANIMATION_NAME)
+			if not landing or not landing:IsA("Animation") then
+				warn(
+					"[LobbyLandingController] GameAssets.Animations.LandingAnimation missing -- landing pose may pop in"
+				)
+				return
+			end
+			pcall(ContentProvider.PreloadAsync, ContentProvider, { landing })
+
+			local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
+			local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+			if animator and character.Parent then
+				pcall(animator.LoadAnimation, animator, landing)
+			end
+		end)
+	end
+	if Players.LocalPlayer.Character then
+		warmLandingPose(Players.LocalPlayer.Character)
+	end
+	Players.LocalPlayer.CharacterAdded:Connect(warmLandingPose)
+
+	-- Fallback: never strand the player behind the loader.
+	PreloadController.OnPreloadComplete:Connect(function()
+		task.delay(FALLBACK_SECONDS, function()
+			if self._revealed then
+				return
+			end
+			self:_reveal()
+			self:_unlockControls()
+		end)
+	end)
+end
+
+return LobbyLandingController
