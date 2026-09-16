@@ -42,7 +42,7 @@ luac.out
 # luau-lsp sourcemap (generated per place by the VS Code task)
 sourcemap.json
 
-# luau-lsp CLI type-check input, fetched by the CI workflow (see ci.yaml)
+# luau-lsp CLI type-check input (optional local use)
 tools/luau/globalTypes.d.luau
 
 # Python bytecode from tools/

@@ -88,9 +88,9 @@
 
 		{
 			"label": "lint",
-			"detail": "selene + stylua --check over core and both places (the same commands the PR gate runs)",
+			"detail": "selene + stylua --check, exactly what the two CI workflows run (bfg-core: Source; parent: Places)",
 			"type": "shell",
-			"command": "cd bfg-core && stylua --syntax Luau --check Source Libraries/IsometricCamera Libraries/ProjectileCast Libraries/UserNotificationSystem && stylua --config-path stylua.toml --check ../Places/Dungeons ../Places/Lobby && selene Source ../Places/Dungeons ../Places/Lobby",
+			"command": "cd bfg-core && selene Source && stylua --syntax Luau --check Source && cd .. && selene Places && stylua --syntax Luau --check Places",
 			"group": { "kind": "test" },
 			"options": { "cwd": "${workspaceFolder}" },
 			"presentation": { "reveal": "always", "focus": true },

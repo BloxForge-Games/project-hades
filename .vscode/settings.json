@@ -36,10 +36,9 @@
 	// Third-party sources: analysed for types, but their own diagnostics are
 	// not ours to fix. Project-authored libraries (IsometricCamera,
 	// UserNotificationSystem, ProjectileCast) are NOT listed: they are checked
-	// like the rest of the code. Keep in step with the Type check step in
-	// .github/workflows/ci.yaml.
+	// like the rest of the code.
 	"luau-lsp.ignoreGlobs": [
-		// The CI type-check step downloads luau-lsp's definitions file here;
+		// luau-lsp's definitions file lands here when the CLI checker is used;
 		// it is declaration syntax, not a script.
 		"**/tools/luau/**",
 		"**/Packages/**",
@@ -60,7 +59,7 @@
 	],
 	"luau-lsp.diagnostics.strictDatamodelTypes": false,
 	// Check EVERY file in the workspace, not only the open ones, so the
-	// Problems panel is the whole project (the same set CI checks).
+	// Problems panel is the whole project.
 	"luau-lsp.diagnostics.workspace": true,
 	"luau-lsp.completion.imports.enabled": true,
 	"luau-lsp.completion.imports.suggestServices": true,

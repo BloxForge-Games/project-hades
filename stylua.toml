@@ -1,0 +1,7 @@
+# Same settings as bfg-core/stylua.toml so the place code and the core are
+# formatted identically. Luau syntax is a command-line flag in stylua 2.1:
+#
+#     stylua --syntax Luau --check Places
+#
+# line_endings: git stores LF and the CI runner is Linux.
+line_endings = "Unix"

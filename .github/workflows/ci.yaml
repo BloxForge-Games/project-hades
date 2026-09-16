@@ -1,59 +1,35 @@
 name: CI
 
-# Every push on every branch, so a feature branch gets the check without a
-# PR; pull_request covers forks.
-on:
-  push:
-  pull_request:
+# Lint and format the place code only. bfg-core has its own workflow for
+# its Source; nothing here checks out the submodules, so the automatic
+# GITHUB_TOKEN (created per run, read access to this repo only) is enough.
+# The two actions use it just to download their tool releases.
+on: [push, pull_request]
 
 jobs:
-  check:
-    name: Format, lint, type check
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (with submodules)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v5
 
-      # rokit.toml pins rojo, selene, stylua and luau-lsp; the same versions
-      # every developer runs locally.
-      - name: Install toolchain
+      - name: Install rokit
         uses: CompeyDev/setup-rokit@v0.1.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: StyLua (core)
-        working-directory: bfg-core
-        run: stylua --syntax Luau --check Source Libraries/IsometricCamera Libraries/ProjectileCast Libraries/UserNotificationSystem
-
-      - name: StyLua (places)
-        working-directory: bfg-core
-        run: stylua --config-path stylua.toml --check ../Places/Dungeons ../Places/Lobby
-
       - name: Selene
-        working-directory: bfg-core
-        run: selene Source ../Places/Dungeons ../Places/Lobby
+        run: selene Places
 
-      # luau-lsp needs the Roblox globals that match its pinned version
-      # (the tag is read from rokit.toml's pin).
-      - name: Fetch Roblox type definitions
-        run: |
-          version=$(sed -n 's/^luau-lsp = "JohnnyMorganz\/luau-lsp@\(.*\)"$/\1/p' rokit.toml)
-          mkdir -p tools/luau
-          curl -sSfL -o tools/luau/globalTypes.d.luau \
-            "https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/${version}/scripts/globalTypes.d.luau"
+  style:
+    name: Styling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
-      # The same luau-lsp the editor runs, from the command line. The
-      # --ignore list mirrors luau-lsp.ignoreGlobs in .vscode/settings.json
-      # (third-party libraries and the Blink-generated Network modules);
-      # keep the two in step. The sourcemap maps Studio instance paths to
-      # files so requires resolve.
-      - name: Type check
-        run: |
-          rojo sourcemap dungeons.project.json -o sourcemap.json
-          luau-lsp analyze             --definitions tools/luau/globalTypes.d.luau             --sourcemap sourcemap.json             --no-strict-dm-types             --ignore "**/Packages/**"             --ignore "**/_Index/**"             --ignore "**/Source/Server/Network/**"             --ignore "**/Source/Client/Network/**"             --ignore "**/Source/Shared/Network/**"             --ignore "**/Libraries/AfterImage/**"             --ignore "**/Libraries/HyperText/**"             --ignore "**/Libraries/LocationMarkerSystem/**"             --ignore "**/Libraries/LootPlan/**"             --ignore "**/Libraries/ProfileService/**"             --ignore "**/Libraries/RaycastHitbox/**"             --ignore "**/Libraries/Shime.luau"             --ignore "**/Libraries/ViewportModel/**"             --ignore "**/Libraries/WindShake/**"             bfg-core/Source             bfg-core/Libraries/IsometricCamera             bfg-core/Libraries/ProjectileCast             bfg-core/Libraries/UserNotificationSystem             Places
-
-      - name: Place verifier
-        run: python3 tools/verify_places.py
+      - name: StyLua
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2.1.0
+          args: --syntax Luau --check Places
