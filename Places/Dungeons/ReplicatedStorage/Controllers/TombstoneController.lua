@@ -3,10 +3,13 @@
      Module: TombstoneController.lua
      Description:
      Client-side death-marker renderer. Observes LifeController.DeathState
-     (whose entries now carry deathPosition + diedAtServerTime in addition
-     to existence) and spawns / tweens / destroys a tombstone instance
-     locally per dead player. Server doesn't track the marker at all — it
-     just publishes the death metadata.
+     (entries carry phase, deathPosition, diedAtServerTime and, once the
+     revive window has closed, fullyDiedAtServerTime) and spawns / tweens
+     / destroys a tombstone instance locally per FULLY dead player. A
+     DOWNED player (phase "downed", revive window open) gets no marker:
+     the body is lying right there and may yet stand back up. Server
+     doesn't track the marker at all — it just publishes the death
+     metadata.
 
      Why client-side instead of server-instanced:
        - Tombstones are pure visual; no gameplay system reads or interacts
@@ -18,22 +21,20 @@
          observer is the single source of truth.
 
      Timing:
-       - SPAWN_DELAY_AFTER_DEATH (= client DEATH_VFX_DURATION + fade +
-         black hold + small buffer) gates when the tombstone appears
-         after a fresh death. Computed against the entry's diedAtServerTime
-         so all clients agree on the spawn moment regardless of when they
-         observed the change.
+       - SPAWN_DELAY_AFTER_FULL_DEATH (= the body fade + a small buffer)
+         gates when the tombstone appears after the window closes.
+         Computed against the entry's fullyDiedAtServerTime so all clients
+         agree on the spawn moment regardless of when they observed the
+         change.
        - Late joiners get the snapshot via Observe's initial fire. If the
-         death is older than SPAWN_DELAY_AFTER_DEATH at the time of join,
-         we spawn immediately (no wait).
+         full death is older than SPAWN_DELAY_AFTER_FULL_DEATH at the time
+         of join, we spawn immediately (no wait).
 
      Cleanup:
        - DeathState entry vanishes (revive / player leave) → destroy
          the local instance + cancel any pending spawn task.
-       - The diedAtServerTime field doubles as a "death generation" — if
-         it changes for a userId (rare: die → revive → die within the
-         spawn-delay window), the pending spawn aborts because the entry
-         it was scheduled for no longer matches the current state.
+       - A "downed" entry never schedules anything, so the phase flipping
+         to "dead" on a later observation is what schedules the spawn.
 ]]
 
 --[ Roblox Services ]--
@@ -71,15 +72,13 @@ local TOMBSTONE_FALLBACK_MATERIAL = Enum.Material.Slate
 local TOMBSTONE_RISE_DURATION = 1
 local TOMBSTONE_RISE_OFFSET = 5
 
--- Delay from moment-of-death to start of the rise tween. Sized so the
--- marker only appears AFTER the dying player's death cinematic + fade-
--- to-black completes — for them the rise plays under the black; for
--- other players it reads as a "moment of silence then the marker rises."
--- Keep this in rough sync with the client-side LifeController constants
--- DEATH_VFX_DURATION + DEATH_FADE_DURATION + DEATH_BLACK_HOLD_DURATION
--- (currently ~5.4-6.4s total). Slight desync is fine — other players
--- have no fade to align with.
-local SPAWN_DELAY_AFTER_DEATH = 8
+-- Delay from the moment of FULL death (the revive window closing) to the
+-- start of the rise tween. Sized so the marker only appears AFTER the
+-- body has faded out (LifeController's CHARACTER_FADE_DURATION, 1s) —
+-- for the dead player the rise plays under their fade-to-black; for
+-- other players it reads as "the body fades, then the marker rises."
+-- Slight desync is fine — other players have no fade to align with.
+local SPAWN_DELAY_AFTER_FULL_DEATH = 2
 
 -- Where to parent the tombstone in the world tree. Falls back to
 -- workspace if IgnoreInstances.MagicSpells isn't present yet.
@@ -165,14 +164,22 @@ end
 -- immediately (late joiner past the spawn delay) or from the delayed
 -- spawn closure. No-op if a tombstone for this userId already exists
 -- (defensive against double-spawn races).
-function TombstoneController._spawnTombstone(self: typeof(TombstoneController), userId: number, player: Player)
+function TombstoneController._spawnTombstone(
+	self: typeof(TombstoneController),
+	userId: number,
+	player: Player,
+	recordedDeathPosition: Vector3?
+)
 	if self._tombstones[userId] then
 		return
 	end
 
+	-- The body never moves between downed and dead, so its root part and
+	-- the server's recorded position agree; the record covers a character
+	-- that has already been removed.
 	local character = player and player.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	local deathPosition = (rootPart and rootPart.Position) :: Vector3
+	local deathPosition = ((rootPart and rootPart.Position) or recordedDeathPosition) :: Vector3
 
 	-- Raycast down to find the ground, excluding the dying player's
 	-- character so we don't hit the ragdoll body.
@@ -220,13 +227,25 @@ end
 
 -- Decides whether to spawn now or schedule a delayed spawn for a
 -- newly-observed DeathState entry. Token-stamps so subsequent changes
--- for the same userId cancel an in-flight delay.
+-- for the same userId cancel an in-flight delay. A DOWNED entry is left
+-- alone (no token either), so the observation that flips it to "dead"
+-- is the one that schedules.
 function TombstoneController._scheduleSpawn(
 	self: typeof(TombstoneController),
 	userId: number,
-	entry: { diedAtServerTime: number, deathPosition: Vector3, player: Player }
+	entry: {
+		phase: string,
+		diedAtServerTime: number,
+		fullyDiedAtServerTime: number?,
+		deathPosition: Vector3,
+		player: Player,
+	}
 )
-	if not entry.deathPosition or not entry.diedAtServerTime then
+	if entry.phase ~= "dead" then
+		return
+	end
+	local fullyDiedAt = entry.fullyDiedAtServerTime
+	if not entry.deathPosition or not fullyDiedAt then
 		return
 	end
 
@@ -236,7 +255,7 @@ function TombstoneController._scheduleSpawn(
 	local token = {}
 	self._pendingTokens[userId] = token
 
-	local spawnAt = entry.diedAtServerTime + SPAWN_DELAY_AFTER_DEATH
+	local spawnAt = fullyDiedAt + SPAWN_DELAY_AFTER_FULL_DEATH
 	local waitFor = spawnAt - workspace:GetServerTimeNow()
 
 	if waitFor <= 0 then
@@ -244,7 +263,7 @@ function TombstoneController._scheduleSpawn(
 		-- Spawn immediately, skip the visual delay (we missed the
 		-- "moment of silence" beat anyway).
 		self._pendingTokens[userId] = nil
-		self:_spawnTombstone(userId, entry.player)
+		self:_spawnTombstone(userId, entry.player, entry.deathPosition)
 		return
 	end
 
@@ -255,7 +274,7 @@ function TombstoneController._scheduleSpawn(
 			return
 		end
 		self._pendingTokens[userId] = nil
-		self:_spawnTombstone(userId, entry.player)
+		self:_spawnTombstone(userId, entry.player, entry.deathPosition)
 	end)
 end
 
@@ -267,10 +286,10 @@ function TombstoneController.Start(self: typeof(TombstoneController))
 	--
 	-- For each userId currently rendered locally:
 	--   - if the server entry vanished → destroy
-	--   - if the server entry's diedAtServerTime changed → destroy + reschedule
-	--     (handles die → revive → die where a stale tombstone might linger)
 	-- For each userId in the server state without a local instance:
-	--   - schedule a spawn (delayed for fresh deaths, immediate for late-join)
+	--   - schedule a spawn once its phase is "dead" (delayed for fresh
+	--     deaths, immediate for late-join); "downed" entries are skipped
+	--     and picked up by the observation that flips them
 	LifeController.DeathState:Observe(function(deathState: { [any]: any }?)
 		local serverEntries: { [any]: any } = deathState or {}
 

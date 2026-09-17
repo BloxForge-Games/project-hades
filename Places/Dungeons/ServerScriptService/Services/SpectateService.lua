@@ -204,10 +204,12 @@ function SpectateService.Start(self: typeof(SpectateService))
 		end
 	end)
 
-	-- When the currently-spectated player dies, every spectator watching
-	-- them needs to re-target. We use OnPlayerDied for this (the dying
-	-- player just became ineligible), and just brute-force re-pick — the
-	-- candidate filter already excludes the dying player.
+	-- When the currently-spectated player is DOWNED, every spectator
+	-- watching them needs to re-target. OnPlayerDied (= downed) is the
+	-- right edge, not OnPlayerFullyDied: a body on the floor is already
+	-- ineligible (_getCandidates excludes any death state), and there is
+	-- nothing to watch during its revive window. Brute-force re-pick — the
+	-- candidate filter does the exclusion.
 	LifeService.OnPlayerDied:Connect(function(deadPlayer: Player)
 		for spectatorId, targetId in self._spectateTargets do
 			if targetId == deadPlayer.UserId then

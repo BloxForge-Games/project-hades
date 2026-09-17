@@ -82,6 +82,7 @@ local GearDropService = require(ServerScriptService.Services.GearDropService)
 local DamageService = require(ServerScriptService.Services.DamageService)
 local StatusConditionService = require(ServerScriptService.Services.StatusConditionService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
+local EnemyScalingService = require(ServerScriptService.Services.EnemyScalingService)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local MagicService = require(ServerScriptService.Services.MagicService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
@@ -492,12 +493,16 @@ function MobBase:_applyHumanoidProperties()
 	-- 	end
 	-- end
 
+	-- ZombieData carries the BASE health (a function-valued entry is still
+	-- honoured and resolved here). The live player multiplier, the two
+	-- scaling attributes and the MaxHealth / Health write all belong to
+	-- EnemyScalingService, which also rescales this mob later when the
+	-- party changes shape.
 	if type(self._health) == "function" then
 		self._health = self._health()
 	end
 
-	self._humanoid.MaxHealth = self._health
-	self._humanoid.Health = self._health
+	EnemyScalingService:ApplyToMob(self._model, self._humanoid, self._health)
 	self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 	self._humanoid.HipHeight = self._hipHeight
 	self._humanoid.MaxSlopeAngle = 89

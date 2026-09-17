@@ -2,15 +2,16 @@
 --[[
      Module: SpectateInterfaceController.lua
      Description:
-     Spectate HUD overlay. Visible while the local player is in
-     LifeService.DeathState. Shows:
+     Spectate HUD overlay. Visible once the local player is FULLY dead
+     (the revive window closed and the death fade completed). Shows:
        - "Now Viewing: <PlayerName>" centered near the top with left/right
          arrow hints (cycle via arrow keys, wired in SpectateController)
-       - A REVIVE button in the bottom-right corner that calls
-         PlayerNetwork.PromptRevivePurchase → MarketplaceService prompt
+
+     The paid REVIVE button lives on the Game Over screen during the
+     downed window, not here: once spectating you cannot revive.
 
      Auto-hides the moment the local player's DeathState entry clears
-     (revive successful).
+     (a /revive or a late receipt).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

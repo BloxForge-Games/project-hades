@@ -10,6 +10,16 @@
        3. Timing sourced from DeathCinematicData.GameOverDuration /
           GameOverStartupDelay / GameOverTextStaggerDelay — independent
           knobs from the death screen so each can tune separately.
+       4. The bar counts down the REVIVE DECISION WINDOW. props.reviveWindow
+          ({ endsAt, startedAt } in server time, or nil) comes from the
+          replicated DeathState via LifeController; the fill starts at the
+          fraction still remaining and tweens to zero over exactly the
+          seconds left on the SERVER clock. Without a window (the wipe
+          screen for a player who was already fully dead) the bar falls
+          back to the fixed GameOverDuration countdown.
+       5. A REVIVE button, shown with the bar while the window is open,
+          that prompts the paid dev product (PlayerNetwork.PromptRevivePurchase;
+          the server refuses it once the window is closed).
 
      Everything else (gradient pulse, text fly-in, progress bar
      countdown, token race protection) is byte-for-byte the same
@@ -30,6 +40,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
+local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
 local HyperText = require(ReplicatedStorage.Submodules.Core.Libraries.HyperText)
 
@@ -61,10 +72,20 @@ local PROGRESS_BAR_FILL_VISIBLE_TRANSPARENCY = 0
 
 local GAME_OVER_PULSE_DURATION = DeathCinematicData.GameOverDuration
 local BAR_STARTUP_DELAY = DeathCinematicData.GameOverStartupDelay
+-- Fallback only: the wipe screen for a client with no open revive window.
+-- A downed player's bar is driven by the server window instead.
 local BAR_COUNTDOWN_DURATION = GAME_OVER_PULSE_DURATION - BAR_STARTUP_DELAY
 
-local BAR_COUNTDOWN_TWEEN_INFO =
-	TweenInfo.new(BAR_COUNTDOWN_DURATION, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+-- REVIVE button, under the subtitle. Same footprint the spectate UI's
+-- button had, so it reads as the same control moved to where the
+-- decision is actually made.
+local REVIVE_BUTTON_POSITION = UDim2.fromScale(0.5, 0.65)
+-- Where the button's CanvasGroup rests while hidden: a little BELOW its
+-- seat, so it rises into place on the fade-in and sinks away on the
+-- fade-out, the same motion the title and subtitle make.
+local REVIVE_BUTTON_START_POSITION = UDim2.fromScale(0.5, 0.65 + TEXT_RISE_OFFSET)
+local REVIVE_BUTTON_SIZE = UDim2.fromScale(0.105, 0.047)
+local REVIVE_BUTTON_FONT = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold)
 
 -- Fixed subtitle per spec. No randomization (the death screen picks
 -- from DEATH_REASON_TEXTS); Game Over has a single deterministic line
@@ -234,8 +255,103 @@ local function Container(props: any)
 	local progressBarBgRef = React.useRef(nil)
 	local progressBarFillRef = React.useRef(nil)
 	local barCountdownTweenRef = React.useRef(nil)
+	-- The REVIVE button's CanvasGroup (tweened as one: GroupTransparency +
+	-- Position) and the token that cancels a fly-in still waiting on the
+	-- subtitle when the button is told to hide first.
+	local reviveGroupRef = React.useRef(nil)
+	local reviveShowTokenRef = React.useRef(nil)
 
 	local imageColor3 = props.ImageColor3
+
+	-- The revive window, mirrored into a ref so the pulse effect (whose
+	-- closure is built once per pulse edge) reads the latest one.
+	local reviveWindow = props.reviveWindow
+	local reviveWindowRef = React.useRef(nil)
+	reviveWindowRef.current = reviveWindow
+
+	-- True from the bar's fly-in until pulse-out: the button shows with
+	-- the bar, never before the title lands.
+	local barShown, setBarShown = React.useState(false)
+	-- True once the window's remaining time has run out on this client,
+	-- as a belt-and-braces hide: the server flips the phase to "dead" on
+	-- the same beat, which nils the window through props anyway.
+	local windowExpired, setWindowExpired = React.useState(false)
+	local expiryTokenRef = React.useRef(nil)
+
+	-- (Re)starts the fill countdown. With a window: the fill snaps to the
+	-- fraction of the window still remaining on the SERVER clock and tweens
+	-- to zero over exactly the seconds left, so every client -- including
+	-- one that pulsed in late -- reads the same remainder. Without one:
+	-- the fixed fallback countdown.
+	local function startCountdown()
+		local fill = progressBarFillRef.current
+		if not fill then
+			return
+		end
+		if barCountdownTweenRef.current then
+			barCountdownTweenRef.current:Cancel()
+			barCountdownTweenRef.current = nil
+		end
+
+		local window = reviveWindowRef.current
+		local remaining = BAR_COUNTDOWN_DURATION
+		local fraction = 1
+		-- Seconds until the drain may begin: the window's opening is the
+		-- bar's fly-in beat, and a bar that is on screen a hair early (clock
+		-- skew) holds full until then rather than starting down.
+		local holdFor = 0
+		if window then
+			local now = workspace:GetServerTimeNow()
+			local total = math.max(window.endsAt - window.startedAt, 0.01)
+			holdFor = math.max(window.startedAt - now, 0)
+			remaining = math.max(window.endsAt - math.max(now, window.startedAt), 0)
+			fraction = math.clamp(remaining / total, 0, 1)
+		end
+
+		fill.Size = UDim2.fromScale(fraction, 1)
+		if remaining <= 0 then
+			return
+		end
+
+		local countdownTween = TweenService:Create(
+			fill,
+			TweenInfo.new(remaining, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, false, holdFor),
+			{ Size = UDim2.fromScale(0, 1) }
+		)
+		barCountdownTweenRef.current = countdownTween
+		countdownTween:Play()
+	end
+
+	-- Window edge: arm the local expiry and, if the bar is already on
+	-- screen, re-sync it to the new window (a window that arrives after
+	-- the pulse, or is replaced by a later death).
+	React.useEffect(function()
+		local token = {}
+		expiryTokenRef.current = token
+
+		if not reviveWindow then
+			setWindowExpired(false)
+			return
+		end
+
+		local remaining = reviveWindow.endsAt - workspace:GetServerTimeNow()
+		if remaining <= 0 then
+			setWindowExpired(true)
+		else
+			setWindowExpired(false)
+			task.delay(remaining, function()
+				if expiryTokenRef.current ~= token then
+					return
+				end
+				setWindowExpired(true)
+			end)
+		end
+
+		if barShown then
+			startCountdown()
+		end
+		return nil
+	end, { reviveWindow })
 
 	React.useEffect(function()
 		if props.pulseGradient then
@@ -269,13 +385,6 @@ local function Container(props: any)
 					}):Play()
 				end
 
-				if barCountdownTweenRef.current then
-					barCountdownTweenRef.current:Cancel()
-					barCountdownTweenRef.current = nil
-				end
-				if progressBarFillRef.current then
-					progressBarFillRef.current.Size = UDim2.fromScale(1, 1)
-				end
 				if progressBarBgRef.current then
 					TweenService:Create(progressBarBgRef.current, TEXT_TWEEN_INFO, {
 						BackgroundTransparency = PROGRESS_BAR_BG_VISIBLE_TRANSPARENCY,
@@ -286,15 +395,9 @@ local function Container(props: any)
 					TweenService:Create(progressBarFillRef.current, TEXT_TWEEN_INFO, {
 						BackgroundTransparency = PROGRESS_BAR_FILL_VISIBLE_TRANSPARENCY,
 					}):Play()
-
-					local countdownTween = TweenService:Create(
-						progressBarFillRef.current,
-						BAR_COUNTDOWN_TWEEN_INFO,
-						{ Size = UDim2.fromScale(0, 1) }
-					)
-					barCountdownTweenRef.current = countdownTween
-					countdownTween:Play()
 				end
+				startCountdown()
+				setBarShown(true)
 
 				-- Subtitle stagger. Token-guarded so a pulse-out that
 				-- lands during (startup, startup + stagger) can cancel
@@ -327,6 +430,7 @@ local function Container(props: any)
 			-- clears the Game Over state would land here.
 			outerFlyInTokenRef.current = nil
 			subtitleTokenRef.current = nil
+			setBarShown(false)
 
 			-- Kill the countdown tween too. It is not visible once the bar fades,
 			-- but leaving it running means it keeps writing Size behind a
@@ -374,6 +478,38 @@ local function Container(props: any)
 			end
 		end
 	end, { props.pulseGradient })
+
+	-- REVIVE button visibility, as a tween rather than a Visible flip. It
+	-- rises in after the subtitle has finished its own fly-in (stagger +
+	-- the tween's length, measured from the bar appearing, which is what
+	-- flips barShown) and sinks out the moment the window closes, the
+	-- player revives, or the screen pulses out.
+	local reviveShown = barShown and reviveWindow ~= nil and not windowExpired
+	React.useEffect(function()
+		local group = reviveGroupRef.current
+		if not group then
+			return
+		end
+		if reviveShown then
+			local token = {}
+			reviveShowTokenRef.current = token
+			task.delay(SUBTITLE_STAGGER_DELAY + TEXT_TWEEN_INFO.Time, function()
+				if reviveShowTokenRef.current ~= token or not group.Parent then
+					return
+				end
+				TweenService:Create(group, TEXT_TWEEN_INFO, {
+					GroupTransparency = 0,
+					Position = REVIVE_BUTTON_POSITION,
+				}):Play()
+			end)
+		else
+			reviveShowTokenRef.current = nil
+			TweenService:Create(group, TEXT_FADE_OUT_TWEEN_INFO, {
+				GroupTransparency = 1,
+				Position = REVIVE_BUTTON_START_POSITION,
+			}):Play()
+		end
+	end, { reviveShown })
 
 	return React.createElement("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -465,6 +601,66 @@ local function Container(props: any)
 			GroupTransparency = 1,
 			BorderSizePixel = 0,
 			ZIndex = 2,
+		}),
+
+		--[ REVIVE button (paid) ]--
+		-- Only while the bar is up AND the local player's revive window is
+		-- open. Fires PlayerNetwork.PromptRevivePurchase; the server checks
+		-- the player is still DOWNED and prompts the dev product. On
+		-- purchase, ProcessReceipt -> :Revive stands the player up in place
+		-- and LifeController tears this screen down. Once the window has
+		-- closed the player is fully dead: no button, and the server would
+		-- refuse the prompt anyway.
+		-- Wrapped in a CanvasGroup so the whole control (fill, strokes,
+		-- text) fades as one; the group is what the effect above tweens.
+		-- The button stays mounted and only becomes clickable while shown,
+		-- so a click cannot land on an invisible button mid-fade.
+		ReviveGroup = React.createElement("CanvasGroup", {
+			ref = reviveGroupRef,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = REVIVE_BUTTON_START_POSITION,
+			Size = REVIVE_BUTTON_SIZE,
+			BackgroundTransparency = 1,
+			GroupTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, {
+			ReviveButton = React.createElement("TextButton", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Color3.fromRGB(85, 255, 127),
+				Text = "REVIVE",
+				TextColor3 = Color3.fromRGB(255, 255, 255),
+				TextScaled = true,
+				FontFace = REVIVE_BUTTON_FONT,
+				BorderSizePixel = 0,
+				AutoButtonColor = true,
+				Interactable = reviveShown,
+				[React.Event.Activated] = function()
+					PlayerNetwork.PromptRevivePurchase.Fire()
+				end,
+			}, {
+				UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(0.2, 0) }),
+				UIStroke = React.createElement("UIStroke", {
+					Color = Color3.fromRGB(31, 94, 46),
+					Thickness = 0.06,
+					ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
+				}),
+				BorderStroke = React.createElement("UIStroke", {
+					Color = Color3.fromRGB(31, 94, 46),
+					Thickness = 0.075,
+					ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
+				}),
+				UIPadding = React.createElement("UIPadding", {
+					PaddingLeft = UDim.new(0, 0),
+					PaddingRight = UDim.new(0, 0),
+					PaddingTop = UDim.new(0.15, 0),
+					PaddingBottom = UDim.new(0.15, 0),
+				}),
+			}),
 		}),
 	})
 end

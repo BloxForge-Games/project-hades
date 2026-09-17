@@ -10,11 +10,10 @@
        - Top-center: "Now Viewing: <PlayerName>" with "< />" arrow hints
          flanking the name (matches the arrow-key cycle controls).
 
-     Bottom-center: REVIVE button (paid, restored). Calls
-     PlayerNetwork.PromptRevivePurchase; the server's ProcessReceipt →
-     :Revive flow fades, teleports to the party, and clears DeathState
-     (which hides this whole UI). Run escrow stays lost — revive buys
-     your feet back, not your loot.
+     No REVIVE button here any more: the paid revive is offered on the
+     Game Over screen during the DOWNED window (GameOverGradient
+     Container). By the time this UI shows the window has closed and the
+     player is fully dead; the server refuses the prompt from here.
 ]]
 
 local Players = game:GetService("Players")
@@ -278,47 +277,6 @@ local function Container(props: any)
 						end,
 					}),
 				}),
-			}),
-		}),
-
-		--[ REVIVE button (paid, restored) ]--
-		-- Fires PlayerNetwork.PromptRevivePurchase; the server validates the
-		-- player is downed and prompts the dev product. On purchase, the server's
-		-- ProcessReceipt -> :Revive flow fades, teleports, and clears the
-		-- death state -- which hides this whole UI mid-fade.
-		ReviveButton = React.createElement("TextButton", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.825),
-			Size = UDim2.fromScale(0.105, 0.047),
-			BackgroundColor3 = Color3.fromRGB(85, 255, 127),
-			Text = "REVIVE",
-			TextColor3 = Color3.fromRGB(255, 255, 255),
-			TextScaled = true,
-			FontFace = FONT,
-			BorderSizePixel = 0,
-			AutoButtonColor = true,
-			[React.Event.Activated] = function()
-				PlayerNetwork.PromptRevivePurchase.Fire()
-			end,
-		}, {
-			UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(0.2, 0) }),
-			UIStroke = React.createElement("UIStroke", {
-				Color = Color3.fromRGB(31, 94, 46),
-				Thickness = 0.06,
-				ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-				StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-			}),
-			BorderStroke = React.createElement("UIStroke", {
-				Color = Color3.fromRGB(31, 94, 46),
-				Thickness = 0.075,
-				ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-				StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-			}),
-			UIPadding = React.createElement("UIPadding", {
-				PaddingLeft = UDim.new(0, 0),
-				PaddingRight = UDim.new(0, 0),
-				PaddingTop = UDim.new(0.15, 0),
-				PaddingBottom = UDim.new(0.15, 0),
 			}),
 		}),
 	})

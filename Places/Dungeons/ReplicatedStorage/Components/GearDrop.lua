@@ -138,6 +138,9 @@ local ATTR_PUBLIC_DROP = "PublicDrop"
 -- Attributes.DroppedByName: who dropped it, for the billboard's owner
 -- line. Absent on mob loot and chest loot, which nobody dropped.
 local ATTR_DROPPED_BY = "DroppedByName"
+-- Stamped by the server on every item but the first of a death spill: no
+-- throw pop for this one, the burst already sounded once.
+local ATTR_SILENT_POP = "SilentPop"
 -- CLIENT-LOCAL: this player triggered the prompt and is waiting on the
 -- server. Read by GearDropsRenderController to keep the floating label
 -- down for the whole round trip, so a successful pickup never flashes it
@@ -238,7 +241,10 @@ function GearDrop:_playBezierFlight()
 	-- chest-only coin blip that used to play here — gear now sounds the
 	-- same whichever way it arrived, and a chest item made two noises at
 	-- once with both. Coins keep their own blip (Drop component).
-	lootSound:PlayPop(self._carrier)
+	-- A death spill pops once: every item after its first is stamped silent.
+	if self.Instance:GetAttribute(ATTR_SILENT_POP) ~= true then
+		lootSound:PlayPop(self._carrier)
+	end
 
 	local origin = self._originPosition
 	local landing = self._restingPosition

@@ -120,6 +120,12 @@ local ENCOUNTER_INTRO_WALK_UP_STUDS = 20
 local ENCOUNTER_INTRO_SPREAD_STUDS = 5
 local ENCOUNTER_INTRO_POST_TELEPORT_WAIT = 1 -- buffer for HRP replication + constraint catch-up
 local ENCOUNTER_INTRO_WALK_UP_DURATION = 1.5
+-- Per-player random delay before the walk-up starts, so the line does not
+-- step off in lockstep (the same idea as the landing's drop stagger). The
+-- phase timer waits the maximum on top of the walk so the last starter
+-- still arrives before the camera pans.
+local ENCOUNTER_INTRO_WALK_STAGGER_MIN_SECONDS = 0.1
+local ENCOUNTER_INTRO_WALK_STAGGER_MAX_SECONDS = 0.5
 local ENCOUNTER_INTRO_CAMERA_TWEEN_DURATION = 2 -- matches { duration = 2 } in IsometricCameraController
 local ENCOUNTER_INTRO_BOSS_HOLD_DURATION = 3 -- seconds the camera holds on the mob
 
@@ -846,12 +852,19 @@ function EncounterService._startFight(
 		-- else's slot would drag them sideways, and a player who never
 		-- arrived (dead) has no walk to run.
 		for player, arrivalPosition in arrivalPositions do
-			DungeonNetwork.EncounterIntroWalk.Fire(
-				player,
-				arrivalPosition + (walkDirection * ENCOUNTER_INTRO_WALK_UP_STUDS)
-			)
+			local stagger = ENCOUNTER_INTRO_WALK_STAGGER_MIN_SECONDS
+				+ math.random()
+					* (ENCOUNTER_INTRO_WALK_STAGGER_MAX_SECONDS - ENCOUNTER_INTRO_WALK_STAGGER_MIN_SECONDS)
+			task.delay(stagger, function()
+				if player.Parent then
+					DungeonNetwork.EncounterIntroWalk.Fire(
+						player,
+						arrivalPosition + (walkDirection * ENCOUNTER_INTRO_WALK_UP_STUDS)
+					)
+				end
+			end)
 		end
-		task.wait(ENCOUNTER_INTRO_WALK_UP_DURATION)
+		task.wait(ENCOUNTER_INTRO_WALK_UP_DURATION + ENCOUNTER_INTRO_WALK_STAGGER_MAX_SECONDS)
 
 		-- Phase 5: pan the camera onto the mob.
 		local cameraTarget = mob:WaitForChild("HumanoidRootPart") :: BasePart

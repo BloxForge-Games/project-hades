@@ -143,6 +143,9 @@ local DROP_ATTACHMENT_NAME = "DropAttachment"
 -- Marks gear that fell out of a Miniboss / Boss chest rather than off a
 -- corpse. Read by Client/Components/GearDrop for the pop-out blip.
 local ATTR_FROM_CHEST = "ChestDrop"
+-- Set on every item but the first of a death spill: the client skips the
+-- throw pop for it, so a burst of gear makes one sound, not one per item.
+local ATTR_SILENT_POP = "SilentPop"
 
 -- Billboard prefab name under GameAssets.BillboardGuis. Reused from
 -- the relic system since the same name + rarity layout fits gear too.
@@ -1088,12 +1091,15 @@ end
 -- `requestedLanding` (optional): where the item should land, chosen by the
 -- caller (the death spill lays its items out in a ring). Snapped to the
 -- floor; nil means the usual random scatter around `originPosition`.
+-- `silentPop` (optional): true to stamp the drop so the client plays no
+-- throw pop for it (the death spill sounds once for the whole burst).
 function GearDropService.DropExistingGear(
 	self: typeof(GearDropService),
 	player: Player,
 	originPosition: Vector3,
 	escrowItem: { [string]: any },
-	requestedLanding: Vector3?
+	requestedLanding: Vector3?,
+	silentPop: boolean?
 ): boolean
 	local item = escrowItem and escrowItem.item
 	local gearType = escrowItem and escrowItem.gearType
@@ -1156,6 +1162,9 @@ function GearDropService.DropExistingGear(
 	end
 	model:SetAttribute(ATTR_DROPPED_BY, originName)
 	model:SetAttribute(ATTR_DROPPED_BY_ID, originId)
+	if silentPop then
+		model:SetAttribute(ATTR_SILENT_POP, true)
+	end
 
 	local preservedItem = table.clone(item)
 	preservedItem.originalOwnerId = originId

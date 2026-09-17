@@ -163,24 +163,28 @@ function LandingController._lockControls(self: typeof(LandingController), barsDe
 	end
 end
 
+-- Everything comes back on ONE beat, a second after the landing ends,
+-- when the cinematic bars slide out: movement used to return the instant
+-- the server called the landing done, a second before the bars and the
+-- CutscenePlaying gate, so the player was walking off under the bars.
 function LandingController._unlockControls(self: typeof(LandingController))
 	local character = Players.LocalPlayer.Character
 
-	local controls = self:_getPlayerControls()
-	if controls then
-		controls:Enable()
-	end
+	task.delay(1, function()
+		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 
-	if character then
-		task.delay(1, function()
-			CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
+		local controls = self:_getPlayerControls()
+		if controls then
+			controls:Enable()
+		end
 
+		if character then
 			character:SetAttribute(Attributes.CutscenePlaying, false)
-			if RelicRenderController then
-				RelicRenderController:SetLandingHidden(false)
-			end
-		end)
-	end
+		end
+		if RelicRenderController then
+			RelicRenderController:SetLandingHidden(false)
+		end
+	end)
 
 	-- Same beat as the bars going out: the HUD comes up once, after the
 	-- cutscene. No-op on run-transition landings (the source isn't held).

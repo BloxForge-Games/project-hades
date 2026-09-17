@@ -2,14 +2,26 @@
 --[[
      Module: LifeController.lua
      Description:
-     Client-side glue for LifeService. Subscribes to the three server
-     visual-callback signals and re-emits them through local Signal objects
+     Client-side glue for LifeService. Subscribes to the server's death
+     lifecycle broadcasts and re-emits them through local Signal objects
      so client systems (VFX, audio, screen flashes, etc.) can hook in
      without needing to know about the network layer.
 
-     For now (Chunk A) the local handlers only print — Chunks C/D wire
-     real visuals + spectate behavior. The signal surface is forwards-
-     compatible: future VFX listeners just `LifeController.OnLifeLost:Connect(...)`.
+     Death is two server-authoritative phases (see LifeService):
+       DOWNED (PlayerDied)        the body stays where it fell, fully
+                                  visible. The local player gets the
+                                  impact, the Game Over screen with the
+                                  revive window's bar and REVIVE button,
+                                  the red hold and the half fade. Nothing
+                                  else moves: no body fade, no gravestone,
+                                  no spectate.
+       DEAD (PlayerFullyDied)     the window closed. Every client fades
+                                  the body; the local player fades to
+                                  black, the screen clears under it and
+                                  spectate begins. A wipe (IsWipe) leaves
+                                  the screen up for GameOver instead.
+     A revive (PlayerRevived) tears the local overlays down in either
+     phase and restores a faded body.
 
      Identification: server fires with `userId`. Listeners that only care
      about the local player should compare userId == Players.LocalPlayer.UserId
@@ -100,9 +112,9 @@ LifeController.DeathState = RemoteProperty.Client({
 -- Death cinematic timings — sourced from Shared/Data/DeathCinematicData so
 -- LifeController, GameOverGradientInterfaceController, and its Container all
 -- stay in lockstep. To re-tune the cinematic, edit DeathCinematicData; the
--- locals below propagate the change automatically. CHARACTER_FADE_START_OFFSET
--- stays local because it's tuned against this controller's own task.delay
--- timeline and isn't referenced by the other systems.
+-- locals below propagate the change automatically. The revive window
+-- itself (GameOverDuration) is never read here: the server stamps its end
+-- time on the death state and the screen counts down to that.
 -- AUTHORED colour grade — the values the place's ColorCorrection is
 -- built with, pinned in Shared/Data/ColorCorrectionDefaults (the one
 -- source every grade-bending effect restores to). The death cinematic
@@ -137,24 +149,21 @@ local DEATH_IMPACT_HOLD_SECONDS = 0.18
 local DEATH_IMPACT_DECAY_SECONDS = 0.65
 local DEATH_IMPACT_ECHO_DELAY_SECONDS = 0.55
 local DEATH_IMPACT_ECHO_SCALE = 0.45
-local DEATH_IMPACT_TO_GAME_OVER_SECONDS = 3
+-- Shared with LifeService through DeathCinematicData: the server opens the
+-- revive window this far (plus the screen's startup pause) after the
+-- downing, so the bar flies in full.
+local DEATH_IMPACT_TO_GAME_OVER_SECONDS = DeathCinematicData.GameOverImpactDelay
 
 local AUTHORED_BLUR_SIZE = Lighting.Blur.Size
 
-local DEATH_VFX_DURATION = DeathCinematicData.VfxDuration
 local DEATH_FADE_DURATION = DeathCinematicData.FadeDuration
 local DEATH_BLACK_HOLD_DURATION = DeathCinematicData.BlackHoldDuration
 
--- Body fade timing. Body is fully invisible by
--- CHARACTER_FADE_START_OFFSET + CHARACTER_FADE_DURATION (default ≈ 2.5s
--- after death). Originally 6.5s offset + 0.5s tween, which left the
--- ragdoll visible for the entire screen-fade-to-black window (~7s).
--- QA reported "you can see the player get up briefly during the Death
--- animation" — that was the death animation track ending while the
--- humanoid was still live underneath the cinematic, with no fade yet
--- to hide it. Fading earlier (1.5s after death) puts the body out of
--- frame well before any default Humanoid state can take over visually.
-local CHARACTER_FADE_START_OFFSET = 5
+-- Body fade. Starts the moment a player is FULLY dead (the server's
+-- window expired), not on a local timer: while downed the body is meant
+-- to be seen lying there, revive button and all. The server keeps the
+-- death pose frozen until after this tween, so the humanoid never
+-- visibly stands back up under a still-visible body.
 local CHARACTER_FADE_DURATION = DEATH_BLACK_HOLD_DURATION
 
 --[ Red flash overlay tuning ]--
@@ -249,7 +258,8 @@ end
 -- Each fires with userId (number). Subscribers filter for local vs. remote
 -- as needed.
 LifeController.OnLifeLost = Signal.new()
-LifeController.OnPlayerDied = Signal.new()
+LifeController.OnPlayerDied = Signal.new() -- downed: the revive window opened
+LifeController.OnPlayerFullyDied = Signal.new() -- the window closed, gone for good
 LifeController.OnPlayerRevived = Signal.new()
 
 -- Local-only signal indicating whether the LOCAL player is in the
@@ -282,16 +292,21 @@ LifeController._controlsLocked = false
 LifeController._isLocalSpectating = false
 LifeController._isLocalDead = false
 
--- Per-userId cache + race token for the body-fade. The cache holds the
--- pre-fade transparency of every BasePart/Decal/Texture on the dying
--- character so we can tween-restore them on revive (player might be
--- wearing semi-transparent gear; we don't want to wipe that to 0).
--- The token guards against die → revive → die races scheduled within the
--- CHARACTER_FADE_START_OFFSET window: each death stamps a fresh token,
--- the delay callback aborts if it doesn't match anymore.
+-- Per-userId cache for the body-fade. Holds the pre-fade transparency of
+-- every BasePart/Decal/Texture on the dead character so we can
+-- tween-restore them on revive (player might be wearing semi-transparent
+-- gear; we don't want to wipe that to 0). Written on PlayerFullyDied,
+-- consumed on PlayerRevived.
 LifeController._characterFadeCaches = {} :: { [number]: { { part: any, transparency: number } } }
-LifeController._pendingFadeTokens = {} :: { [number]: any }
 LifeController._isGameOver = false -- true after the all-dead trigger, until teleport or reload
+-- True while the LOCAL player's downed screen (Game Over overlay + red
+-- hold) is painted: from the downed tick until it clears for spectate or
+-- a revive tears it down. GameOver reads it so a wipe never replays the
+-- impact or restacks the overlay on a screen that is already showing it.
+LifeController._localScreenUp = false
+-- The revive window last pushed to the Game Over screen (its server end
+-- time), so DeathState updates for OTHER players do not re-push it.
+LifeController._pushedReviveWindowEndsAt = nil :: number?
 -- Bumped per death impact; a scheduled hold-release or echo from an
 -- earlier death checks it before touching Lighting.
 LifeController._deathImpactToken = 0
@@ -536,57 +551,31 @@ function LifeController.Start(self: typeof(LifeController))
 		self.OnLifeLost:Fire(userId)
 	end)
 
-	PlayerNetwork.PlayerDied.On(function(payload: { UserId: number, IsWipe: boolean })
-		local userId, isWipe = payload.UserId, payload.IsWipe
-		print(("[LifeController] %s died (wipe=%s)"):format(nameFor(userId), tostring(isWipe == true)))
+	-- DOWNED. The body stays where it fell, fully visible: no body fade, no
+	-- gravestone, no spectate yet. For the local player the Game Over
+	-- screen goes up with the revive window's bar and REVIVE button; the
+	-- fully dead beat (PlayerFullyDied) or a revive (PlayerRevived) ends it.
+	PlayerNetwork.PlayerDied.On(function(userId: number)
+		print(("[LifeController] %s is downed"):format(nameFor(userId)))
 		self.OnPlayerDied:Fire(userId)
 
 		CutsceneController:CancelActiveAbility(false)
-
-		local fadeToken = {}
-		self._pendingFadeTokens[userId] = fadeToken
-
-		task.delay(CHARACTER_FADE_START_OFFSET, function()
-			if self._pendingFadeTokens[userId] ~= fadeToken then
-				return -- superseded (revived or died again)
-			end
-			local diedPlayer = Players:GetPlayerByUserId(userId)
-			local character = diedPlayer and diedPlayer.Character
-			if not character then
-				return
-			end
-			self._characterFadeCaches[userId] = captureAndTweenCharacterToInvisible(character)
-		end)
 
 		if userId ~= Players.LocalPlayer.UserId then
 			return
 		end
 
-		-- Wipe-completing death — this player's death was the all-dead
-		-- trigger. SKIP the standard death cinematic (red flash, fade-in,
-		-- spectate setup) entirely; the OnGameOver handler below will
-		-- paint the Game Over screen instead. User stories 2 and 3:
-		--   * Story 2 (solo): die → no other players → wipe → straight
-		--     to Game Over.
-		--   * Story 3 (last alive): die while teammates are spectating →
-		--     wipe → Game Over plays for everyone.
-		-- Without this early return, the death cinematic would run for
-		-- ~7s under the Game Over overlay, finishing right around when
-		-- the teleport fires — wastes the moment.
-		if isWipe == true then
-			return
-		end
+		self._localScreenUp = true
 
 		CharacterHighlightController:RequestDeathFlash(Players.LocalPlayer.Character)
 
-		-- HARDCORE: the Game Over screen is the ONLY death screen — it
-		-- paints on every death regardless of party size or how many
-		-- players are still alive. This is the individual-death path
-		-- (teammates still fighting); the wipe path early-returns above
-		-- and gets the same screen from the OnGameOver handler instead.
-		-- DeathGradientInterfaceController ("You Died") is intentionally
-		-- never fired now; the controller itself is left registered so
-		-- restoring it is a one-line change.
+		-- The Game Over screen is the ONLY death screen — it paints on every
+		-- death regardless of party size or how many players are still
+		-- alive. While downed it carries the revive window (bar counting
+		-- down to the server's end time, REVIVE button); on a wipe it stays
+		-- up as the wipe screen. DeathGradientInterfaceController ("You
+		-- Died") is intentionally never fired now; the controller itself is
+		-- left registered so restoring it is a one-line change.
 		--
 		-- death=true → the pulse handler takes the long-hold branch
 		-- (multi-second timeout vs 0.25s for normal pulses) so the title
@@ -599,156 +588,83 @@ function LifeController.Start(self: typeof(LifeController))
 		-- beat, so the death reads as a HIT before it reads as a screen.
 		self:_playDeathImpact()
 		task.delay(DEATH_IMPACT_TO_GAME_OVER_SECONDS, function()
+			if not self._localScreenUp then
+				return -- revived inside the beat; nothing to paint
+			end
 			GameOverGradientInterfaceController.Signals.OnPulseGradient:Fire(Color3.fromRGB(255, 0, 0), true)
 		end)
 
-		-- Death-VFX-phase overlay. Red persistent gradient at 0.35
-		-- transparency held until the FadeIn-to-full-black completes — at
-		-- which point we crossfade it to black (see inside the task.spawn
-		-- below) so the spectate reveal shows a black overlay. Fires here
-		-- on the local death tick so the red is visible from frame 1 of
-		-- the cinematic, alongside the DeathGradient pulse above.
+		-- Downed-phase overlay. Red persistent gradient at 0.35 transparency
+		-- held for the whole window; the fully-dead beat crossfades it to
+		-- black under the fade so the spectate reveal shows a black overlay.
+		-- Fires here on the downed tick so the red is visible from frame 1.
 		ScreenGradientInterfaceController.Signals.OnSetHold:Fire(Color3.fromRGB(255, 0, 0), 0.35)
 
-		-- clearZombieHitboxes()
+		TweenService:Create(
+			Lighting.ColorCorrection,
+			TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Saturation = -0.5 }
+		):Play()
 
-		if CutsceneController then
-			CutsceneController:CancelActiveAbility(false)
+		TweenService:Create(
+			Lighting.Blur,
+			TweenInfo.new(DEATH_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Size = 7.5 }
+		):Play()
+
+		-- Half fade: the world dims behind the screen but the body, the
+		-- fight and the button all stay readable for the whole window.
+		ScreenFadeInterfaceController.Signals.FadeIn:Fire(DEATH_FADE_DURATION, 0.5)
+	end)
+
+	-- FULLY DEAD: the window closed with no revive. Every client fades the
+	-- body now (the server releases the frozen pose only after this tween).
+	-- The local player fades to black, clears the screen under it and
+	-- enters spectate -- unless this death completed a WIPE, in which case
+	-- the screen stays up and the GameOver handler owns it from here.
+	PlayerNetwork.PlayerFullyDied.On(function(payload: { UserId: number, IsWipe: boolean })
+		local userId, isWipe = payload.UserId, payload.IsWipe
+		print(("[LifeController] %s fully died (wipe=%s)"):format(nameFor(userId), tostring(isWipe == true)))
+		self.OnPlayerFullyDied:Fire(userId)
+
+		local diedPlayer = Players:GetPlayerByUserId(userId)
+		local character = diedPlayer and diedPlayer.Character
+		if character and not self._characterFadeCaches[userId] then
+			self._characterFadeCaches[userId] = captureAndTweenCharacterToInvisible(character)
+		end
+
+		if userId ~= Players.LocalPlayer.UserId then
+			return
+		end
+
+		-- Wipe-completing death: no black fade, no spectate. The downed
+		-- screen (title up, bar at zero, button gone with the phase) IS the
+		-- wipe screen; GameOver arrives right behind this and only flags.
+		if isWipe == true then
+			return
 		end
 
 		task.spawn(function()
-			print("[LifeController] Death Animation")
-
-			-- 	local cachedTransparency = table.create(4096)
-			-- 	local screenGuis = table.create(512)
-			-- 	local particles = table.create(512)
-
-			-- 	fadeRootAndCache(workspace.IgnoreInstances.Map.DungeonRooms, cachedTransparency, screenGuis, particles)
-
-			-- 	for _, zombie in workspace.IgnoreInstances.Zombies:GetChildren() do
-			-- 		if zombie:IsA("Model") then
-			-- 			fadeRootAndCache(zombie, cachedTransparency, screenGuis, particles)
-			-- 		end
-			-- 	end
-
-			-- 	local playersContainer = workspace:FindFirstChild("Players")
-			-- 	local localCharacter = Players.LocalPlayer.Character
-
-			-- 	if playersContainer then
-			-- 		for _, character in playersContainer:GetChildren() do
-			-- 			if character:IsA("Model") and character ~= localCharacter then
-			-- 				fadeRootAndCache(character, cachedTransparency, screenGuis, particles)
-			-- 			end
-			-- 		end
-			-- 	end
-
-			-- 	local dropsContainer = workspace.IgnoreInstances:FindFirstChild("Drops")
-
-			-- 	if dropsContainer then
-			-- 		fadeRootAndCache(dropsContainer, cachedTransparency, screenGuis, particles)
-			-- 	end
-
-			-- 	workspace.IgnoreInstances.DeadZombies:ClearAllChildren()
-
-			-- 	local suppressionConnections = {}
-
-			-- 	local function watchBillboard(billboard: BillboardGui)
-			-- 		local conn = billboard:GetPropertyChangedSignal("Enabled"):Connect(function()
-			-- 			if billboard.Enabled then
-			-- 				billboard.Enabled = false
-			-- 			end
-			-- 		end)
-			-- 		table.insert(suppressionConnections, conn)
-			-- 	end
-
-			-- 	local function watchZombie(zombie: Instance)
-			-- 		if not zombie:IsA("Model") then
-			-- 			return
-			-- 		end
-			-- 		for _, descendant in zombie:GetDescendants() do
-			-- 			if descendant:IsA("BillboardGui") then
-			-- 				watchBillboard(descendant)
-			-- 			end
-			-- 		end
-			-- 		local descConn = zombie.DescendantAdded:Connect(function(descendant)
-			-- 			if descendant:IsA("BillboardGui") then
-			-- 				-- Cache so restore re-enables to its actual state.
-			-- 				table.insert(screenGuis, { part = descendant, enabled = descendant.Enabled })
-			-- 				descendant.Enabled = false
-			-- 				watchBillboard(descendant)
-			-- 			end
-			-- 		end)
-			-- 		table.insert(suppressionConnections, descConn)
-			-- 	end
-
-			-- 	for _, zombie in workspace.IgnoreInstances.Zombies:GetChildren() do
-			-- 		watchZombie(zombie)
-			-- 	end
-			-- 	local zombieAddedConn = workspace.IgnoreInstances.Zombies.ChildAdded:Connect(function(zombie)
-			-- 		if zombie:IsA("Model") then
-			-- 			fadeRootAndCache(zombie, cachedTransparency, screenGuis, particles)
-			-- 			watchZombie(zombie)
-			-- 		end
-			-- 	end)
-
-			-- 	table.insert(suppressionConnections, zombieAddedConn)
-
-			TweenService:Create(
-				Lighting.ColorCorrection,
-				TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ Saturation = -0.5 }
-			):Play()
-
-			TweenService:Create(
-				Lighting.Blur,
-				TweenInfo.new(DEATH_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ Size = 7.5 }
-			):Play()
-
-			ScreenFadeInterfaceController.Signals.FadeIn:Fire(DEATH_FADE_DURATION, 0.5)
-
-			task.wait(DEATH_VFX_DURATION)
-
 			ScreenFadeInterfaceController.Signals.FadeIn:Fire(DEATH_FADE_DURATION, 0)
-
-			-- 	if not ScreenFadeInterfaceController then
-			-- 		return
-			-- 	end
 
 			task.wait(DEATH_FADE_DURATION)
 
 			ScreenGradientInterfaceController.Signals.OnSetHold:Fire(Color3.fromRGB(0, 0, 0), 0.35)
 
-			-- 	for _, conn in suppressionConnections do
-			-- 		conn:Disconnect()
-			-- 	end
-			-- 	table.clear(suppressionConnections)
-
-			-- 	for _, entry in cachedTransparency do
-			-- 		entry.part.Transparency = entry.transparency
-			-- 	end
-
-			-- 	for _, entry in screenGuis do
-			-- 		entry.part.Enabled = entry.enabled
-			-- 	end
-
-			-- 	for _, entry in particles do
-			-- 		entry.part.Enabled = entry.enabled
-			-- 	end
-
 			if self._isGameOver then
 				return
 			end
 
-			-- Individual death: the screen is fully black here, so this is
-			-- the one moment the Game Over overlay (title, subtitle, bar) can
-			-- go without being seen. Its gameOver pulse never self-clears (it
-			-- assumes a teleport), so without this the spectating player sat
-			-- under "Eternal Damnation" the whole time -- and the pulse latch
+			-- The screen is fully black here, so this is the one moment the
+			-- Game Over overlay (title, subtitle, bar) can go without being
+			-- seen. Its gameOver pulse never self-clears (it assumes a
+			-- teleport), so without this the spectating player sat under
+			-- "Eternal Damnation" the whole time -- and the pulse latch
 			-- stayed set, which also swallowed the real wipe screen later.
 			if GameOverGradientInterfaceController then
 				GameOverGradientInterfaceController.Signals.OnClearGradient:Fire()
 			end
+			self._localScreenUp = false
 
 			PlayerNetwork.SpectateRequested.Fire()
 
@@ -767,7 +683,7 @@ function LifeController.Start(self: typeof(LifeController))
 		print(("[LifeController] %s revived"):format(nameFor(userId)))
 		self.OnPlayerRevived:Fire(userId)
 
-		self._pendingFadeTokens[userId] = nil
+		-- Only a FULLY dead body was faded; a downed one stands up as it is.
 		local cache = self._characterFadeCaches[userId]
 
 		if cache then
@@ -776,6 +692,8 @@ function LifeController.Start(self: typeof(LifeController))
 		end
 
 		if userId == Players.LocalPlayer.UserId then
+			self._localScreenUp = false
+
 			-- Retire any impact beat still pending (a slam or decay landing
 			-- AFTER this restore would leave the grade off), then put the
 			-- WHOLE grade back to the authored values in one tween.
@@ -818,9 +736,7 @@ function LifeController.Start(self: typeof(LifeController))
 	end)
 
 	Players.PlayerRemoving:Connect(function(player: Player)
-		local userId = player.UserId
-		self._pendingFadeTokens[userId] = nil
-		self._characterFadeCaches[userId] = nil
+		self._characterFadeCaches[player.UserId] = nil
 	end)
 
 	PlayerNetwork.RevivalFade.On(function(payload: { Phase: string, Duration: number })
@@ -856,10 +772,18 @@ function LifeController.Start(self: typeof(LifeController))
 
 		self._isGameOver = true
 
-		-- Only the player whose death CAUSED the wipe takes the hit;
-		-- teammates already spectating had theirs when they fell. Read
-		-- before the spectate reset below clears the evidence. (Solo play
-		-- is always a wipe, so this is the path that usually runs.)
+		-- The player whose window just closed is still looking at the
+		-- downed screen: title up, bar at zero, button gone with their
+		-- "downed" phase. The wipe adds nothing for them -- no second
+		-- impact, no restacked overlay. (Solo play always lands here.)
+		if self._localScreenUp then
+			return
+		end
+
+		-- Otherwise the local player was already fully dead and spectating
+		-- with a cleared screen: paint the wipe screen for them, without
+		-- the impact (they had theirs when they fell). Read before the
+		-- spectate reset below clears the evidence.
 		local justDied = not self:IsLocalSpectating()
 
 		self:_setSpectatingState(false)
@@ -895,11 +819,37 @@ function LifeController.Start(self: typeof(LifeController))
 		end
 	end)
 
+	-- Snapshot shape per entry (LifeService._replicateDeathState):
+	--   { phase = "downed" | "dead", diedAtServerTime, windowEndsAtServerTime,
+	--     fullyDiedAtServerTime?, deathPosition, player }
 	self.DeathState:Observe(function(deathState: { [any]: any }?)
 		local localId = Players.LocalPlayer.UserId
 		local localEntry = deathState and (deathState[localId] or deathState[tostring(localId)])
 		self._isLocalDead = localEntry ~= nil
 		self:_refreshPromptGate()
+
+		-- The revive window, to the Game Over screen: its bar counts down
+		-- to the SERVER end time (right remainder on a laggy or late
+		-- client) and its REVIVE button shows only while the phase is
+		-- "downed". nil once fully dead, revived, or never down. Pushed on
+		-- change only: this observer also runs for other players' deaths.
+		local windowEndsAt: number? = nil
+		if localEntry and localEntry.phase == "downed" then
+			windowEndsAt = localEntry.windowEndsAtServerTime
+		end
+		if windowEndsAt ~= self._pushedReviveWindowEndsAt then
+			self._pushedReviveWindowEndsAt = windowEndsAt
+			if GameOverGradientInterfaceController then
+				local window = if windowEndsAt
+					then {
+						endsAt = windowEndsAt,
+						startedAt = localEntry.windowStartsAtServerTime or localEntry.diedAtServerTime,
+					}
+					else nil
+				GameOverGradientInterfaceController.Signals.SetReviveWindow:Fire(window)
+			end
+		end
+
 		if localEntry then
 			self:_lockControls()
 			self:_setHudVisible(false)

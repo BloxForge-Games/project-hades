@@ -231,6 +231,13 @@ local LANDING_POSE_SETTLE = 0.2
 local LANDING_POSE_HOLD_SECONDS = 0.5
 local LANDING_DROP_SPEED = 0.75
 local LANDING_IMPACT_DELAY = 1.6
+-- Per-player random delay before the reveal + drop, so a party that spawned
+-- in together does not all hit the ground on the same frame: the slots
+-- already spread them in SPACE (LANDING_SPREAD_STUDS), this spreads them in
+-- TIME. Everything after the reveal (impact, end) is relative to it, so the
+-- whole landing shifts as one.
+local LANDING_STAGGER_MIN_SECONDS = 0.1
+local LANDING_STAGGER_MAX_SECONDS = 0.5
 local LANDING_DURATION = 1.7
 
 -- RUN LOOP (see StartRun / AdvanceRun). After a boss: outro + rewards
@@ -1922,6 +1929,21 @@ function DungeonService._runPlayerLanding(self: typeof(DungeonService), player: 
 				end
 				return
 			end
+		end
+
+		-- Stagger (see LANDING_STAGGER_*). Re-checked after the wait like the
+		-- holds above: the character or the floor can go away in it.
+		task.wait(
+			LANDING_STAGGER_MIN_SECONDS + math.random() * (LANDING_STAGGER_MAX_SECONDS - LANDING_STAGGER_MIN_SECONDS)
+		)
+		if not character.Parent or not hrp.Parent or self._activeDungeon ~= dungeon then
+			if character.Parent then
+				character:SetAttribute(Attributes.Landing, nil)
+			end
+			if not character.Parent or not hrp.Parent then
+				self._landed[player] = nil
+			end
+			return
 		end
 
 		-- Reveal: fade the joiner's loading screen (or the transition black)

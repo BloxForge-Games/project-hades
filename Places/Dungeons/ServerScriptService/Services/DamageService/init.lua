@@ -1162,10 +1162,18 @@ function DamageService.TakeDamage(
 	-- damage bypasses both: a relic's listed number is what it deals —
 	-- previously TNT / tremor / Ghost Dragon (neither melee nor magic) were
 	-- silently halved by projectile-resistant mobs via the not-melee-not-
-	-- magic bucket below.
+	-- magic bucket below. Projectile resistance is against BULLETS: a spell
+	-- Sword of the Epicredness turned into weapon damage is not one, and it
+	-- landed in the not-melee-not-magic bucket the same way until it was
+	-- excluded here.
 	local isMagicResistedHit = isMagicResistant and isMagic and not isRelicSourced
-	local isResistedHit = (isProjectileResistant and not isMelee and not isMagic and not isRelicSourced)
-		or isMagicResistedHit
+	local isResistedHit = (
+		isProjectileResistant
+		and not isMelee
+		and not isMagic
+		and not isRelicSourced
+		and not isConvertedSpell
+	) or isMagicResistedHit
 
 	-- Number colour by damage kind: resisted grey > magic purple > weapon
 	-- orange (melee and ranged both — anything that isn't relic-sourced)

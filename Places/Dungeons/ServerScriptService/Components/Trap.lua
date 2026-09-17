@@ -92,6 +92,14 @@ function Trap:_onEntityEntered()
 			if not humanoid or humanoid.Health <= 0 then
 				continue
 			end
+			-- A downed or dead body on the plate is scenery: it neither sets
+			-- the spikes off nor takes the hit. Attributes.Death is written by
+			-- LifeService at the downing and cleared by a revive, so the body
+			-- that lies there through the whole revive window is skipped and
+			-- a live player stepping on is not.
+			if model:GetAttribute(Attributes.Death) == true then
+				continue
+			end
 
 			entitiesInZone += 1
 

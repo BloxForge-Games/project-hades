@@ -12,21 +12,24 @@
          * Randomized death reason from a corpus
 
        Game Over screen (this controller):
-         * Server-broadcast trigger (fires for EVERY client on all-dead)
-         * Holds for DeathCinematicData.GameOverDuration (4.25s, matches
-           LifeService.ALL_DEAD_TELEPORT_DELAY so the bar reaches 0 on
-           the same beat TeleportAsync fires)
-         * Auto-clears just as the place unloads (or stays held if the
-           teleport fails — see GameOverDuration tuning comment)
-         * Fixed subtitle: "Teleporting all players back to the Lobby..."
+         * Goes up when the LOCAL player is DOWNED (LifeController fires
+           the pulse a beat after the impact), and stays up on a wipe
+         * The bar is the REVIVE DECISION WINDOW: LifeController pushes
+           the window (server end time) through SetReviveWindow and the
+           Container counts down to THAT time, so a late or laggy client
+           sees the true remainder. With no window (the wipe screen for
+           a player who was already fully dead) it falls back to the
+           GameOverDuration countdown.
+         * A REVIVE button beside the bar while the window is open; it
+           prompts the paid dev product (PlayerNetwork.PromptRevivePurchase)
+         * Never self-clears: LifeController clears it under the black
+           fade before spectate, on a revive, or the place unloads
+         * Fixed subtitle
 
      Signal API mirrors DeathGradient for consistency. Same pulse +
-     hold-latch + token-guard machinery — the only differences are the
-     duration (sourced from DeathCinematicData.GameOverDuration) and the
-     Container child it renders.
+     hold-latch + token-guard machinery plus the revive window.
 
-     Server-side wiring lives in LifeService (forthcoming) — for visual
-     testing, fire from the command bar:
+     For visual testing, fire from the command bar:
        require(game.ReplicatedStorage.Interfaces.GameOverGradientInterfaceController)
               .Signals.OnPulseGradient:Fire(Color3.fromRGB(255, 0, 0), true)
 ]]
@@ -44,6 +47,10 @@ local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data
 local Container = require(script.ReactComponents.Container)
 
 local INTERFACE_ID = "GameOverGradientInterfaceController"
+
+-- The local player's open revive window, in workspace:GetServerTimeNow()
+-- seconds: when it closes and when it opened (the bar's full width).
+export type ReviveWindow = { endsAt: number, startedAt: number }
 
 --[ App Component ]--
 
@@ -72,12 +79,19 @@ GameOverGradientInterfaceController.Signals = {
 	-- AND the pulse latch stays set, which also blocks the next death's
 	-- pulse-in (and therefore its progress-bar reset).
 	OnClearGradient = Signal.new(), -- ()
+
+	-- The local player's revive window, or nil once it is over (fully
+	-- dead, revived, or never down). Fired by LifeController from the
+	-- replicated DeathState; drives the bar's countdown and the REVIVE
+	-- button's visibility.
+	SetReviveWindow = Signal.new(), -- (window: ReviveWindow?)
 }
 
 function GameOverGradientInterfaceController._render(self: typeof(GameOverGradientInterfaceController))
 	return function()
 		local pulseGradient, setPulseGradient = React.useState(false)
 		local imageColor3, setImageColor3 = React.useState(Color3.fromRGB(255, 255, 255))
+		local reviveWindow, setReviveWindow = React.useState(nil :: ReviveWindow?)
 
 		React.useEffect(function()
 			local onStartConn
@@ -118,9 +132,14 @@ function GameOverGradientInterfaceController._render(self: typeof(GameOverGradie
 				setPulseGradient(false)
 			end)
 
+			local onWindowConn = self.Signals.SetReviveWindow:Connect(function(window: ReviveWindow?)
+				setReviveWindow(window)
+			end)
+
 			return function()
 				onStartConn:Disconnect()
 				onClearConn:Disconnect()
+				onWindowConn:Disconnect()
 			end
 		end, {})
 
@@ -140,6 +159,7 @@ function GameOverGradientInterfaceController._render(self: typeof(GameOverGradie
 				ImageColor3 = imageColor3,
 
 				pulseGradient = pulseGradient,
+				reviveWindow = reviveWindow,
 			}),
 		})
 	end

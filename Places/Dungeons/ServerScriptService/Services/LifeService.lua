@@ -2,13 +2,34 @@
 --[[
      Module: LifeService.lua
      Description:
-     Server-authoritative lives + death lifecycle (HARDCORE: death is
-     permanent for the run — the paid revive flow was removed; dead
-     players spectate until the run ends). Replaces Roblox's
+     Server-authoritative lives + death lifecycle. Replaces Roblox's
      built-in Humanoid death entirely: DamageService clamps lethal damage to
      leave HP at 1 instead of 0, then calls LifeService:LoseLife. We never
      let Humanoid.Health reach 0, so Humanoid.Died never fires and the
      thousand systems that assume the character is alive don't break.
+
+     Death is TWO phases, both server-authoritative and both replicated
+     through the DeathState snapshot:
+
+       DOWNED  Out of lives. Death attribute on, controls locked, the death
+               animation plays and freezes on its last frame, the body
+               stays where it fell. The revive DECISION WINDOW
+               (DeathCinematicData.GameOverDuration) is open: the client's
+               "Eternal Damnation" screen counts down to
+               `windowEndsAtServerTime` and offers the paid revive. The run
+               gear does NOT spill and nothing is discarded -- a revive
+               here stands the player up in place with everything intact.
+
+       DEAD    The window closed with no revive. `fullyDiedAtServerTime`
+               is stamped, OnPlayerFullyDied / PlayerFullyDied fire, and
+               ONLY NOW the gear spills (RunEscrowService), the body and
+               screen fade, the gravestone rises and spectate begins. A
+               party WIPE is every connected player in this phase.
+
+     The paid revive (dev product) works in both phases: prompted only
+     while downed, but a receipt that lands after the window closed still
+     revives (they paid). `/revive` (ChatCommandsService) is a debug tool
+     that calls :Revive any time.
 ]]
 
 --[ Roblox Services ]--
@@ -33,6 +54,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
 
 -- DungeonService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -43,6 +65,24 @@ local function getDungeonService(): any
 	end
 	return dungeonServiceLazy
 end
+
+export type DeathPhase = "downed" | "dead"
+
+-- One player's death, server side. The replicated snapshot carries every
+-- field but diedAtClock (see _replicateDeathState for the wire shape).
+export type DeathEntry = {
+	phase: DeathPhase,
+	diedAtClock: number,
+	diedAtServerTime: number,
+	-- When the revive window opens and closes (workspace:GetServerTimeNow()
+	-- base). Fixed at the moment of downing; the client bar flies in full
+	-- at the opening and counts down to the close.
+	windowStartsAtServerTime: number,
+	windowEndsAtServerTime: number,
+	-- Stamped on the downed -> dead transition; nil while downed.
+	fullyDiedAtServerTime: number?,
+	deathPosition: Vector3,
+}
 
 local LifeService = {
 	Name = "LifeService",
@@ -62,8 +102,9 @@ LifeService._livesProperty = RemoteProperty.Server({
 	get = PlayerNetwork.GetLivesData,
 }, {})
 
--- Per-player death snapshot, replicated to ALL clients (was a replicated
--- property): { [userId] = { diedAtServerTime, deathPosition, player } }
+-- Per-player death snapshot, replicated to ALL clients:
+--   { [userId] = { phase, diedAtServerTime, windowEndsAtServerTime,
+--                  fullyDiedAtServerTime?, deathPosition, player } }
 LifeService._deathStateProperty = RemoteProperty.Server({
 	changed = PlayerNetwork.DeathStateChanged,
 	get = PlayerNetwork.GetDeathState,
@@ -78,12 +119,30 @@ LifeService._isGameOver = false
 local POST_LIFE_LOSS_INVULN_SECONDS = 3
 local DEFAULT_LIVES = 1
 local DEATH_ANIMATION_ID = "rbxassetid://73249560309673"
-local DEATH_ANIMATION_KEYFRAME_MARKER = "PauseKeyframe"
+local DEATH_ANIMATION_SPEED = 0.35
+-- How close to the track's end (seconds of track time) the hold engages.
+-- At 0.35x speed one Heartbeat advances the track ~6ms, so this is ~8
+-- frames of margin: comfortably before Roblox stops a non-looped track
+-- at its end, and visually still the final pose.
+local DEATH_ANIMATION_HOLD_EPSILON = 0.05
+-- The client fades the body over CHARACTER_FADE_DURATION (1s) once fully
+-- dead. The held track is released only after that fade, so the humanoid
+-- never visibly pops back to standing under a still-visible body.
+local DEATH_ANIMATION_RELEASE_DELAY = 2
 local ALL_DEAD_TELEPORT_DELAY = 6
 
--- Paid revive (restored after the pure-hardcore pass). The dev product is
--- prompted server-side only, and ProcessReceipt is the sole caller of
--- :Revive -- there is no free path back from the death state.
+-- The revive decision window. One source of truth with the client bar
+-- (GameOverGradientInterfaceController), which nonetheless counts down to
+-- the replicated `windowEndsAtServerTime` rather than this constant.
+local DEATH_WINDOW_SECONDS = DeathCinematicData.GameOverDuration
+-- The window OPENS when the client's bar flies in, not at the downing:
+-- the client spends the impact beat and the startup pause first, and a
+-- window measured from the downing had the bar appear already a third
+-- drained. Same constants the client paces itself on.
+local DEATH_WINDOW_LEAD_SECONDS = DeathCinematicData.GameOverImpactDelay + DeathCinematicData.GameOverStartupDelay
+
+-- Paid revive. The dev product is prompted server-side only (and only
+-- while downed); ProcessReceipt is the sole production caller of :Revive.
 local REVIVE_CUTSCENE_DURATION = 4
 local FADE_DURATION = 0.4
 local REVIVE_PRODUCT_ID = 3598188186
@@ -91,18 +150,27 @@ local REVIVE_PRODUCT_ID = 3598188186
 --[ Properties ]--
 
 LifeService._lives = {} :: { [number]: { current: number, max: number } }
-LifeService._deathState = {} :: {
-	[number]: {
-		diedAtClock: number,
-		diedAtServerTime: number,
-		deathPosition: Vector3,
-	},
-}
+LifeService._deathState = {} :: { [number]: DeathEntry }
 LifeService._deathAnimationTracks = {} :: { [number]: AnimationTrack }
+-- The Heartbeat poll that freezes each death track on its last frame.
+LifeService._deathAnimationHolds = {} :: { [number]: RBXScriptConnection }
+-- Token per open revive window; the expiry callback aborts if a revive
+-- (or a leave) replaced or cleared it.
+LifeService._deathWindowTokens = {} :: { [number]: any }
 LifeService._lobbyTeleportToken = nil :: any
 
 LifeService.OnLifeLost = Signal.new() -- (player)
+-- DOWNED: the player is out of lives and the revive window just opened.
+-- Listeners that treat the player as gone for good belong on
+-- OnPlayerFullyDied instead.
 LifeService.OnPlayerDied = Signal.new() -- (player)
+-- The window closed with no revive. isWipe: this was the last connected
+-- player still not fully dead, so the run is over (GameOver follows).
+LifeService.OnPlayerFullyDied = Signal.new() -- (player, isWipe: boolean)
+-- Every connected player is fully dead. Fires AFTER OnPlayerFullyDied on
+-- a death-triggered wipe (lastPlayer = who closed it) and on its own,
+-- lastPlayer = nil, when the wipe was completed by a player LEAVING.
+LifeService.OnPartyWiped = Signal.new() -- (lastPlayer: Player?)
 LifeService.OnPlayerRevived = Signal.new() -- (player)
 
 --[ Private helpers ]--
@@ -116,11 +184,18 @@ function LifeService._replicateLives(self: typeof(LifeService))
 	self._livesProperty:Set(snapshot)
 end
 
+-- The wire shape every client reader (LifeController, TombstoneController,
+-- the Game Over screen) sees. diedAtClock stays server-side: it is an
+-- os.clock() race token, meaningless on another machine.
 function LifeService._replicateDeathState(self: typeof(LifeService))
 	local snapshot = {}
 	for userId, entry in self._deathState do
 		snapshot[userId] = {
+			phase = entry.phase,
 			diedAtServerTime = entry.diedAtServerTime,
+			windowStartsAtServerTime = entry.windowStartsAtServerTime,
+			windowEndsAtServerTime = entry.windowEndsAtServerTime,
+			fullyDiedAtServerTime = entry.fullyDiedAtServerTime,
 			deathPosition = entry.deathPosition,
 			player = Players:GetPlayerByUserId(userId),
 		}
@@ -128,6 +203,13 @@ function LifeService._replicateDeathState(self: typeof(LifeService))
 	self._deathStateProperty:Set(snapshot)
 end
 
+-- Plays the death animation and FREEZES IT ON ITS FINAL FRAME. A
+-- non-looped track stops itself at its end and the humanoid snaps back to
+-- its idle pose, so the track is polled each Heartbeat and its speed set
+-- to 0 just before the end is reached. The hold lasts until
+-- _stopDeathAnimation: a revive while downed, the post-fade release after
+-- full death, or the player leaving. The track is never stopped while the
+-- body is still on show.
 function LifeService._playDeathAnimation(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 
@@ -147,23 +229,46 @@ function LifeService._playDeathAnimation(self: typeof(LifeService), player: Play
 	track.Priority = Enum.AnimationPriority.Action4
 	track.Looped = false
 
-	track:GetMarkerReachedSignal(DEATH_ANIMATION_KEYFRAME_MARKER):Connect(function()
-		if track.IsPlaying then
-			track:AdjustSpeed(0)
+	track:Play()
+	track:AdjustSpeed(DEATH_ANIMATION_SPEED)
+	self._deathAnimationTracks[userId] = track
 
-			task.delay(8, function()
-				self:_stopDeathAnimation(userId)
-			end)
+	-- Length reads 0 until the asset has loaded; the poll simply waits
+	-- for a real value. If the track somehow stops before the hold
+	-- engages (asset failed to load), the poll ends with it.
+	self._deathAnimationHolds[userId] = RunService.Heartbeat:Connect(function()
+		if self._deathAnimationTracks[userId] ~= track then
+			self:_releaseDeathAnimationHold(userId)
+			return
+		end
+		if not track.IsPlaying then
+			self:_releaseDeathAnimationHold(userId)
+			return
+		end
+		local length = track.Length
+		if length <= 0 then
+			return
+		end
+		if track.TimePosition >= length - DEATH_ANIMATION_HOLD_EPSILON then
+			track:AdjustSpeed(0)
+			self:_releaseDeathAnimationHold(userId)
 		end
 	end)
+end
 
-	track:Play()
-	track:AdjustSpeed(0.35)
-	self._deathAnimationTracks[userId] = track
+-- Disconnects the last-frame poll only; the track keeps whatever speed it
+-- has (0 once the hold engaged).
+function LifeService._releaseDeathAnimationHold(self: typeof(LifeService), userId: number)
+	local hold = self._deathAnimationHolds[userId]
+	if hold then
+		hold:Disconnect()
+		self._deathAnimationHolds[userId] = nil
+	end
 end
 
 -- Stops the death animation for `userId` if one is active. Idempotent.
 function LifeService._stopDeathAnimation(self: typeof(LifeService), userId: number)
+	self:_releaseDeathAnimationHold(userId)
 	local track = self._deathAnimationTracks[userId]
 	if not track then
 		return
@@ -173,21 +278,24 @@ function LifeService._stopDeathAnimation(self: typeof(LifeService), userId: numb
 	self._deathAnimationTracks[userId] = nil
 end
 
--- True iff every player currently in the server is in death state. Returns
--- false on an empty server so a teleport never fires when nobody's even here
--- (defensive — the scheduling path can only run from inside LoseLife so the
--- caller is always in the player list anyway).
-function LifeService._areAllPlayersDead(self: typeof(LifeService)): boolean
-	local players = Players:GetPlayers()
-	if #players == 0 then
-		return false
-	end
-	for _, player in players do
-		if not self._deathState[player.UserId] then
+-- True iff every connected player is FULLY dead (phase "dead"). A downed
+-- player still counts as in the fight: their window may end in a revive.
+-- `excluding` leaves one player out -- the one mid PlayerRemoving, who is
+-- still in Players:GetPlayers() while the handlers run. Returns false on
+-- an empty server so a teleport never fires when nobody's even here.
+function LifeService._areAllPlayersDead(self: typeof(LifeService), excluding: Player?): boolean
+	local counted = 0
+	for _, player in Players:GetPlayers() do
+		if player == excluding then
+			continue
+		end
+		counted += 1
+		local entry = self._deathState[player.UserId]
+		if not entry or entry.phase ~= "dead" then
 			return false
 		end
 	end
-	return true
+	return counted > 0
 end
 
 -- Fires OnTeleportToLobby (clients dismiss spectate / fade / cinematic UI),
@@ -253,8 +361,9 @@ function LifeService.TeleportPlayerToLobby(_self: typeof(LifeService), player: P
 end
 
 -- Schedules the all-dead lobby teleport. Token-stamped so:
---   1. A re-schedule (another LoseLife while one is pending) supersedes the
---      old token, leaving the prior callback to abort harmlessly
+--   1. A re-schedule (another wipe evaluation while one is pending)
+--      supersedes the old token, leaving the prior callback to abort
+--      harmlessly
 --   2. The "are still all dead?" re-check at fire time handles the rare race
 --      where a player joins mid-window (joiners aren't in death state, so
 --      _areAllPlayersDead returns false → teleport aborts)
@@ -278,6 +387,66 @@ function LifeService._scheduleLobbyTeleport(self: typeof(LifeService))
 	end)
 end
 
+-- The run is over: every connected player is fully dead. `lastPlayer` is
+-- the one whose window just closed, or nil when a leaver completed the
+-- wipe. Broadcasts GameOver, fires OnPartyWiped and schedules the
+-- teleport. Re-entrant only after a revive cleared _isGameOver.
+function LifeService._onPartyWiped(self: typeof(LifeService), lastPlayer: Player?)
+	self._isGameOver = true
+	PlayerNetwork.GameOver.FireAll()
+	self.OnPartyWiped:Fire(lastPlayer)
+	print(
+		("[LifeService] Party wipe (%s) — lobby teleport scheduled in %.2fs"):format(
+			if lastPlayer then lastPlayer.Name .. " was the last" else "last player left",
+			ALL_DEAD_TELEPORT_DELAY
+		)
+	)
+	self:_scheduleLobbyTeleport()
+end
+
+-- DOWNED -> DEAD. The window expired (or was never going to be answered:
+-- see the leave path) with no revive. Stamps the phase, tells everyone,
+-- and evaluates the wipe. Everything that treats the player as gone for
+-- good hangs off the signals fired here.
+function LifeService._finalizeDeath(self: typeof(LifeService), player: Player)
+	local userId = player.UserId
+	local entry = self._deathState[userId]
+	if not entry or entry.phase ~= "downed" then
+		return
+	end
+
+	self._deathWindowTokens[userId] = nil
+	entry.phase = "dead"
+	entry.fullyDiedAtServerTime = workspace:GetServerTimeNow()
+	self:_replicateDeathState()
+
+	-- The client fades the body now; the frozen pose is released only once
+	-- that fade has hidden it. Stamped against the entry so a revive-then-
+	-- die-again inside the delay cannot stop the NEW death's track.
+	task.delay(DEATH_ANIMATION_RELEASE_DELAY, function()
+		if self._deathState[userId] == entry then
+			self:_stopDeathAnimation(userId)
+		end
+	end)
+
+	local isWipe = self:_areAllPlayersDead()
+	if isWipe then
+		self._isGameOver = true
+	end
+
+	-- isWipe rides the server signal: RunEscrowService spills the run gear
+	-- on every full death and discards every escrow on a wipe, in that
+	-- order.
+	self.OnPlayerFullyDied:Fire(player, isWipe)
+	PlayerNetwork.PlayerFullyDied.FireAll({ UserId = userId, IsWipe = isWipe })
+
+	print(("[LifeService] %s fully died — spectate engaged"):format(player.Name))
+
+	if isWipe then
+		self:_onPartyWiped(player)
+	end
+end
+
 --[ Public API ]--
 
 -- Seeds (or resets) a player's lives to `max`. Called by DungeonService on
@@ -297,15 +466,47 @@ function LifeService.GetLives(self: typeof(LifeService), player: Player): (numbe
 	return entry.current, entry.max
 end
 
--- True when the player is in the death state (downed, awaiting revive).
+-- True in EITHER death phase (downed or fully dead): the player cannot act.
 function LifeService.IsDeathState(self: typeof(LifeService), player: Player): boolean
 	return self._deathState[player.UserId] ~= nil
 end
 
--- Where the player's HumanoidRootPart was when they entered the death
--- state, for callers that need the corpse's spot after the character is
--- gone (RunEscrowService spills run gear there). nil when not in the
--- death state, or when no root part could be read at the time of death.
+-- True only while the revive window is open.
+function LifeService.IsDowned(self: typeof(LifeService), player: Player): boolean
+	local entry = self._deathState[player.UserId]
+	return entry ~= nil and entry.phase == "downed"
+end
+
+-- True only once the window closed with no revive (phase "dead").
+function LifeService.IsFullyDead(self: typeof(LifeService), player: Player): boolean
+	local entry = self._deathState[player.UserId]
+	return entry ~= nil and entry.phase == "dead"
+end
+
+-- Connected players who are still IN the run: alive or downed. A downed
+-- player may yet buy a revive, so they count; a fully dead one does not.
+-- `excluding` leaves out a player mid PlayerRemoving (still listed by
+-- Players:GetPlayers() while its handlers run). EnemyScalingService's
+-- multiplier is built on this.
+function LifeService.GetActivePlayerCount(self: typeof(LifeService), excluding: Player?): number
+	local count = 0
+	for _, player in Players:GetPlayers() do
+		if player == excluding then
+			continue
+		end
+		if self:IsFullyDead(player) then
+			continue
+		end
+		count += 1
+	end
+	return count
+end
+
+-- Where the player's HumanoidRootPart was when they went down, for
+-- callers that need the corpse's spot after the character is gone
+-- (RunEscrowService spills run gear there). The body never moves between
+-- downed and dead, so the one position serves both phases. nil when not
+-- in the death state, or when no root part could be read at the time.
 function LifeService.GetDeathPosition(self: typeof(LifeService), player: Player): Vector3?
 	local state = self._deathState[player.UserId]
 	if not state or state.deathPosition == Vector3.zero then
@@ -314,16 +515,10 @@ function LifeService.GetDeathPosition(self: typeof(LifeService), player: Player)
 	return state.deathPosition
 end
 
--- Alias for IsDeathState — no longer distinguishes "in window" vs "fully
--- dead" since there's no timed window anymore. Kept for any external
--- code that still calls IsFullyDead.
-function LifeService.IsFullyDead(self: typeof(LifeService), player: Player): boolean
-	return self:IsDeathState(player)
-end
-
 -- Called by DamageService when damage would have killed the player.
 -- Decrements lives and either restores HP in place (lives left) or
--- transitions to the death state (no lives left).
+-- DOWNS the player (no lives left): the revive window opens here, and
+-- _finalizeDeath closes it.
 function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 	local entry = self._lives[userId]
@@ -332,7 +527,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		return
 	end
 
-	-- Already dead — don't double-decrement on lingering hits while ragdolled.
+	-- Already down — don't double-decrement on lingering hits.
 	if self._deathState[userId] then
 		return
 	end
@@ -370,9 +565,9 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		return
 	end
 
-	-- Out of lives. Enter death state. Ragdoll + Attributes.Death=true
-	-- happen immediately; the client orchestrates the visual fade-into-
-	-- spectate sequence based on OnPlayerDied + the DeathState property.
+	-- Out of lives: DOWNED. Attributes.Death=true and the frozen death pose
+	-- happen now; the body stays where it fell, fully visible, and nothing
+	-- is spilled or discarded until the window closes without a revive.
 	if character then
 		character:SetAttribute(Attributes.Death, true)
 	end
@@ -381,42 +576,28 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 	local deathPosition = (hrp and hrp.Position) or Vector3.zero
 
 	local deathClock = os.clock()
-	self._deathState[userId] = {
+	local now = workspace:GetServerTimeNow()
+	local deathEntry: DeathEntry = {
+		phase = "downed",
 		diedAtClock = deathClock,
-		diedAtServerTime = workspace:GetServerTimeNow(),
+		diedAtServerTime = now,
+		windowStartsAtServerTime = now + DEATH_WINDOW_LEAD_SECONDS,
+		windowEndsAtServerTime = now + DEATH_WINDOW_LEAD_SECONDS + DEATH_WINDOW_SECONDS,
+		fullyDiedAtServerTime = nil,
 		deathPosition = deathPosition,
 	}
+	self._deathState[userId] = deathEntry
 
 	self:_replicateDeathState()
 
-	local isWipe = self:_areAllPlayersDead()
+	self.OnPlayerDied:Fire(player)
+	PlayerNetwork.PlayerDied.FireAll(userId)
 
-	if isWipe then
-		self._isGameOver = true
-	end
-
-	-- isWipe rides the server signal too: RunEscrowService keeps a dead
-	-- player's run loot for a possible revive and discards it only when
-	-- the whole party is down.
-	self.OnPlayerDied:Fire(player, isWipe)
-	PlayerNetwork.PlayerDied.FireAll({ UserId = userId, IsWipe = isWipe })
-
-	if isWipe then
-		PlayerNetwork.GameOver.FireAll()
-	end
-
-	if TextIndicatorService and character then
-		local currentState = self._deathState[userId]
-		if not currentState or currentState.diedAtClock ~= deathClock then
-			return
-		end
-
+	if character then
 		RagdollService:Unragdoll(character)
 
-		-- if RagdollService and character and character.Parent then
-		-- 	RagdollService:Ragdoll(character)
-		-- end
-
+		-- The party learns of the fall at once: the teammate is on the
+		-- floor either way, and a revive gets its own notification.
 		for _, playerIndex in pairs(Players:GetPlayers()) do
 			if player == playerIndex then
 				continue
@@ -438,19 +619,30 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		self:_playDeathAnimation(player)
 
 		local head = character:FindFirstChild("Head") :: BasePart?
-		if head then
+		if TextIndicatorService and head then
 			TextIndicatorService:ShowIndicator(player, head, "Eternally Damned!", Color3.fromRGB(247, 67, 67))
 		end
 	end
 
-	if isWipe then
-		print(
-			("[LifeService] Party wipe detected — lobby teleport scheduled in %.2fs"):format(ALL_DEAD_TELEPORT_DELAY)
-		)
-		self:_scheduleLobbyTeleport()
-	end
+	-- The window. Its token is cleared by a revive (Revive) or a leave
+	-- (OnPlayerRemoved), and the entry identity is re-checked so a
+	-- revive-then-down-again inside one window cannot close the new one.
+	local windowToken = {}
+	self._deathWindowTokens[userId] = windowToken
+	-- Lead + window: the timer must land on the same beat the replicated
+	-- windowEndsAtServerTime names, or the server closes the window while
+	-- the client's bar still shows time left.
+	task.delay(DEATH_WINDOW_LEAD_SECONDS + DEATH_WINDOW_SECONDS, function()
+		if self._deathWindowTokens[userId] ~= windowToken then
+			return
+		end
+		if self._deathState[userId] ~= deathEntry then
+			return
+		end
+		self:_finalizeDeath(player)
+	end)
 
-	print(("[LifeService] %s fully died — spectate engaged"):format(player.Name))
+	print(("[LifeService] %s is downed — %.0fs to revive"):format(player.Name, DEATH_WINDOW_SECONDS))
 end
 
 -- Increments lives, capped at max. Use for relic/event grants.
@@ -463,23 +655,29 @@ function LifeService.AddLife(self: typeof(LifeService), player: Player)
 	self:_replicateLives()
 end
 
--- Paid revive, restored. Full sequence: fade to black, un-ragdoll,
--- teleport to the spectated party's current room, restore health, fade
--- back, invuln window, clear death state, lives back to 1. ONLY
--- ProcessReceipt calls this.
+-- Revive, in EITHER phase. Sequence: fade to black, release the death
+-- pose, un-ragdoll, (fully dead only) teleport to the spectated party's
+-- current room, restore health, fade back, invuln windows, clear death
+-- state, lives back to 1. A DOWNED player stands up IN PLACE: the body is
+-- right there and nothing spilled, so there is nothing to teleport to or
+-- recover. ProcessReceipt and the /revive debug command call this.
 --
--- Escrow note: RunEscrowService discarded this player's run items and
--- coins the moment they entered the death state. Revive does NOT restore
--- them -- you buy your way back to your feet, not your loot back.
+-- Escrow note: a fully dead player's run gear already spilled out of the
+-- corpse (RunEscrowService). Revive does NOT restore it -- you buy your
+-- way back to your feet, then walk over and pick it up.
 function LifeService.Revive(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
-	if not self._deathState[userId] then
+	local entry = self._deathState[userId]
+	if not entry then
 		return
 	end
-	print(("[LifeService] %s revive sequence starting"):format(player.Name))
+	local wasDowned = entry.phase == "downed"
+	print(("[LifeService] %s revive sequence starting (%s)"):format(player.Name, entry.phase))
 
-	-- Cancel a pending all-dead lobby teleport and clear Game Over if the
-	-- wipe screen already went up -- a revive un-wipes the party.
+	-- Close the revive window (no expiry may land mid-sequence), cancel a
+	-- pending all-dead lobby teleport and clear Game Over if the wipe
+	-- screen already went up -- a revive un-wipes the party.
+	self._deathWindowTokens[userId] = nil
 	self._lobbyTeleportToken = nil
 
 	self._isGameOver = false
@@ -511,7 +709,9 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 		RagdollService:Unragdoll(character)
 	end
 
-	if character and getDungeonService() then
+	-- Fully dead: the party has moved on and the body is invisible, so
+	-- rejoin them. Downed: the fight is right here; stand up where you fell.
+	if not wasDowned and character and getDungeonService() then
 		local room = getDungeonService():GetPlayerRoom(player)
 		if room and room.model and room.model.PrimaryPart then
 			character:PivotTo(CFrame.new(room.model.PrimaryPart.Position + Vector3.new(0, 5, 0)))
@@ -544,15 +744,19 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 		character:SetAttribute(Attributes.Death, false)
 	end
 
-	local entry = self._lives[userId]
-	if entry then
+	local lives = self._lives[userId]
+	if lives then
 		-- Stand up at lives = 1. Next death = same flow.
-		entry.current = 1
+		lives.current = 1
 		self:_replicateLives()
 	end
 
-	self._deathState[userId] = nil
-	self:_replicateDeathState()
+	-- Only clear the entry this revive started on: a leave during the
+	-- cutscene already removed it, and must not have a stale write undone.
+	if self._deathState[userId] == entry then
+		self._deathState[userId] = nil
+		self:_replicateDeathState()
+	end
 
 	print(("[LifeService] %s revived. Lives reset to 1."):format(player.Name))
 end
@@ -600,9 +804,18 @@ function LifeService.Start(self: typeof(LifeService))
 		local userId = player.UserId
 		self._lives[userId] = nil
 		self._deathState[userId] = nil
+		self._deathWindowTokens[userId] = nil
 		self:_replicateLives()
 		self:_replicateDeathState()
 		self:_stopDeathAnimation(userId)
+
+		-- The leaver may have been the last player not fully dead (alive,
+		-- or downed with a window that will now never close): if everyone
+		-- still here is fully dead, the run is over. The leaver is still
+		-- in Players:GetPlayers() at this point, hence the exclusion.
+		if not self._isGameOver and self:_areAllPlayersDead(player) then
+			self:_onPartyWiped(nil)
+		end
 	end)
 
 	MarketplaceService.ProcessReceipt = function(receiptInfo)
@@ -617,7 +830,9 @@ function LifeService.Start(self: typeof(LifeService))
 
 		-- Grant WITHOUT reviving if they somehow stood up already -- eating
 		-- the robux on a no-op is worse than the refund dance, and Roblox
-		-- retries NotProcessedYet receipts forever.
+		-- retries NotProcessedYet receipts forever. Either death phase
+		-- revives: only the PROMPT is gated on the window, a receipt that
+		-- lands after it closed was still paid for.
 		if not self:IsDeathState(player) then
 			warn(("[LifeService] Revive receipt for %s but they're not in death state"):format(player.Name))
 			return Enum.ProductPurchaseDecision.PurchaseGranted
@@ -631,10 +846,10 @@ end
 --[ Client-callable API ]--
 
 -- Client requests the revive purchase prompt. Server-initiated so the dev
--- product flow can't be spoofed; validates the player is actually downed
--- before prompting.
+-- product flow can't be spoofed; validates the window is actually open
+-- before prompting -- once fully dead there is no button and no prompt.
 function LifeService._onPromptRevivePurchase(self: typeof(LifeService), player: Player)
-	if not self:IsDeathState(player) then
+	if not self:IsDowned(player) then
 		warn(("[LifeService] %s tried to prompt revive but isn't downed"):format(player.Name))
 		return
 	end
