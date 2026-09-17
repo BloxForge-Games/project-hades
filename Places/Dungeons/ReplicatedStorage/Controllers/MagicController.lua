@@ -63,6 +63,11 @@ local MagicController = {
 	_magicData = ({} :: any) :: PlayerMagicData,
 	_magicCooldownRegistry = {} :: { [string]: { cooldown: number, lastUsed: number } },
 	_magicDebounce = false,
+	-- Bumped per cast. A cast's end-of-duration timer acts only while its
+	-- serial is still the latest: Fire Blast's timer used to clear
+	-- MagicEnabled (and the debounce) 0.65 s in, right after Wind Bomb had
+	-- set them for its own second, which unlocked dodging mid-cast.
+	_castSerial = 0,
 	-- Cloned MobileHitMarkers, keyed by marker name; indexed by child name.
 	_studMarkers = {} :: { [string]: any },
 	_arrowBeamPart = nil :: any,
@@ -236,6 +241,8 @@ function MagicController.CastMagic(self: typeof(MagicController), equipSlot: num
 	character:SetAttribute(Attributes.MagicEnabled, true)
 
 	self._magicDebounce = true
+	self._castSerial += 1
+	local castSerial = self._castSerial
 
 	self._magicCooldownRegistry[vfxName] = {
 		cooldown = newCooldown,
@@ -259,6 +266,11 @@ function MagicController.CastMagic(self: typeof(MagicController), equipSlot: num
 	VFXController:PlayVFX(vfxName)
 
 	task.delay(MagicData[vfxName].duration, function()
+		-- A later cast owns the flags now; its own timer releases them.
+		if self._castSerial ~= castSerial then
+			self.Signals.OnMagicComplete:Fire(vfxName)
+			return
+		end
 		self._magicDebounce = false
 
 		-- Symmetric clear for the optimistic `MagicEnabled = true` write

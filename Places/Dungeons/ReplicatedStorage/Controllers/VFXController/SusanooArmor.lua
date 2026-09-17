@@ -15,11 +15,13 @@ local SUSANOO_TINT_COLOR = Color3.fromRGB(217, 156, 255)
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 
 return function(player: Player, preload: boolean?)
 	local character = player.Character :: Model
 
-	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = 0
+	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
+	local walkSpeedClaim = claimWalkSpeed(character, 0)
 
 	local susanooAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooArmorAnimation")
@@ -69,6 +71,6 @@ return function(player: Player, preload: boolean?)
 		-- the humanoid's 0, so the restore would silently never fire and
 		-- the player would stay rooted. Domain Expansion, the other spell
 		-- that roots fully, claims 0 for the same reason.
-		restoreWalkSpeed(character, 0)
+		restoreWalkSpeed(character, 0, walkSpeedClaim)
 	end)
 end

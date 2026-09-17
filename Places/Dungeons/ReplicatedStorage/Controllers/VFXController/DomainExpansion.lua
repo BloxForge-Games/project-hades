@@ -44,6 +44,7 @@ local DOMAIN_AMBIENT_SHAKE = CameraShakePresets.DomainAmbient
 local DOMAIN_RISE_SHAKE = CameraShakePresets.Medium
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 -- The Roblox type definitions no longer allow indexing the root part off
@@ -59,7 +60,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		return
 	end
 
-	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = 0
+	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
+	local walkSpeedClaim = claimWalkSpeed(character, 0)
 
 	local domainExpansionAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("DomainExpansionAnimation")
@@ -330,6 +332,6 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/
 		-- restoreWalkSpeed.
-		restoreWalkSpeed(character, 0)
+		restoreWalkSpeed(character, 0, walkSpeedClaim)
 	end)
 end

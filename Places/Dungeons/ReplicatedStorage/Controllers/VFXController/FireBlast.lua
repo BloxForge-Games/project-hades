@@ -9,6 +9,7 @@ local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
@@ -22,7 +23,8 @@ end
 return function(player: Player, preload: boolean, cframe: CFrame)
 	local character = player.Character :: Model
 
-	(character:FindFirstChildOfClass("Humanoid") :: Humanoid).WalkSpeed = CASTING_HUMANOID_WALK_SPEED
+	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
+	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
 	local fireBlastAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("FireBlastAnimation")
@@ -106,6 +108,6 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/
 		-- restoreWalkSpeed.
-		restoreWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
+		restoreWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED, walkSpeedClaim)
 	end)
 end

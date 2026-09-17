@@ -138,6 +138,12 @@ local VFXService = {
 type DetectedParts = { [Model]: boolean, hitboxCount: number? }
 VFXService._playerDetectedPartsRegistry = {} :: { [number]: { [string]: DetectedParts } }
 VFXService._vfxReplicationQueue = {}
+-- Per player, bumped per accepted cast. The end-of-duration timer clears
+-- MagicEnabled / restores the weapon only while its serial is the latest:
+-- an earlier cast's timer used to clear the flag a later cast had set
+-- (Fire Blast into Wind Bomb), and the false replicated over the client's
+-- true and unlocked dodging mid-cast.
+VFXService._castSerials = {} :: { [number]: number }
 VFXService._vfxAuraRegistry = {}
 VFXService._vfxAttackRegistry = {}
 
@@ -693,6 +699,8 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	local character = player.Character :: Model
 
 	character:SetAttribute(Attributes.MagicEnabled, true)
+	local castSerial = (self._castSerials[player.UserId] or 0) + 1
+	self._castSerials[player.UserId] = castSerial
 
 	-- CAST CUTSCENE i-frames. A spell with `cutscene` in MagicData holds
 	-- the caster in a cinematic beat on their client (bars, no control);
@@ -726,6 +734,9 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	end
 
 	task.delay(duration, function()
+		if self._castSerials[activePlayer.UserId] ~= castSerial then
+			return
+		end
 		if activePlayer.Character then
 			self:_toggleWeaponTransparency(activePlayer, 0)
 
@@ -1035,6 +1046,7 @@ function VFXService.Start(self: typeof(VFXService))
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		self._playerDetectedPartsRegistry[player.UserId] = nil
+		self._castSerials[player.UserId] = nil
 
 		if self._vfxReplicationQueue[player.UserId] then
 			self._vfxReplicationQueue[player.UserId] = nil
