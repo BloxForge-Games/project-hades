@@ -9,6 +9,7 @@ local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicN
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local radialGroundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.radialGroundFracture)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -60,6 +61,16 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					lightingShatterVFX:PivotTo(cachedFrames[i])
 
 					radialGroundFracture:Spawn(cachedFrames[i].Position, 6.5)
+
+					-- The combat pack's dust under each strike, with its fracture.
+					emitVFXPart(
+						"GroundDust",
+						cachedFrames[i],
+						nil,
+						-- Half again the pack size: each strike is a bigger impact
+						-- than the other spells' single burst.
+						{ GroundSnapDistance = 10, Scale = 1.5 }
+					)
 
 					for _, particle in pairs(lightingShatterVFX:WaitForChild("Starter"):GetDescendants()) do
 						if particle:IsA("ParticleEmitter") then

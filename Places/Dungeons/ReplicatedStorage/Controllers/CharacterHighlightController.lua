@@ -122,6 +122,17 @@ local INVULN_COLOR = Color3.fromRGB(255, 255, 255)
 local INVULN_FADE_DURATION = 0.25
 -- The per-character highlight this client creates on OTHER players.
 local OTHER_INVULN_HIGHLIGHT_NAME = "InvulnerableHighlight"
+-- The server's reason for a window (Attributes.InvulnerableReason). A
+-- cutscene window never paints ANY character white -- the cinematic is
+-- the feedback -- and this is how a TEAMMATE's screen knows: the local
+-- CutscenePlaying attributes never replicate. nil (a window nothing
+-- stamped) counts as combat and shows.
+local INVULN_REASON_CUTSCENE = "Cutscene"
+
+local function wantsInvulnerableHighlight(character: Model): boolean
+	return character:GetAttribute(Attributes.Invulnerable) == true
+		and character:GetAttribute(Attributes.InvulnerableReason) ~= INVULN_REASON_CUTSCENE
+end
 
 -- Occlusion outline: stays at this transparency whenever the head is
 -- behind terrain. White, occlusion-only DepthMode (AlwaysOnTop so it
@@ -317,10 +328,12 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	-- Expansion), whose own presentation is the feedback, and the encounter
 	-- intro / landing / event beats, which grant no i-frames but can
 	-- overlap one. The glow comes up as the cutscene ends and covers the
-	-- grace tail of the window.
+	-- grace tail of the window. The server's reason (wantsInvulnerable-
+	-- Highlight) applies the same rule to windows this client cannot see
+	-- locally; the local checks stay as the extra guard.
 	local inCutscene = character:GetAttribute(Attributes.CutscenePlaying) == true
 		or character:GetAttribute(Attributes.MagicCutscenePlaying) == true
-	local invulnTarget = if character:GetAttribute(Attributes.Invulnerable) == true and not inCutscene then 1 else 0
+	local invulnTarget = if wantsInvulnerableHighlight(character) and not inCutscene then 1 else 0
 	local step = deltaTime / INVULN_FADE_DURATION
 	local diff = invulnTarget - (self._playerInvulnIntensity or 0)
 	if math.abs(diff) <= step then
@@ -406,12 +419,13 @@ function CharacterHighlightController._resolvePlayerHighlight(
 end
 
 -- OTHER players: one small Highlight per character, created while their
--- Attributes.Invulnerable is true and faded out + destroyed when it drops.
+-- Attributes.Invulnerable is true for a non-cutscene reason and faded
+-- out + destroyed when that stops holding.
 -- Their characters carry no other client highlight, so this cannot take
 -- a slot from anything.
 function CharacterHighlightController._bindOtherCharacter(_self: typeof(CharacterHighlightController), character: Model)
 	local function refresh()
-		local wants = character:GetAttribute(Attributes.Invulnerable) == true
+		local wants = wantsInvulnerableHighlight(character)
 		local existing = character:FindFirstChild(OTHER_INVULN_HIGHLIGHT_NAME)
 		if wants and not existing then
 			local highlight = Instance.new("Highlight")
@@ -433,8 +447,8 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 				{ FillTransparency = 1 }
 			)
 			fade.Completed:Once(function()
-				-- Re-checked: the attribute may have come back mid-fade.
-				if existing.Parent and character:GetAttribute(Attributes.Invulnerable) ~= true then
+				-- Re-checked: the attributes may have come back mid-fade.
+				if existing.Parent and not wantsInvulnerableHighlight(character) then
 					existing:Destroy()
 				end
 			end)
@@ -442,6 +456,7 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 		end
 	end
 	character:GetAttributeChangedSignal(Attributes.Invulnerable):Connect(refresh)
+	character:GetAttributeChangedSignal(Attributes.InvulnerableReason):Connect(refresh)
 	refresh()
 end
 

@@ -178,13 +178,11 @@ local EventController = {
 	_reforgeFlowActive = false,
 	-- COFFIN (CoffinEvent graph). CoffinStatus / CoffinDeclined are fetched
 	-- by the opening node ("idle" | "running" | "won" | "failed" |
-	-- "expired"); CoffinConfirmVisited flags the confirm node so the accept
-	-- twin can tell a jump from a walk-forward; CoffinAccepted gates the
-	-- decline twin off the accept path. All reset on close except
-	-- CoffinDeclined, which the close handler reads to consume the prompt.
+	-- "expired"); CoffinAccepted gates the decline node off the accept
+	-- path. All reset on close except CoffinDeclined, which the close
+	-- handler reads to consume the prompt.
 	CoffinStatus = "idle",
 	CoffinDeclined = false,
-	CoffinConfirmVisited = false,
 	CoffinAccepted = false,
 	-- [merchant model] = true once this player took "I want to leave" —
 	-- the option hides on later visits. Weak keys: the models die with
@@ -686,7 +684,6 @@ function EventController.BeginCoffinDialogue(self: typeof(EventController))
 	self:BeginEventCutscene()
 	self.CoffinStatus = "idle"
 	self.CoffinDeclined = false
-	self.CoffinConfirmVisited = false
 	self.CoffinAccepted = false
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
@@ -705,21 +702,22 @@ function EventController.BeginCoffinDialogue(self: typeof(EventController))
 end
 
 -- Confirm node's PostAction (either option).
-function EventController.MarkCoffinConfirmVisited(self: typeof(EventController))
-	self.CoffinConfirmVisited = true
-end
-
--- Accept twin's PreAction: yields on the server, which starts the
--- challenge for the room. A refusal (someone was first) is fine — the
--- server's cancel closes this conversation either way.
+-- The confirm node's "Open it." option action: asks the server to start
+-- the challenge for the room. The model is resolved NOW, while the
+-- conversation is still open (the option closes it right after), and
+-- the request runs off the click so the close is not held on the round
+-- trip. A refusal (someone was first) is fine — the server's cancel
+-- reaches every open coffin conversation either way.
 function EventController.AcceptCoffin(self: typeof(EventController))
 	self.CoffinAccepted = true
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
 	end
-	pcall(function()
-		DungeonNetwork.AcceptCoffin.Invoke(model)
+	task.spawn(function()
+		pcall(function()
+			DungeonNetwork.AcceptCoffin.Invoke(model)
+		end)
 	end)
 end
 
@@ -1187,7 +1185,6 @@ function EventController.Start(self: typeof(EventController))
 		self.ReforgeDone = false
 		self.CoffinStatus = "idle"
 		self.CoffinDeclined = false
-		self.CoffinConfirmVisited = false
 		self.CoffinAccepted = false
 		-- Walk-away mid-sale: the conversation died while the tray was
 		-- open. Close the tray too, or sell mode outlives its merchant.

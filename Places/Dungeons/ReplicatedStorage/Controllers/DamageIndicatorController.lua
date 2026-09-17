@@ -162,7 +162,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			return
 		end
 
-		local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
+		local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFXNew:Clone()
 		-- Random roll about the attachment's own Z. The slash is a flat
 		-- streak, so without this every hit stamps it at the identical
 		-- angle and a combo reads as one frame repeated. Applied to the
@@ -185,11 +185,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 				continue
 			end
 
-			if particle.Name == "Hit" then
-				particle:Emit(2)
-			else
-				particle:Emit(6)
-			end
+			particle:Emit(2)
 		end
 
 		Debris:AddItem(hitVFX, 2)

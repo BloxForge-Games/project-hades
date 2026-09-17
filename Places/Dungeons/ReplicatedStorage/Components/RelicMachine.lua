@@ -9,6 +9,7 @@
 
 --[ Roblox Services ]--
 
+local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -150,6 +151,21 @@ function RelicMachine:Start()
 			task.delay(0.35, function()
 				self.Instance.PrimaryPart.LandParticle:Emit(10)
 				self.Instance.PrimaryPart.Landing:Play()
+
+				-- The dodge landing burst at the machine's foot: the dust
+				-- ring the roll leaves, here as the ground kick of the drop.
+				-- Particles only; the machine has its own Landing sound and
+				-- the burst's thud stays silent.
+				local dustVFX = ReplicatedStorage.GameAssets.VFX.Dodge.Dodge:Clone() :: any
+				local foot = self.Instance.PrimaryPart.Position
+				dustVFX:PivotTo(CFrame.new(foot.X, floorY, foot.Z))
+				dustVFX.Parent = workspace.IgnoreInstances.MagicSpells
+				for _, particle in dustVFX.Part.Attachment:GetChildren() do
+					if particle:IsA("ParticleEmitter") then
+						particle:Emit(10)
+					end
+				end
+				Debris:AddItem(dustVFX, 5)
 
 				-- Landing impact — small local shake for anyone near the
 				-- drop (the owner is always ~8 studs away).

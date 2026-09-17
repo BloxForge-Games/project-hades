@@ -360,7 +360,8 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 
 		-- ApplyTo itself no-ops on a nil character; the guard only narrows the type.
 		if character then
-			InvulnerabilityService:ApplyTo(character, POST_LIFE_LOSS_INVULN_SECONDS)
+			-- "Combat": earned in play, so the white highlight shows.
+			InvulnerabilityService:ApplyTo(character, POST_LIFE_LOSS_INVULN_SECONDS, "Combat")
 		end
 
 		self.OnLifeLost:Fire(player)
@@ -527,7 +528,14 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 	PlayerNetwork.PlayerRevived.FireAll(userId)
 
 	if character then
-		InvulnerabilityService:ApplyTo(character, POST_LIFE_LOSS_INVULN_SECONDS + REVIVE_CUTSCENE_DURATION)
+		-- Two windows, not one: the revive cinematic is a Cutscene (no
+		-- highlight; the fade and the stand-up are the feedback) and the
+		-- grace after it is Combat (highlight on, like a life loss). The
+		-- service keeps the UNION open, so the cutscene window closing never
+		-- cuts the grace short, and the reason flips to Combat the moment
+		-- only the grace remains.
+		InvulnerabilityService:ApplyTo(character, REVIVE_CUTSCENE_DURATION, "Cutscene")
+		InvulnerabilityService:ApplyTo(character, REVIVE_CUTSCENE_DURATION + POST_LIFE_LOSS_INVULN_SECONDS, "Combat")
 	end
 
 	task.wait(REVIVE_CUTSCENE_DURATION)

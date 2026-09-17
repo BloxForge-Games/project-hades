@@ -11,6 +11,7 @@ local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicN
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local groundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.groundFracture)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -109,6 +110,14 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end
 
 		task.delay(0.1, function()
+			-- The combat pack's burst, 2 studs ahead of the caster and facing
+			-- the shot, on the same beat as the white flash. Every viewer runs
+			-- this module, so it needs no replication of its own.
+			-- Yawed a quarter turn: the pack part is authored with its burst
+			-- along its side axis, so placed on the cast CFrame as-is it stood
+			-- perpendicular to the caster.
+			emitVFXPart("HollowPurpleBurst", (cframe + cframe.LookVector * 2) * CFrame.Angles(0, math.rad(90), 0))
+
 			local colorCorrection = Instance.new("ColorCorrectionEffect")
 			colorCorrection.Parent = Lighting
 			colorCorrection.TintColor = Color3.fromRGB(255, 255, 255)

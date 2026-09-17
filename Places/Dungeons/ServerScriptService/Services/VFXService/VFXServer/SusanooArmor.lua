@@ -10,6 +10,7 @@ local VFXService = require(ServerScriptService.Services.VFXService)
 local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 return function(player: Player)
 	local character = player.Character or player.CharacterAdded:Wait()
@@ -130,6 +131,11 @@ return function(player: Player)
 		susanooRig.PrimaryPart.GroundSmash:Play()
 
 		Debris:AddItem(attackVFXPart, 3)
+
+		-- The combat pack's dust where the smash lands. Server-side like the
+		-- AttackPart burst above; the helper needs only ReplicatedStorage and
+		-- workspace, so it runs here exactly as it does on a client.
+		emitVFXPart("GroundDust", hitboxCFrame, nil, { GroundSnapDistance = 10 })
 
 		VFXService:CreateHitbox(
 			MagicNames["Susanoo Armor"],

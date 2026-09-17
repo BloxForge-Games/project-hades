@@ -9,6 +9,7 @@ local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -87,6 +88,9 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end
 
 		Debris:AddItem(fireBlastExplosionVFX, 5)
+
+		-- The combat pack's dust where the projectile detonated.
+		emitVFXPart("GroundDust", projectile.CFrame, nil, { GroundSnapDistance = 10 })
 
 		for _, particle in pairs(castFX:GetDescendants()) do
 			if particle:IsA("ParticleEmitter") then

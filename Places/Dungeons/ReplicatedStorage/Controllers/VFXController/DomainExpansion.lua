@@ -44,6 +44,7 @@ local DOMAIN_AMBIENT_SHAKE = CameraShakePresets.DomainAmbient
 local DOMAIN_RISE_SHAKE = CameraShakePresets.Medium
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 -- The Roblox type definitions no longer allow indexing the root part off
 -- the character; the cast keeps a missing one erroring where the old index did.
@@ -146,6 +147,20 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			end
 
 			task.wait(0.5)
+
+			-- The combat pack's eruption where the shrine breaks the surface:
+			-- its root's XZ at floor level, upright, on the rise beat. The
+			-- floor ray starts at the CASTER's height -- the shrine itself is
+			-- still 15 studs under the ground here.
+			local shrineRootPosition: Vector3 = shrineModel.PrimaryPart.Position
+			emitVFXPart(
+				"ShrineAppear",
+				cframe.Rotation + Vector3.new(shrineRootPosition.X, cframe.Position.Y, shrineRootPosition.Z),
+				nil,
+				-- Lifted a few studs: the eruption is authored to rise from its
+				-- pivot, and resting on the floor read as buried on screen.
+				{ GroundSnapDistance = 10, GroundFallbackDrop = 3, GroundLift = 3 }
+			)
 
 			TweenService:Create(
 				shrineModel.PrimaryPart,

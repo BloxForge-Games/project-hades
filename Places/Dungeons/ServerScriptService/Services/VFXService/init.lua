@@ -108,6 +108,10 @@ local AURA_DELAY = 1
 -- good) way to open with an aura — the swing fires the instant the
 -- attribute flips, which is exactly when the rig is least ready.
 local AURA_ACTIVATION_DELAY = 2
+-- Studs a client-placed hitbox may land PAST the spell's authored reach
+-- (range + travel + half the hitbox). Covers the caster moving between
+-- the cast and the request, and latency. See _isHitboxPlacementValid.
+local HITBOX_PLACEMENT_SLACK_STUDS = 12
 
 local vfxServer = script.VFXServer
 
@@ -703,7 +707,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	local cutscene = MagicData[vfxName].cutscene
 	if cutscene and cutscene.enabled == true and InvulnerabilityService then
 		local window = (cutscene.duration or DEFAULT_MAGIC_CUTSCENE_SECONDS) + MAGIC_CUTSCENE_INVULNERABLE_GRACE_SECONDS
-		InvulnerabilityService:ApplyTo(character, window)
+		InvulnerabilityService:ApplyTo(character, window, "Cutscene")
 	end
 
 	self:_toggleWeaponTransparency(player, 1)
@@ -761,6 +765,47 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	Magic.CastReplicated.FireAll({ Caster = activePlayer, MagicName = vfxName, CFrame = cframe })
 end
 
+-- A hitbox request carries the CFrame the CLIENT chose. The cast itself is
+-- held within 10 studs of the caster (_onCastRequested) but nothing
+-- bounded where its hitboxes then landed, so a tampered client could
+-- detonate any owned spell anywhere in the room. The bound is the spell's
+-- own data, measured from the caster's root NOW: `range` (how far it
+-- reaches), `travelDistance` when `includeTravel` (Fire Blast's projectile
+-- flies that far before it asks; a SWEEP's origin must not, it travels
+-- from there on the server), half the hitbox, and the slack above.
+function VFXService._isHitboxPlacementValid(
+	_self: typeof(VFXService),
+	player: Player,
+	vfxName: string,
+	cframe: CFrame,
+	includeTravel: boolean
+): boolean
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return false
+	end
+	local magicIndexData = MagicData[vfxName] or {}
+	local hitboxSize: Vector3 = magicIndexData.hitboxSize or Vector3.zero
+	local allowed = (magicIndexData.range or 0)
+		+ (if includeTravel then (magicIndexData.travelDistance or 0) else 0)
+		+ hitboxSize.Magnitude / 2
+		+ HITBOX_PLACEMENT_SLACK_STUDS
+	local distance = (cframe.Position - root.Position).Magnitude
+	if distance > allowed then
+		warn(
+			("[VFXService] %s placed a %s hitbox %.0f studs from their character (limit %.0f); dropped"):format(
+				player.Name,
+				vfxName,
+				distance,
+				allowed
+			)
+		)
+		return false
+	end
+	return true
+end
+
 function VFXService._onHitboxRequested(
 	self: typeof(VFXService),
 	player: Player,
@@ -777,9 +822,11 @@ function VFXService._onHitboxRequested(
 		return
 	end
 
-	-- TODO: Reimplement, exploiters can send same player objects
 	-- Ensure that only the active player can trigger hitbox effects for their VFX
 	if player ~= activePlayer then
+		return
+	end
+	if not self:_isHitboxPlacementValid(player, vfxName, cframe, true) then
 		return
 	end
 
@@ -833,6 +880,13 @@ function VFXService._onSweepHitboxRequested(
 	if player ~= activePlayer then
 		return
 	end
+	if not self:_isHitboxPlacementValid(player, vfxName, cframe, false) then
+		return
+	end
+	-- Spent NOW, not when the sweep ends: while the flag stayed true for
+	-- the length of the sweep, a second request in that window ran a
+	-- second sweep off the same cast.
+	self._vfxReplicationQueue[player.UserId][vfxName] = false
 
 	local magicIndexData = MagicData[vfxName] or {}
 
@@ -875,8 +929,6 @@ function VFXService._onSweepHitboxRequested(
 			onHitboxDamage(model, stepCFrame, activePlayer, magicIndexData, true, false)
 		end, magicIndexData.hitboxSize.X, true)
 	end
-
-	self._vfxReplicationQueue[player.UserId][vfxName] = false
 end
 
 function VFXService._onPersistentHitboxRequested(
@@ -897,6 +949,13 @@ function VFXService._onPersistentHitboxRequested(
 	if player ~= activePlayer then
 		return
 	end
+	if not self:_isHitboxPlacementValid(player, vfxName, cframe, false) then
+		return
+	end
+	-- Spent NOW. The flag used to stay true for the whole hitboxDuration
+	-- (15 s for Domain Expansion) and every extra request inside that
+	-- window started ANOTHER full damage loop off the one cast.
+	self._vfxReplicationQueue[player.UserId][vfxName] = false
 
 	local magicIndexData = MagicData[vfxName] or {}
 
@@ -935,8 +994,6 @@ function VFXService._onPersistentHitboxRequested(
 			local casterCharacter = player.Character :: Model
 			casterCharacter:SetAttribute(Attributes.DomainExpansionActive, false)
 		end
-
-		self._vfxReplicationQueue[player.UserId][vfxName] = false
 	end)
 end
 

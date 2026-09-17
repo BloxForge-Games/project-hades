@@ -319,8 +319,8 @@ function DamageService.PlayerTakeDamage(
 		zombieHit.TimePosition = 0.2
 		zombieHit:Play()
 
-		local hitVFX: Instance = rootPart:FindFirstChild("HitFX")
-			or ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
+		local hitVFX: Instance = rootPart:FindFirstChild("HitFXNew")
+			or ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFXNew:Clone()
 		if hitVFX.Parent ~= rootPart then
 			hitVFX.Parent = rootPart
 		end
@@ -330,11 +330,7 @@ function DamageService.PlayerTakeDamage(
 				continue
 			end
 
-			if particle.Name == "Hit" then
-				particle:Emit(2)
-			else
-				particle:Emit(6)
-			end
+			particle:Emit(2)
 		end
 	end
 

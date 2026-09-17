@@ -9,6 +9,7 @@ local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -52,13 +53,18 @@ return function(player: Player, preload: boolean?)
 		Debris:AddItem(windBombSound, 5)
 	end
 
+	-- Where the bomb LANDS: the hitbox CFrame, taken on every viewer at the
+	-- request beat (the caster's client sends it; the others compute the
+	-- same point from the replicated root) so the ground dust below falls
+	-- where the damage did, not where the explosion mesh is drawn.
+	local impactCFrame: CFrame? = nil
+
 	task.delay(0.75, function()
+		local hitboxCFrame = getRootPart(character).CFrame
+			+ getRootPart(character).CFrame.LookVector * MagicData[MagicNames["Wind Bomb"]].range
+		impactCFrame = hitboxCFrame
 		if player == Players.LocalPlayer and not preload then
-			Magic.HitboxRequested.Fire({
-				MagicName = MagicNames["Wind Bomb"],
-				CFrame = getRootPart(character).CFrame
-					+ getRootPart(character).CFrame.LookVector * MagicData[MagicNames["Wind Bomb"]].range,
-			})
+			Magic.HitboxRequested.Fire({ MagicName = MagicNames["Wind Bomb"], CFrame = hitboxCFrame })
 		end
 	end)
 
@@ -76,6 +82,14 @@ return function(player: Player, preload: boolean?)
 		end
 
 		Debris:AddItem(windbombExplosionVFX, 5)
+
+		-- The combat pack's dust at the landing point, on the explosion beat.
+		emitVFXPart(
+			"GroundDust",
+			impactCFrame or windbombExplosionVFX.CFrame,
+			nil,
+			{ GroundSnapDistance = 10, GroundLift = 5 }
+		)
 
 		for _, particle in pairs(windbombVFX:GetDescendants()) do
 			particle.Enabled = false

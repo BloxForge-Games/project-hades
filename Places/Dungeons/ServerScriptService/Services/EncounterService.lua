@@ -628,11 +628,23 @@ function EncounterService.IsCutsceneActive(self: typeof(EncounterService)): bool
 	return self._cutsceneDepth > 0
 end
 
+-- Direct writes, not InvulnerabilityService: the window is the cutscene's
+-- own length, opened and closed by the same depth counter. The REASON
+-- rides along so every client (teammates' screens included) leaves the
+-- white invulnerable highlight off for the cinematic. Written before the
+-- flag on open and cleared after it on close, so a client reacting to
+-- Invulnerable never reads a stale reason.
 local function setCharactersInvulnerable(invulnerable: boolean)
 	for _, player in Players:GetPlayers() do
 		local character = player.Character
 		if character then
+			if invulnerable then
+				character:SetAttribute(Attributes.InvulnerableReason, "Cutscene")
+			end
 			character:SetAttribute(Attributes.Invulnerable, invulnerable)
+			if not invulnerable then
+				character:SetAttribute(Attributes.InvulnerableReason, nil)
+			end
 		end
 	end
 end
@@ -1179,6 +1191,7 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	for _, player in Players:GetPlayers() do
 		local character = player.Character
 		if character then
+			character:SetAttribute(Attributes.InvulnerableReason, "Cutscene")
 			character:SetAttribute(Attributes.Invulnerable, true)
 			table.insert(frozenCharacters, character)
 		end
@@ -1247,6 +1260,7 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	for _, character in frozenCharacters do
 		if character.Parent then
 			character:SetAttribute(Attributes.Invulnerable, false)
+			character:SetAttribute(Attributes.InvulnerableReason, nil)
 		end
 	end
 	self:_endCutscene()

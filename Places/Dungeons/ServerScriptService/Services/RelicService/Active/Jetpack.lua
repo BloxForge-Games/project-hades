@@ -54,10 +54,12 @@ function Jetpack.Invoke(self: Jetpack)
 	-- Invulnerability + highlight lifecycle is owned by InvulnerabilityService
 	-- (moved out of here in Chunk C so LifeService's death-state i-frames
 	-- can reuse the same pattern). Duration matches the jetpack flight
-	-- length so the i-frames lift exactly when the jetpack does.
+	-- length so the i-frames lift exactly when the jetpack does. "Combat":
+	-- earned in play, so the white highlight shows for the flight.
 	InvulnerabilityService:ApplyTo(
 		character,
-		RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"]) :: number
+		RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"]) :: number,
+		"Combat"
 	)
 
 	local jetpackClone = ReplicatedStorage.GameAssets.Relics.Actives[RelicNames["Experimental Jetpack"]]:Clone()

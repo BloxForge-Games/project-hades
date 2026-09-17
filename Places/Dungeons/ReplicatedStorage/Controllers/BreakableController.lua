@@ -195,7 +195,7 @@ function BreakableController._playHitFX(
 		else (buildTemplate :: PVInstance):GetPivot() + (buildTemplate :: PVInstance):GetPivot().LookVector * -1
 	partVFX.Parent = workspace.IgnoreInstances.MagicSpells
 
-	local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFX:Clone()
+	local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFXNew:Clone()
 	hitVFX.Parent = partVFX
 
 	for _, particle in pairs(hitVFX:GetDescendants()) do
@@ -203,11 +203,7 @@ function BreakableController._playHitFX(
 			continue
 		end
 
-		if particle.Name == "Hit" then
-			particle:Emit(2)
-		else
-			particle:Emit(6)
-		end
+		particle:Emit(2)
 	end
 
 	Debris:AddItem(hitVFX, 2)
