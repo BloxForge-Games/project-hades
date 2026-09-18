@@ -251,7 +251,21 @@ end
 -- Both designs were scrapped — it is now a crit-chance relic whose
 -- Adrenaline proc rides DamageService:_postDamage's `wasCrit`, so it
 -- needs no perfect-dodge hook either way.
+-- The perfect-dodge burst (GameAssets.VFX.DodgeVFXPart), for everyone: a
+-- BROADCAST (RelicNetwork.PerfectDodgeBurst) naming the dodger the moment
+-- the perfect dodge registers. Each client places it on the dodger's root
+-- as IT sees it and emits on the same frame (RelicController). The server
+-- sends no CFrame: mid-roll its copy of the root trails the client's, and
+-- a server-read position landed the burst back where the roll began.
+local function playPerfectDodgeVFX(player: Player)
+	RelicNetwork.PerfectDodgeBurst.FireAll(player)
+end
+
 function RelicService.OnPlayerPerfectDodged(self: typeof(RelicService), player: Player)
+	-- The burst first: this is the one server-side fan-out every perfect
+	-- dodge path (melee, projectile, hitbox) runs through.
+	playPerfectDodgeVFX(player)
+
 	-- Jetpack proc — existing behavior, kept identical. GetRelicActiveModule
 	-- internally checks ownership before invoking.
 	self:GetRelicActiveModule(player, "Jetpack")

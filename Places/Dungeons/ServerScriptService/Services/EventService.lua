@@ -87,6 +87,12 @@ local SWORD_PULL_HEALTH_FRACTION = 0.10
 local SHRINE_HEALTH_FRACTION = 0.50
 local SHRINE_CURSE_COUNT = 3
 
+-- The green the Greater Blessing notification paints the blessing name in
+-- (the reward green the rest of the HUD uses).
+local GREATER_BLESSING_HIGHLIGHT_R = 126
+local GREATER_BLESSING_HIGHLIGHT_G = 251
+local GREATER_BLESSING_HIGHLIGHT_B = 69
+
 -- Greater Shrine. The PrayingStatue in every Start chunk after the first
 -- floor: pick ONE Greater Blessing per player, free, granted on the spot
 -- and lasting the rest of the run. Spirit joins the fountain's Max-HP
@@ -976,22 +982,29 @@ function EventService._onChooseGreaterBlessing(
 
 	PlayerStatsService:AddGreaterShrineEffect(player, config.effect, config.amount)
 
-	-- Tell the player what they took. `response` is the dialogue row's
-	-- HyperText ("Spirit <color=...>(+%d%% Max HP)</color>"); the
-	-- notification is plain text, so the tags are stripped.
+	-- Tell EVERYONE what was taken: a blessing is a party-wide moment, and
+	-- the same line lands on every screen. White body, with the blessing
+	-- and the word "Blessing" in green (rich text; the body label renders
+	-- the markup only when asked to).
 	if UserNotificationService then
-		local line = (config.response or blessing):format(math.round(config.amount * 100))
-		line = line:gsub("<color=[^>]*>", ""):gsub("</color>", "")
-		UserNotificationService:RequestUserNotification(player, {
+		local line = ('%s chose the <font color="rgb(%d,%d,%d)">%s Blessing</font>!'):format(
+			player.Name,
+			GREATER_BLESSING_HIGHLIGHT_R,
+			GREATER_BLESSING_HIGHLIGHT_G,
+			GREATER_BLESSING_HIGHLIGHT_B,
+			blessing
+		)
+		UserNotificationService:RequestAllNotification({
 			titleText = "Greater Blessing",
 			titleTextFont = Enum.Font.SourceSansBold,
 			titleTextColor3 = Color3.fromRGB(174, 95, 252),
 			titleTextTransparency = 0,
 
-			text = player.Name .. ": " .. line,
+			text = line,
 			textFont = Enum.Font.SourceSansBold,
-			textColor3 = Color3.fromRGB(126, 251, 69),
+			textColor3 = Color3.fromRGB(255, 255, 255),
 			textTransparency = 0,
+			richText = true,
 		})
 	end
 	return "ok"

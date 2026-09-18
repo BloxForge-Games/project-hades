@@ -11,6 +11,7 @@ local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicDat
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local emitAttributeVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitAttributeVFX)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -83,11 +84,26 @@ return function(player: Player, preload: boolean, _: CFrame)
 			divergentFistExplosion.PrimaryPart.Explosion:Play()
 		end
 
-		for _, particle in pairs(divergentFistExplosion:GetDescendants()) do
-			if particle:IsA("ParticleEmitter") then
-				particle:Emit(15)
+		task.delay(0.05, function()
+			-- Attachment2's emitters are ATTRIBUTE-driven (EmitCount / EmitDelay
+			-- authored on each in Studio) and play on this same beat; the rest of
+			-- the explosion keeps its hand-tuned burst, so those are skipped in
+			-- the fixed loop below.
+			local attributeAttachment = divergentFistExplosion:FindFirstChild("Attachment2", true)
+
+			for _, particle in pairs(divergentFistExplosion:GetDescendants()) do
+				if
+					particle:IsA("ParticleEmitter")
+					and not (attributeAttachment and particle:IsDescendantOf(attributeAttachment))
+				then
+					particle:Emit(15)
+				end
 			end
-		end
+
+			if attributeAttachment then
+				emitAttributeVFX(attributeAttachment)
+			end
+		end)
 
 		Debris:AddItem(divergentFistExplosion, 5)
 

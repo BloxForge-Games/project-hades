@@ -40,7 +40,7 @@ local RelicMachineService = {
 -- Studs in front of the player the machine lands, along their own facing.
 -- Close: the machine faces THEM (see DropModelOnPlayer), so a player who
 -- does not move has it squarely in front of them.
-local FORWARD_OFFSET = 4
+local FORWARD_OFFSET = 6
 -- Extra clearance kept between the machine's footprint and the floor edge,
 -- so a clamped machine never overhangs the lip of the slab.
 local FLOOR_EDGE_MARGIN = 1.5

@@ -161,7 +161,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				nil,
 				-- Lifted a few studs: the eruption is authored to rise from its
 				-- pivot, and resting on the floor read as buried on screen.
-				{ GroundSnapDistance = 10, GroundFallbackDrop = 3, GroundLift = 3 }
+				{ GroundSnapDistance = 10, GroundFallbackDrop = 3, GroundLift = 0.25 }
 			)
 
 			TweenService:Create(

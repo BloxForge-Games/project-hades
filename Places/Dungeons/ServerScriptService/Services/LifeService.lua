@@ -418,6 +418,10 @@ function LifeService._finalizeDeath(self: typeof(LifeService), player: Player)
 	self._deathWindowTokens[userId] = nil
 	entry.phase = "dead"
 	entry.fullyDiedAtServerTime = workspace:GetServerTimeNow()
+	local deadCharacter = player.Character
+	if deadCharacter then
+		deadCharacter:SetAttribute(Attributes.Downed, false)
+	end
 	self:_replicateDeathState()
 
 	-- The client fades the body now; the frozen pose is released only once
@@ -570,6 +574,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 	-- is spilled or discarded until the window closes without a revive.
 	if character then
 		character:SetAttribute(Attributes.Death, true)
+		character:SetAttribute(Attributes.Downed, true)
 	end
 
 	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
@@ -672,6 +677,10 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 		return
 	end
 	local wasDowned = entry.phase == "downed"
+	-- The pulse stops the moment the revive is committed, before the fade.
+	if player.Character then
+		player.Character:SetAttribute(Attributes.Downed, false)
+	end
 	print(("[LifeService] %s revive sequence starting (%s)"):format(player.Name, entry.phase))
 
 	-- Close the revive window (no expiry may land mid-sequence), cancel a

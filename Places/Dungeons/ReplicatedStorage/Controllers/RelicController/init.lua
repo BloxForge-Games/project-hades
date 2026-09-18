@@ -9,6 +9,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local QuadraticBezierController = require(ReplicatedStorage.Controllers.QuadraticBezierController)
 local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
+local vanishCharacter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.vanishCharacter)
+local DodgeConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.DodgeConfig)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
@@ -48,6 +50,70 @@ end
 
 function RelicController.GetRelicsFromUserId(self: typeof(RelicController), userId: number)
 	return self._relicRegistry[tostring(userId)] or nil
+end
+
+-- See the PerfectDodgeBurst handler in Start.
+local PERFECT_DODGE_VFX_NAME = "DodgeVFXPart"
+local PERFECT_DODGE_DEFAULT_EMIT = 25
+-- The burst's ACTIVE window: how long the prefab streams.
+local PERFECT_DODGE_ACTIVE_SECONDS = 0.2
+-- How long the dodger's body is gone (vanishCharacter) -- the whole
+-- character, armour, weapons and particles included, so the burst reads
+-- as the player blinking out of existence and back. A touch longer than
+-- the stream so the body returns after the last particles have left.
+local PERFECT_DODGE_VANISH_SECONDS = 0.1
+-- The burst sits where the body WAS this many seconds ago, not where it
+-- is: a roll is a straight line at a known speed (DodgeConfig's dash),
+-- so "0.05 s ago" is that many studs back along the roll, and the burst
+-- trails the body like an after-image instead of sitting on top of it.
+-- 0 puts it on the root.
+local PERFECT_DODGE_TRAIL_SECONDS = 0.05
+local PERFECT_DODGE_LIFETIME = 3
+local warnedMissingDodgeVFX = false
+
+function RelicController._playPerfectDodgeBurst(_self: typeof(RelicController), cframe: CFrame)
+	local gameAssets = ReplicatedStorage:FindFirstChild("GameAssets")
+	local vfxFolder = gameAssets and gameAssets:FindFirstChild("VFX")
+	local template = vfxFolder and vfxFolder:FindFirstChild(PERFECT_DODGE_VFX_NAME)
+	if not template or not template:IsA("BasePart") then
+		if not warnedMissingDodgeVFX then
+			warnedMissingDodgeVFX = true
+			warn(
+				("[RelicController] GameAssets.VFX.%s is missing; no perfect-dodge burst"):format(
+					PERFECT_DODGE_VFX_NAME
+				)
+			)
+		end
+		return
+	end
+
+	local clone = template:Clone()
+	clone.Anchored = true
+	clone.CanCollide = false
+	clone.CanQuery = false
+	clone.CanTouch = false
+	clone.CFrame = cframe
+	local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
+	clone.Parent = (ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")) or workspace
+
+	local emitters: { ParticleEmitter } = {}
+	for _, descendant in clone:GetDescendants() do
+		if descendant:IsA("ParticleEmitter") then
+			descendant.Enabled = true
+			local count = descendant:GetAttribute("EmitCount")
+			descendant:Emit(if typeof(count) == "number" then count else PERFECT_DODGE_DEFAULT_EMIT)
+			table.insert(emitters, descendant)
+		end
+	end
+
+	task.delay(PERFECT_DODGE_ACTIVE_SECONDS, function()
+		for _, emitter in emitters do
+			if emitter.Parent then
+				emitter.Enabled = false
+			end
+		end
+	end)
+	Debris:AddItem(clone, PERFECT_DODGE_LIFETIME)
 end
 
 function RelicController.Start(self: typeof(RelicController))
@@ -122,6 +188,27 @@ function RelicController.Start(self: typeof(RelicController))
 
 	RelicNetwork.LightningStrikeEffect.On(function(position: Vector3)
 		LightningStrike.new(position):PlayEffect()
+	end)
+
+	-- Perfect dodge: the burst on the dodger's root, read HERE so it sits
+	-- where this client sees the body (the server's copy trails a roll).
+	-- Built on every client and emitted on the frame it is placed: a burst
+	-- from each emitter at once (EmitCount, default
+	-- PERFECT_DODGE_DEFAULT_EMIT) plus the prefab's own stream for
+	-- PERFECT_DODGE_ACTIVE_SECONDS, then gone after PERFECT_DODGE_LIFETIME.
+	-- For PERFECT_DODGE_VANISH_SECONDS the dodger's whole body vanishes on
+	-- this client, so the burst is all that is left of them.
+	RelicNetwork.PerfectDodgeBurst.On(function(dodger: Player?)
+		local character = dodger and dodger.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if character and root and root:IsA("BasePart") then
+			-- The mover faces the root along the roll, so "behind" is
+			-- straight back along its look vector at the roll's speed.
+			local rollSpeed = DodgeConfig.DashDistance / DodgeConfig.DashDuration
+			local trail = root.CFrame.LookVector * (rollSpeed * PERFECT_DODGE_TRAIL_SECONDS)
+			self:_playPerfectDodgeBurst(root.CFrame - trail)
+			vanishCharacter(character, PERFECT_DODGE_VANISH_SECONDS)
+		end
 	end)
 
 	RelicNetwork.VolleyballEffect.On(

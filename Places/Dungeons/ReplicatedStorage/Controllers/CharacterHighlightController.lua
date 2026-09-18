@@ -122,12 +122,42 @@ local INVULN_COLOR = Color3.fromRGB(255, 255, 255)
 local INVULN_FADE_DURATION = 0.25
 -- The per-character highlight this client creates on OTHER players.
 local OTHER_INVULN_HIGHLIGHT_NAME = "InvulnerableHighlight"
+
+-- Downed (Attributes.Downed: out of lives, inside the revive window): a red
+-- fill that BREATHES between the two transparencies, DOWNED_PULSE_SECONDS
+-- each way, for as long as the body can still be saved. Every client
+-- draws it on every downed character -- the attribute is server-stamped
+-- -- so a teammate reads "revivable" from across the room. Ends the
+-- moment the player revives or fully dies (the attribute drops).
+local DOWNED_COLOR = Color3.fromRGB(255, 0, 0)
+local DOWNED_TRANSPARENCY_FAR = 0.9
+local DOWNED_TRANSPARENCY_NEAR = 0.5
+local DOWNED_PULSE_SECONDS = 1
+local OTHER_DOWNED_HIGHLIGHT_NAME = "DownedHighlight"
+-- The teammate tween: far -> near over the pulse, reversed, forever.
+local DOWNED_TWEEN_INFO =
+	TweenInfo.new(DOWNED_PULSE_SECONDS, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+
+-- The same breath for the local resolver, which sets the value per tick
+-- instead of tweening: far at the start of each cycle, near at its middle.
+local function downedPulseTransparency(elapsed: number): number
+	local cycle = (elapsed % (DOWNED_PULSE_SECONDS * 2)) / DOWNED_PULSE_SECONDS
+	local alpha = if cycle <= 1 then cycle else 2 - cycle
+	local eased = TweenService:GetValue(alpha, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+	return DOWNED_TRANSPARENCY_FAR + (DOWNED_TRANSPARENCY_NEAR - DOWNED_TRANSPARENCY_FAR) * eased
+end
 -- The server's reason for a window (Attributes.InvulnerableReason). A
 -- cutscene window never paints ANY character white -- the cinematic is
 -- the feedback -- and this is how a TEAMMATE's screen knows: the local
 -- CutscenePlaying attributes never replicate. nil (a window nothing
 -- stamped) counts as combat and shows.
 local INVULN_REASON_CUTSCENE = "Cutscene"
+-- The Experimental Jetpack's window: shown ALWAYS -- through a cutscene,
+-- snapped on instead of ramped, and over the dodge flash a perfect dodge
+-- leaves behind (that flash used to hide the jetpack's glow for its whole
+-- decay, which read as the jetpack "taking half a second to become
+-- invulnerable").
+local INVULN_REASON_JETPACK = "Jetpack"
 
 local function wantsInvulnerableHighlight(character: Model): boolean
 	return character:GetAttribute(Attributes.Invulnerable) == true
@@ -181,6 +211,7 @@ local CharacterHighlightController = {
 	_playerDamageFlashEndAt = nil :: number?,
 	_playerDodgeStartAt = nil :: number?,
 	_playerDeathStartAt = nil :: number?,
+	_playerDownedStartAt = nil :: number?,
 	_threadGeneration = 0,
 }
 
@@ -333,13 +364,21 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	-- locally; the local checks stay as the extra guard.
 	local inCutscene = character:GetAttribute(Attributes.CutscenePlaying) == true
 		or character:GetAttribute(Attributes.MagicCutscenePlaying) == true
-	local invulnTarget = if wantsInvulnerableHighlight(character) and not inCutscene then 1 else 0
-	local step = deltaTime / INVULN_FADE_DURATION
-	local diff = invulnTarget - (self._playerInvulnIntensity or 0)
-	if math.abs(diff) <= step then
-		self._playerInvulnIntensity = invulnTarget
+	local jetpackInvuln = character:GetAttribute(Attributes.Invulnerable) == true
+		and character:GetAttribute(Attributes.InvulnerableReason) == INVULN_REASON_JETPACK
+	local invulnTarget = if wantsInvulnerableHighlight(character) and (jetpackInvuln or not inCutscene) then 1 else 0
+	if jetpackInvuln then
+		-- At once, and the dodge flash that granted it steps aside.
+		self._playerInvulnIntensity = 1
+		self._playerDodgeStartAt = nil
 	else
-		self._playerInvulnIntensity = (self._playerInvulnIntensity or 0) + (if diff > 0 then step else -step)
+		local step = deltaTime / INVULN_FADE_DURATION
+		local diff = invulnTarget - (self._playerInvulnIntensity or 0)
+		if math.abs(diff) <= step then
+			self._playerInvulnIntensity = invulnTarget
+		else
+			self._playerInvulnIntensity = (self._playerInvulnIntensity or 0) + (if diff > 0 then step else -step)
+		end
 	end
 
 	local now = os.clock()
@@ -357,6 +396,20 @@ function CharacterHighlightController._resolvePlayerHighlight(
 		end
 		self._playerDeathStartAt = nil
 	end
+
+	-- Priority 0.5: downed. Under the death flash (which plays once at the
+	-- downing) and over everything else: the pulse owns the body until
+	-- the window closes or a revive lands.
+	if character:GetAttribute(Attributes.Downed) == true then
+		local downedStartAt = self._playerDownedStartAt or now
+		self._playerDownedStartAt = downedStartAt
+		highlight.FillColor = DOWNED_COLOR
+		highlight.FillTransparency = downedPulseTransparency(now - downedStartAt)
+		highlight.OutlineTransparency = 1
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		return
+	end
+	self._playerDownedStartAt = nil
 
 	if self._playerDamageFlashEndAt and now < self._playerDamageFlashEndAt then
 		local remaining = self._playerDamageFlashEndAt - now
@@ -428,18 +481,23 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 		local wants = wantsInvulnerableHighlight(character)
 		local existing = character:FindFirstChild(OTHER_INVULN_HIGHLIGHT_NAME)
 		if wants and not existing then
+			-- A teammate's jetpack glow snaps on like the owner's; every
+			-- other window fades in.
+			local isJetpack = character:GetAttribute(Attributes.InvulnerableReason) == INVULN_REASON_JETPACK
 			local highlight = Instance.new("Highlight")
 			highlight.Name = OTHER_INVULN_HIGHLIGHT_NAME
 			highlight.FillColor = INVULN_COLOR
-			highlight.FillTransparency = 1
+			highlight.FillTransparency = if isJetpack then INVULN_FILL_TRANSPARENCY else 1
 			highlight.OutlineTransparency = 1
 			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 			highlight.Parent = character
-			TweenService:Create(
-				highlight,
-				TweenInfo.new(INVULN_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ FillTransparency = INVULN_FILL_TRANSPARENCY }
-			):Play()
+			if not isJetpack then
+				TweenService:Create(
+					highlight,
+					TweenInfo.new(INVULN_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+					{ FillTransparency = INVULN_FILL_TRANSPARENCY }
+				):Play()
+			end
 		elseif not wants and existing then
 			local fade = TweenService:Create(
 				existing,
@@ -458,6 +516,28 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 	character:GetAttributeChangedSignal(Attributes.Invulnerable):Connect(refresh)
 	character:GetAttributeChangedSignal(Attributes.InvulnerableReason):Connect(refresh)
 	refresh()
+
+	-- The downed pulse on a TEAMMATE: its own Highlight, alive exactly as
+	-- long as the attribute is. A downed player is never invulnerable, so
+	-- it never fights the invulnerable highlight for the slot.
+	local function refreshDowned()
+		local wants = character:GetAttribute(Attributes.Downed) == true
+		local existing = character:FindFirstChild(OTHER_DOWNED_HIGHLIGHT_NAME)
+		if wants and not existing then
+			local highlight = Instance.new("Highlight")
+			highlight.Name = OTHER_DOWNED_HIGHLIGHT_NAME
+			highlight.FillColor = DOWNED_COLOR
+			highlight.FillTransparency = DOWNED_TRANSPARENCY_FAR
+			highlight.OutlineTransparency = 1
+			highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			highlight.Parent = character
+			TweenService:Create(highlight, DOWNED_TWEEN_INFO, { FillTransparency = DOWNED_TRANSPARENCY_NEAR }):Play()
+		elseif not wants and existing then
+			existing:Destroy()
+		end
+	end
+	character:GetAttributeChangedSignal(Attributes.Downed):Connect(refreshDowned)
+	refreshDowned()
 end
 
 function CharacterHighlightController._watchOtherPlayers(self: typeof(CharacterHighlightController))
@@ -584,6 +664,7 @@ function CharacterHighlightController._initHighlightThread(self: typeof(Characte
 	self._playerDamageFlashEndAt = nil
 	self._playerDodgeStartAt = nil
 	self._playerDeathStartAt = nil
+	self._playerDownedStartAt = nil
 	self._playerInvulnIntensity = 0
 
 	local lastTick = os.clock()

@@ -71,6 +71,13 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local ZombieService = {
 	Name = "ZombieService",
 	Dependencies = { RelicService, TextIndicatorService, DamageService } :: { any },
+
+	-- Players credited a perfect dodge for the roll they are IN. One
+	-- credit per roll: a second mob swinging into the same i-frame window
+	-- (or a swing plus a fireball) is the same dodge, not another one.
+	-- Cleared when that roll's IsDodging drops, so the next roll can earn
+	-- its own. See _creditPerfectDodge.
+	_perfectDodgeCredited = {} :: { [Player]: boolean },
 }
 
 local HttpService = game:GetService("HttpService")
@@ -120,6 +127,42 @@ ZombieService._pendingRangedCasts = {}
 -- missing — the user is responsible for authoring these under
 -- ReplicatedStorage.GameAssets.Hitboxes.<name>. Each template must be
 -- a Model with PrimaryPart set.
+-- Credits ONE perfect dodge per roll, from every intercept path (melee
+-- swing, ranged cast, projectile impact): the relic fan-out (which also
+-- plays the burst), and the "Perfect Dodge!" floater on `anchor` (the hit
+-- point, or the head). A second intercept inside the same roll is ignored.
+function ZombieService._creditPerfectDodge(self: typeof(ZombieService), player: Player, anchor: BasePart?)
+	if self._perfectDodgeCredited[player] then
+		return
+	end
+	local character = player.Character
+	if not character or character:GetAttribute(Attributes.IsDodging) ~= true then
+		return
+	end
+	self._perfectDodgeCredited[player] = true
+
+	-- Release the credit when THIS roll ends. Re-checked right after
+	-- connecting: the attribute can drop on the same frame.
+	local connection: RBXScriptConnection
+	connection = character:GetAttributeChangedSignal(Attributes.IsDodging):Connect(function()
+		if character:GetAttribute(Attributes.IsDodging) ~= true then
+			connection:Disconnect()
+			self._perfectDodgeCredited[player] = nil
+		end
+	end)
+	if character:GetAttribute(Attributes.IsDodging) ~= true then
+		connection:Disconnect()
+		self._perfectDodgeCredited[player] = nil
+	end
+
+	-- All perfect-dodge-triggered relics (and the burst) fan out from here.
+	RelicService:OnPlayerPerfectDodged(player)
+	local indicatorAnchor = anchor or character:FindFirstChild("Head")
+	if indicatorAnchor and indicatorAnchor:IsA("BasePart") then
+		TextIndicatorService:ShowIndicator(player, indicatorAnchor, "Perfect Dodge!")
+	end
+end
+
 function ZombieService._resolveHitboxTemplate(_self: typeof(ZombieService), hitboxName: string): Model?
 	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
 	if not hitboxesFolder then
@@ -142,7 +185,7 @@ end
 --
 -- One damage application per (player, attack) — players who walk
 -- through multiple zones within one swing aren't multi-hit.
-function ZombieService._runHitDetection(_self: typeof(ZombieService), zombieModel: Model, attack, hitboxModel: Model)
+function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel: Model, attack, hitboxModel: Model)
 	local hitRegistry: { [Player]: boolean } = {}
 	local startTime = os.clock()
 	-- Cache the zombie's humanoid so the per-tick alive-check below
@@ -216,13 +259,8 @@ function ZombieService._runHitDetection(_self: typeof(ZombieService), zombieMode
 					perfectDodgedPart.Parent = workspace.IgnoreInstances.MagicSpells
 					Debris:AddItem(perfectDodgedPart, 2)
 
-					-- All perfect-dodge-triggered relics fan out from here.
-					-- Single fan-out means future perfect-dodge relics plug in
-					-- without editing this attack-loop branch — they just add
-					-- a branch inside RelicService:OnPlayerPerfectDodged.
-					-- Today: Experimental Jetpack only.
-					RelicService:OnPlayerPerfectDodged(player)
-					TextIndicatorService:ShowIndicator(player, perfectDodgedPart, "Perfect Dodge!")
+					-- One credit per roll, relics + floater (_creditPerfectDodge).
+					self:_creditPerfectDodge(player, perfectDodgedPart)
 				else
 					DamageService:PlayerTakeDamage(player, zombieModel, attack.damage, attack.canRagdoll)
 				end
@@ -556,9 +594,8 @@ function ZombieService._onMobProjectilePerfectDodged(self: typeof(ZombieService)
 		return
 	end
 
-	-- Same fan-out as the melee dodge branch — see RelicService:OnPlayerPerfectDodged.
-	RelicService:OnPlayerPerfectDodged(player)
-	TextIndicatorService:ShowIndicator(player, character:FindFirstChild("Head") :: BasePart, "Perfect Dodge!")
+	-- Same credit as the melee branch: once per roll (_creditPerfectDodge).
+	self:_creditPerfectDodge(player, nil)
 	-- Intentionally do NOT clear registry[castUuid] — the projectile
 	-- keeps flying client-side; the registry needs to stay alive so
 	-- a real impact later in the projectile's flight can apply damage.
@@ -628,12 +665,10 @@ function ZombieService._onMobProjectileHit(
 			-- caught: "Perfect Dodging the Wizard Fireball does not
 			-- trigger Experimental Jetpack."
 			if character:GetAttribute(Attributes.IsDodging) then
-				RelicService:GetRelicActiveModule(hitPlayer, "Jetpack")
-				TextIndicatorService:ShowIndicator(
-					hitPlayer,
-					character:FindFirstChild("Head") :: BasePart,
-					"Perfect Dodge!"
-				)
+				-- Through the one credit path: relic fan-out (jetpack AND
+				-- the burst) + floater, once per roll. This used to call
+				-- the jetpack module directly and skip the burst.
+				self:_creditPerfectDodge(hitPlayer, nil)
 			else
 				DamageService:PlayerTakeDamage(hitPlayer, entry.mob, entry.damage, entry.canRagdoll)
 			end
@@ -643,8 +678,7 @@ function ZombieService._onMobProjectileHit(
 		local character = player.Character :: Model
 
 		if character:GetAttribute(Attributes.IsDodging) then
-			RelicService:GetRelicActiveModule(player, "Jetpack")
-			TextIndicatorService:ShowIndicator(player, character:FindFirstChild("Head") :: BasePart, "Perfect Dodge!")
+			self:_creditPerfectDodge(player, nil)
 		else
 			DamageService:PlayerTakeDamage(player, entry.mob, entry.damage, entry.canRagdoll)
 		end
@@ -678,6 +712,10 @@ end
 --[ Lifecycle ]--
 
 function ZombieService.Start(self: typeof(ZombieService))
+	Players.PlayerRemoving:Connect(function(player: Player)
+		self._perfectDodgeCredited[player] = nil
+	end)
+
 	Combat.MobProjectilePerfectDodged.On(function(player: Player, castUuid: string)
 		self:_onMobProjectilePerfectDodged(player, castUuid)
 	end)
