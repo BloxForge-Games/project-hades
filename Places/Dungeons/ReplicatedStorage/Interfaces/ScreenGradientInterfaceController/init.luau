@@ -22,6 +22,13 @@ local INTERFACE_ID = "ScreenGradientInterfaceController"
 
 local ScreenGradientInterfaceController = {
 	Name = "ScreenGradientInterfaceController",
+	-- The pulse's shape, for effects that ride along with it (the
+	-- perfect-dodge camera flourish in TextIndicatorController): the flash
+	-- tweens in over PULSE_TWEEN_SECONDS (the Container's
+	-- DEFAULT_TWEEN_DURATION; keep the two equal), holds until
+	-- PULSE_HOLD_SECONDS after the fire, then tweens out over the same.
+	PULSE_TWEEN_SECONDS = 0.35,
+	PULSE_HOLD_SECONDS = 0.45,
 }
 
 ScreenGradientInterfaceController._deathPulse = false
@@ -85,7 +92,7 @@ function ScreenGradientInterfaceController._render(self: typeof(ScreenGradientIn
 					setPulseGradient(true)
 					setPulseColor(color3)
 
-					task.delay(0.45, function()
+					task.delay(self.PULSE_HOLD_SECONDS, function()
 						setPulseGradient(false)
 					end)
 				end)
