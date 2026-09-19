@@ -76,7 +76,9 @@ function Relic:Start()
 				TextIndicatorService:ShowIndicator(
 					player,
 					indicatorPart,
-					"Reached Maximum Relics! (12)",
+					-- The number is the player's OPEN slot count, which a shop
+					-- unlock can raise mid-run, so it is read rather than typed.
+					string.format("Reached Maximum Relics! (%d)", RelicService:GetRelicSlots(player)),
 					Color3.fromRGB(250, 70, 70),
 					true
 				)

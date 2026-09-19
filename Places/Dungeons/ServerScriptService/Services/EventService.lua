@@ -52,6 +52,8 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
+local RelicSlotShopData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicSlotShopData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
@@ -232,11 +234,14 @@ local EventService = {
 	-- [userId] = { [roomId] = { { relicName, price, sold } } }
 	_merchantStock = {},
 
-	-- [roomId] = { merchant = Model?, room = room, slotCFrames = { [index] = CFrame } }
+	-- [roomId] = { merchant = Model?, room = room, slotCFrames = { [index] = CFrame },
+	--              slotUpgradeCFrame = CFrame? }
 	-- Captured AT GENERATION, server-side — the server sees the whole
 	-- floor, so pedestal positions never depend on what has streamed to
 	-- any client. GetMerchantStalls serves these with the stock so a
 	-- client can render every stand the moment generation lands.
+	-- slotUpgradeCFrame is the Relic Slot stand (Interactables.RelicSlot,
+	-- RelicSlotShopData), nil when the prefab has none.
 	_merchantRooms = {},
 
 	-- [roomId] = true once the room BEFORE the shop has STARTED (its
@@ -283,6 +288,18 @@ end
 
 -- One-shot UI-feedback sound at a character's HRP (server-side clone
 -- — spatial, replicates on its own). GameAssets.Sounds.<soundName>.
+-- Where a shop stand's display floats: the authored attachment if there
+-- is one, else 3 studs above the part / pivot.
+local function standCFrame(pedestal: Instance): CFrame
+	local attachment = pedestal:FindFirstChildWhichIsA("Attachment", true)
+	if attachment then
+		return attachment.WorldCFrame
+	elseif pedestal:IsA("BasePart") then
+		return pedestal.CFrame * CFrame.new(0, 3, 0)
+	end
+	return (pedestal :: Model):GetPivot() * CFrame.new(0, 3, 0)
+end
+
 local function playFeedbackSound(hrp: BasePart?, soundName: string)
 	if not hrp then
 		return
@@ -582,20 +599,22 @@ function EventService._wireDungeon(self: typeof(EventService), dungeon)
 			-- the server, where streaming can't hide anything. The tag still
 			-- goes on for the client's PROMPT wiring; the display no longer
 			-- waits on it. Stock itself stays lazy per player (cached roll).
+			-- The un-numbered RelicSlot pedestal is the Relic SLOT stand
+			-- (RelicSlotShopData): its own tag, its own CFrame, no stock.
 			local slotCFrames = {}
+			local slotUpgradeCFrame: CFrame? = nil
 			if interactablesFolder then
 				for _, pedestal in interactablesFolder:GetChildren() do
+					if not (pedestal:IsA("Model") or pedestal:IsA("BasePart")) then
+						continue
+					end
 					local slotIndex = tonumber(string.match(pedestal.Name, "%d+$"))
-					if slotIndex and (pedestal:IsA("Model") or pedestal:IsA("BasePart")) then
+					if slotIndex then
 						CollectionService:AddTag(pedestal, TagList.MerchantPedestal)
-						local attachment = pedestal:FindFirstChildWhichIsA("Attachment", true)
-						if attachment then
-							slotCFrames[slotIndex] = attachment.WorldCFrame
-						elseif pedestal:IsA("BasePart") then
-							slotCFrames[slotIndex] = pedestal.CFrame * CFrame.new(0, 3, 0)
-						else
-							slotCFrames[slotIndex] = pedestal:GetPivot() * CFrame.new(0, 3, 0)
-						end
+						slotCFrames[slotIndex] = standCFrame(pedestal)
+					elseif pedestal.Name == RelicSlotShopData.PedestalName then
+						CollectionService:AddTag(pedestal, TagList.MerchantSlotPedestal)
+						slotUpgradeCFrame = standCFrame(pedestal)
 					end
 				end
 			end
@@ -603,6 +622,7 @@ function EventService._wireDungeon(self: typeof(EventService), dungeon)
 				merchant = merchant,
 				room = room,
 				slotCFrames = slotCFrames,
+				slotUpgradeCFrame = slotUpgradeCFrame,
 			}
 		end
 	end
@@ -1311,7 +1331,16 @@ function EventService._onGetMerchantStalls(_self: typeof(EventService), player: 
 		-- roomModel rides along so the client can gate rendering on the
 		-- room's FogRevealed attribute — floating relics inside an
 		-- unrevealed shop would announce the shop through its doorway.
-		table.insert(stalls, { roomId = roomId, slots = slots, roomModel = entry.room.model })
+		-- The Relic Slot stand, as this player sees it (their own rung).
+		local slotUpgrade = nil
+		if entry.slotUpgradeCFrame then
+			local tier, price, soldOut = EventService:_slotUpgradeFor(player)
+			slotUpgrade = { tier = tier, price = price, soldOut = soldOut, cframe = entry.slotUpgradeCFrame }
+		end
+		table.insert(
+			stalls,
+			{ roomId = roomId, slots = slots, roomModel = entry.room.model, slotUpgrade = slotUpgrade }
+		)
 	end
 	return stalls
 end
@@ -1378,6 +1407,67 @@ function EventService._onBuyMerchantRelic(
 			player,
 			hrp,
 			("You bought %s!"):format(slot.relicName),
+			Color3.fromRGB(255, 255, 255),
+			true
+		)
+	end
+	return "bought"
+end
+
+-- The Relic Slot stand's state for one player: the rung on sale (1-based
+-- index into RelicSlotShopData.Tiers), its price, and sold-out. DERIVED,
+-- never stored: the rung is how many slots the player has opened past
+-- the default, so it carries across every shop on the floor and survives
+-- a rejoin with the open count. Sold out reports the last rung (the
+-- greyed display still shows a tier) at price 0.
+function EventService._slotUpgradeFor(_self: typeof(EventService), player: Player): (number, number, boolean)
+	local tiers = RelicSlotShopData.Tiers
+	local bought = math.max(0, RelicService:GetRelicSlots(player) - RelicCapData.DefaultSlots)
+	local rung = tiers[bought + 1]
+	if not rung then
+		return #tiers, 0, true
+	end
+	return bought + 1, rung.price, false
+end
+
+-- Buys the Relic Slot rung on sale in merchant room `roomId`: one more
+-- OPEN relic slot (RelicService.SetRelicSlots, which replicates it to
+-- the tray), and the next rung goes on sale at once. Same gates as a
+-- relic buy: the room unlocked for this player, and in range of the
+-- stand. Returns "bought" | "poor" | "sold" | "invalid".
+-- DungeonNetwork.BuyRelicSlot handler.
+function EventService._onBuyRelicSlot(_self: typeof(EventService), player: Player, roomId: number): string
+	if typeof(roomId) ~= "number" then
+		return "invalid"
+	end
+	local entry = EventService._merchantRooms[roomId]
+	if not entry or not entry.slotUpgradeCFrame or not EventService:_isMerchantUnlockedFor(player, roomId) then
+		return "invalid"
+	end
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not hrp or (hrp.Position - entry.slotUpgradeCFrame.Position).Magnitude > INTERACT_RANGE then
+		return "invalid"
+	end
+
+	local _tier, price, soldOut = EventService:_slotUpgradeFor(player)
+	if soldOut then
+		return "sold"
+	end
+	if not RunEscrowService:SpendCoins(player, price) then
+		if TextIndicatorService then
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough coins", NOT_ENOUGH_COINS_COLOR, true)
+		end
+		playFeedbackSound(hrp, "Error")
+		return "poor"
+	end
+
+	local openSlots = RelicService:SetRelicSlots(player, RelicService:GetRelicSlots(player) + 1)
+	-- Same voice as "You bought X!" — white, over the buyer, server-issued.
+	if TextIndicatorService then
+		TextIndicatorService:ShowIndicator(
+			player,
+			hrp,
+			("Relic Slot unlocked! (%d/%d)"):format(openSlots, RelicCapData.MaxSlots),
 			Color3.fromRGB(255, 255, 255),
 			true
 		)
@@ -1457,6 +1547,9 @@ function EventService.Start(self: typeof(EventService))
 	end)
 	DungeonNetwork.BuyMerchantRelic.On(function(player: Player, payload)
 		return self:_onBuyMerchantRelic(player, payload.RoomId, payload.Index)
+	end)
+	DungeonNetwork.BuyRelicSlot.On(function(player: Player, roomId: number)
+		return self:_onBuyRelicSlot(player, roomId)
 	end)
 	DungeonNetwork.SellRelic.On(function(player: Player, relicName: string)
 		return self:_onSellRelic(player, relicName)

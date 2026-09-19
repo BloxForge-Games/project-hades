@@ -19,6 +19,8 @@ local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Ro
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 
 local Container = require(script.ReactComponents.Container)
 
@@ -33,6 +35,14 @@ local function getEventController(): any
 end
 
 local INTERFACE_ID = "RelicInterfaceController"
+
+-- The run's OPEN relic slot count, stamped on the Player by RelicService.
+-- The default is only a pre-stamp fallback: the attribute lands with the
+-- relic registry on join, before the tray is ever opened.
+local function readRelicSlots(): number
+	local slots = Players.LocalPlayer:GetAttribute(Attributes.RelicSlots)
+	return if typeof(slots) == "number" then slots else RelicCapData.DefaultSlots
+end
 
 export type RelicList = {
 	[RelicNames.RelicNames]: number,
@@ -66,6 +76,21 @@ RelicInterfaceController.Signals = {
 function RelicInterfaceController._render(_self: typeof(RelicInterfaceController))
 	return function()
 		local relicData, setRelicData = React.useState(nil :: { hashmap: RelicList, list: { RelicNames.RelicNames } }?)
+		local relicSlots, setRelicSlots = React.useState(readRelicSlots())
+
+		-- Re-render the tray whenever the server moves the open count (a
+		-- future shop unlock), so the locked boxes follow it live.
+		React.useEffect(function()
+			local conn = Players.LocalPlayer:GetAttributeChangedSignal(Attributes.RelicSlots):Connect(function()
+				setRelicSlots(readRelicSlots())
+			end)
+			-- Catch a stamp that landed between the initial read and the connect.
+			setRelicSlots(readRelicSlots())
+
+			return function()
+				conn:Disconnect()
+			end
+		end, {})
 
 		React.useEffect(function()
 			local onRelicUpdateConn
@@ -96,6 +121,7 @@ function RelicInterfaceController._render(_self: typeof(RelicInterfaceController
 				Visible = true,
 
 				relicData = relicData,
+				relicSlots = relicSlots,
 				setVisibleSignal = RelicInterfaceController.Signals.SetVisible,
 				sellModeSignal = RelicInterfaceController.Signals.SetSellMode,
 				reforgeModeSignal = RelicInterfaceController.Signals.SetReforgeMode,

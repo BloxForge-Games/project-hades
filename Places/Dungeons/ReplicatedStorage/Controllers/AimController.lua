@@ -34,7 +34,7 @@ local function getRootPart(character: Model): BasePart
 	return character:FindFirstChild("HumanoidRootPart") :: BasePart
 end
 
-local INDEX: number = 0.125
+local INDEX: number = 0.15
 -- MINIMUM cast lock (see BeginCastLock). The server builds a spell's
 -- hitbox from the caster's CFrame, so the heading has to stay put across
 -- that round trip even for a spell whose authored duration is shorter

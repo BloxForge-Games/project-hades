@@ -67,7 +67,7 @@ local PERFECT_DODGE_VANISH_SECONDS = 0.1
 -- so "0.05 s ago" is that many studs back along the roll, and the burst
 -- trails the body like an after-image instead of sitting on top of it.
 -- 0 puts it on the root.
-local PERFECT_DODGE_TRAIL_SECONDS = 0.025
+local PERFECT_DODGE_TRAIL_SECONDS = 0
 local PERFECT_DODGE_LIFETIME = 3
 local warnedMissingDodgeVFX = false
 

@@ -406,7 +406,8 @@ function CharacterHighlightController._resolvePlayerHighlight(
 		highlight.FillColor = DOWNED_COLOR
 		highlight.FillTransparency = downedPulseTransparency(now - downedStartAt)
 		highlight.OutlineTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		-- Occluded: the pulse is on the body, not a through-wall marker.
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 		return
 	end
 	self._playerDownedStartAt = nil
@@ -529,7 +530,9 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 			highlight.FillColor = DOWNED_COLOR
 			highlight.FillTransparency = DOWNED_TRANSPARENCY_FAR
 			highlight.OutlineTransparency = 1
-			highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			-- Occluded on every screen: the pulse marks the body, never a
+			-- through-wall beacon.
+			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 			highlight.Parent = character
 			TweenService:Create(highlight, DOWNED_TWEEN_INFO, { FillTransparency = DOWNED_TRANSPARENCY_NEAR }):Play()
 		elseif not wants and existing then

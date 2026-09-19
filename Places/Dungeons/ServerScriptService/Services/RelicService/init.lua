@@ -98,6 +98,11 @@ local RelicService = {
 	_relicOrigins = {},
 	_incrementalCount = 0,
 	_incrementalRegistry = {} :: { [number]: number },
+	-- [userId] = OPEN relic slots this run. Starts at RelicCapData's
+	-- StartingSlots with the registry and is never saved; a future shop
+	-- unlock raises it through SetRelicSlots. Mirrored onto the Player as
+	-- Attributes.RelicSlots so clients draw the locked boxes from it.
+	_relicSlots = {} :: { [number]: number },
 	_activeRegistry = {},
 	_relicsList = {},
 }
@@ -111,10 +116,9 @@ local RelicService = {
 -- weights table to RollRandomRelic for custom distributions:
 --   GDD Greater Shrine: { Rare=65, Epic=30, Legendary=5 }
 
--- Hard ceiling on DISTINCT relics a player can own in a run. SHARED with
--- the client (Shared/Data/RelicCapData) so the pickup component can refuse
--- WITHOUT consuming the relic, and the relic interface can size itself.
-local MAX_OWNED_RELICS = RelicCapData.MaxOwnedRelics
+-- The relic cap is the player's OPEN slot count (GetRelicSlots), not a
+-- constant: Shared/Data/RelicCapData only supplies the starting value and
+-- the bounds, so the relic interface can size itself off the same numbers.
 
 -- PURE RANDOM SELECTION -- rarity is rolled from the run-stage table in
 -- Shared/Data/RelicRollConfig, then the relic is picked uniformly from that
@@ -620,7 +624,7 @@ function RelicService.MarkRelicChoiceMade(self: typeof(RelicService), player: Pl
 	RelicService.Signals.OnRelicsUpdated:Fire(player, nil, nil, self._relicsList)
 end
 
--- Number of DISTINCT relics the player owns (the MAX_OWNED_RELICS pool).
+-- Number of DISTINCT relics the player owns (what the open slots hold).
 -- Publishes the owned-relic count onto the PLAYER, where anything
 -- cosmetic can watch it without a remote. The attribute has existed in
 -- the enum since before anything wrote it; the Spirit Companion's
@@ -637,24 +641,50 @@ function RelicService.GetOwnedRelicCount(self: typeof(RelicService), player: Pla
 	return #(self._relicsList[player.UserId] or {})
 end
 
--- True once the player holds the maximum number of DISTINCT relics. The
--- vending machine reads this to decide whether to dispense the Skip offer:
--- a capped player cannot claim anything, so the Skip is their only way to
--- clear the pull and open the gate.
-function RelicService.IsAtRelicCap(self: typeof(RelicService), player: Player): boolean
-	return self:GetOwnedRelicCount(player) >= MAX_OWNED_RELICS
+-- Mirrors the open slot count onto the Player so every client can draw
+-- the tray's locked boxes from it without a remote. On the PLAYER rather
+-- than the character so it survives a respawn.
+function RelicService._publishRelicSlots(self: typeof(RelicService), player: Player)
+	player:SetAttribute(Attributes.RelicSlots, self:GetRelicSlots(player))
 end
 
--- False when granting `relic` would exceed the relic cap: the player is at
--- MAX_OWNED_RELICS and doesn't already own this one (owned relics re-trigger
--- the per-relic stack guard instead). Pickup paths check this BEFORE
--- consuming anything so a refused grab wastes nothing.
+-- How many relic slots are OPEN for this player this run: the number of
+-- DISTINCT relics they may hold. Falls back to the run's starting count
+-- for a player whose registry has not been set up yet, so a grant that
+-- races the join is judged by the same rule as everyone else.
+function RelicService.GetRelicSlots(self: typeof(RelicService), player: Player): number
+	return self._relicSlots[player.UserId] or RelicCapData.StartingSlots
+end
+
+-- Sets the OPEN slot count for this run, clamped to
+-- [DefaultSlots, MaxSlots]: a run can never fall below the default nor
+-- open a box the tray does not draw. This is what the shop's slot unlock
+-- will call. Per run only; nothing here touches the profile.
+function RelicService.SetRelicSlots(self: typeof(RelicService), player: Player, count: number): number
+	local clamped = math.clamp(math.floor(count), RelicCapData.DefaultSlots, RelicCapData.MaxSlots)
+	self._relicSlots[player.UserId] = clamped
+	self:_publishRelicSlots(player)
+	return clamped
+end
+
+-- True once the player holds as many DISTINCT relics as they have open
+-- slots. The vending machine reads this to decide whether to dispense the
+-- Skip offer: a capped player cannot claim anything, so the Skip is their
+-- only way to clear the pull and open the gate.
+function RelicService.IsAtRelicCap(self: typeof(RelicService), player: Player): boolean
+	return self:GetOwnedRelicCount(player) >= self:GetRelicSlots(player)
+end
+
+-- False when granting `relic` would exceed the player's open slots: every
+-- open slot is filled and they don't already own this one (owned relics
+-- re-trigger the per-relic stack guard instead). Pickup paths check this
+-- BEFORE consuming anything so a refused grab wastes nothing.
 function RelicService.CanAcceptRelic(self: typeof(RelicService), player: Player, relic: string): boolean
 	local registry = self._relicRegistry[player.UserId]
 	if registry and (registry[relic] or 0) > 0 then
 		return true
 	end
-	return self:GetOwnedRelicCount(player) < MAX_OWNED_RELICS
+	return self:GetOwnedRelicCount(player) < self:GetRelicSlots(player)
 end
 
 -- Mechanics the player can currently PRODUCE: the union of every owned
@@ -1199,6 +1229,10 @@ function RelicService.Start(self: typeof(RelicService))
 		self._relicRegistry[player.UserId] = {}
 		self._incrementalRegistry[player.UserId] = 0
 		self._relicsList[player.UserId] = {}
+		-- The open slot count starts over with the registry: it is a
+		-- per-run number, so it must never outlive the relics it caps.
+		self._relicSlots[player.UserId] = RelicCapData.StartingSlots
+		self:_publishRelicSlots(player)
 
 		RelicNetwork.RelicsReplicated.FireAll({
 			UserId = player.UserId,
@@ -1291,6 +1325,7 @@ function RelicService.Start(self: typeof(RelicService))
 		self._incrementalRegistry[player.UserId] = nil
 		self._relicsList[player.UserId] = nil
 		self._relicOrigins[player.UserId] = nil
+		self._relicSlots[player.UserId] = nil
 
 		RelicNetwork.RelicsReplicated.FireAll({
 			UserId = player.UserId,
