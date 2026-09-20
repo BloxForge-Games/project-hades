@@ -165,12 +165,7 @@ end
 -- component reads it to force one ungated relic from each of the run's
 -- two elements, so neither element starts dead. DungeonService passes it
 -- on the first dungeon's landing; every other drop leaves it false.
-function RelicMachineService.DropMachineOnPlayer(
-	self: typeof(RelicMachineService),
-	player: Player,
-	isRuneMachine: boolean?,
-	isStarter: boolean?
-)
+function RelicMachineService.DropMachineOnPlayer(self: typeof(RelicMachineService), player: Player, isStarter: boolean?)
 	-- Skip dead / spectating players. The two callers in Start iterate
 	-- Players:GetPlayers() raw, so a teammate who died last room would
 	-- otherwise get a vending machine dropped onto their ragdoll's HRP
@@ -182,20 +177,10 @@ function RelicMachineService.DropMachineOnPlayer(
 		return
 	end
 
-	-- Rune machines get their own authored model; everything downstream
-	-- (fall animation, prompt, machine component) is shape-identical, so
-	-- ONLY the template differs. Falls back to Default if the Rune model
-	-- hasn't been published to this place yet.
-	local machinesFolder = ReplicatedStorage.GameAssets.VendingMachines
-	local template = if isRuneMachine then machinesFolder:FindFirstChild("Rune") else nil
-	if isRuneMachine and not template then
-		warn("[RelicMachineService] Missing GameAssets.VendingMachines.Rune -- using Default")
-	end
-	local vendingMachine = (template or machinesFolder.Default):Clone()
+	local vendingMachine = ReplicatedStorage.GameAssets.VendingMachines.Default:Clone()
 
 	vendingMachine:SetAttribute("OwnerId", player.UserId)
-	-- The machine component reads this to decide WHAT it dispenses.
-	vendingMachine:SetAttribute("MachineType", if isRuneMachine then "Rune" else "Relic")
+	vendingMachine:SetAttribute("MachineType", "Relic")
 	vendingMachine:SetAttribute("IsStarterMachine", isStarter == true)
 
 	if not self:DropModelOnPlayer(player, vendingMachine, workspace.IgnoreInstances.Map.RelicMachines) then
@@ -288,14 +273,10 @@ function RelicMachineService.Start(_self: typeof(RelicMachineService))
 			return
 		end
 
-		-- EVERY cleared Combat segment drops a RELIC machine. The previous
-		-- odd/even alternation with rune machines is gone: rune machines no
-		-- longer spawn from room clears at all, so relic pickups are the
-		-- single reward cadence and the element-affinity snowball gets a
-		-- chance to compound every room instead of every other one.
-		--
-		-- DropMachineOnPlayer still takes isRuneMachine, and the /drop rune
-		-- chat command still uses it -- this only stops the automatic drops.
+		-- EVERY cleared Combat segment drops a relic machine: relic pickups
+		-- are the single reward cadence, so the element-affinity snowball
+		-- gets a chance to compound every room. (Rune machines, which used
+		-- to alternate with these, are gone with the rune drop path.)
 		for _, player in Players:GetPlayers() do
 			task.wait(0.25)
 			RelicMachineService:DropMachineOnPlayer(player)

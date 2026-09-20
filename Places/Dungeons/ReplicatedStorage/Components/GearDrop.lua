@@ -31,6 +31,7 @@ local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTyp
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
@@ -62,6 +63,13 @@ local SPIN_RAD_PER_SEC_MAX = math.rad(25)
 local PROMPT_MAX_DISTANCE = 5
 local PROMPT_KEY = Enum.KeyCode.F
 local PROMPT_STYLE_ATTRIBUTE = "GearDrop"
+-- Pixels the prompt card sits ABOVE the carrier. The custom prompt module
+-- turns this into a fraction of the card's own height, and on touch and
+-- gamepad it then drops the card by 0.55 of that height (the taller
+-- Gamepad template). The relic prompt lifts 60 and reads right on every
+-- input; 15 here left the gear card a touch low on keyboard and, once
+-- the 0.55 drop ate it, well below the gear on mobile.
+local PROMPT_UI_OFFSET = Vector2.new(0, 60)
 
 -- Drops always spawn at level 1 today. Pulled from the GearLevel attribute
 -- on the carrier (controller sets it) so when variable-level drops land
@@ -90,17 +98,17 @@ local STREAM_WAIT_SECONDS = 10
 -- so both sides agree on the handle.
 local SCALE_VALUE_NAME = "GearScale"
 
--- Name of the burst attachment GearDropService parents to the carrier
--- server-side (one-shot pickup VFX). On prompt Triggered the owner's
--- client component walks this attachment's ParticleEmitter children
--- and calls :Emit() so the player gets immediate "you grabbed it"
--- feedback before the server even responds. COLLECTED_EMIT_COUNT is
--- how many particles each emitter inside the attachment spawns —
--- user-spec is :Emit(1), one particle per emitter (the attachment
--- ships with multiple emitter children, so the visible burst is still
--- a multi-particle flash).
-local COLLECTED_ATTACHMENT_NAME = "Collected"
-local COLLECTED_EMIT_COUNT = 1
+-- The pickup bursts, the SAME pair a relic plays (Client/Components/
+-- Relic), both tinted to the gear's rarity and both attribute-driven
+-- prefabs under GameAssets.VFX (emitVFXPart): CollectRelicVFX at the
+-- drop, CollectRelicVFXCharacter on the collector. Played by every
+-- client off the replicated CollectedById the server stamps before the
+-- Expired fade (see _fadeOutAndDestroy); a timeout fade has no
+-- collector and bursts nothing.
+local COLLECT_VFX_NAME = "CollectRelicVFX"
+local COLLECT_CHARACTER_VFX_NAME = "CollectRelicVFXCharacter"
+local COLLECT_VFX_LIFETIME_SCALE = 1.5
+local COLLECT_CHARACTER_VFX_LIFETIME_SCALE = 2
 
 -- LANDING burst, the relic drop's beat (Client/Components/Relic emits
 -- its RelicParticles the frame the bezier finishes). The rarity
@@ -128,6 +136,8 @@ local ATTR_RARITY = "GearRarity"
 local ATTR_DESCRIPTION = "GearDescription"
 local ATTR_LEVEL = "GearLevel"
 local ATTR_EXPIRED = "Expired"
+-- Attributes.CollectedById: who took it (server), read by the fade.
+local ATTR_COLLECTED_BY_ID = "CollectedById"
 local ATTR_OWNER_ID = "OwnerId"
 local ATTR_ORIGIN_POSITION = "OriginPosition"
 -- Attributes.BouncePosition: the landing ricocheted off a wall (server).
@@ -226,7 +236,7 @@ function GearDrop:_buildPrompt(): ProximityPrompt
 	prompt.Style = Enum.ProximityPromptStyle.Custom
 	prompt.Enabled = false -- enabled after the bezier lands
 	prompt:SetAttribute("Style", PROMPT_STYLE_ATTRIBUTE)
-	prompt.UIOffset = Vector2.new(0, 15)
+	prompt.UIOffset = PROMPT_UI_OFFSET
 
 	prompt:SetAttribute("Rarity", rarity)
 	prompt:SetAttribute("RarityColor", RarityColors:Get(rarity))
@@ -271,8 +281,7 @@ function GearDrop:_playBezierFlight()
 end
 
 -- The burst as the drop hits the floor, tinted by the rarity prefab it
--- came from. Separate from _emitPickupBurst: that one is the Collected
--- attachment, fired when the player takes the item.
+-- came from. The pickup bursts are separate (see _fadeOutAndDestroy).
 function GearDrop:_emitLandingBurst()
 	if not self._landingParticles then
 		return
@@ -282,17 +291,6 @@ function GearDrop:_emitLandingBurst()
 	-- the floor with a different puff from a relic — the aura is the
 	-- ambient glow, not a landing effect.
 	self._landingParticles:Emit(LANDING_EMIT_COUNT)
-end
-
-function GearDrop:_emitPickupBurst()
-	if not self._carrier then
-		return
-	end
-	for _, child in self._collected:GetChildren() do
-		if child:IsA("ParticleEmitter") then
-			child:Emit(COLLECTED_EMIT_COUNT)
-		end
-	end
 end
 
 -- Someone else's drop. The server already spawned it invisible
@@ -406,12 +404,33 @@ function GearDrop:_setupScale()
 	end))
 end
 
--- Fade everything out then destroy. Called when the server signals expire.
+-- Fade everything out then destroy. Called when the server signals expire
+-- -- a pickup (CollectedById stamped: the bursts play) or a timeout.
 function GearDrop:_fadeOutAndDestroy()
 	self._janitor:Cleanup()
 
 	if not self._carrier or not self._carrier.Parent then
 		return
+	end
+
+	-- THE PICKUP BURSTS, on every screen (see COLLECT_VFX_NAME): at the
+	-- drop, and on the collector's body, in the gear's rarity colour.
+	local collectorId = self.Instance:GetAttribute(ATTR_COLLECTED_BY_ID)
+	local collector = if typeof(collectorId) == "number" then Players:GetPlayerByUserId(collectorId) else nil
+	if collector then
+		local burstColor = RarityColors:Get(self.Instance:GetAttribute(ATTR_RARITY))
+		emitVFXPart(COLLECT_VFX_NAME, self._carrier.CFrame, nil, {
+			Color = burstColor,
+			LifetimeScale = COLLECT_VFX_LIFETIME_SCALE,
+		})
+		local character = collector.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			emitVFXPart(COLLECT_CHARACTER_VFX_NAME, root.CFrame, nil, {
+				Color = burstColor,
+				LifetimeScale = COLLECT_CHARACTER_VFX_LIFETIME_SCALE,
+			})
+		end
 	end
 
 	-- Disable the prompt so the player can't grab a half-faded drop.
@@ -486,7 +505,6 @@ function GearDrop:Construct()
 		return child
 	end
 	self._dropParticles = need(need(self._carrier, "DropAttachment"), "DropParticles")
-	self._collected = need(self._carrier, COLLECTED_ATTACHMENT_NAME)
 	if self._gone then
 		return
 	end
@@ -571,7 +589,6 @@ function GearDrop:Start()
 			if GearDropsRenderController then
 				GearDropsRenderController:RefreshBillboardVisibility(self.Instance)
 			end
-			self:_emitPickupBurst()
 			DungeonNetwork.GearDropCollected.Fire(self.Instance)
 
 			ReplicatedStorage.GameAssets.Sounds.GearCollected:Play()

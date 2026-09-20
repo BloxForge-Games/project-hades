@@ -9,6 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local QuadraticBezierController = require(ReplicatedStorage.Controllers.QuadraticBezierController)
 local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local vanishCharacter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.vanishCharacter)
 local DodgeConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.DodgeConfig)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
@@ -56,7 +57,7 @@ end
 local PERFECT_DODGE_VFX_NAME = "DodgeVFXPart"
 local PERFECT_DODGE_DEFAULT_EMIT = 25
 -- The burst's ACTIVE window: how long the prefab streams.
-local PERFECT_DODGE_ACTIVE_SECONDS = 0.2
+local PERFECT_DODGE_ACTIVE_SECONDS = 0.25
 -- How long the dodger's body is gone (vanishCharacter) -- the whole
 -- character, armour, weapons and particles included, so the burst reads
 -- as the player blinking out of existence and back. A touch longer than
@@ -115,6 +116,9 @@ function RelicController._playPerfectDodgeBurst(_self: typeof(RelicController), 
 	end)
 	Debris:AddItem(clone, PERFECT_DODGE_LIFETIME)
 end
+
+-- See the TntExplosionEffect handler in Start.
+local TNT_EXPLOSION_VFX_PATH = "BundleOfTNT/Explosion/Explosion"
 
 function RelicController.Start(self: typeof(RelicController))
 	RelicNetwork.RelicsReplicated.On(
@@ -182,6 +186,21 @@ function RelicController.Start(self: typeof(RelicController))
 	-- `scale` is 1 for a normal Shatter. (The 2x Staff of Azure Ever Ice
 	-- variant was cut in the 2026-09 pass; the parameter stays so a future
 	-- variant needs no signal change.)
+	-- Bundle of TNT's blast: the prefab's part (folder > Explosion model >
+	-- Explosion part) through the attribute-driven helper, plus every
+	-- Sound authored on it.
+	RelicNetwork.TntExplosionEffect.On(function(position: Vector3)
+		local blast = emitVFXPart(TNT_EXPLOSION_VFX_PATH, CFrame.new(position))
+		if not blast then
+			return
+		end
+		for _, descendant in blast:GetDescendants() do
+			if descendant:IsA("Sound") then
+				descendant:Play()
+			end
+		end
+	end)
+
 	RelicNetwork.ShatterEffect.On(function(payload: { Position: Vector3, Scale: number })
 		Shatter.new(payload.Position, payload.Scale):PlayEffect()
 	end)

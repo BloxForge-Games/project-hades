@@ -136,8 +136,6 @@ local RARITY_TO_PARTICLE: { [string]: string } = {
 
 -- Pickup-burst attachment names — match prefabs in
 -- ReplicatedStorage.GameAssets.Particles. Cloned onto the carrier here;
--- the client component :Emit()s the Collected emitters on Triggered.
-local COLLECTED_ATTACHMENT_NAME = "Collected"
 local DROP_ATTACHMENT_NAME = "DropAttachment"
 
 -- Marks gear that fell out of a Miniboss / Boss chest rather than off a
@@ -639,34 +637,19 @@ function GearDropService._attachRarityParticles(_self: typeof(GearDropService), 
 	prefab:Clone().Parent = carrier
 end
 
--- Clones the Collected + DropAttachment prefabs to the carrier. Mirrors
--- the DropService pattern (relic drops also receive these two).
--- Collected = one-shot burst, recolored per rarity, :Emit()ed by the
--- client component on Triggered. DropAttachment = ambient stream while
--- the drop sits on the floor; not recolored.
+-- Clones the DropAttachment prefab to the carrier: the ambient stream
+-- while the drop sits on the floor (not recolored). The pickup bursts are
+-- the clients' own CollectRelicVFX clones (Client/Components/GearDrop),
+-- the same pair a relic plays, not an attachment on the drop.
 function GearDropService._attachPickupBurstAttachments(
 	_self: typeof(GearDropService),
 	carrier: BasePart,
-	rarity: string
+	_rarity: string
 )
 	local assets = ReplicatedStorage:FindFirstChild("GameAssets")
 	local particlesFolder = assets and assets:FindFirstChild("Particles")
 	if not particlesFolder then
 		return
-	end
-
-	local rarityColor = RarityColors:Get(rarity)
-
-	local collectedTemplate = particlesFolder:FindFirstChild(COLLECTED_ATTACHMENT_NAME)
-
-	if collectedTemplate then
-		local collected = collectedTemplate:Clone()
-		for _, child in collected:GetChildren() do
-			if child:IsA("ParticleEmitter") then
-				child.Color = ColorSequence.new(rarityColor)
-			end
-		end
-		collected.Parent = carrier
 	end
 
 	local dropAttachmentTemplate = particlesFolder:FindFirstChild(DROP_ATTACHMENT_NAME)

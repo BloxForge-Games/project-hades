@@ -54,6 +54,7 @@ local RelicMachineService = require(ServerScriptService.Services.RelicMachineSer
 local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local LifeService = require(ServerScriptService.Services.LifeService)
+local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
@@ -61,6 +62,8 @@ local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyT
 --[ Constants ]--
 
 local COMMAND_PREFIX = "/"
+-- /give gold: one command can hand out at most this much.
+local MAX_GIVE_GOLD = 1_000_000
 
 -- Upper bound on any /drop repetition. Purely a footgun guard: the command
 -- is open to everyone, and spawning hundreds of models in one frame would
@@ -151,21 +154,6 @@ local DROP_TARGETS: { [string]: DropTarget } = {
 			end
 		end,
 	},
-	-- Same drop path as the vending machine; the `true` is the
-	-- isRuneMachine flag (the machine component reads the MachineType
-	-- attribute it stamps and dispenses runes instead of relics).
-	RuneMachine = {
-		aliases = { "runemachine", "rune", "runes" },
-		label = "rune machine",
-		drop = function()
-			for _, target in Players:GetPlayers() do
-				if RelicMachineService then
-					RelicMachineService:DropMachineOnPlayer(target, true)
-				end
-				task.wait(DROP_STAGGER_SECONDS)
-			end
-		end,
-	},
 }
 
 -- alias -> target, built once at load so lookup is O(1) and aliases can't
@@ -226,6 +214,30 @@ COMMANDS = {
 			end)
 
 			return ("Dropping %d %s%s on all players."):format(count, target.label, if count == 1 then "" else "s")
+		end,
+	},
+
+	give = {
+		usage = "/give gold <amount>",
+		description = "Gives YOU <amount> run gold (the coins the Merchant Shop spends).",
+		handler = function(player: Player, args: { string }): string?
+			local what = args[1] and string.lower(args[1])
+			if what ~= "gold" then
+				return ("Usage: %s"):format(COMMANDS.give.usage)
+			end
+			local amount = math.floor(tonumber(args[2]) or 0)
+			if amount <= 0 then
+				return ("Usage: %s -- amount must be a positive number"):format(COMMANDS.give.usage)
+			end
+			amount = math.min(amount, MAX_GIVE_GOLD)
+			if not RunEscrowService then
+				return "RunEscrowService is unavailable."
+			end
+			-- Run coins (the escrow), not banked profile coins: this is
+			-- what the shop and the Relic Slot stand spend, and it rides
+			-- the same risk as the rest of the run.
+			RunEscrowService:AddCoins(player, amount)
+			return ("Gave you %d gold (now %d)."):format(amount, RunEscrowService:GetCoins(player))
 		end,
 	},
 

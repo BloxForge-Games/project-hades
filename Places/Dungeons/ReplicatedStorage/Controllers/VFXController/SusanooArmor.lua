@@ -16,6 +16,25 @@ local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicN
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+
+-- The spawn burst: GameAssets.VFX["Susanoo Armor"].SpawnPart, whose
+-- attachment emitters carry their own EmitCount / EmitDelay /
+-- EmitDuration (emitVFXPart reads them). Played on every client ON THE
+-- SAME FRAME the server's CastPart lands: the server clones that part
+-- into IgnoreInstances.MagicSpells at the caster's root once the rig
+-- has risen (VFXServer/SusanooArmor), and it reaches each client a
+-- replication hop later, so a fixed delay here always drifted from it.
+-- This watches the folder for a CastPart arriving within
+-- SPAWN_VFX_MATCH_STUDS of the caster and bursts a stud under it. If
+-- none shows inside SPAWN_VFX_FALLBACK_SECONDS (the cast was refused,
+-- or the part streamed elsewhere), the burst plays at the root anyway.
+-- SPAWN only: the window closes long before the despawn CastPart.
+local SPAWN_VFX_PATH = "Susanoo Armor/SpawnPart"
+local SPAWN_VFX_OFFSET = CFrame.new(0, -1, 0)
+local SPAWN_VFX_CAST_PART_NAME = "CastPart"
+local SPAWN_VFX_MATCH_STUDS = 10
+local SPAWN_VFX_FALLBACK_SECONDS = 2
 
 return function(player: Player, preload: boolean?)
 	local character = player.Character :: Model
@@ -35,6 +54,48 @@ return function(player: Player, preload: boolean?)
 
 	if not preload then
 		ReplicatedStorage.GameAssets.Sounds.SusanooVoiceline:Play()
+
+		-- Spawn burst, on the CastPart's own frame (see SPAWN_VFX_PATH).
+		local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
+		local spellsFolder = ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")
+		local burstPlayed = false
+		local castPartWatch: RBXScriptConnection? = nil
+		local function playSpawnBurst(at: CFrame)
+			if burstPlayed then
+				return
+			end
+			burstPlayed = true
+			if castPartWatch then
+				castPartWatch:Disconnect()
+			end
+			emitVFXPart(SPAWN_VFX_PATH, at * SPAWN_VFX_OFFSET)
+		end
+		if spellsFolder then
+			castPartWatch = spellsFolder.ChildAdded:Connect(function(child: Instance)
+				if child.Name ~= SPAWN_VFX_CAST_PART_NAME or not child:IsA("BasePart") then
+					return
+				end
+				local root = character:FindFirstChild("HumanoidRootPart")
+				if
+					root
+					and root:IsA("BasePart")
+					and (child.Position - root.Position).Magnitude <= SPAWN_VFX_MATCH_STUDS
+				then
+					playSpawnBurst(child.CFrame)
+				end
+			end)
+		end
+		task.delay(SPAWN_VFX_FALLBACK_SECONDS, function()
+			if burstPlayed then
+				return
+			end
+			local root = character:FindFirstChild("HumanoidRootPart")
+			if root and root:IsA("BasePart") and character.Parent then
+				playSpawnBurst(root.CFrame)
+			elseif castPartWatch then
+				castPartWatch:Disconnect()
+			end
+		end)
 	end
 
 	if player == Players.LocalPlayer and not preload then

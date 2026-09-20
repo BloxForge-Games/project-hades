@@ -68,6 +68,11 @@ local ATTR_OWNER_ID = "OwnerId"
 -- Raised on pickup. Every client watches it to kill the prompt + label
 -- and fade the model; the destroy follows POST_FADE_DESTROY_DELAY later.
 local ATTR_EXPIRED = "Expired"
+-- Attributes.CollectedById: the UserId of the player who TOOK this drop,
+-- set right before the Expired fade so every client plays the pickup
+-- bursts (at the drop, on the collector) -- a plain timeout fade has
+-- no collector and bursts nothing.
+local ATTR_COLLECTED_BY_ID = "CollectedById"
 -- The client fade (FADE_DURATION, 0.5s) plus a margin, so the model is
 -- never pulled out from under a tween still running.
 local POST_FADE_DESTROY_DELAY = 0.65
@@ -344,6 +349,7 @@ function GearDrop:Start()
 		-- instant so nobody is left looking at a claimed drop that still
 		-- reads as takeable.
 		self._collected = true
+		self.Instance:SetAttribute(ATTR_COLLECTED_BY_ID, player.UserId)
 		self:_fadeAndDestroy()
 	end)
 end

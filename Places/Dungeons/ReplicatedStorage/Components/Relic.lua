@@ -19,6 +19,7 @@ local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.Rarit
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
@@ -26,6 +27,21 @@ local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.F
 local localPlayer = Players.LocalPlayer
 
 local Y_POS_OFFSET = 3
+-- The pickup bursts, both tinted to the relic's rarity and both parts
+-- whose attachment emitters carry their own EmitCount / EmitDelay /
+-- EmitDuration (emitVFXPart reads them):
+--   * CollectRelicVFX           at the RELIC, where it was taken;
+--   * CollectRelicVFXCharacter  on the COLLECTOR's character.
+-- Played by every client off the replicated CollectedById (see
+-- _playCollectedFade) -- not off the collector-only accept signal, which
+-- is why nobody else used to see them.
+local COLLECT_RELIC_VFX_NAME = "CollectRelicVFX"
+local COLLECT_RELIC_CHARACTER_VFX_NAME = "CollectRelicVFXCharacter"
+-- The prefabs' authored particle lifetimes read as a snap; every emitter
+-- lingers this much longer (emitVFXPart's LifetimeScale), the body burst
+-- more than the relic one.
+local COLLECT_RELIC_VFX_LIFETIME_SCALE = 1.5
+local COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE = 2
 local ROTATION_SPEED = 20
 -- How long Construct waits for a streamed-in descendant before giving up.
 local STREAM_WAIT_SECONDS = 10
@@ -118,7 +134,6 @@ function Relic:Construct()
 	local handle = need(self.Instance, "Handle")
 	self._relicParticleAttachment = need(anchor, "RelicParticleAttachment")
 	self._dropParticles = need(need(handle, "DropAttachment"), "DropParticles")
-	self._collectedAttachment = need(handle, "Collected")
 	if self._gone then
 		return
 	end
@@ -210,6 +225,37 @@ function Relic:_playCollectedFade()
 		if descendant:IsA("BasePart") and descendant ~= anchor then
 			TweenService:Create(descendant, tweenInfo, { Transparency = 1 }):Play()
 		end
+	end
+
+	-- THE PICKUP BURSTS, on every screen, only for the relic actually
+	-- taken: the rest of a claim-one pull is Collected but carries no
+	-- collector. CollectRelicVFX bursts at the relic and
+	-- CollectRelicVFXCharacter on the collector's body, both in the
+	-- relic's colour. Relic colour is read here rather than from Start's
+	-- locals because this runs on clients that never own the relic.
+	local collectorId = self.Instance:GetAttribute(Attributes.CollectedById)
+	local collector = if typeof(collectorId) == "number" then Players:GetPlayerByUserId(collectorId) else nil
+	if not collector then
+		return
+	end
+	local relicData = RelicData[self.Instance.Name]
+	local burstColor = if self.Instance.Name == SkipRelicData.Name
+		then SkipRelicData.Color
+		elseif relicData then RarityColors:Get(relicData.rarity)
+		else nil
+	-- Own clone at the relic, not a child of it: the relic fades and
+	-- leaves while the burst is still playing.
+	emitVFXPart(COLLECT_RELIC_VFX_NAME, self._primaryPart.CFrame, nil, {
+		Color = burstColor,
+		LifetimeScale = COLLECT_RELIC_VFX_LIFETIME_SCALE,
+	})
+	local character = collector.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		emitVFXPart(COLLECT_RELIC_CHARACTER_VFX_NAME, root.CFrame, nil, {
+			Color = burstColor,
+			LifetimeScale = COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE,
+		})
 	end
 end
 
@@ -448,16 +494,11 @@ function Relic:Start()
 			end)
 
 			-- ACCEPTED by the server, and only ever for the COLLECTOR: their
-			-- own flourish. The disappearance itself — prompt, label, fade —
-			-- rides the Collected attribute instead, so every player sees it.
+			-- own screen pulse. The disappearance and both pickup bursts
+			-- ride the Collected / CollectedById attributes instead
+			-- (_playCollectedFade), so every player sees them.
 			self._janitor:Add(acceptedRouter:Bind(self.Instance, function()
 				ScreenGradientInterfaceController.Signals.OnPulseGradient:Fire(rarityColor)
-
-				for _, emitter in self._collectedAttachment:GetChildren() do
-					if emitter:IsA("ParticleEmitter") then
-						emitter:Emit(1)
-					end
-				end
 			end))
 		end
 	end)

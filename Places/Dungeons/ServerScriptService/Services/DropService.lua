@@ -19,8 +19,6 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
-local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
-local RuneRarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneRarityColors)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local resolveArcLanding = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.resolveArcLanding)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
@@ -159,8 +157,6 @@ DropService.OnDropRequested =
 -- (player, itemRarity, relicName, originalPosition, targetPosition, options?)
 DropService.OnRelicDropRequested =
 	Signal.new() :: Signal.Signal<Player, string, string, Vector3, Vector3, RelicDropOptions?>
--- (player, itemRarity, runeName, originalPosition, targetPosition)
-DropService.OnRuneDropRequested = Signal.new() :: Signal.Signal<Player, string, string, Vector3, Vector3>
 -- (player, dropType, value)
 DropService.OnDropCollected = Signal.new() :: Signal.Signal<Player, string, number>
 -- (playerName, coinsValue)
@@ -211,18 +207,8 @@ function DropService.Start(self: typeof(DropService))
 			local drop = template:Clone()
 			drop:ScaleTo(1.5)
 
-			local collectedAttachment = ReplicatedStorage.GameAssets.Particles.Collected:Clone()
-			collectedAttachment.Parent = drop.Handle
-
-			-- Tint the collected-burst particles per rarity. RarityColors:Get
-			-- returns the Default color for unmapped rarities (Common /
-			-- Uncommon / Unique / Mythic / Shiny), which is fine here —
-			-- relic drops only roll Rare+ in practice, but if that changes
-			-- the particles still render a sensible color instead of nil.
-			local rarityColor = RarityColors:Get(itemRarity)
-			for _, descendant in collectedAttachment:GetChildren() do
-				descendant.Color = ColorSequence.new(rarityColor)
-			end
+			-- The pickup bursts are the clients' own CollectRelicVFX clones
+			-- (Client/Components/Relic), not an attachment on the drop.
 
 			local dropAttachment = ReplicatedStorage.GameAssets.Particles.DropAttachment:Clone()
 			dropAttachment.Parent = drop.Handle
@@ -262,81 +248,6 @@ function DropService.Start(self: typeof(DropService))
 				-- Relic component reveals it. Everyone else never sees it.
 				privateDropVisibility.hide(drop)
 			end
-			-- Atomic: the client component needs the Handle and its attachments
-			-- the moment the tagged Model streams in.
-			drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
-			drop.Parent = workspace.IgnoreInstances.Drops
-		end
-	)
-
-	-- Physical rune drops (rune machines). Mirrors the relic path but
-	-- simpler: the model comes from GameAssets.Runes[<name>], the particles
-	-- under its RelicParticleAttachment (Layer / Shine / Spark) are tinted
-	-- to the rolled rarity's colour, and the drop is placed directly at its
-	-- fan position (no client arc -- runes have no client component).
-	-- Physical rune drops (rune machines) -- the EXACT relic recipe: the
-	-- model spawns at the machine's mouth, the CLIENT Rune component
-	-- animates the bezier arc to TargetPosition, and the Collected /
-	-- DropAttachment particles ride the Handle just like a relic's.
-	self.OnRuneDropRequested:Connect(
-		function(
-			player: Player,
-			itemRarity: string,
-			runeName: string,
-			originalPosition: Vector3,
-			targetPosition: Vector3
-		)
-			local runesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Runes")
-			local template = runesFolder and runesFolder:FindFirstChild(runeName)
-			if not template then
-				warn("[DropService] Missing rune model: GameAssets.Runes." .. tostring(runeName))
-				return
-			end
-
-			local drop = template:Clone()
-			drop:ScaleTo(1.5)
-
-			-- Runes use their OWN particle palette (RuneRarityColors), not the
-			-- game-wide RarityColors the relic path above uses.
-			local rarityColor = RuneRarityColors:Get(itemRarity)
-
-			-- Pickup-burst + drop-trail attachments, tinted per rarity --
-			-- same clones the relic path parents onto the Handle.
-			local collectedAttachment = ReplicatedStorage.GameAssets.Particles.Collected:Clone()
-			collectedAttachment.Parent = drop.Handle
-			for _, descendant in collectedAttachment:GetChildren() do
-				descendant.Color = ColorSequence.new(rarityColor)
-			end
-
-			local dropAttachment = ReplicatedStorage.GameAssets.Particles.DropAttachment:Clone()
-			dropAttachment.Parent = drop.Handle
-
-			-- Rarity tint on the authored RelicParticleAttachment set.
-			for _, descendant in drop:GetDescendants() do
-				if descendant.Name == "RelicParticleAttachment" then
-					for _, particle in descendant:GetChildren() do
-						if particle:IsA("ParticleEmitter") then
-							particle.Color = ColorSequence.new(rarityColor)
-						end
-					end
-				end
-			end
-
-			-- Same wall ricochet as the relic path.
-			local landing, bounce = resolveArcLanding(originalPosition, targetPosition)
-			drop:SetAttribute("TargetPosition", landing)
-			if bounce then
-				drop:SetAttribute(Attributes.BouncePosition, bounce)
-			end
-			drop:SetAttribute("OwnerId", player.UserId)
-			drop:SetAttribute("RuneRarity", itemRarity)
-			drop:AddTag(TagList.Rune)
-			-- Spawn at the machine's mouth; the client's bezier carries it to
-			-- the fan position (PivotTo so multi-part models move as one).
-			drop:PivotTo(CFrame.new(originalPosition))
-			-- Always owner-locked: spawned invisible, and only the owner's
-			-- Rune component reveals it.
-			privateDropVisibility.hide(drop)
 			-- Atomic: the client component needs the Handle and its attachments
 			-- the moment the tagged Model streams in.
 			drop.ModelStreamingMode = Enum.ModelStreamingMode.Atomic

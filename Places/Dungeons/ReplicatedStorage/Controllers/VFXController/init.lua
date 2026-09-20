@@ -14,6 +14,8 @@ local UserInputService = game:GetService("UserInputService")
 --[ Exports & Types & Defaults ]--
 
 local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local warmSwordSlashTextures = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.warmSwordSlashTextures)
 -- local VFXData = require(ReplicatedStorage.Submodules.Core.Shared.Data.VFXData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
@@ -40,6 +42,13 @@ local VFXController = {
 --[ Imports ]--
 
 --[ Constants ]--
+
+-- Sword slash texture warming around a cast (warmSwordSlashTextures):
+-- a spell's own textures are what evict the slash flipbook's frames, so
+-- the frames are kept drawn for the spell's length plus this margin.
+-- The fallback covers a spell MagicData has no duration for.
+local SLASH_WARM_MARGIN_SECONDS = 1
+local SLASH_WARM_FALLBACK_SECONDS = 3
 
 --[ Properties ]--
 
@@ -101,7 +110,21 @@ function VFXController._runVFXModule(self: typeof(VFXController), player: Player
 		warn("[VFXController] No VFX found for name:", moduleName)
 		return
 	end
+	self:_warmSlashForCast(vfxName)
 	vfxFunction(player, false, cframe)
+end
+
+-- Keeps the sword slash flipbook's textures drawn (invisibly, at the
+-- camera) through a cast playing on this client -- the caster's own or
+-- anyone's -- so the spell's textures do not push them off the GPU and
+-- the next swing does not flicker. See SLASH_WARM_MARGIN_SECONDS.
+function VFXController._warmSlashForCast(_self: typeof(VFXController), vfxName: string)
+	local data = (MagicData :: any)[vfxName]
+	local seconds = (data and data.duration) or SLASH_WARM_FALLBACK_SECONDS
+	if data and data.cutscene and data.cutscene.enabled then
+		seconds += data.cutscene.duration or 0
+	end
+	warmSwordSlashTextures(seconds + SLASH_WARM_MARGIN_SECONDS)
 end
 
 -- The caster runs their OWN copy of the effect NOW, and skips the copy the

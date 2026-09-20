@@ -46,6 +46,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local RelicService = require(ServerScriptService.Services.RelicService)
+local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local AuraService = require(ServerScriptService.Services.AuraService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
@@ -288,39 +289,12 @@ function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: numbe
 	-- sweep share one point.
 	local blastPosition = hrp.Position
 	task.delay(TNT_FUSE_SECONDS, function()
-		-- Explosion VFX: GameAssets.VFX.BundleOfTNT.Explosion — burst every
-		-- emitter and play every sound authored on it.
-		local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
-		local tntFolder = vfxFolder and vfxFolder:FindFirstChild("BundleOfTNT")
-		local explosionTemplate = tntFolder and tntFolder:FindFirstChild("Explosion")
-		if explosionTemplate then
-			local explosion = explosionTemplate:Clone()
-			-- ANCHOR FIRST. The Sound is a 3D positional sound parented to the
-			-- rig's BasePart, so an unanchored part drops it away from the
-			-- listener under gravity and the roll-off silences it within a
-			-- fraction of a second -- while the burst still looks correct,
-			-- because :Emit particles are world-space and stay where they spawned.
-			-- Same normalisation every other rig in this file does.
-			for _, part in explosion:GetDescendants() do
-				if part:IsA("BasePart") then
-					part.Anchored = true
-					part.CanCollide = false
-					part.CanQuery = false
-				end
-			end
-			explosion:PivotTo(CFrame.new(blastPosition))
-			explosion.Parent = workspace.IgnoreInstances.MagicSpells
-			for _, descendant in explosion:GetDescendants() do
-				if descendant:IsA("ParticleEmitter") then
-					descendant:Emit(10)
-				elseif descendant:IsA("Sound") then
-					descendant:Play()
-				end
-			end
-			Debris:AddItem(explosion, 5)
-		else
-			warn("[ShieldService] Missing GameAssets.VFX.BundleOfTNT.Explosion")
-		end
+		-- Explosion VFX: every client plays GameAssets.VFX.BundleOfTNT
+		-- .Explosion at this point, each emitter on its own authored
+		-- EmitCount / EmitDelay / EmitDuration (RelicController's handler).
+		-- A broadcast rather than a server-built rig: :Emit is a client
+		-- call, so the server copy could only stream or fire blind.
+		RelicNetwork.TntExplosionEffect.FireAll(blastPosition)
 
 		if getDamageService() then
 			local overlapParams = OverlapParams.new()

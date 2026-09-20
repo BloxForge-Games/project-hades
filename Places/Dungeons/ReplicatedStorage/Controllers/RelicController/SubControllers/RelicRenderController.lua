@@ -21,7 +21,6 @@ local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Re
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 
 -- GearDropsRenderController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -441,23 +440,9 @@ function RelicRenderController._applyGroundRelicsDim(
 		-- Tween every BasePart EXCEPT PrimaryPart. PrimaryPart is an
 		-- anchor / BillboardGui adornee — must stay invisible
 		-- regardless of hover/dim state.
-		--
-		-- RUNES ONLY: a rune model carries extra geometry (a union) nested
-		-- UNDER its Handle. Dimming both to the same value puts two coplanar
-		-- semi-transparent surfaces on top of each other, and Roblox's
-		-- transparency sorting flickers between them. So while DIMMED the
-		-- nested parts go fully invisible and only the Handle carries the
-		-- dim; on restore everything returns to 0 together.
-		local isRune = CollectionService:HasTag(relic, TagList.Rune)
-		local handle = relic:FindFirstChild("Handle")
 		for _, descendant in relic:GetDescendants() do
 			if descendant:IsA("BasePart") and descendant ~= relic.PrimaryPart then
-				local nestedUnderHandle = isRune
-					and handle
-					and descendant ~= handle
-					and descendant:IsDescendantOf(handle)
-				local partTransparency = if nestedUnderHandle and dim then 1 else targetTransparency
-				TweenService:Create(descendant, tweenInfo, { Transparency = partTransparency }):Play()
+				TweenService:Create(descendant, tweenInfo, { Transparency = targetTransparency }):Play()
 			end
 		end
 

@@ -1989,7 +1989,7 @@ function DungeonService._runPlayerLanding(self: typeof(DungeonService), player: 
 				if RelicMachineService then
 					-- STARTER machine: forces one ungated relic from each of
 					-- the run's two elements (see RelicMachine).
-					RelicMachineService:DropMachineOnPlayer(player, false, true)
+					RelicMachineService:DropMachineOnPlayer(player, true)
 				end
 			end)
 		end)

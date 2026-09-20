@@ -170,6 +170,12 @@ function Relic:Start()
 			end)
 		end
 
+		-- The TAKEN relic carries its collector, whichever branch below
+		-- runs: the clients' pickup bursts (on the relic and on the
+		-- collector's body) key off it. The rest of a pull is marked
+		-- Collected too but never stamped, so it fades without a burst.
+		self.Instance:SetAttribute(Attributes.CollectedById, player.UserId)
+
 		if isPublic then
 			-- Only ITSELF goes: a public drop is part of no fan, so a
 			-- vending-machine pull the claimant still has open stays open.

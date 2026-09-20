@@ -53,6 +53,7 @@ local RelicController = require(ReplicatedStorage.Controllers.RelicController)
 local RelicInterfaceController = require(ReplicatedStorage.Interfaces.RelicInterfaceController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -88,6 +89,14 @@ local GLOW_BRIGHTNESS = 0.25
 local GLOW_RANGE = 8
 -- Buy flourish: the fade-and-shrink after a purchase.
 local BUY_FADE_SECONDS = 0.4
+-- The pickup bursts, shared with a vending collect (Client/Components/
+-- Relic), attribute-driven and tinted to the rarity: CollectRelicVFX at
+-- the stall's relic, CollectRelicVFXCharacter on the buyer.
+local COLLECT_RELIC_VFX_NAME = "CollectRelicVFX"
+local COLLECT_RELIC_CHARACTER_VFX_NAME = "CollectRelicVFXCharacter"
+-- Same lingering as the vending collect (Client/Components/Relic).
+local COLLECT_RELIC_VFX_LIFETIME_SCALE = 1.5
+local COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE = 2
 -- Stall-display particle tints — the RelicParticleAttachment set ONLY
 -- (nameplate text and the RarityGlow PointLight keep the standard
 -- palettes). Rarities not listed fall back to RarityColors:Get.
@@ -102,9 +111,10 @@ local STALL_PARTICLE_COLORS = {
 }
 
 -- The Relic Slot stand (RelicSlotShopData) once every rung is bought:
--- the display stays as a greyed ghost with a "Sold Out" line, no glow,
--- no sparkles, and no prompt.
-local SOLD_OUT_PART_COLOR = Color3.fromRGB(110, 110, 110)
+-- the display stays as a near-black silhouette (every part this colour,
+-- its mesh texture stripped so the colour is all that draws) with a
+-- "Sold Out" line, no glow, no sparkles, and no prompt.
+local SOLD_OUT_PART_COLOR = Color3.fromRGB(50, 50, 50)
 local SOLD_OUT_PART_TRANSPARENCY = 0.3
 -- After a slot buy the stand re-arms with the next rung: this long after
 -- the flourish starts (its fade is BUY_FADE_SECONDS) the fresh display
@@ -1030,8 +1040,8 @@ end
 -- The Relic Slot stand's display: the Skip offer's model dressed for the
 -- rung on sale -- its rarity on the nameplate line, glow and sparkles,
 -- the rung's price on the price line. Sold out (every rung bought) keeps
--- the model as a greyed ghost: "Sold Out" for a price, the last rung's
--- name on a grey rarity line, no glow, no sparkles.
+-- the model as a greyed ghost: "Sold Out" on the rarity line, "(???)"
+-- for a price, no glow, no sparkles.
 function EventController._renderSlotUpgrade(
 	self: typeof(EventController),
 	roomId: number,
@@ -1056,15 +1066,28 @@ function EventController._renderSlotUpgrade(
 	if upgrade.soldOut then
 		self:_dressStallClone(clone, cframe, {
 			name = RelicSlotShopData.Name,
-			rarity = rung.rarity,
+			rarity = RelicSlotShopData.SoldOutText,
 			rarityColor = SkipRelicData.Color,
-			priceText = RelicSlotShopData.SoldOutText,
+			priceText = RelicSlotShopData.SoldOutPriceText,
 			priceColor = SkipRelicData.Color,
 		})
-		for _, part in clone:GetDescendants() do
-			if part:IsA("BasePart") and part.Transparency < 1 then
-				part.Color = SOLD_OUT_PART_COLOR
-				part.Transparency = math.max(part.Transparency, SOLD_OUT_PART_TRANSPARENCY)
+		for _, descendant in clone:GetDescendants() do
+			if descendant:IsA("BasePart") and descendant.Transparency < 1 then
+				descendant.Color = SOLD_OUT_PART_COLOR
+				descendant.Material = Enum.Material.Plastic
+				descendant.Transparency = math.max(descendant.Transparency, SOLD_OUT_PART_TRANSPARENCY)
+				if descendant:IsA("MeshPart") then
+					-- Settable on a clone at runtime on current clients; a
+					-- refusal just leaves the texture, so guarded.
+					pcall(function()
+						(descendant :: any).TextureID = ""
+					end)
+				end
+			elseif descendant:IsA("SpecialMesh") then
+				descendant.TextureId = ""
+				descendant.VertexColor = Vector3.new(1, 1, 1)
+			elseif descendant:IsA("Decal") or descendant:IsA("Texture") then
+				(descendant :: any).Transparency = 1
 			end
 		end
 	else
@@ -1284,10 +1307,9 @@ function EventController._playBuyFlourish(self: typeof(EventController), clone: 
 		ScreenGradientInterfaceController.Signals.OnPulseGradient:Fire(RarityColors:Get(rarity))
 	end
 
-	-- Vending-pickup parity: the RelicPickup chime and the rarity-tinted
-	-- Collected burst. Real drops carry the attachment already (DropService
-	-- adds + tints it); stall clones are raw templates, so it's cloned and
-	-- tinted here with the same palette (RarityColors:Get).
+	-- Vending-pickup parity: the RelicPickup chime, CollectRelicVFX at
+	-- the relic, and CollectRelicVFXCharacter on the buyer, both tinted
+	-- to the rarity.
 	local handle = clone:FindFirstChild("Handle") or clone.PrimaryPart
 	if handle then
 		-- Two-layer sting: the vending RelicPickup chime plus the shop's
@@ -1300,22 +1322,20 @@ function EventController._playBuyFlourish(self: typeof(EventController), clone: 
 				soundClone:Play()
 			end
 		end
-		local collectedTemplate = ReplicatedStorage.GameAssets.Particles:FindFirstChild("Collected")
-		if collectedTemplate and rarity then
-			local collected = collectedTemplate:Clone()
-			for _, emitter in collected:GetChildren() do
-				if emitter:IsA("ParticleEmitter") then
-					emitter.Color = ColorSequence.new(RarityColors:Get(rarity))
-				end
-			end
-			-- Parent FIRST, burst SECOND — :Emit on an unparented emitter
-			-- is silently discarded.
-			collected.Parent = handle
-			for _, emitter in collected:GetChildren() do
-				if emitter:IsA("ParticleEmitter") then
-					emitter:Emit(1)
-				end
-			end
+		local burstColor = if rarity then RarityColors:Get(rarity) else nil
+		if handle:IsA("BasePart") then
+			emitVFXPart(COLLECT_RELIC_VFX_NAME, handle.CFrame, nil, {
+				Color = burstColor,
+				LifetimeScale = COLLECT_RELIC_VFX_LIFETIME_SCALE,
+			})
+		end
+		local character = Players.LocalPlayer.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			emitVFXPart(COLLECT_RELIC_CHARACTER_VFX_NAME, root.CFrame, nil, {
+				Color = burstColor,
+				LifetimeScale = COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE,
+			})
 		end
 	end
 

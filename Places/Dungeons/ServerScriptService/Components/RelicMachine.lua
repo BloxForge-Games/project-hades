@@ -25,8 +25,6 @@ local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRa
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
-local RuneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RuneNames)
-local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local LifeService = require(ServerScriptService.Services.LifeService)
@@ -182,42 +180,6 @@ end
 
 --[ Initializers ]--
 
--- Rune machines: pick `count` DISTINCT rune types, each with a rarity
--- rolled from the run-stage weights (same table the relic roll uses,
--- Cursed excluded -- runes have no Cursed tier).
-local function rollRuneOffers(count: number): { { name: string, rarity: string } }
-	local names: { string } = {}
-	for _, runeName in RuneNames do
-		table.insert(names, runeName :: string)
-	end
-	-- Fisher-Yates, then take the first `count`.
-	for i = #names, 2, -1 do
-		local j = math.random(1, i)
-		names[i], names[j] = names[j], names[i]
-	end
-
-	local stage = RelicService:GetRunStage()
-	local weights = RelicRollConfig.RarityWeights[stage] or RelicRollConfig.RarityWeights.Early
-	local offers = {}
-	for i = 1, math.min(count, #names) do
-		local total = 0
-		for _, weight in weights do
-			total += weight
-		end
-		local roll = math.random() * total
-		local rolled: string = ItemRarity.Rare
-		for rarity, weight in weights do
-			roll -= weight
-			if roll <= 0 then
-				rolled = rarity
-				break
-			end
-		end
-		table.insert(offers, { name = names[i], rarity = rolled })
-	end
-	return offers
-end
-
 function RelicMachine:Construct()
 	-- A tagged machine whose PrimaryPart link is broken (part deleted /
 	-- renamed / model rebuilt in Studio) would stack-trace on the next
@@ -247,18 +209,14 @@ function RelicMachine:Start()
 
 	self.Instance.PrimaryPart.VendingMachineName.Frame.NameText.Text = Players:GetPlayerByUserId(self._ownerId).Name
 		.. "'s"
-	self._isRuneMachine = self.Instance:GetAttribute("MachineType") == "Rune"
 	-- Run's-first-machine marker. Only meaningful while
 	-- STARTER_GUARANTEED_ELEMENTS > 0; at 0 (today) the starter rolls
 	-- exactly like any other machine.
 	self._isStarterMachine = self.Instance:GetAttribute("IsStarterMachine") == true
-	-- The prompt bubble's title is the AUTHORED ObjectText, and the Rune
-	-- model was duplicated from Default -- stamp it here so the label
-	-- always matches the machine kind, whatever the asset says.
-	self._proximityPrompt.ObjectText = if self._isRuneMachine then "Rune Machine" else "Vending Machine"
-	self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.Text = if self._isRuneMachine
-		then "Rune Machine (Active)"
-		else "Vending Machine (Active)"
+	-- The prompt bubble's title is the AUTHORED ObjectText; stamped here
+	-- so the label never depends on what the asset says.
+	self._proximityPrompt.ObjectText = "Vending Machine"
+	self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.Text = "Vending Machine (Active)"
 	self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.TextColor3 = Color3.fromRGB(85, 255, 127)
 
 	self.Instance.PrimaryPart.Idle:Play()
@@ -290,9 +248,7 @@ function RelicMachine:Start()
 			self.Instance.PrimaryPart.Attachment.Shine.Enabled = false
 			self.Instance.PrimaryPart.Layer.Enabled = false
 			self.Instance.PrimaryPart.Spark.Enabled = false
-			self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.Text = if self._isRuneMachine
-				then "Rune Machine (Empty)"
-				else "Vending Machine (Empty)"
+			self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.Text = "Vending Machine (Empty)"
 			self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.TextColor3 =
 				Color3.fromRGB(255, 85, 85)
 
@@ -301,31 +257,6 @@ function RelicMachine:Start()
 			-- Cursed -- the premium tiers) inside _getRandomRelicData. Purely
 			-- per-owner: machines belong to one player, so nobody else's
 			-- choices are affected.
-			-- RUNE machine: three distinct rune types, rarity rolled per offer.
-			-- Pinata's 2-choice drawback is relic-machine-only; runes have no
-			-- cap and no Skip offer.
-			if self._isRuneMachine then
-				local runeOffers = rollRuneOffers(3)
-				local runeCenter = (#runeOffers + 1) / 2
-				local machineHalfHeight = self.Instance.PrimaryPart.Size.Y / 2
-				local runeOrigin = cframe.Position + Vector3.new(0, machineHalfHeight, 0)
-				for i, offer in runeOffers do
-					local xOffset = (i - runeCenter) * FAN_SPACING_STUDS
-					local zOffset = if math.abs(i - runeCenter) < 0.01 then FAN_FORWARD_Z else FAN_BASE_Z
-					local position = cframe * CFrame.new(xOffset, -machineHalfHeight, zOffset)
-					DropService.OnRuneDropRequested:Fire(
-						player,
-						offer.rarity,
-						offer.name,
-						runeOrigin,
-						position.Position
-					)
-					self.Instance.PrimaryPart.Pop:Play()
-					task.wait(0.25)
-				end
-				return
-			end
-
 			local ownsPinata = RelicService:GetSpecificRelicRegistry(player, RelicNames.Pinata) > 0
 			local offerCount = if ownsPinata then 2 else 3
 
