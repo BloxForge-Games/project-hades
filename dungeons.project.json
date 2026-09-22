@@ -42,11 +42,7 @@
                         "$path": "bfg-core/Source/Shared"
                     }
 
-                },
-
-				"DebugTools": {
-					"$path": "bfg-debug/Source/DebugTools"
-				}
+                }
 
             }
         },

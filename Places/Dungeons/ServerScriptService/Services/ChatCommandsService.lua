@@ -44,8 +44,10 @@
 
 --[ Roblox Services ]--
 
+local GroupService = game:GetService("GroupService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
@@ -58,6 +60,11 @@ local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
+local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+
+-- [player] = their group rank, looked up ONCE per session (GetRankInGroup
+-- is a web call). Weak keys: a leaver takes their entry with it.
+local groupRankCache: { [Player]: number } = setmetatable({}, { __mode = "k" }) :: any
 
 --[ Constants ]--
 
@@ -321,10 +328,32 @@ COMMANDS = {
 
 --[ Private ]--
 
--- Single permission seam. Open to everyone today; restrict HERE if that
--- ever changes, so no individual command has to care.
-function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), _player: Player, _commandName: string): boolean
-	return true
+-- Single permission seam, so no individual command has to care: anyone
+-- in Studio, else members of the game's group at
+-- Constants.COMMAND_MIN_GROUP_RANK or above. The rank is fetched once per
+-- player and cached (GroupService:GetGroupsAsync is a web call); a failed lookup (no group id yet, web error) reads
+-- as rank 0, so commands fail CLOSED.
+function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player: Player, _commandName: string): boolean
+	if RunService:IsStudio() then
+		return true
+	end
+	local rank = groupRankCache[player]
+	if rank == nil then
+		local ok, groups = pcall(function()
+			return GroupService:GetGroupsAsync(player.UserId)
+		end)
+		rank = 0
+		if ok and typeof(groups) == "table" then
+			for _, group in groups :: { any } do
+				if group.Id == Constants.GROUP_ID then
+					rank = tonumber(group.Rank) or 0
+					break
+				end
+			end
+		end
+		groupRankCache[player] = rank
+	end
+	return rank >= Constants.COMMAND_MIN_GROUP_RANK
 end
 
 -- Echoes command feedback back to the caller. Uses the same floating

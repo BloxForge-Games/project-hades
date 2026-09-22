@@ -55,6 +55,11 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
+local ScreenSweepData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ScreenSweepData)
+
+-- Players whose extraction teleport is already in its sweep hold, so a
+-- second portal trigger inside that window does not fire twice.
+local extractionPending: { [Player]: boolean } = {}
 
 -- DungeonService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -333,12 +338,25 @@ function LifeService.TeleportAllToLobby(_self: typeof(LifeService))
 end
 
 -- ONE player to the lobby place -- the run-loop ExitPortal (extraction).
--- The rest of the server keeps running. Fires the same client
--- OnTeleportToLobby cue for that player.
+-- The rest of the server keeps running. Cues the client's Swirl sweep
+-- FIRST and holds for its length (ScreenSweepData) so the teleport lands
+-- under black, then fires the same OnTeleportToLobby cue and teleports.
 -- Returns true if the teleport was ISSUED (Studio can't teleport at all, so
--- callers must be able to tell and not strand the player).
+-- callers must be able to tell and not strand the player). YIELDS for the
+-- sweep hold; the ExitPortal prompt handler that calls it has its own
+-- coroutine. A second call inside the hold returns true at once.
 function LifeService.TeleportPlayerToLobby(_self: typeof(LifeService), player: Player): boolean
 	if not player or not player.Parent then
+		return false
+	end
+	if extractionPending[player] then
+		return true
+	end
+	extractionPending[player] = true
+	PlayerNetwork.ExtractionSweep.Fire(player)
+	task.wait(ScreenSweepData.SweepSeconds + ScreenSweepData.ExtractionTeleportPadSeconds)
+	extractionPending[player] = nil
+	if not player.Parent then
 		return false
 	end
 	if RunService:IsStudio() then
@@ -379,11 +397,7 @@ function LifeService._scheduleLobbyTeleport(self: typeof(LifeService))
 			return -- party-wipe condition no longer holds (rare: late joiner)
 		end
 		self._lobbyTeleportToken = nil
-		-- DEBUG (2026-09): the party-wipe lobby teleport is disabled so a
-		-- wiped party stays in the dungeon for inspection. Restore the
-		-- call below to re-enable it.
-		warn("[LifeService] Party wiped -- lobby teleport disabled for debugging (see _scheduleLobbyTeleport)")
-		-- self:TeleportAllToLobby()
+		self:TeleportAllToLobby()
 	end)
 end
 

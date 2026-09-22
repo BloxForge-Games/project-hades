@@ -6,8 +6,9 @@
 	on the same structure, driven by LobbyLandingService instead of
 	DungeonService:
 
-	  1. Character loads -> controls locked, loading screen up (PreloadInterface
-	     shows itself at Init; only a PLACE controller ever hides it).
+	  1. Character loads -> controls locked, the tile sweep covering the
+	     screen with the loading text and bar over it (ScreenSweepController
+	     snaps the tiles on at Init; only a PLACE controller ever reveals).
 	  2. PreloadController preloads GameAssets (skipped in Studio -- see
 	     PRELOAD_IN_STUDIO in PreloadController; the bar reads 0/0 there).
 	  3. PlayerEventController calls the server's SetupCharacter; the server
@@ -35,6 +36,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
 local PreloadController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PreloadController)
 local PreloadInterface = require(ReplicatedStorage.Submodules.Core.Source.Interfaces.PreloadInterface)
+local ScreenSweepController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSweepController)
 local CinematicInterfaceController =
 	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
 local InterfaceManagerController =
@@ -178,7 +180,9 @@ function LobbyLandingController._snapToLanding(_self: typeof(LobbyLandingControl
 	end
 end
 
--- Dismisses the loading screen. Idempotent: safe to call from both the
+-- Reveals the world: the loading text and bar fade out over the tiles
+-- that have covered the screen since boot (ScreenSweepController.Init),
+-- then the tiles cascade off. Idempotent: safe to call from both the
 -- server cue and the fallback.
 function LobbyLandingController._reveal(self: typeof(LobbyLandingController))
 	if self._revealed then
@@ -187,6 +191,9 @@ function LobbyLandingController._reveal(self: typeof(LobbyLandingController))
 	self._revealed = true
 
 	PreloadInterface:ToggleInterface(false)
+	task.delay(PreloadInterface.FADE_OUT_SECONDS, function()
+		ScreenSweepController:Reveal("Cascade")
+	end)
 end
 
 --[ Lifecycle ]--

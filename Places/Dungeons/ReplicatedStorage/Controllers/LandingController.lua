@@ -40,6 +40,7 @@ local InterfaceManagerController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
 local PreloadInterface = require(ReplicatedStorage.Submodules.Core.Source.Interfaces.PreloadInterface)
 local PreloadController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PreloadController)
+local ScreenSweepController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSweepController)
 local CinematicInterfaceController =
 	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
 local ScreenFadeInterfaceController =
@@ -212,16 +213,19 @@ function LandingController._snapToLanding(_self: typeof(LandingController), targ
 	end
 end
 
--- Dismisses the loading screen. Idempotent — safe to call from both the server
--- cue and the fallback.
+-- Reveals the world: the loading text and bar fade out over the tiles
+-- that have covered the screen since boot (ScreenSweepController.Init),
+-- then the tiles cascade off. Idempotent — safe to call from both the
+-- server cue and the fallback.
 function LandingController._reveal(self: typeof(LandingController))
 	if self._revealed then
 		return
 	end
 	self._revealed = true
-	if PreloadInterface then
-		PreloadInterface:ToggleInterface(false)
-	end
+	PreloadInterface:ToggleInterface(false)
+	task.delay(PreloadInterface.FADE_OUT_SECONDS, function()
+		ScreenSweepController:Reveal("Cascade")
+	end)
 end
 
 --[ Lifecycle ]--

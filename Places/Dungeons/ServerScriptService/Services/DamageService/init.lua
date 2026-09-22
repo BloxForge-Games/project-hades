@@ -53,8 +53,6 @@ local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
--- The on-hit stagger, every direct hit (see the module).
-local HitStun = require(script.HitStun)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
@@ -1072,11 +1070,6 @@ function DamageService.TakeDamage(
 	if not untypedOnly then
 		self._onDamageModules["Jail"](player, humanoid, isMagic)
 	end
-
-	-- HITSTUN: every direct hit (weapon, magic, relic burst) plants a
-	-- Normal / Elite mob for a beat. Status ticks returned above and
-	-- never reach here, so a burn cannot stun-lock.
-	HitStun(humanoid)
 
 	-- ADDITIVE RELIC SUM. Each module internally gates itself and returns
 	-- `damage x its fraction`, so the sum realizes base x (1 + Σ bonuses).

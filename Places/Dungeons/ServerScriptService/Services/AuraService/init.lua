@@ -48,6 +48,7 @@ local Frostburst = require(script.AuraServer.Frostburst)
 local Stormcharged = require(script.AuraServer.Stormcharged)
 local Blighted = require(script.AuraServer.Blighted)
 local Stonebound = require(script.AuraServer.Stonebound)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local AuraService = {
 	Name = "AuraService",
@@ -95,59 +96,37 @@ local AURA_SHOCKWAVE_TEMPLATES = {
 	[AuraNames.Stormcharged] = "StormchargedShockwave",
 	[AuraNames.Stonebound] = "StoneboundShockwave",
 }
+-- The burst count for a shockwave emitter with no EmitCount attribute
+-- (the authored ring); the attachment set added since carries its own
+-- EmitCount / EmitDelay, which emitVFXPart reads.
 local AURA_SHOCKWAVE_EMIT_COUNT = 2
-local AURA_SHOCKWAVE_LIFETIME = 3
 
 --[ Private Functions ]--
 
 -- The element shockwave for a freshly granted aura: the matching VFX
--- part cloned to the middle of the receiver's torso and burst once.
--- One-shot: it STAYS WHERE IT SPAWNED — a ground shockwave, not a
--- rider. Parenting the template's attachment into the HRP instead was
--- tried and reverted: riding the character made the burst read wrong
--- (it inherits the HRP's orientation and drags the ground plane with
--- the player). Debris collects it after the authored particles die out.
+-- part played at the receiver's root through emitVFXPart, so EVERY
+-- emitter under it -- the authored ring and the attachment set added
+-- since -- bursts on its own EmitCount / EmitDelay / EmitDuration
+-- (AURA_SHOCKWAVE_EMIT_COUNT for one without), and the clone is
+-- collected once the longest has died out. One-shot: it STAYS WHERE IT
+-- SPAWNED -- a ground shockwave, not a rider. Parenting the template's
+-- attachment into the HRP instead was tried and reverted: riding the
+-- character made the burst read wrong (it inherits the HRP's orientation
+-- and drags the ground plane with the player).
 --
 -- Fires on FRESH grants only (SetAura's extend branch returns first),
--- and spread-received Stonebound stays silent — that flourish belongs
+-- and spread-received Stonebound stays silent -- that flourish belongs
 -- to the source. Auras without a template entry simply skip.
 local function playAuraShockwave(character: Model, auraName: string)
 	local templateName = AURA_SHOCKWAVE_TEMPLATES[auraName]
 	if not templateName then
 		return
 	end
-	local torso = character:FindFirstChild("HumanoidRootPart") :: BasePart?
-
-	if not torso then
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
 		return
 	end
-
-	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
-	local template = vfxFolder and vfxFolder:FindFirstChild(templateName)
-	if not template then
-		warn("[AuraService] Missing GameAssets.VFX." .. templateName)
-		return
-	end
-
-	local shockwave = template:Clone()
-	if shockwave:IsA("BasePart") then
-		shockwave.Anchored = true
-		shockwave.CanCollide = false
-		shockwave.CanQuery = false
-	end
-
-	shockwave:PivotTo(torso.CFrame)
-	shockwave.Parent = workspace.IgnoreInstances.MagicSpells
-
-	-- Parent FIRST, burst SECOND -- :Emit on an unparented emitter is
-	-- silently discarded.
-	for _, descendant in shockwave:GetDescendants() do
-		if descendant:IsA("ParticleEmitter") then
-			descendant:Emit(AURA_SHOCKWAVE_EMIT_COUNT)
-		end
-	end
-
-	Debris:AddItem(shockwave, AURA_SHOCKWAVE_LIFETIME)
+	emitVFXPart(templateName, root.CFrame, nil, { DefaultEmitCount = AURA_SHOCKWAVE_EMIT_COUNT })
 end
 
 -- The OWNER-relic riders on a Stonebound payload. Base magnitudes are

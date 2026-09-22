@@ -134,7 +134,7 @@ local SELL_PRICES = {
 	[ItemRarity.Rare] = 200,
 	[ItemRarity.Epic] = 400,
 	[ItemRarity.Legendary] = 800,
-	[ItemRarity.Cursed] = 800,
+	-- No Cursed row: the shop refuses them (see _onSellRelic).
 }
 local BUY_PRICE_RANGES = {
 	[ItemRarity.Rare] = { 300, 400 },
@@ -185,6 +185,8 @@ local DROP_POP_SOUND_PATH = { "VendingMachines", "Default" }
 local DROP_POP_SOUND_NAME = "Pop"
 
 local NOT_ENOUGH_COINS_COLOR = Color3.fromRGB(255, 92, 92)
+-- The relic-cap refusal, the same red the vending pickup's pop uses.
+local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
 local SOLD_COLOR = Color3.fromRGB(85, 255, 127)
 
 --[ Service ]--
@@ -1347,7 +1349,7 @@ end
 
 -- Buys stock slot `index` of merchant room `roomId`. Grants the relic
 -- DIRECTLY (no physical drop) and empties the pedestal for this player
--- only. Returns "bought" | "poor" | "sold" | "invalid".
+-- only. Returns "bought" | "poor" | "full" | "sold" | "invalid".
 -- DungeonNetwork.BuyMerchantRelic handler (was a client-callable method).
 function EventService._onBuyMerchantRelic(
 	_self: typeof(EventService),
@@ -1386,6 +1388,23 @@ function EventService._onBuyMerchantRelic(
 			TextIndicatorService:ShowIndicator(player, hrp, "Already owned", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		return "sold"
+	end
+
+	-- Relic cap: the shop sells only unowned relics, so any buy fills a
+	-- slot. Refused BEFORE the coins move, with the vending pickup's own
+	-- refusal pop, so a capped player wastes nothing by trying.
+	if not RelicService:CanAcceptRelic(player, slot.relicName) then
+		if TextIndicatorService and hrp then
+			TextIndicatorService:ShowIndicator(
+				player,
+				hrp,
+				("Reached Maximum Relics! (%d)"):format(RelicService:GetRelicSlots(player)),
+				RELIC_CAP_COLOR,
+				true
+			)
+		end
+		playFeedbackSound(hrp, "Error")
+		return "full"
 	end
 
 	if not RunEscrowService:SpendCoins(player, slot.price) then
@@ -1478,12 +1497,53 @@ end
 -- Sells one owned relic at the flat rarity price. The relic and its
 -- effects leave immediately (RemoveRelicsRegistry replicates; stats
 -- recompute off the registry). Returns the coins paid, or 0.
+-- True when the player stands within INTERACT_RANGE of the merchant NPC
+-- of a shop room that has unlocked for them: the same physical-presence
+-- gate the buy paths enforce, for the sell path.
+function EventService._isAtUnlockedMerchant(self: typeof(EventService), player: Player): boolean
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if not hrp or not hrp:IsA("BasePart") then
+		return false
+	end
+	for roomId, entry in self._merchantRooms do
+		local merchant = entry.merchant
+		if merchant and merchant.Parent and self:_isMerchantUnlockedFor(player, roomId) then
+			if (hrp.Position - merchant:GetPivot().Position).Magnitude <= INTERACT_RANGE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 -- DungeonNetwork.SellRelic handler (was a client-callable method).
-function EventService._onSellRelic(_self: typeof(EventService), player: Player, relicName: string): number
+-- Gated like the buys: an unlocked merchant room, in range of its
+-- merchant. A Cursed relic is refused outright -- its drawback is the
+-- price of its payoff (the tray refuses to drop one for the same
+-- reason), so the shop is not a way to shed it for coins.
+function EventService._onSellRelic(self: typeof(EventService), player: Player, relicName: string): number
 	if typeof(relicName) ~= "string" or not RelicData[relicName] then
 		return 0
 	end
+	if not self:_isAtUnlockedMerchant(player) then
+		return 0
+	end
 	if RelicService:GetSpecificRelicRegistry(player, relicName) <= 0 then
+		return 0
+	end
+
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if RelicData[relicName].rarity == ItemRarity.Cursed then
+		if TextIndicatorService and hrp then
+			TextIndicatorService:ShowIndicator(
+				player,
+				hrp,
+				"Cursed relics cannot be sold",
+				NOT_ENOUGH_COINS_COLOR,
+				true
+			)
+		end
+		playFeedbackSound(hrp, "Error")
 		return 0
 	end
 

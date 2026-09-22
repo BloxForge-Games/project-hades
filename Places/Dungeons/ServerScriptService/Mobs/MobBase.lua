@@ -481,7 +481,6 @@ function MobBase:_resetAttributes()
 	self._model:SetAttribute(Attributes.SuperArmor, false)
 	self._model:SetAttribute(Attributes.SlainBy, "")
 	self._model:SetAttribute(Attributes.Jailed, false)
-	self._model:SetAttribute(Attributes.HitStunned, false)
 	self._model:SetAttribute(Attributes.Slowed, false)
 	self._model:SetAttribute(Attributes.CCDebounce, false)
 	self._model:SetAttribute(Attributes.EnemyType, self._enemyType)
@@ -569,7 +568,7 @@ function MobBase:_resyncWalkSpeed()
 	-- status flip mid-roam / mid-attack keeps that state's pace.
 	local baseSpeed = self._baseWalkSpeed or self._defaultWalkSpeed
 	local statusSlow = self._model:GetAttribute("StatusSlowMultiplier") or 1
-	if self._model:GetAttribute(Attributes.Jailed) or self._model:GetAttribute(Attributes.HitStunned) then
+	if self._model:GetAttribute(Attributes.Jailed) then
 		self._humanoid.WalkSpeed = 0
 	elseif self._model:GetAttribute(Attributes.Slowed) then
 		self._humanoid.WalkSpeed = (baseSpeed / 2.5) * statusSlow
@@ -582,10 +581,6 @@ end
 
 function MobBase:_setupListeners()
 	self._janitor:Add(self._model:GetAttributeChangedSignal(Attributes.Jailed):Connect(function()
-		self:_resyncWalkSpeed()
-	end))
-	-- The on-hit stagger (DamageService/HitStun): planted while it is set.
-	self._janitor:Add(self._model:GetAttributeChangedSignal(Attributes.HitStunned):Connect(function()
 		self:_resyncWalkSpeed()
 	end))
 
@@ -934,10 +929,7 @@ end
 --[ Chase step ]--
 
 function MobBase:_chaseStep()
-	-- Jailed or hit-stunned: no pursuit and no attack decision this tick
-	-- (the walk speed is already 0; this keeps a swing from starting
-	-- out of the stagger).
-	if self._model:GetAttribute(Attributes.Jailed) or self._model:GetAttribute(Attributes.HitStunned) then
+	if self._model:GetAttribute(Attributes.Jailed) then
 		return
 	end
 	if not self._currentTarget or not self._currentTargetHRP or not self._currentTargetHRP.Parent then

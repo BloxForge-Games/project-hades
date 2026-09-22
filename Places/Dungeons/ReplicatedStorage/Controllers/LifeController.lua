@@ -50,6 +50,7 @@ local InterfaceManagerController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
 local LivesInterfaceController = require(ReplicatedStorage.Interfaces.LivesInterfaceController)
 local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
+local ScreenSweepController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSweepController)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
@@ -756,6 +757,14 @@ function LifeController.Start(self: typeof(LifeController))
 				end
 			end)
 		end
+	end)
+
+	-- Extraction: the Swirl sweep covers the screen; the server holds the
+	-- lobby teleport for the sweep's length (LifeService), so the teleport
+	-- happens under black. The sweep releases itself if no teleport
+	-- follows (Studio), see ScreenSweepController.
+	PlayerNetwork.ExtractionSweep.On(function()
+		ScreenSweepController:Cover("Swirl")
 	end)
 
 	PlayerNetwork.TeleportToLobby.On(function()
