@@ -4,13 +4,16 @@
 	Description:
 	Keeps the local player visible around map buildings (models tagged
 	TagList.Building -- the static Map.Buildings set and every chunk's
-	relocated Buildings, see DungeonService:_relocateChunkBuildings).
+	relocated Buildings, see DungeonGenerator._relocateChunkBuildings).
 
-	Two fades, evaluated every THREAD_LOOP_WAIT:
+	Two fades, evaluated every THREAD_LOOP_WAIT (on OcclusionController's
+	shared pass, throttled to that cadence):
 	  * OCCLUDED  -- the building sits between the camera and the player
-	                 (Camera:GetPartsObscuringTarget on the head + root).
-	                 The WHOLE model goes semi-transparent, textures and
-	                 decals included, so a pillar never hides the player.
+	                 (the parts covering the head, root, chest and legs,
+	                 read from OcclusionController's single per-tick
+	                 query). The WHOLE model goes semi-transparent,
+	                 textures and decals included, so a pillar never
+	                 hides the player.
 	  * NEAR      -- the building is within MAX_STUD_RAYCAST_DIST of the
 	                 player. Only its "Roof" parts fade (walking into a
 	                 house shows the inside without dissolving the walls).
@@ -34,12 +37,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local IgnoreListController = require(ReplicatedStorage.Controllers.IgnoreListController)
+local OcclusionController = require(ReplicatedStorage.Controllers.OcclusionController)
 local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
-
-local camera: Camera = workspace.CurrentCamera
 
 -- Faded transparency for parts and for their Textures / Decals. Applied as
 -- max(authored, value): anything authored MORE transparent keeps its own.
@@ -53,13 +55,21 @@ local FADE_TWEEN_INFO = TweenInfo.new(0.15, Enum.EasingStyle.Quad)
 -- the camera and the player. Longer than one loop so an edge flicker
 -- (one tick occluded, next not) never reaches the parts.
 local PILLAR_RELEASE_SECONDS = 0.4
--- Extra cast heights (relative to the root) so a pillar covering only the
--- legs or only the head still counts as occluding.
-local PILLAR_CAST_OFFSETS = { Vector3.new(0, -2.5, 0), Vector3.new(0, 1.5, 0) }
+-- (The extra cast heights -- so a pillar covering only the legs or only
+-- the chest still counts as occluding -- are OcclusionController's body
+-- points now.)
 
 -- Cached authored transparency, stamped on the instance the first time a
 -- fade touches it.
 local AUTHORED_TRANSPARENCY_ATTRIBUTE = "AuthoredTransparency"
+
+-- The ObjectValue CollisionGroupService:SetupBuilding leaves on a Base
+-- part it moves to IgnoreInstances.Terrain, pointing back at its building.
+local BUILDING_REF_NAME = "Building"
+
+-- The Base-part index is keyed by building Models that die with the
+-- floor: weak keys.
+local WEAK_KEYS = { __mode = "k" }
 
 -- Fade modes per building.
 local MODE_WHOLE = "whole"
@@ -67,13 +77,22 @@ local MODE_ROOF = "roof"
 
 local BuildingTransparencyController = {
 	Name = "BuildingTransparencyController",
-	Dependencies = { IgnoreListController } :: { any },
+	Dependencies = { IgnoreListController, OcclusionController } :: { any },
 
 	_buildingIgnoreList = {},
 	-- [building Model] = MODE_WHOLE | MODE_ROOF for every building currently faded.
 	_activeModes = {} :: { [Model]: string },
 	-- [pillar Model] = os.clock() deadline the whole-fade holds until.
 	_pillarHoldUntil = {},
+	-- [building Model] = its Base parts under IgnoreInstances.Terrain (and
+	-- their descendants), indexed ONCE as they arrive (see
+	-- _watchTerrainParts) instead of re-walking the whole Terrain folder
+	-- per held pillar per tick.
+	_basePartsByBuilding = setmetatable({}, WEAK_KEYS) :: any,
+	-- [Base part] = the building it was indexed under, for removal.
+	_basePartBuilding = {} :: { [Instance]: Model },
+	-- os.clock() of the last tick this controller ran on the shared pass.
+	_lastTickAt = 0,
 }
 
 --[ Private ]--
@@ -110,41 +129,20 @@ local function isPillar(building: Model): boolean
 	return building:HasTag(TagList.Pillar)
 end
 
--- A building's "Base" parts live under IgnoreInstances.Terrain (moved there
--- by CollisionGroupService:SetupBuilding, which leaves a `Building`
--- ObjectValue on each pointing back). They fade with the building.
-local function basePartsOf(building: Model): { Instance }
-	local out = {}
-	local terrain = workspace.IgnoreInstances:FindFirstChild("Terrain")
-	if not terrain then
-		return out
-	end
-	for _, part in terrain:GetChildren() do
-		local ref = part:FindFirstChild("Building")
-		if ref and ref:IsA("ObjectValue") and ref.Value == building then
-			table.insert(out, part)
-			for _, descendant in part:GetDescendants() do
-				table.insert(out, descendant)
-			end
-		end
-	end
-	return out
-end
-
 -- Applies `mode` to every fadeable descendant of `building` (and its Base
--- parts): the selected ones go to their faded value, the rest back to
--- authored. nil = restore all.
+-- parts, `extras` -- see _basePartsByBuilding): the selected ones go to
+-- their faded value, the rest back to authored. nil = restore all.
 --
 -- A PILLAR is written directly (no tween): one value, every part, this
 -- frame. Tweens are what let two blocks of the same column disagree --
 -- a block still easing toward 0.85 when the mode flipped back to restore
 -- started its return from wherever it was, while its neighbour started
 -- from 0.85.
-local function applyMode(building: Model, mode: string?)
+local function applyMode(building: Model, mode: string?, extras: { Instance }?)
 	local instant = isPillar(building)
 	local instances = building:GetDescendants()
-	for _, extra in basePartsOf(building) do
-		table.insert(instances, extra)
+	if extras then
+		table.move(extras, 1, #extras, #instances + 1, instances)
 	end
 	for _, instance in instances do
 		if not isFadeable(instance) then
@@ -186,13 +184,90 @@ local function buildingOf(part: BasePart): Model?
 	return nil
 end
 
+-- A building's "Base" parts live under IgnoreInstances.Terrain (moved there
+-- by CollisionGroupService:SetupBuilding, which leaves a `Building`
+-- ObjectValue on each pointing back). They fade with the building, so each
+-- is indexed under it the moment it arrives. The reference (and the
+-- building it points at) can replicate a step after the part, so the
+-- index waits for whichever is missing.
+function BuildingTransparencyController._indexTerrainPart(self: typeof(BuildingTransparencyController), part: Instance)
+	local ref = part:FindFirstChild(BUILDING_REF_NAME)
+	if not (ref and ref:IsA("ObjectValue")) then
+		local connection: RBXScriptConnection
+		connection = part.ChildAdded:Connect(function(child)
+			if child.Name == BUILDING_REF_NAME and child:IsA("ObjectValue") then
+				connection:Disconnect()
+				self:_indexTerrainPart(part)
+			end
+		end)
+		return
+	end
+	local building = ref.Value
+	if not (building and building:IsA("Model")) then
+		ref:GetPropertyChangedSignal("Value"):Once(function()
+			self:_indexTerrainPart(part)
+		end)
+		return
+	end
+	if self._basePartBuilding[part] then
+		return
+	end
+	local parts = self._basePartsByBuilding[building] or {}
+	self._basePartsByBuilding[building] = parts
+	table.insert(parts, part)
+	for _, descendant in part:GetDescendants() do
+		table.insert(parts, descendant)
+	end
+	self._basePartBuilding[part] = building
+end
+
+function BuildingTransparencyController._unindexTerrainPart(
+	self: typeof(BuildingTransparencyController),
+	part: Instance
+)
+	local building = self._basePartBuilding[part]
+	if not building then
+		return
+	end
+	self._basePartBuilding[part] = nil
+	local parts = self._basePartsByBuilding[building]
+	if not parts then
+		return
+	end
+	-- The part and everything indexed under it.
+	for index = #parts, 1, -1 do
+		local indexed = parts[index]
+		if indexed == part or indexed:IsDescendantOf(part) then
+			table.remove(parts, index)
+		end
+	end
+	if #parts == 0 then
+		self._basePartsByBuilding[building] = nil
+	end
+end
+
+function BuildingTransparencyController._watchTerrainParts(self: typeof(BuildingTransparencyController))
+	local terrain = workspace.IgnoreInstances:FindFirstChild("Terrain")
+	if not terrain then
+		return
+	end
+	for _, part in terrain:GetChildren() do
+		self:_indexTerrainPart(part)
+	end
+	terrain.ChildAdded:Connect(function(part)
+		self:_indexTerrainPart(part)
+	end)
+	terrain.ChildRemoved:Connect(function(part)
+		self:_unindexTerrainPart(part)
+	end)
+end
+
 function BuildingTransparencyController._buildingProximityFunction(
 	self: typeof(BuildingTransparencyController),
 	overlapParams: OverlapParams
 )
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local head = character and character:FindFirstChild("Head")
 	if not root then
 		return
 	end
@@ -208,17 +283,11 @@ function BuildingTransparencyController._buildingProximityFunction(
 	end
 
 	-- OCCLUDED: whole-model fade for anything between the camera and the
-	-- player. Several cast points (root, head, legs, chest) so a pillar
-	-- covering only part of the body still counts. Wins over the roof fade.
-	local castPoints = { root.Position }
-	if head then
-		table.insert(castPoints, head.Position)
-	end
-	for _, offset in PILLAR_CAST_OFFSETS do
-		table.insert(castPoints, root.Position + offset)
-	end
+	-- player. The shared pass casts on several points (root, head, legs,
+	-- chest) so a pillar covering only part of the body still counts.
+	-- Wins over the roof fade.
 	local now = os.clock()
-	for _, part in camera:GetPartsObscuringTarget(castPoints, self._buildingIgnoreList) do
+	for _, part in OcclusionController:GetPlayerOccluders() do
 		local building = buildingOf(part)
 		if building then
 			desired[building] = MODE_WHOLE
@@ -257,12 +326,12 @@ function BuildingTransparencyController._buildingProximityFunction(
 		local changed = self._activeModes[building] ~= mode
 		local heldPillar = mode == MODE_WHOLE and isPillar(building)
 		if changed or heldPillar then
-			applyMode(building, mode)
+			applyMode(building, mode, self._basePartsByBuilding[building])
 		end
 	end
 	for building in self._activeModes do
 		if not desired[building] and building.Parent then
-			applyMode(building, nil)
+			applyMode(building, nil, self._basePartsByBuilding[building])
 		end
 	end
 
@@ -302,11 +371,19 @@ function BuildingTransparencyController.Start(self: typeof(BuildingTransparencyC
 		end
 	end)
 
-	-- Run on a separate thread so it never blocks anything else.
-	task.spawn(function()
-		while task.wait(THREAD_LOOP_WAIT) do
-			self:_buildingProximityFunction(overlapParams)
+	self:_watchTerrainParts()
+
+	-- Rides the shared occlusion pass, at this controller's own cadence:
+	-- the pass runs faster than THREAD_LOOP_WAIT, and a held pillar is
+	-- re-asserted (every part written) on every tick this runs, so it
+	-- keeps the slower clock it was tuned at.
+	OcclusionController.OnPass:Connect(function()
+		local now = os.clock()
+		if now - self._lastTickAt < THREAD_LOOP_WAIT then
+			return
 		end
+		self._lastTickAt = now
+		self:_buildingProximityFunction(overlapParams)
 	end)
 end
 

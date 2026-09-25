@@ -28,6 +28,9 @@
 	  2. OUTLINE       — white, partly transparent, AlwaysOnTop. Active
 	                     whenever the zombie's head is occluded by
 	                     terrain so you can read threats through walls.
+	                     The occlusion answer is OcclusionController's
+	                     (one shared pass per tick; this used to query
+	                     the camera once per zombie per tick).
 	  3. ATTACK WINDUP — white, transparent, AlwaysOnTop. Server-driven
 	                     via the MobHighlightAttackActive attribute on
 	                     the model. Client tweens local intensity over
@@ -73,17 +76,16 @@ local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
-
-local camera: Camera = workspace.CurrentCamera
+local OcclusionController = require(ReplicatedStorage.Controllers.OcclusionController)
 
 local MOB_HIGHLIGHT_NAME = "MobHighlight"
 local MOB_ATTACK_ATTRIBUTE = "MobHighlightAttackActive"
 local PLAYER_HIGHLIGHT_NAME = "CharacterHighlight"
 
 -- Per-frame loop cadence. 0.025s ≈ 40Hz — matches the legacy tick
--- this controller used. Trade-off: lower = smoother windup tweens,
--- higher = cheaper raycast budget. 40Hz is the sweet spot for
--- 30-50 live zombies.
+-- this controller used. Only property writes and the local ramps
+-- (windup, invulnerable) run here now; the occlusion queries are
+-- OcclusionController's, on its own clock.
 local TICK_INTERVAL = 0.025
 
 -- Damage flash: 0.25s fade from peak transparency 0.4 → 1, red.
@@ -197,11 +199,11 @@ type ZombieHighlightData = {
 
 local CharacterHighlightController = {
 	Name = "CharacterHighlightController",
-	Dependencies = { PlayerEventController } :: { any },
+	Dependencies = { PlayerEventController, OcclusionController } :: { any },
 
-	-- Both built in Init.
+	-- Built in Init. Holds the local character's loop thread and highlight
+	-- (see _initHighlightThread).
 	_janitor = nil :: typeof(Janitor.new())?,
-	_ignoreList = {} :: { Instance },
 
 	_zombieRegistry = {} :: { [Model]: ZombieHighlightData },
 
@@ -212,7 +214,6 @@ local CharacterHighlightController = {
 	_playerDodgeStartAt = nil :: number?,
 	_playerDeathStartAt = nil :: number?,
 	_playerDownedStartAt = nil :: number?,
-	_threadGeneration = 0,
 }
 
 --------------------------------------------------
@@ -276,8 +277,9 @@ function CharacterHighlightController._registerZombie(self: typeof(CharacterHigh
 			return -- raced with another _RegisterZombie call
 		end
 
+		local head = zombie:FindFirstChild("Head") :: BasePart
 		self._zombieRegistry[zombie] = {
-			head = zombie:FindFirstChild("Head") :: BasePart,
+			head = head,
 			highlight = highlight :: Highlight,
 
 			-- Damage flash state: nil if not flashing, else tick()
@@ -290,6 +292,8 @@ function CharacterHighlightController._registerZombie(self: typeof(CharacterHigh
 			-- of snapping.
 			windupIntensity = 0,
 		}
+		-- Into the shared occlusion pass, on the head.
+		OcclusionController:Track(zombie, head)
 
 		-- AncestryChanged fires on ANY parent change. We want to drop
 		-- the registry entry the moment the zombie leaves the live-
@@ -300,6 +304,7 @@ function CharacterHighlightController._registerZombie(self: typeof(CharacterHigh
 		zombie.AncestryChanged:Connect(function(_, parent)
 			if parent ~= workspace.IgnoreInstances.Zombies then
 				self._zombieRegistry[zombie] = nil
+				OcclusionController:Untrack(zombie)
 			end
 		end)
 	end)
@@ -423,8 +428,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	end
 	self._playerDamageFlashEndAt = nil
 
-	local head = character:FindFirstChild("Head") :: BasePart?
-	local occluded = head ~= nil and self:_isOccluded(head.Position)
+	local occluded = OcclusionController:IsOccluded(character)
 
 	-- Priority 1.5: perfect dodge (white: 1 -> peak over the attack, then
 	-- peak -> 1 over the decay).
@@ -561,17 +565,12 @@ function CharacterHighlightController._watchOtherPlayers(self: typeof(CharacterH
 	Players.PlayerAdded:Connect(bind)
 end
 
-function CharacterHighlightController._isOccluded(self: typeof(CharacterHighlightController), point: Vector3)
-	local hit = camera:GetPartsObscuringTarget({ point }, self._ignoreList)
-	return hit and #hit > 0
-end
-
 -- Per-frame priority resolver for a single zombie. Picks the highest
 -- priority active layer and writes its color/transparency to the
 -- single MobHighlight Instance. Lower-priority layers are NOT
 -- additive — only the winner is rendered.
 function CharacterHighlightController._resolveZombieHighlight(
-	self: typeof(CharacterHighlightController),
+	_self: typeof(CharacterHighlightController),
 	zombie: Model,
 	data: ZombieHighlightData,
 	deltaTime: number
@@ -621,7 +620,7 @@ function CharacterHighlightController._resolveZombieHighlight(
 	end
 
 	-- Priority 2: occlusion outline (white, 0.65, AlwaysOnTop).
-	local occluded = self:_isOccluded(head.Position)
+	local occluded = OcclusionController:IsOccluded(zombie)
 	if occluded then
 		highlight.FillColor = OUTLINE_COLOR
 		highlight.FillTransparency = OUTLINE_TRANSPARENCY
@@ -651,62 +650,51 @@ end
 
 function CharacterHighlightController._initHighlightThread(self: typeof(CharacterHighlightController))
 	local janitor = assert(self._janitor, "[CharacterHighlightController] Init has not run")
+	-- RE-ENTRANT. OnCharacterLoaded can fire more than once for one
+	-- character (the initial load and CharacterAdded both fire it), and
+	-- again on every respawn. The previous loop thread and its highlight
+	-- are the janitor's, so this cancels them before building the next
+	-- pair, instead of two loops driving two highlights on one model.
 	janitor:Cleanup()
 
 	local player = Players.LocalPlayer
 	local character = player.Character
+	if not character then
+		return
+	end
 
-	-- RE-ENTRANT. OnCharacterLoaded can fire more than once for one
-	-- character (the initial load and CharacterAdded both fire it); the
-	-- generation lets the previous loop notice it has been superseded and
-	-- stop, instead of two loops driving two highlights on one model.
-	self._threadGeneration = (self._threadGeneration or 0) + 1
-	local generation = self._threadGeneration
-
-	self._playerHighlight = self:_createPlayerHighlightInstance(character)
+	self._playerHighlight = janitor:Add(self:_createPlayerHighlightInstance(character))
 	self._playerDamageFlashEndAt = nil
 	self._playerDodgeStartAt = nil
 	self._playerDeathStartAt = nil
 	self._playerDownedStartAt = nil
 	self._playerInvulnIntensity = 0
 
-	local lastTick = os.clock()
-	while task.wait(TICK_INTERVAL) do
-		if self._threadGeneration ~= generation then
-			return
-		end
-		local now = os.clock()
-		local deltaTime = now - lastTick
-		lastTick = now
+	janitor:Add(
+		task.spawn(function()
+			local lastTick = os.clock()
+			while task.wait(TICK_INTERVAL) do
+				local now = os.clock()
+				local deltaTime = now - lastTick
+				lastTick = now
 
-		self:_resolvePlayerHighlight(character, deltaTime)
+				self:_resolvePlayerHighlight(character, deltaTime)
 
-		-- Resolve priority for every registered zombie. AncestryChanged
-		-- has already scrubbed entries for dead/destroyed zombies, so
-		-- this iteration is over live mobs only.
-		for zombie, data in pairs(self._zombieRegistry) do
-			self:_resolveZombieHighlight(zombie, data, deltaTime)
-		end
-	end
+				-- Resolve priority for every registered zombie. AncestryChanged
+				-- has already scrubbed entries for dead/destroyed zombies, so
+				-- this iteration is over live mobs only.
+				for zombie, data in pairs(self._zombieRegistry) do
+					self:_resolveZombieHighlight(zombie, data, deltaTime)
+				end
+			end
+		end),
+		true
+	)
 end
 
 function CharacterHighlightController.Init(self: typeof(CharacterHighlightController))
 	self._janitor = Janitor.new()
 	self._zombieRegistry = {}
-
-	self._ignoreList = {
-		Players.LocalPlayer.Character,
-		workspace.IgnoreInstances.Terrain,
-		workspace.IgnoreInstances.Boundaries,
-		workspace.Terrain,
-		workspace.CurrentCamera,
-		workspace.IgnoreInstances.MapMarkers,
-		workspace.IgnoreInstances.MagicSpells,
-		workspace.PlayerBaseplates,
-		workspace.IgnoreInstances.Drops,
-		workspace.IgnoreInstances.Zombies,
-		workspace.IgnoreInstances.DeadZombies,
-	}
 end
 
 function CharacterHighlightController.Start(self: typeof(CharacterHighlightController))

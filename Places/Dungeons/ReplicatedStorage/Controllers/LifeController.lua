@@ -62,6 +62,8 @@ local getEffectiveBaseWalkSpeed =
 local getEffectiveJetpackWalkSpeed =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveJetpackWalkSpeed)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 -- The death flash is a LAYER of the local character's single Highlight
 -- (CharacterHighlightController), not its own instance: the old
 -- onDeathIndicator highlight was never destroyed, so from the first down
@@ -166,6 +168,11 @@ local DEATH_BLACK_HOLD_DURATION = DeathCinematicData.BlackHoldDuration
 -- death pose frozen until after this tween, so the humanoid never
 -- visibly stands back up under a still-visible body.
 local CHARACTER_FADE_DURATION = DEATH_BLACK_HOLD_DURATION
+-- Honors CHARACTER_FADE_DURATION (a hardcoded 0.5 here used to silently
+-- disagree with the named constant). With the ~1.5s start offset + this
+-- duration the body fade visibly happens *during* the early red flash
+-- instead of as a late blip. The revive restore rides the same tween.
+local CHARACTER_FADE_INFO = TweenInfo.new(CHARACTER_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 --[ Red flash overlay tuning ]--
 
@@ -176,82 +183,19 @@ local CHARACTER_FADE_DURATION = DEATH_BLACK_HOLD_DURATION
 
 --[ Module-scope helpers (no per-event closure allocation) ]--
 
-local function captureAndTweenCharacterToInvisible(character: Model): { { part: any, transparency: number } }
-	local cache = table.create(1000)
-	-- Honor CHARACTER_FADE_DURATION (was previously hardcoded 0.5 here,
-	-- which silently disagreed with the named constant). With the new
-	-- ~1.5s start offset + this duration the body fade visibly happens
-	-- *during* the early red flash instead of as a late blip.
-	local tweenInfo = TweenInfo.new(CHARACTER_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-	for _, descendant in character:GetDescendants() do
-		if descendant:IsA("BasePart") or descendant:IsA("Decal") or descendant:IsA("Texture") then
-			if descendant.Transparency == 1 then
-				continue
-			end
-
-			table.insert(cache, { part = descendant, transparency = descendant.Transparency })
-			TweenService:Create(descendant, tweenInfo, { Transparency = 1 }):Play()
-		end
-	end
-
-	return cache
-end
-
--- Tweens each cached part back to its captured Transparency. Skips parts
--- that have since been destroyed (character respawn, leaver, etc.).
-local function tweenRestoreCharacterTransparency(cache: { { part: any, transparency: number } }?)
-	if not cache then
-		return
-	end
-	local tweenInfo = TweenInfo.new(CHARACTER_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	for _, entry in cache do
-		if entry.part and entry.part.Parent then
-			TweenService:Create(entry.part, tweenInfo, { Transparency = entry.transparency }):Play()
-		end
-	end
-end
-
--- Walks every descendant of `root` and either caches+writes Transparency=1
--- (for BasePart / Decal / Texture) or caches+disables (for BillboardGui /
--- ParticleEmitter). Push into the three caller-provided tables so the
--- restore-on-revive loop can put everything back.
---
--- Consolidated into one helper so the dungeon-rooms / zombies / players /
--- relics paths all use the same type-handling logic. Saves duplicating
--- the IsA chain four times and makes adding a new source one line.
---
--- Skips nil / unparented roots defensively (relic models can vanish
--- between getting tagged and us iterating).
-local function _fadeRootAndCache(
-	root: Instance?,
-	cachedTransparency: { { part: any, transparency: number } },
-	screenGuis: { { part: any, enabled: boolean } },
-	particles: { { part: any, enabled: boolean } }
-)
-	if not root or not root.Parent then
-		return
-	end
-
-	for _, part in root:GetDescendants() do
-		-- Texture is a Decal subclass, so the Decal branch covers both. Two
-		-- identical branches on purpose: the old solver cannot write a
-		-- property through a union of Instance classes.
-		-- selene: allow(if_same_then_else)
-		if part:IsA("BasePart") then
-			table.insert(cachedTransparency, { part = part :: Instance, transparency = part.Transparency })
-			part.Transparency = 1
-		elseif part:IsA("Decal") then
-			table.insert(cachedTransparency, { part = part :: Instance, transparency = part.Transparency })
-			part.Transparency = 1
-		elseif part:IsA("BillboardGui") then
-			table.insert(screenGuis, { part = part, enabled = part.Enabled })
-			part.Enabled = false
-		elseif part:IsA("ParticleEmitter") then
-			table.insert(particles, { part = part, enabled = part.Enabled })
-			part.Enabled = false
-		end
-	end
+-- The body fade: every BasePart, Decal and Texture on the dead character
+-- to invisible, through the shared walk (fadeSubtree). Anything already
+-- at 1 is left alone. Returns the restore for the revive, which tweens
+-- each part back to what it had (a player might be wearing
+-- semi-transparent gear -- never wiped to 0) and skips parts destroyed
+-- since (character respawn, leaver, etc.).
+local function fadeCharacterToInvisible(character: Model): () -> ()
+	return fadeSubtree(character, {
+		targetTransparency = 1,
+		tweenInfo = CHARACTER_FADE_INFO,
+		includeDecals = true,
+		skipHidden = true,
+	})
 end
 
 --[ Local-only signals for downstream VFX / UI hooks ]--
@@ -293,12 +237,10 @@ LifeController._controlsLocked = false
 LifeController._isLocalSpectating = false
 LifeController._isLocalDead = false
 
--- Per-userId cache for the body-fade. Holds the pre-fade transparency of
--- every BasePart/Decal/Texture on the dead character so we can
--- tween-restore them on revive (player might be wearing semi-transparent
--- gear; we don't want to wipe that to 0). Written on PlayerFullyDied,
--- consumed on PlayerRevived.
-LifeController._characterFadeCaches = {} :: { [number]: { { part: any, transparency: number } } }
+-- Per-userId restore for the body-fade (see fadeCharacterToInvisible):
+-- tweens every faded part back to its pre-fade transparency on revive.
+-- Written on PlayerFullyDied, consumed on PlayerRevived.
+LifeController._characterFadeRestores = {} :: { [number]: () -> () }
 LifeController._isGameOver = false -- true after the all-dead trigger, until teleport or reload
 -- True while the LOCAL player's downed screen (Game Over overlay + red
 -- hold) is painted: from the downed tick until it clears for spectate or
@@ -311,6 +253,10 @@ LifeController._pushedReviveWindowEndsAt = nil :: number?
 -- Bumped per death impact; a scheduled hold-release or echo from an
 -- earlier death checks it before touching Lighting.
 LifeController._deathImpactToken = 0
+-- Whether the LOCAL player had a DeathState entry at the last observation
+-- (nil = never observed). The observer runs for EVERY player's death and
+-- revive; the controls lock and the HUD signals only move on a local edge.
+LifeController._observedLocalDead = nil :: boolean?
 
 --[ Private helpers ]--
 
@@ -409,7 +355,6 @@ end
 -- Idempotent.
 function LifeController._lockControls(self: typeof(LifeController))
 	if self._controlsLocked then
-		warn("[LifeController] Controls already locked; skipping redundant lock")
 		return
 	end
 	local controls = self:_getPlayerControls()
@@ -429,7 +374,7 @@ function LifeController._lockControls(self: typeof(LifeController))
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if humanoid then
-		print("[LifeController] Locking controls: setting WalkSpeed=0 to stop residual movement")
+		Log.debug("[LifeController] Locking controls: setting WalkSpeed=0 to stop residual movement")
 		humanoid.WalkSpeed = 0
 	end
 end
@@ -548,7 +493,7 @@ function LifeController.Start(self: typeof(LifeController))
 	MobileActionButtonInterface = Blitz.OptionalController("MobileActionButtonInterface")
 
 	PlayerNetwork.LifeLost.On(function(userId: number)
-		print(("[LifeController] %s lost a life"):format(nameFor(userId)))
+		Log.debug(("[LifeController] %s lost a life"):format(nameFor(userId)))
 		self.OnLifeLost:Fire(userId)
 	end)
 
@@ -557,7 +502,7 @@ function LifeController.Start(self: typeof(LifeController))
 	-- screen goes up with the revive window's bar and REVIVE button; the
 	-- fully dead beat (PlayerFullyDied) or a revive (PlayerRevived) ends it.
 	PlayerNetwork.PlayerDied.On(function(userId: number)
-		print(("[LifeController] %s is downed"):format(nameFor(userId)))
+		Log.debug(("[LifeController] %s is downed"):format(nameFor(userId)))
 		self.OnPlayerDied:Fire(userId)
 
 		CutsceneController:CancelActiveAbility(false)
@@ -574,9 +519,7 @@ function LifeController.Start(self: typeof(LifeController))
 		-- death regardless of party size or how many players are still
 		-- alive. While downed it carries the revive window (bar counting
 		-- down to the server's end time, REVIVE button); on a wipe it stays
-		-- up as the wipe screen. DeathGradientInterfaceController ("You
-		-- Died") is intentionally never fired now; the controller itself is
-		-- left registered so restoring it is a one-line change.
+		-- up as the wipe screen.
 		--
 		-- death=true → the pulse handler takes the long-hold branch
 		-- (multi-second timeout vs 0.25s for normal pulses) so the title
@@ -625,13 +568,13 @@ function LifeController.Start(self: typeof(LifeController))
 	-- the screen stays up and the GameOver handler owns it from here.
 	PlayerNetwork.PlayerFullyDied.On(function(payload: { UserId: number, IsWipe: boolean })
 		local userId, isWipe = payload.UserId, payload.IsWipe
-		print(("[LifeController] %s fully died (wipe=%s)"):format(nameFor(userId), tostring(isWipe == true)))
+		Log.debug(("[LifeController] %s fully died (wipe=%s)"):format(nameFor(userId), tostring(isWipe == true)))
 		self.OnPlayerFullyDied:Fire(userId)
 
 		local diedPlayer = Players:GetPlayerByUserId(userId)
 		local character = diedPlayer and diedPlayer.Character
-		if character and not self._characterFadeCaches[userId] then
-			self._characterFadeCaches[userId] = captureAndTweenCharacterToInvisible(character)
+		if character and not self._characterFadeRestores[userId] then
+			self._characterFadeRestores[userId] = fadeCharacterToInvisible(character)
 		end
 
 		if userId ~= Players.LocalPlayer.UserId then
@@ -681,15 +624,15 @@ function LifeController.Start(self: typeof(LifeController))
 	-- via PlayerNetwork.RevivalFade — we just print the animation hook here
 	-- so any client VFX code has a single subscribe point.
 	PlayerNetwork.PlayerRevived.On(function(userId: number)
-		print(("[LifeController] %s revived"):format(nameFor(userId)))
+		Log.debug(("[LifeController] %s revived"):format(nameFor(userId)))
 		self.OnPlayerRevived:Fire(userId)
 
 		-- Only a FULLY dead body was faded; a downed one stands up as it is.
-		local cache = self._characterFadeCaches[userId]
+		local restore = self._characterFadeRestores[userId]
 
-		if cache then
-			tweenRestoreCharacterTransparency(cache)
-			self._characterFadeCaches[userId] = nil
+		if restore then
+			restore()
+			self._characterFadeRestores[userId] = nil
 		end
 
 		if userId == Players.LocalPlayer.UserId then
@@ -732,12 +675,12 @@ function LifeController.Start(self: typeof(LifeController))
 			end
 
 			-- VFX hook (replace with real revive VFX/animation later).
-			print("[LifeController] Revive Animation")
+			Log.debug("[LifeController] Revive Animation")
 		end
 	end)
 
 	Players.PlayerRemoving:Connect(function(player: Player)
-		self._characterFadeCaches[player.UserId] = nil
+		self._characterFadeRestores[player.UserId] = nil
 	end)
 
 	PlayerNetwork.RevivalFade.On(function(payload: { Phase: string, Duration: number })
@@ -767,17 +710,8 @@ function LifeController.Start(self: typeof(LifeController))
 		ScreenSweepController:Cover("Swirl")
 	end)
 
-	PlayerNetwork.TeleportToLobby.On(function()
-		-- self:_setSpectatingState(false)
-		-- self:_setHudVisible(false)
-
-		-- if CinematicInterfaceController then
-		-- 	CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
-		-- end
-	end)
-
 	PlayerNetwork.GameOver.On(function()
-		print("[LifeController] Game Over — wipe broadcast received")
+		Log.debug("[LifeController] Game Over — wipe broadcast received")
 
 		self._isGameOver = true
 
@@ -859,7 +793,15 @@ function LifeController.Start(self: typeof(LifeController))
 			end
 		end
 
-		if localEntry then
+		-- A teammate's death or revive lands here too; the local player's
+		-- own state has not moved, so the lock and the HUD stay as they are.
+		local isLocalDead = localEntry ~= nil
+		if isLocalDead == self._observedLocalDead then
+			return
+		end
+		self._observedLocalDead = isLocalDead
+
+		if isLocalDead then
 			self:_lockControls()
 			self:_setHudVisible(false)
 		else

@@ -7,17 +7,19 @@
 -- flat-bonus shape.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 
-return function(player: Player, damage: number, _isMagic: boolean)
+type RelicSnapshot = DamageService.RelicSnapshot
+
+return function(_player: Player, snapshot: RelicSnapshot, damage: number, _isMagic: boolean)
 	-- No damage-type gate — the bonus applies to weapon AND magic. The
 	-- magnitude scales linearly with the caster's CURRENT HP (up to +20%
 	-- at full); the curve lives in the RelicData callback, read fresh on
-	-- every hit.
-	local blueLaserEffect = RelicService:GetRelicEffect(player, RelicNames["Hyperlaser Gun"]) or 1
+	-- every hit (the snapshot lists this relic as `live`, so RelicEffect
+	-- invokes the callback rather than a cached value).
+	local blueLaserEffect = DamageService.RelicEffect(snapshot, RelicNames["Hyperlaser Gun"]) or 1
 
 	if blueLaserEffect == 1 then
 		return 0

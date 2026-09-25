@@ -18,7 +18,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
-local RelicService = require(ServerScriptService.Services.RelicService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
 local DamageService = require(script.Parent)
@@ -26,16 +25,18 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
+type RelicSnapshot = DamageService.RelicSnapshot
+
 local VOLLEY_BALL_DESYNC_DELAY = 0.5
 local SPIKE_INTERVAL = 3
 
--- PRIVATE ranged-only hit counter. The orchestrator's shared _onHitRegistry
--- counts EVERY damage event — melee swings, magic hits, relic procs — so
--- reading it made "every 3rd ranged attack" fire on the 3rd damage event of
--- any type. A melee-and-gun player got spikes at effectively random points in
--- their gun's cadence, and a pure-magic player advanced the counter without
--- ever being able to trigger it. Same fix GeneralsFortyFive already carries
--- for its 6th-shot bonus.
+-- PRIVATE ranged-only hit counter. The orchestrator used to hand every
+-- module a shared counter of EVERY damage event — melee swings, magic hits,
+-- relic procs — so reading it made "every 3rd ranged attack" fire on the
+-- 3rd damage event of any type. A melee-and-gun player got spikes at
+-- effectively random points in their gun's cadence, and a pure-magic player
+-- advanced the counter without ever being able to trigger it. Same fix
+-- GeneralsFortyFive already carries for its 6th-shot bonus.
 --
 -- Only incremented on hits that PASS the ranged gate below, so the first
 -- spike lands exactly 3 ranged attacks after pickup.
@@ -47,12 +48,9 @@ end)
 
 return function(
 	player: Player,
+	snapshot: RelicSnapshot,
 	humanoid: Humanoid,
 	damage: number,
-	-- Kept in the signature so the orchestrator's call site stays unchanged,
-	-- but deliberately UNUSED — see rangedHitCounts above for why the shared
-	-- registry can't drive a "3rd ranged attack" cadence.
-	_onhitRegistry: { [number]: number },
 	isMagic: boolean,
 	isMelee: boolean
 )
@@ -60,7 +58,7 @@ return function(
 		return 0
 	end
 
-	local volleyballEffect = RelicService:GetRelicEffect(player, RelicNames["Volleyball"]) or 1
+	local volleyballEffect = DamageService.RelicEffect(snapshot, RelicNames["Volleyball"]) or 1
 	if volleyballEffect == 1 then
 		return 0
 	end

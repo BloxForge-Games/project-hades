@@ -2,16 +2,10 @@
 --[[
      Module: GameOverGradientInterfaceController.lua
      Description:
-     Game Over screen. Visually identical to DeathGradientInterfaceController
-     but with different text content + different lifecycle:
+     Game Over screen -- the ONLY death screen (the per-player "You Died"
+     DeathGradient overlay it was modelled on is gone):
 
-       Death screen:
-         * Per-player trigger (OnPlayerDied for THIS userId)
-         * Holds for DeathCinematicData.VfxDuration (7s)
-         * Auto-clears so the dying player enters spectate
-         * Randomized death reason from a corpus
-
-       Game Over screen (this controller):
+       Lifecycle:
          * Goes up when the LOCAL player is DOWNED (LifeController fires
            the pulse a beat after the impact), and stays up on a wipe
          * The bar is the REVIVE DECISION WINDOW: LifeController pushes
@@ -26,8 +20,7 @@
            fade before spectate, on a revive, or the place unloads
          * Fixed subtitle
 
-     Signal API mirrors DeathGradient for consistency. Same pulse +
-     hold-latch + token-guard machinery plus the revive window.
+     Pulse + hold-latch + token-guard machinery plus the revive window.
 
      For visual testing, fire from the command bar:
        require(game.ReplicatedStorage.Interfaces.GameOverGradientInterfaceController)
@@ -64,7 +57,7 @@ local GameOverGradientInterfaceController = {
 GameOverGradientInterfaceController._gameOverPulse = false
 GameOverGradientInterfaceController._pulseToken = nil :: {}?
 GameOverGradientInterfaceController.Signals = {
-	-- Same signature as DeathGradient.OnPulseGradient: (color3, gameOver?).
+	-- OnPulseGradient(color3, gameOver?).
 	-- gameOver=true takes the long-hold branch (GameOverDuration). Without
 	-- it, a 0.25s flash plays — useful for non-gameover red flashes if
 	-- they ever stack on this controller. In practice LifeService always
@@ -149,9 +142,8 @@ function GameOverGradientInterfaceController._render(self: typeof(GameOverGradie
 			Name = INTERFACE_ID,
 			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 			ClipToDeviceSafeArea = false,
-			-- DisplayOrder one notch above DeathGradient so if the
-			-- death screen is mid-fade-out on Game Over arrival, this
-			-- overlay sits on top. DeathGradient uses 99999.
+			-- Above every other overlay (the old death screen sat at
+			-- 99999).
 			DisplayOrder = 100000,
 		}, {
 			Container = React.createElement(Container, {

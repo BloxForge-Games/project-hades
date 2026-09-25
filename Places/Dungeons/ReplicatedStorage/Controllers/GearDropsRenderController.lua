@@ -5,8 +5,16 @@
      Singleton client-side render coordinator for gear drops. Mirrors
      RelicRenderController's role for relics — handles all the cross-drop
      hover orchestration that doesn't belong in a per-instance component:
+     the hovered drop's highlight and scale bump, its label swap for the
+     prompt, and the FLOOR DIM (every other owned drop steps back) that
+     it shares with the relic side through PickupHoverStyle.
 
-
+     The floor dim is DERIVED, not toggled. Two inputs -- this side's own
+     prompt (active + the hovered drop) and the relic side's hover
+     (SetExternalHover) -- are OR'd into one wanted state, committed
+     HOVER_DEBOUNCE_SECONDS after the last change, and applied only to the
+     drops whose state actually differs. Walking across a loot pile used
+     to fire a full restore-then-dim of every drop on every footfall.
 ]]
 
 --[ Roblox Services ]--
@@ -22,19 +30,16 @@ local CollectionService = game:GetService("CollectionService")
 local RelicRenderController =
 	require(ReplicatedStorage.Controllers.RelicController.SubControllers.RelicRenderController)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local PickupHoverStyle = require(ReplicatedStorage.Submodules.Core.Shared.Data.PickupHoverStyle)
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
-
--- Cross-controller reference, resolved in Start. The mirror of the
--- one RelicRenderController holds on THIS controller: hovering a gear
--- drop dims every relic, rune and vending machine, exactly as hovering a
--- relic dims every gear drop. Only one pickup is ever lit at a time.
+local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 
 --[ Constants ]--
 
+-- The hovered drop's OWN treatment (highlight fill, scale bump): snappier
+-- than the floor dim, whose timing is PickupHoverStyle's.
 local TWEEN_DURATION = 0.25
 local TWEEN_INFO = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-
-local DIMMED_TRANSPARENCY = 0.7
 
 -- Idle scale ladder now lives in
 -- Shared/Functions/Gear/getGearIdleScale. HOVER_SCALE_MULTIPLIER stays
@@ -43,21 +48,16 @@ local DIMMED_TRANSPARENCY = 0.7
 -- shared resolver).
 local HOVER_SCALE_MULTIPLIER = 1.25
 
-local PARTICLE_DIMMED_BRIGHTNESS = 0.25
-local PARTICLE_RESTORED_BRIGHTNESS_LAYER = 4
-local PARTICLE_RESTORED_BRIGHTNESS_SPARK = 4
-local PARTICLE_RESTORED_BRIGHTNESS_SHINE = 1
-
 local HIGHLIGHT_FILL_TRANSPARENCY_HOVERED = 0.75
 local HIGHLIGHT_FILL_TRANSPARENCY_HIDDEN = 1
 local HIGHLIGHT_FILL_COLOR = Color3.fromRGB(255, 255, 255)
 local HIGHLIGHT_OUTLINE_COLOR = Color3.fromRGB(255, 255, 255)
 
+-- The floor dim, shared with the relic side (see PickupHoverStyle).
+local HOVER_DEBOUNCE_SECONDS = PickupHoverStyle.HoverDebounceSeconds
+
 -- Names — must match the controller / component conventions.
 local SCALE_VALUE_NAME = "GearScale"
-local PARTICLE_LAYER_NAME = "Layer"
-local PARTICLE_SPARK_NAME = "Spark"
-local PARTICLE_SHINE_NAME = "Shine"
 
 -- Attribute names.
 local ATTR_TYPE = "GearType"
@@ -78,16 +78,27 @@ local ATTR_PUBLIC_DROP = "PublicDrop"
 local ATTR_PROMPT_SHOWN = "PromptShown"
 local ATTR_PICKUP_PENDING = "PickupPending"
 
--- Billboard text transparency while another drop is hovered. Matches
--- RelicRenderController's TOGGLE_TRANSPARENCY so a mixed floor of relics
--- and gear dims to one level.
-local BILLBOARD_TEXT_DIMMED_TRANSPARENCY = 0.8
+-- The per-drop applied-dim record is keyed by drop models that die with
+-- the floor: weak keys.
+local WEAK_KEYS = { __mode = "k" }
 
 --[ Controller ]--
 
 local GearDropsRenderController = {
 	Name = "GearDropsRenderController",
 	Dependencies = { RelicRenderController } :: { any },
+
+	-- Single shared Highlight, built in Start. Reparented between hovered
+	-- drops; sits detached (Parent = nil) when nothing is hovered.
+	_highlight = nil :: Highlight?,
+
+	-- The floor dim's two inputs (see the header) and its bookkeeping.
+	_ownHoverActive = false,
+	_ownHoverModel = nil :: Model?,
+	_externalHoverActive = false,
+	_dimCommitPending = false,
+	-- [drop model] = true while this controller holds it dimmed.
+	_dimApplied = setmetatable({}, WEAK_KEYS) :: any,
 }
 
 --[ Private helpers ]--
@@ -107,102 +118,44 @@ function GearDropsRenderController._findVisualModel(_self: typeof(GearDropsRende
 	return nil
 end
 
--- Walks a drop's descendants once and tweens every fadeable surface
--- towards the given targetTransparency. Centralized so the
--- shown/hidden handlers stay short and the set of fadeable types is
--- defined in exactly one place.
+-- The dim (or restore) of ONE drop: the shared fade walk (fadeSubtree),
+-- riding its one pass for the billboard flag and the sparkles too.
 --
--- Skips:
 --   * BaseParts already at Transparency 1 (carrier, hidden Handle on
---     weapon drops, artist-authored invisible markers). Tweening those
---     would expose geometry that's meant to stay invisible.
-function GearDropsRenderController._tweenDropTransparency(
+--     weapon drops, artist-authored invisible markers) are skipped:
+--     tweening those would expose geometry that's meant to stay
+--     invisible.
+--   * Labels and their strokes take the TEXT value, lighter than the
+--     mesh, and their billboard drops behind geometry while dimmed. Every
+--     TextLabel in a drop is billboard text (the prompt is a custom
+--     style, so it puts no UI in the model), which is what lets this skip
+--     an ancestor check per descendant.
+--   * The rarity sparkle set (Layer / Spark / Shine) is written directly,
+--     not tweened, matching the relic side: a fade on particle intensity
+--     reads as "the dimming finished between frames" anyway.
+function GearDropsRenderController._applyDropDim(
 	_self: typeof(GearDropsRenderController),
 	model: Instance,
-	targetTransparency: number
+	dim: boolean
 )
-	for _, descendant in model:GetDescendants() do
-		-- The billboard's labels / strokes have their OWN dim value
-		-- (_tweenDropBillboardText); tweening them here too made the last
-		-- tween to play win.
-		if descendant:FindFirstAncestorWhichIsA("BillboardGui") then
-			continue
-		end
-		if descendant:IsA("BasePart") then
-			if descendant.Transparency ~= 1 then
-				TweenService:Create(descendant, TWEEN_INFO, { Transparency = targetTransparency }):Play()
-			end
-		elseif descendant:IsA("Decal") or descendant:IsA("Texture") or descendant:IsA("UIStroke") then
-			TweenService:Create(descendant, TWEEN_INFO, { Transparency = targetTransparency }):Play()
-		elseif descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
-			TweenService:Create(descendant, TWEEN_INFO, { TextTransparency = targetTransparency }):Play()
-		end
-	end
-end
-
--- Modulates named ParticleEmitters' Brightness on a drop. dimmed=true
--- pushes all three to PARTICLE_DIMMED_BRIGHTNESS (0.25); dimmed=false
--- restores authored Layer/Spark/Shine values. Direct property writes
--- (not tweens) match RelicRenderController which also writes the
--- Brightness instantly — feels more responsive than a fade on
--- particle intensity, which the eye reads as "the dimming finished
--- between frames" anyway.
-function GearDropsRenderController._setDropParticleBrightness(
-	_self: typeof(GearDropsRenderController),
-	model: Instance,
-	dimmed: boolean
-)
-	for _, descendant in model:GetDescendants() do
-		if not descendant:IsA("ParticleEmitter") then
-			continue
-		end
-		if descendant.Name == PARTICLE_LAYER_NAME then
-			descendant.Brightness = dimmed and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_LAYER
-		elseif descendant.Name == PARTICLE_SPARK_NAME then
-			descendant.Brightness = dimmed and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_SPARK
-		elseif descendant.Name == PARTICLE_SHINE_NAME then
-			descendant.Brightness = dimmed and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_SHINE
-		end
-	end
-end
-
--- Flips BillboardGui.AlwaysOnTop on every billboard inside a drop.
--- Direct write (not tween) — boolean property.
-function GearDropsRenderController._setDropBillboardAlwaysOnTop(
-	_self: typeof(GearDropsRenderController),
-	model: Instance,
-	alwaysOnTop: boolean
-)
-	for _, descendant in model:GetDescendants() do
-		if descendant:IsA("BillboardGui") then
-			descendant.AlwaysOnTop = alwaysOnTop
-		end
-	end
-end
-
--- Fades the TEXT of every billboard inside a drop (labels and their
--- strokes alike). The relic side dims NameText / RarityText by name;
--- walking every TextLabel instead covers the owner line as well and
--- needs no update when the prefab gains another row.
-function GearDropsRenderController._tweenDropBillboardText(
-	_self: typeof(GearDropsRenderController),
-	model: Instance,
-	targetTransparency: number
-)
-	for _, descendant in model:GetDescendants() do
-		if not descendant:IsA("BillboardGui") then
-			continue
-		end
-		for _, label in descendant:GetDescendants() do
-			if label:IsA("TextLabel") then
-				TweenService:Create(label, TWEEN_INFO, { TextTransparency = targetTransparency }):Play()
-				local stroke = label:FindFirstChildOfClass("UIStroke")
-				if stroke then
-					TweenService:Create(stroke, TWEEN_INFO, { Transparency = targetTransparency }):Play()
+	fadeSubtree(model, {
+		targetTransparency = if dim then PickupHoverStyle.ModelTransparency else 0,
+		textTransparency = if dim then PickupHoverStyle.TextTransparency else 0,
+		tweenInfo = PickupHoverStyle.TweenInfo,
+		skipHidden = true,
+		includeDecals = true,
+		includeGuis = true,
+		visit = function(descendant)
+			if descendant:IsA("BillboardGui") then
+				descendant.AlwaysOnTop = not dim
+			elseif descendant:IsA("ParticleEmitter") then
+				local restored = PickupHoverStyle.ParticleRestoredBrightness[descendant.Name]
+				if restored then
+					descendant.Brightness = if dim then PickupHoverStyle.ParticleDimmedBrightness else restored
 				end
 			end
-		end
-	end
+		end,
+	})
 end
 
 -- Recomputes whether a drop's billboard should be showing from the three
@@ -239,9 +192,9 @@ function GearDropsRenderController._setDropBillboardEnabled(
 	end
 end
 
--- Walks every OTHER GearDrop on the client and applies the dim
--- treatment (transparency + particles + AlwaysOnTop). Filters:
---   * Skips the hovered model itself.
+-- The floor dim as it should be RIGHT NOW, applied to every drop whose
+-- recorded state differs. Filters:
+--   * Skips the hovered model itself (it is lit, not dimmed).
 --   * Skips drops that are mid-fade (ATTR_EXPIRED == true) — their
 --     own _fadeOutAndDestroy is driving transparency to 1; we'd
 --     fight that.
@@ -249,37 +202,58 @@ end
 --     invisible on this client (spawned hidden by the server, see
 --     privateDropVisibility, and never revealed here); tweening their
 --     transparency from 1 → 0.5 would partially un-hide other players'
---     loot. Owner-only drops also means only
---     owner-hovers can fire PromptShown anyway, so the dim only ever
---     needs to touch the local player's own siblings.
+--     loot. A PUBLIC drop (one a player dropped) is visible to everyone,
+--     so it dims on everyone's client -- the owner filter only exists to
+--     avoid un-hiding loot this client cannot see.
 local localUserId = Players.LocalPlayer.UserId
-function GearDropsRenderController._applyOthersDim(
-	self: typeof(GearDropsRenderController),
-	hoveredModel: Model,
-	dim: boolean
-)
-	local targetTransparency = dim and DIMMED_TRANSPARENCY or 0
-	local alwaysOnTop = not dim
-	for _, otherModel in CollectionService:GetTagged(TagList.GearDrop) do
-		if otherModel == hoveredModel then
+function GearDropsRenderController._commitDim(self: typeof(GearDropsRenderController))
+	local active = self._ownHoverActive or self._externalHoverActive
+	local hoveredModel = if self._ownHoverActive then self._ownHoverModel else nil
+	for _, model in CollectionService:GetTagged(TagList.GearDrop) do
+		if not model:IsDescendantOf(workspace) then
 			continue
 		end
-		if otherModel:GetAttribute(ATTR_EXPIRED) == true then
+		if model:GetAttribute(ATTR_EXPIRED) == true then
 			continue
 		end
-		-- A PUBLIC drop (one a player dropped) is visible to everyone, so
-		-- it dims on everyone's client -- the owner filter above only
-		-- exists to avoid un-hiding loot this client cannot see.
-		if
-			otherModel:GetAttribute(ATTR_PUBLIC_DROP) ~= true
-			and otherModel:GetAttribute(ATTR_OWNER_ID) ~= localUserId
-		then
+		if model:GetAttribute(ATTR_PUBLIC_DROP) ~= true and model:GetAttribute(ATTR_OWNER_ID) ~= localUserId then
 			continue
 		end
-		self:_tweenDropTransparency(otherModel, targetTransparency)
-		self:_setDropParticleBrightness(otherModel, dim)
-		self:_setDropBillboardAlwaysOnTop(otherModel, alwaysOnTop)
-		self:_tweenDropBillboardText(otherModel, if dim then BILLBOARD_TEXT_DIMMED_TRANSPARENCY else 0)
+		local wanted = active and model ~= hoveredModel
+		local applied = self._dimApplied[model] == true
+		if wanted == applied then
+			continue
+		end
+		self:_applyDropDim(model, wanted)
+		self._dimApplied[model] = if wanted then true else nil
+	end
+end
+
+-- Schedules a commit HOVER_DEBOUNCE_SECONDS out. Every input change in
+-- that window folds into the one commit, which then applies only the
+-- difference between what is on the floor and what is wanted.
+function GearDropsRenderController._scheduleDimCommit(self: typeof(GearDropsRenderController))
+	if self._dimCommitPending then
+		return
+	end
+	self._dimCommitPending = true
+	task.delay(HOVER_DEBOUNCE_SECONDS, function()
+		self._dimCommitPending = false
+		self:_commitDim()
+	end)
+end
+
+-- This side's own prompt: the hovered drop lights up and everything else
+-- steps back — other gear here, and relics, runes and vending machines
+-- through the relic controller. The relic side is told at once (it
+-- debounces its own commit); the cross-call never comes back, so there
+-- is no loop.
+function GearDropsRenderController._setOwnHover(self: typeof(GearDropsRenderController), active: boolean, model: Model?)
+	self._ownHoverActive = active
+	self._ownHoverModel = if active then model else nil
+	self:_scheduleDimCommit()
+	if RelicRenderController then
+		RelicRenderController:SetExternalHover(active)
 	end
 end
 
@@ -302,23 +276,14 @@ function GearDropsRenderController._tweenHoveredScale(
 	end
 end
 
--- Called by RelicRenderController when a Relic / RelicMachine prompt is
--- shown / hidden so the gear-drop side dims in lockstep with relic
--- hover. When `active` is true: dim every gear drop the local player
--- owns (no model to skip — no gear is the "hovered" one in this path).
--- When false: restore them.
---
--- One-way relationship by design — gear-drop hover is intentionally
--- minimal (highlight + scale only, see PromptShown below) so we don't
--- mirror back into the relic side. Only RELIC hover triggers the
--- cross-system dim; GEAR hover stays self-contained.
+-- Called by RelicRenderController when a relic, rune, vending machine or
+-- stall display is hovered / released so the gear-drop side dims in
+-- lockstep. The caller has already debounced; this only records the
+-- input and schedules the commit (no drop is the "hovered" one in this
+-- path, so every owned drop takes the dim). Never calls back.
 function GearDropsRenderController.SetExternalHover(self: typeof(GearDropsRenderController), active: boolean)
-	-- _applyOthersDim treats `hoveredModel == nil` as "no exclusion" —
-	-- the `if otherModel == hoveredModel then continue end` check is
-	-- never true when hoveredModel is nil, so every owned drop gets
-	-- the dim treatment. Reuses the full dim path (transparency tweens
-	-- + particle brightness + AlwaysOnTop flip).
-	self:_applyOthersDim(nil :: any, active)
+	self._externalHoverActive = active
+	self:_scheduleDimCommit()
 end
 
 -- Returns the GearDrop-tagged ancestor Model of the prompt, or nil if
@@ -338,27 +303,19 @@ end
 --[ Lifecycle ]--
 
 function GearDropsRenderController.Start(self: typeof(GearDropsRenderController))
-	-- Resolved here rather than at module scope: the two render
-	-- controllers reference each other, so a require-time lookup would be
-	-- circular.
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "GearDropHighlight"
+	highlight.FillColor = HIGHLIGHT_FILL_COLOR
+	highlight.OutlineColor = HIGHLIGHT_OUTLINE_COLOR
+	highlight.FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HIDDEN
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Parent = nil
+	self._highlight = highlight
 
-	-- Single shared Highlight. Reparented between hovered drops; sits
-	-- detached (Parent = nil) when nothing is hovered.
-	self._highlight = Instance.new("Highlight")
-	self._highlight.Name = "GearDropHighlight"
-	self._highlight.FillColor = HIGHLIGHT_FILL_COLOR
-	self._highlight.OutlineColor = HIGHLIGHT_OUTLINE_COLOR
-	self._highlight.FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HIDDEN
-	self._highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	self._highlight.Parent = nil
-
-	-- Gear hover is the FULL treatment now, matching a relic hover: the
-	-- hovered drop lights up and everything else steps back — its own
-	-- label hidden so it does not fight the prompt, other gear dimmed,
-	-- and relics, runes and vending machines dimmed through
-	-- RelicRenderController. The relationship is now symmetric: each
-	-- side's PromptShown calls the other's SetExternalHover, and neither
-	-- of those calls back, so there is no loop.
+	-- Gear hover is the FULL treatment, matching a relic hover: the
+	-- hovered drop lights up at once (highlight, scale, its own label
+	-- hidden so it does not fight the prompt) and the floor dim follows
+	-- through the debounced commit.
 	ProximityPromptService.PromptShown:Connect(function(prompt: ProximityPrompt)
 		local model = self:_resolveDropModelFromPrompt(prompt)
 		if not model then
@@ -371,9 +328,9 @@ function GearDropsRenderController.Start(self: typeof(GearDropsRenderController)
 		-- makes the outline trace only the visible mesh.
 		local visualModel = self:_findVisualModel(model)
 		if visualModel then
-			self._highlight.Adornee = visualModel
-			self._highlight.Parent = visualModel
-			TweenService:Create(self._highlight, TWEEN_INFO, { FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HOVERED })
+			highlight.Adornee = visualModel
+			highlight.Parent = visualModel
+			TweenService:Create(highlight, TWEEN_INFO, { FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HOVERED })
 				:Play()
 		end
 
@@ -388,12 +345,7 @@ function GearDropsRenderController.Start(self: typeof(GearDropsRenderController)
 		model:SetAttribute(ATTR_PROMPT_SHOWN, true)
 		self:RefreshBillboardVisibility(model)
 
-		-- Everything else steps back: other gear here, relics and runes
-		-- and vending machines through the relic controller.
-		self:_applyOthersDim(model, true)
-		if RelicRenderController then
-			RelicRenderController:SetExternalHover(true)
-		end
+		self:_setOwnHover(true, model)
 	end)
 
 	ProximityPromptService.PromptHidden:Connect(function(prompt: ProximityPrompt)
@@ -405,9 +357,9 @@ function GearDropsRenderController.Start(self: typeof(GearDropsRenderController)
 		-- Detach highlight first so a quick hover-on/hover-off cycle
 		-- doesn't leave a stale outline mid-tween. Direct write
 		-- (no tween) — same as RelicRenderController.
-		self._highlight.FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HIDDEN
-		self._highlight.Adornee = nil
-		self._highlight.Parent = nil
+		highlight.FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HIDDEN
+		highlight.Adornee = nil
+		highlight.Parent = nil
 
 		-- Scale back to idle.
 		local idleScale =
@@ -418,10 +370,8 @@ function GearDropsRenderController.Start(self: typeof(GearDropsRenderController)
 		-- pickup in flight, or a drop already fading out.
 		model:SetAttribute(ATTR_PROMPT_SHOWN, false)
 		self:RefreshBillboardVisibility(model)
-		self:_applyOthersDim(model, false)
-		if RelicRenderController then
-			RelicRenderController:SetExternalHover(false)
-		end
+
+		self:_setOwnHover(false, nil)
 	end)
 end
 

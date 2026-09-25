@@ -9,8 +9,8 @@
 -- way you get health back is by hurting something.
 --
 -- "On ALL damage": called with the FINAL applied amount from every path
--- that lands damage -- each direct hit (_recordLastHit: crit, resisted,
--- plain) AND every status DoT tick. An AoE that hits ten mobs calls
+-- that lands damage -- each direct hit (crit, resisted, plain) AND every
+-- status DoT tick. An AoE that hits ten mobs calls
 -- TakeDamage ten times and so heals ten times, which is intended.
 --
 -- isLifesteal = true on the ApplyHealing call is load-bearing: without it

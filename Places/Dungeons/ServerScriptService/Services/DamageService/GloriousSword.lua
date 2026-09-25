@@ -9,20 +9,21 @@
 -- a flat bonus for the orchestrator's additive amplifier sum.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 
-return function(player: Player, damage: number, isMagic: boolean)
+type RelicSnapshot = DamageService.RelicSnapshot
+
+return function(_player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean)
 	if isMagic then
 		return 0
 	end
 
-	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Glorious Sword"]) <= 0 then
+	if DamageService.RelicCount(snapshot, RelicNames["Glorious Sword"]) <= 0 then
 		return 0
 	end
 
-	local effect = RelicService:GetRelicEffect(player, RelicNames["Glorious Sword"]) or 1
+	local effect = DamageService.RelicEffect(snapshot, RelicNames["Glorious Sword"]) or 1
 	return math.round(damage * (effect - 1))
 end

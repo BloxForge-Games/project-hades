@@ -67,6 +67,7 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local DamageService = require(ServerScriptService.Services.DamageService)
 local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local ZombieService = {
 	Name = "ZombieService",
@@ -105,6 +106,13 @@ local HITBOX_PARENT = workspace.IgnoreInstances.MagicSpells
 -- Entries auto-expire via task.delay(projectileLifetime + grace) so
 -- dropped/spoofed impact reports don't accumulate.
 local PROJECTILE_REGISTRY_EXPIRE_GRACE = 0.5
+
+-- The hit-frame overlap query runs once every this many Heartbeats rather
+-- than every frame: a hit window of a few tenths of a second is still
+-- sampled several times over, while the gates (death, Jailed,
+-- AttackInterrupted) keep running every frame so an interrupt still lands
+-- the same frame it fires.
+local HIT_QUERY_INTERVAL_FRAMES = 2
 
 -- Overlap params reused across calls. Excludes IgnoreInstances entirely
 -- so the hit check only sees player characters + dungeon geometry (the
@@ -163,6 +171,20 @@ function ZombieService._creditPerfectDodge(self: typeof(ZombieService), player: 
 	end
 end
 
+-- Players whose character can still be hit right now. The hit-frame loop
+-- stops querying once every one of them is in its hit registry.
+function ZombieService._countHittablePlayers(_self: typeof(ZombieService)): number
+	local count = 0
+	for _, player in Players:GetPlayers() do
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			count += 1
+		end
+	end
+	return count
+end
+
 function ZombieService._resolveHitboxTemplate(_self: typeof(ZombieService), hitboxName: string): Model?
 	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
 	if not hitboxesFolder then
@@ -187,6 +209,8 @@ end
 -- through multiple zones within one swing aren't multi-hit.
 function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel: Model, attack, hitboxModel: Model)
 	local hitRegistry: { [Player]: boolean } = {}
+	local hitCount = 0
+	local frameIndex = 0
 	local startTime = os.clock()
 	-- Cache the zombie's humanoid so the per-tick alive-check below
 	-- doesn't pay a FindFirstChildOfClass lookup every Heartbeat.
@@ -229,6 +253,14 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 			return
 		end
 
+		-- Spatial query only every HIT_QUERY_INTERVAL_FRAMES frames (the
+		-- first frame of the window always queries).
+		if frameIndex % HIT_QUERY_INTERVAL_FRAMES ~= 0 then
+			frameIndex += 1
+			RunService.Heartbeat:Wait()
+			continue
+		end
+
 		for _, hitboxPart in hitParts do
 			local touched = workspace:GetPartBoundsInBox(hitboxPart.CFrame, hitboxPart.Size, overlapParams)
 			for _, part in touched do
@@ -236,7 +268,7 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 				if not model then
 					continue
 				end
-				local humanoid = model:FindFirstChild("Humanoid")
+				local humanoid = model:FindFirstChildOfClass("Humanoid")
 				if not humanoid or humanoid.Health <= 0 then
 					continue
 				end
@@ -245,6 +277,7 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 					continue
 				end
 				hitRegistry[player] = true
+				hitCount += 1
 
 				-- Dodge intercept: the player perfectly dodged this swing.
 				-- Same UX as the prior implementation — small invisible part
@@ -267,6 +300,14 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 			end
 		end
 
+		-- Every hittable player is already registered (hit or dodged): the
+		-- registry cannot grow, so the rest of the window has nothing left
+		-- to find.
+		if hitCount >= self:_countHittablePlayers() then
+			return
+		end
+
+		frameIndex += 1
 		RunService.Heartbeat:Wait()
 	end
 end
@@ -276,10 +317,9 @@ end
 -- just before the wall so the mob doesn't tween THROUGH geometry.
 function ZombieService._computeLungeGoalCFrame(
 	_self: typeof(ZombieService),
-	zombieModel: Model,
+	root: BasePart,
 	lungeDistance: number
 ): CFrame
-	local root = zombieModel:FindFirstChild("HumanoidRootPart") :: BasePart
 	local goalCFrame = root.CFrame + root.CFrame.LookVector * lungeDistance
 
 	local rayOrigin = root.Position - Vector3.new(0, root.Size.Y, 0)
@@ -332,7 +372,7 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	if not zombieModel or not zombieModel.Parent then
 		return
 	end
-	if not zombieModel:FindFirstChild("HumanoidRootPart") then
+	if not getRoot(zombieModel) then
 		return
 	end
 
@@ -394,8 +434,11 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	-- Phase 3: lunge (opt-in) — fires at hit-frame start
 	-- ============================================================
 	if config.lungeDistance and config.lungeDistance > 0 then
-		local root = zombieModel:FindFirstChild("HumanoidRootPart") :: BasePart
-		local goalCFrame = self:_computeLungeGoalCFrame(zombieModel, config.lungeDistance)
+		local root = getRoot(zombieModel)
+		if not root then
+			return
+		end
+		local goalCFrame = self:_computeLungeGoalCFrame(root, config.lungeDistance)
 		Combat.MobLunge.FireAll({
 			Mob = zombieModel,
 			StartCFrame = root.CFrame,
@@ -477,9 +520,12 @@ function ZombieService.FireMobRangedAttack(
 	if not zombieModel.Parent or not target or not target.Parent then
 		return nil
 	end
-	local targetCharacter = target.Character
-	local targetHRP = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+	local targetHRP = getRoot.fromPlayer(target)
 	if not targetHRP then
+		return nil
+	end
+	local mobRoot = getRoot(zombieModel)
+	if not mobRoot then
 		return nil
 	end
 
@@ -508,7 +554,6 @@ function ZombieService.FireMobRangedAttack(
 	end)
 
 	-- Resolve muzzle origin (mob-relative CFrame from per-attack function).
-	local mobRoot = zombieModel:FindFirstChild("HumanoidRootPart") :: BasePart
 	local originCFrame = attack.muzzleOffset and attack.muzzleOffset(zombieModel) or mobRoot.CFrame
 
 	-- Aim point: straight ahead along the MOB's facing at cast time —
@@ -647,7 +692,7 @@ function ZombieService._onMobProjectileHit(
 			if not character then
 				continue
 			end
-			local humanoid = character:FindFirstChild("Humanoid")
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			if not humanoid or humanoid.Health <= 0 then
 				continue
 			end

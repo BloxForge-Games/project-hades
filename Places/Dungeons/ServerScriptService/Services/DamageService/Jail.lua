@@ -36,12 +36,14 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageService = require(script.Parent)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
+local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+
+type RelicSnapshot = DamageService.RelicSnapshot
 
 local JAIL_DURATION = 3
 local JAILED_DEBOUNCE = 5
@@ -49,27 +51,17 @@ local JAILED_DEBOUNCE = 5
 -- Jail chance (percent) for a NON-BOSS enemy. Tune here.
 local NORMAL_JAIL_CHANCE_PCT = 15
 
--- True when the mob is a Miniboss or Boss, which can never be Jailed.
--- Reads the EnemyType attribute MobBase stamps at spawn (Normal / Elite /
--- Miniboss / Boss). A missing/unknown attribute reads as NON-boss, so a
--- misconfigured ZombieData entry surfaces as "weird mob got jailed"
--- rather than "relic silently does nothing".
-local function isEncounterEnemy(mobModel: Model): boolean
-	local enemyType = mobModel:GetAttribute(Attributes.EnemyType)
-	return enemyType == EnemyTypes.Miniboss or enemyType == EnemyTypes.Boss
-end
-
-return function(player: Player, humanoid: Humanoid, isMagic: boolean)
+return function(_player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, isMagic: boolean)
 	if isMagic then
 		return
 	end
 
-	-- Relic ownership check. Reads the registry rather than the callback,
+	-- Relic ownership check. Reads the count rather than the callback,
 	-- which returns a bare 1 (the relic's old +25% Weapon Damage half left
 	-- with its rework -- Jail is now its whole effect). The per-type chance
 	-- math lives here, not in the callback, because it needs the per-mob
 	-- EnemyType attribute.
-	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Portable Justice"]) <= 0 then
+	if DamageService.RelicCount(snapshot, RelicNames["Portable Justice"]) <= 0 then
 		return
 	end
 
@@ -92,7 +84,8 @@ return function(player: Player, humanoid: Humanoid, isMagic: boolean)
 		return
 	end
 
-	-- Minibosses and Bosses are Jail-IMMUNE per the relic text.
+	-- Minibosses and Bosses are Jail-IMMUNE per the relic text (shared
+	-- Functions/Mob/isEncounterEnemy: the EnemyType attribute MobBase stamps).
 	if isEncounterEnemy(mobModel) then
 		return
 	end

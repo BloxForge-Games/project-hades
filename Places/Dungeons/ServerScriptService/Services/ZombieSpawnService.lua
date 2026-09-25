@@ -1,7 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
@@ -9,16 +8,14 @@ local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Dungeo
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
 
 local SPAWN_DELAY = 0.5
 
@@ -28,7 +25,7 @@ local SPAWN_DELAY = 0.5
 --         QUEUE_SEGMENT_ONE + ((combatSegmentIndex - 1) × QUEUE_PER_SEGMENT)
 --                           + (players × QUEUE_PER_PLAYER)
 --     where combatSegmentIndex is the room's dungeon-wide COMBAT SEGMENT
---     ordinal, stamped at generation by DungeonService. Miniboss/Boss and
+--     ordinal, stamped at generation by DungeonGenerator. Miniboss/Boss and
 --     Treasure/Shrine segments do NOT consume an ordinal, so the ramp
 --     stays continuous across the miniboss.
 --
@@ -93,13 +90,17 @@ local MAX_MINIBOSS_WAVE_ZOMBIES = 8
 
 local MINIBOSS_SPAWN_POINT_NAME = "MinibossSpawnPoint"
 local MINIBOSS_WAVE_INTERVAL = 45
+-- How often a PAUSED (phase cutscene) or CAPPED wave spawner re-checks
+-- whether it may spawn again. It used to spin every frame: both `continue`
+-- branches skipped the trailing interval wait, so a paused or capped room
+-- scanned the whole Zombies folder and warned once per Heartbeat.
+local MINIBOSS_WAVE_POLL_SECONDS = 1
 
 local ZombieSpawnService = {
 	Name = "ZombieSpawnService",
 
 	_zombiePlan = LootPlan.new("single"), -- rebuilt per dungeon (BuildZombiePlanForDungeon)
 	_zombiePlanDungeonId = nil :: string?,
-	_zombiesRegistry = {},
 	_zombiesByRoom = {}, -- [roomId]: { Model, ... } — populated by the room queue
 	_roomQueues = {}, -- [roomId]: { remaining: number, concurrentCap: number } — see SpawnZombiesInRoom
 	_activeMinibossWaves = {}, -- [roomId]: thread — running wave spawner per miniboss room
@@ -109,14 +110,8 @@ local ZombieSpawnService = {
 ZombieSpawnService.OnZombieSpawn = Signal.new()
 ZombieSpawnService.OnZombieDespawn = Signal.new()
 
-function ZombieSpawnService.GetZombieRegistry(self: typeof(ZombieSpawnService)): { Model }
-	return self._zombiesRegistry
-end
-
 function ZombieSpawnService.IncrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
 	self.OnZombieSpawn:Fire(zombie)
-
-	table.insert(self._zombiesRegistry, zombie)
 end
 
 function ZombieSpawnService.DecrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
@@ -133,11 +128,6 @@ function ZombieSpawnService.DecrementZombieCount(self: typeof(ZombieSpawnService
 				table.remove(roomList, roomIdx)
 			end
 		end
-	end
-
-	local index = table.find(self._zombiesRegistry, zombie)
-	if index then
-		table.remove(self._zombiesRegistry, index)
 	end
 
 	self.OnZombieDespawn:Fire(zombie)
@@ -162,7 +152,8 @@ function ZombieSpawnService._zombieFolder(_self: typeof(ZombieSpawnService), dun
 end
 
 function ZombieSpawnService._activeDungeonId(_self: typeof(ZombieSpawnService)): string?
-	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local dungeon = dungeonService and dungeonService:GetActiveDungeon()
 	return dungeon and dungeon.id or nil
 end
 
@@ -266,7 +257,6 @@ function ZombieSpawnService.ResetForNewDungeon(self: typeof(ZombieSpawnService))
 	for _, zombie in workspace.IgnoreInstances.Zombies:GetChildren() do
 		zombie:Destroy()
 	end
-	table.clear(self._zombiesRegistry)
 end
 
 -- Collect every Attachment under the room's "SpawnPoints" folder. Each
@@ -323,7 +313,8 @@ function ZombieSpawnService._getPreviousChunks(self: typeof(ZombieSpawnService),
 	if room.segmentId == nil or room.chunkIndex == nil then
 		return previous
 	end
-	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local dungeon = dungeonService and dungeonService:GetActiveDungeon()
 	if not dungeon then
 		return previous
 	end
@@ -723,6 +714,24 @@ function ZombieSpawnService.SpawnMinibossInRoom(
 	return miniboss
 end
 
+-- Live wave adds in the room: the room's own list minus its boss /
+-- miniboss. DecrementZombieCount prunes the list on death, so this is what
+-- the MAX_MINIBOSS_WAVE_ZOMBIES cap compares against — never the whole
+-- Zombies folder, where another room's mobs would starve this room's waves.
+function ZombieSpawnService._countRoomWaveZombies(self: typeof(ZombieSpawnService), room): number
+	local roomList = self._zombiesByRoom[room.id]
+	if not roomList then
+		return 0
+	end
+	local count = 0
+	for _, zombie in roomList do
+		if zombie:GetAttribute(Attributes.IsBoss) ~= true and zombie:GetAttribute(Attributes.IsMiniBoss) ~= true then
+			count += 1
+		end
+	end
+	return count
+end
+
 -- Begins a periodic wave spawner for the miniboss room. Every
 -- MINIBOSS_WAVE_INTERVAL seconds, spawns one zombie at each regular
 -- SpawnPoint attachment (skipping MinibossSpawnPoint). Stops when
@@ -735,26 +744,38 @@ function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService),
 	-- Cancel any existing waves for this room first (defensive).
 	self:StopMinibossWaves(room)
 
+	-- The wave loop appends to the room list; make sure it exists even when
+	-- the miniboss itself was placed some other way.
+	self._zombiesByRoom[room.id] = self._zombiesByRoom[room.id] or {}
+
 	self._activeMinibossWaves[room.id] = task.spawn(function()
-		while task.wait() do
+		-- One warn per cap episode, not one per poll.
+		local warnedCap = false
+		while true do
 			if not room.model or not room.model.Parent then
 				break
 			end
 
 			-- Frozen during a boss phase-change cutscene — don't start a wave.
 			if self._minibossWavesPaused[room.id] then
+				task.wait(MINIBOSS_WAVE_POLL_SECONDS)
 				continue
 			end
 
-			if #workspace.IgnoreInstances.Zombies:GetChildren() >= MAX_MINIBOSS_WAVE_ZOMBIES then
-				warn(
-					("[ZombieSpawnService] Hit %d-zombie cap for miniboss waves; skipping this wave for room %s"):format(
-						MAX_MINIBOSS_WAVE_ZOMBIES,
-						room.model.Name
+			if self:_countRoomWaveZombies(room) >= MAX_MINIBOSS_WAVE_ZOMBIES then
+				if not warnedCap then
+					warnedCap = true
+					warn(
+						("[ZombieSpawnService] Hit %d-zombie cap for miniboss waves; holding waves for room %s"):format(
+							MAX_MINIBOSS_WAVE_ZOMBIES,
+							room.model.Name
+						)
 					)
-				)
+				end
+				task.wait(MINIBOSS_WAVE_POLL_SECONDS)
 				continue
 			end
+			warnedCap = false
 
 			local points = self:_getRoomRegularSpawnPoints(room.model)
 

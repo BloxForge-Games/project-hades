@@ -49,6 +49,7 @@ local Stormcharged = require(script.AuraServer.Stormcharged)
 local Blighted = require(script.AuraServer.Blighted)
 local Stonebound = require(script.AuraServer.Stonebound)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local AuraService = {
 	Name = "AuraService",
@@ -68,13 +69,12 @@ local STONEBOUND_DAMAGE_ATTRIBUTE = "StoneboundDamageBonus"
 local STONEBOUND_REDUCTION_ATTRIBUTE = "StoneboundDamageReduction"
 local STONEBOUND_OWNER_ATTRIBUTE = "StoneboundOwnerId"
 
--- Aura-duration extensions, summed ADDITIVELY (both owned = +75%, never
--- 1.25 x 1.5), read from the RECEIVER ("your auras"). Flaming Orb of
+-- Aura-duration extensions, summed ADDITIVELY (never multiplied together
+-- should more than one ever stack), read from the RECEIVER ("your auras"). Flaming Orb of
 -- Divine Pain pays for its +50% with +25% damage taken while an aura is up
 -- (DamageService:PlayerTakeDamage).
 local AURA_DURATION_BONUSES = {
 	{ relicName = RelicNames["Flaming Orb of Divine Pain"], bonus = 0.5 },
-	{ relicName = RelicNames["Spray Paint"], bonus = 0.25 },
 }
 
 -- How far Stonebound carries to allies. Every source spreads — Riot
@@ -122,8 +122,8 @@ local function playAuraShockwave(character: Model, auraName: string)
 	if not templateName then
 		return
 	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root or not root:IsA("BasePart") then
+	local root = getRoot(character)
+	if not root then
 		return
 	end
 	emitVFXPart(templateName, root.CFrame, nil, { DefaultEmitCount = AURA_SHOCKWAVE_EMIT_COUNT })
@@ -159,7 +159,7 @@ end
 -- The live Stonebound payload on a character, for the damage pipeline:
 -- (damageBonus, damageReduction), both 0 when the aura isn't up.
 function AuraService.GetStoneboundPayload(_self: typeof(AuraService), character: Model?): (number, number)
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = getRoot(character)
 	local marker = hrp and hrp:FindFirstChild(AuraNames.Stonebound)
 	if not marker then
 		return 0, 0
@@ -211,7 +211,7 @@ end
 -- their own, AND it is what marks the grant as a spread so the recipient
 -- does not pass it on again.
 function AuraService._spreadStonebound(self: typeof(AuraService), ownerPlayer: Player, ownerCharacter: Model)
-	local hrp = ownerCharacter and ownerCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot(ownerCharacter)
 	if not hrp then
 		return
 	end
@@ -221,7 +221,7 @@ function AuraService._spreadStonebound(self: typeof(AuraService), ownerPlayer: P
 	for _, other in Players:GetPlayers() do
 		if other ~= ownerPlayer then
 			local otherCharacter = other.Character
-			local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+			local otherHrp = getRoot(otherCharacter)
 			if otherHrp and (otherHrp.Position - hrp.Position).Magnitude <= STONEBOUND_SPREAD_RADIUS then
 				self:SetAura(other, AuraNames.Stonebound, otherCharacter, nil, ownerPlayer)
 			end
@@ -230,7 +230,7 @@ function AuraService._spreadStonebound(self: typeof(AuraService), ownerPlayer: P
 end
 
 -- Grants `auraName` to `character` for `duration` seconds (defaults from
--- AuraData). `player` is the RECEIVER — their Spray Paint extends it,
+-- AuraData). `player` is the RECEIVER — their Flaming Orb extends it,
 -- their Sword of Eternal Abyss blocks it. `ownerPlayer` matters only for
 -- Stonebound, whose payload follows the GRANTER's relics; nil = self.
 --
@@ -244,7 +244,7 @@ function AuraService.SetAura(
 	duration: number?,
 	ownerPlayer: Player?
 )
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = getRoot(character)
 	if not hrp then
 		return
 	end

@@ -28,6 +28,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local LifeService = require(ServerScriptService.Services.LifeService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 local EnemyScalingService = {
 	Name = "EnemyScalingService",
@@ -111,7 +112,7 @@ function EnemyScalingService.RescaleAll(_self: typeof(EnemyScalingService), excl
 		end
 	end
 
-	print(
+	Log.debug(
 		("[EnemyScalingService] x%d for %d active players; %d mobs rescaled"):format(
 			multiplier,
 			activePlayers,

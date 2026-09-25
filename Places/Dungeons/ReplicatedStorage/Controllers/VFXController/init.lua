@@ -16,7 +16,6 @@ local UserInputService = game:GetService("UserInputService")
 local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
 local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
 local warmSwordSlashTextures = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.warmSwordSlashTextures)
--- local VFXData = require(ReplicatedStorage.Submodules.Core.Shared.Data.VFXData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 -- Sub-registry: per-projectile modules for MOB ranged attacks. Keyed

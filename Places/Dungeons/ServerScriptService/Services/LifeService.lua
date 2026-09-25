@@ -56,25 +56,24 @@ local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Dungeo
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
 local ScreenSweepData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ScreenSweepData)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Players whose extraction teleport is already in its sweep hold, so a
 -- second portal trigger inside that window does not fire twice.
 local extractionPending: { [Player]: boolean } = {}
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
 
 export type DeathPhase = "downed" | "dead"
 
 -- One player's death, server side. The replicated snapshot carries every
--- field but diedAtClock (see _replicateDeathState for the wire shape).
+-- field but diedAtClock (see _publishDeathState for the wire shape).
 export type DeathEntry = {
 	phase: DeathPhase,
 	diedAtClock: number,
@@ -162,6 +161,11 @@ LifeService._deathAnimationHolds = {} :: { [number]: RBXScriptConnection }
 -- Token per open revive window; the expiry callback aborts if a revive
 -- (or a leave) replaced or cleared it.
 LifeService._deathWindowTokens = {} :: { [number]: any }
+-- [userId] = true from the moment a Revive is committed until its
+-- sequence ends. Revive yields for the fade and the cutscene, and two
+-- callers inside that window (a duplicate receipt, a receipt plus
+-- /revive) used to run the whole sequence twice.
+LifeService._reviving = {} :: { [number]: boolean }
 LifeService._lobbyTeleportToken = nil :: any
 
 LifeService.OnLifeLost = Signal.new() -- (player)
@@ -178,10 +182,22 @@ LifeService.OnPlayerFullyDied = Signal.new() -- (player, isWipe: boolean)
 LifeService.OnPartyWiped = Signal.new() -- (lastPlayer: Player?)
 LifeService.OnPlayerRevived = Signal.new() -- (player)
 
+LifeService.Signals = {
+	-- (player) -- TeleportPlayerToLobby has ISSUED this player's lobby
+	-- teleport (TeleportAsync returned without throwing). Fires after
+	-- the extraction sweep and never in Studio, where no teleport goes
+	-- out. Anything that must only happen once the player is really on
+	-- the way out (RunEscrowService banks the run escrow here) hangs off
+	-- this, not off DungeonService.OnPlayerExtracted, which fires when
+	-- the portal prompt is triggered, before the teleport is attempted.
+	OnPlayerLeavingToLobby = Signal.new(),
+}
+
 --[ Private helpers ]--
 
--- Publishes the current LivesData snapshot to clients.
-function LifeService._replicateLives(self: typeof(LifeService))
+-- The ONLY writer of the LivesData property: derives the snapshot from
+-- _lives and publishes it. Reached through _setLives, never directly.
+function LifeService._publishLives(self: typeof(LifeService))
 	local snapshot = {}
 	for userId, entry in self._lives do
 		snapshot[userId] = { current = entry.current, max = entry.max }
@@ -189,10 +205,46 @@ function LifeService._replicateLives(self: typeof(LifeService))
 	self._livesProperty:Set(snapshot)
 end
 
--- The wire shape every client reader (LifeController, TombstoneController,
--- the Game Over screen) sees. diedAtClock stays server-side: it is an
--- os.clock() race token, meaningless on another machine.
-function LifeService._replicateDeathState(self: typeof(LifeService))
+-- The ONLY writer of _lives. Every life change (seed / reset on a new
+-- run, a life lost, a life granted, the revive's reset to 1, the leave)
+-- lands here, so the table and its replicated mirror can never drift.
+-- `current` = nil drops the entry (the player left). An existing entry
+-- is updated in place, so a caller holding it reads the new count.
+function LifeService._setLives(self: typeof(LifeService), player: Player, current: number?, max: number?)
+	local userId = player.UserId
+	if current == nil then
+		self._lives[userId] = nil
+	else
+		local entry = self._lives[userId]
+		local resolvedMax = max or (entry and entry.max) or current
+		if entry then
+			entry.current = current
+			entry.max = resolvedMax
+		else
+			self._lives[userId] = { current = current, max = resolvedMax }
+		end
+	end
+	self:_publishLives()
+end
+
+-- The ONLY writer of _deathState. nil clears the entry (revived, or
+-- left); an entry already stored may be passed back after its fields
+-- changed (the downed -> dead stamp) to republish it.
+function LifeService._setDeathState(self: typeof(LifeService), player: Player, entry: DeathEntry?)
+	if entry then
+		self._deathState[player.UserId] = entry
+	else
+		self._deathState[player.UserId] = nil
+	end
+	self:_publishDeathState()
+end
+
+-- The ONLY writer of the DeathState property: derives the wire shape every
+-- client reader (LifeController, TombstoneController, the Game Over
+-- screen) sees from _deathState. diedAtClock stays server-side: it is an
+-- os.clock() race token, meaningless on another machine. Reached through
+-- _setDeathState, never directly.
+function LifeService._publishDeathState(self: typeof(LifeService))
 	local snapshot = {}
 	for userId, entry in self._deathState do
 		snapshot[userId] = {
@@ -345,7 +397,9 @@ end
 -- callers must be able to tell and not strand the player). YIELDS for the
 -- sweep hold; the ExitPortal prompt handler that calls it has its own
 -- coroutine. A second call inside the hold returns true at once.
-function LifeService.TeleportPlayerToLobby(_self: typeof(LifeService), player: Player): boolean
+-- Signals.OnPlayerLeavingToLobby fires only on the true path, right after
+-- TeleportAsync went out.
+function LifeService.TeleportPlayerToLobby(self: typeof(LifeService), player: Player): boolean
 	if not player or not player.Parent then
 		return false
 	end
@@ -375,6 +429,7 @@ function LifeService.TeleportPlayerToLobby(_self: typeof(LifeService), player: P
 		warn(("[LifeService] Lobby teleport failed for %s: %s"):format(player.Name, tostring(err)))
 		return false
 	end
+	self.Signals.OnPlayerLeavingToLobby:Fire(player)
 	return true
 end
 
@@ -409,7 +464,7 @@ function LifeService._onPartyWiped(self: typeof(LifeService), lastPlayer: Player
 	self._isGameOver = true
 	PlayerNetwork.GameOver.FireAll()
 	self.OnPartyWiped:Fire(lastPlayer)
-	print(
+	Log.debug(
 		("[LifeService] Party wipe (%s) — lobby teleport scheduled in %.2fs"):format(
 			if lastPlayer then lastPlayer.Name .. " was the last" else "last player left",
 			ALL_DEAD_TELEPORT_DELAY
@@ -436,7 +491,7 @@ function LifeService._finalizeDeath(self: typeof(LifeService), player: Player)
 	if deadCharacter then
 		deadCharacter:SetAttribute(Attributes.Downed, false)
 	end
-	self:_replicateDeathState()
+	self:_setDeathState(player, entry)
 
 	-- The client fades the body now; the frozen pose is released only once
 	-- that fade has hidden it. Stamped against the entry so a revive-then-
@@ -458,7 +513,7 @@ function LifeService._finalizeDeath(self: typeof(LifeService), player: Player)
 	self.OnPlayerFullyDied:Fire(player, isWipe)
 	PlayerNetwork.PlayerFullyDied.FireAll({ UserId = userId, IsWipe = isWipe })
 
-	print(("[LifeService] %s fully died — spectate engaged"):format(player.Name))
+	Log.debug(("[LifeService] %s fully died — spectate engaged"):format(player.Name))
 
 	if isWipe then
 		self:_onPartyWiped(player)
@@ -470,9 +525,7 @@ end
 -- Seeds (or resets) a player's lives to `max`. Called by DungeonService on
 -- dungeon generation, and by OnPlayerAdded for late-joiners. Idempotent.
 function LifeService.InitializePlayer(self: typeof(LifeService), player: Player, max: number)
-	local userId = player.UserId
-	self._lives[userId] = { current = max, max = max }
-	self:_replicateLives()
+	self:_setLives(player, max, max)
 end
 
 -- Returns (current, max). Both zero if the player isn't registered yet.
@@ -550,8 +603,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		return
 	end
 
-	entry.current = math.max(entry.current - 1, 0)
-	self:_replicateLives()
+	self:_setLives(player, math.max(entry.current - 1, 0), entry.max)
 
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -579,7 +631,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 
 		self.OnLifeLost:Fire(player)
 		PlayerNetwork.LifeLost.FireAll(userId)
-		print(("[LifeService] %s lost a life. Remaining: %d/%d"):format(player.Name, entry.current, entry.max))
+		Log.debug(("[LifeService] %s lost a life. Remaining: %d/%d"):format(player.Name, entry.current, entry.max))
 		return
 	end
 
@@ -605,9 +657,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		fullyDiedAtServerTime = nil,
 		deathPosition = deathPosition,
 	}
-	self._deathState[userId] = deathEntry
-
-	self:_replicateDeathState()
+	self:_setDeathState(player, deathEntry)
 
 	self.OnPlayerDied:Fire(player)
 	PlayerNetwork.PlayerDied.FireAll(userId)
@@ -661,7 +711,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		self:_finalizeDeath(player)
 	end)
 
-	print(("[LifeService] %s is downed — %.0fs to revive"):format(player.Name, DEATH_WINDOW_SECONDS))
+	Log.debug(("[LifeService] %s is downed — %.0fs to revive"):format(player.Name, DEATH_WINDOW_SECONDS))
 end
 
 -- Increments lives, capped at max. Use for relic/event grants.
@@ -670,8 +720,7 @@ function LifeService.AddLife(self: typeof(LifeService), player: Player)
 	if not entry then
 		return
 	end
-	entry.current = math.min(entry.current + 1, entry.max)
-	self:_replicateLives()
+	self:_setLives(player, math.min(entry.current + 1, entry.max), entry.max)
 end
 
 -- Revive, in EITHER phase. Sequence: fade to black, release the death
@@ -684,18 +733,26 @@ end
 -- Escrow note: a fully dead player's run gear already spilled out of the
 -- corpse (RunEscrowService). Revive does NOT restore it -- you buy your
 -- way back to your feet, then walk over and pick it up.
+--
+-- Re-entrancy: the sequence yields (fade + cutscene), so a second call
+-- while one is running -- a duplicate receipt, a receipt racing /revive
+-- -- is a no-op; the latch is cleared when the sequence ends.
 function LifeService.Revive(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 	local entry = self._deathState[userId]
 	if not entry then
 		return
 	end
+	if self._reviving[userId] then
+		return
+	end
+	self._reviving[userId] = true
 	local wasDowned = entry.phase == "downed"
 	-- The pulse stops the moment the revive is committed, before the fade.
 	if player.Character then
 		player.Character:SetAttribute(Attributes.Downed, false)
 	end
-	print(("[LifeService] %s revive sequence starting (%s)"):format(player.Name, entry.phase))
+	Log.debug(("[LifeService] %s revive sequence starting (%s)"):format(player.Name, entry.phase))
 
 	-- Close the revive window (no expiry may land mid-sequence), cancel a
 	-- pending all-dead lobby teleport and clear Game Over if the wipe
@@ -734,8 +791,9 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 
 	-- Fully dead: the party has moved on and the body is invisible, so
 	-- rejoin them. Downed: the fight is right here; stand up where you fell.
-	if not wasDowned and character and getDungeonService() then
-		local room = getDungeonService():GetPlayerRoom(player)
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not wasDowned and character and dungeonService then
+		local room = dungeonService:GetPlayerRoom(player)
 		if room and room.model and room.model.PrimaryPart then
 			character:PivotTo(CFrame.new(room.model.PrimaryPart.Position + Vector3.new(0, 5, 0)))
 		end
@@ -770,18 +828,17 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 	local lives = self._lives[userId]
 	if lives then
 		-- Stand up at lives = 1. Next death = same flow.
-		lives.current = 1
-		self:_replicateLives()
+		self:_setLives(player, 1, lives.max)
 	end
 
 	-- Only clear the entry this revive started on: a leave during the
 	-- cutscene already removed it, and must not have a stale write undone.
 	if self._deathState[userId] == entry then
-		self._deathState[userId] = nil
-		self:_replicateDeathState()
+		self:_setDeathState(player, nil)
 	end
 
-	print(("[LifeService] %s revived. Lives reset to 1."):format(player.Name))
+	self._reviving[userId] = nil
+	Log.debug(("[LifeService] %s revived. Lives reset to 1."):format(player.Name))
 end
 
 --[ Lifecycle ]--
@@ -791,11 +848,12 @@ function LifeService.Start(self: typeof(LifeService))
 		self:_onPromptRevivePurchase(player)
 	end)
 
-	if getDungeonService() and getDungeonService().Signals and getDungeonService().Signals.OnDungeonGenerated then
-		getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if dungeonService then
+		dungeonService.Signals.OnDungeonGenerated:Connect(function(dungeon)
 			-- Lives are PER RUN: seeded when the run's FIRST dungeon generates and
 			-- carried across dungeons 2 / 3 -- a later dungeon must not refill them.
-			if getDungeonService().GetRunDungeonIndex and getDungeonService():GetRunDungeonIndex() > 1 then
+			if dungeonService:GetRunDungeonIndex() > 1 then
 				return
 			end
 			local dungeonConfig = DungeonData[dungeon.id]
@@ -810,8 +868,9 @@ function LifeService.Start(self: typeof(LifeService))
 
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)
 		local maxLives = DEFAULT_LIVES
-		if getDungeonService() then
-			local active = getDungeonService():GetActiveDungeon()
+		local activeDungeonService = Blitz.OptionalService("DungeonService")
+		if activeDungeonService then
+			local active = activeDungeonService:GetActiveDungeon()
 			if active then
 				local dungeonConfig = DungeonData[active.id]
 				local difficultyConfig = dungeonConfig and dungeonConfig.difficulties[active.difficulty]
@@ -825,11 +884,10 @@ function LifeService.Start(self: typeof(LifeService))
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		local userId = player.UserId
-		self._lives[userId] = nil
-		self._deathState[userId] = nil
+		self:_setLives(player, nil)
+		self:_setDeathState(player, nil)
 		self._deathWindowTokens[userId] = nil
-		self:_replicateLives()
-		self:_replicateDeathState()
+		self._reviving[userId] = nil
 		self:_stopDeathAnimation(userId)
 
 		-- The leaver may have been the last player not fully dead (alive,

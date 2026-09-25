@@ -25,7 +25,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
-local vfxFade = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxFade)
+local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -47,14 +48,16 @@ local function awaitExpiry(marker: Instance)
 end
 
 -- `options.transparencyFade`: on expiry, ALSO ramp the whole rig's
--- transparency to invisible over the grace (vfxFade) instead of only
--- letting disabled emitters run dry. Emitter Transparency applies to
--- particles ALREADY ALIVE, which is exactly right on the way OUT — the
--- lingering particles thin away instead of holding full opacity until
--- they expire. Opt-in per aura.
+-- transparency to invisible over the grace instead of only letting
+-- disabled emitters run dry. Emitter Transparency applies to particles
+-- ALREADY ALIVE, which is exactly right on the way OUT — the lingering
+-- particles thin away instead of holding full opacity until they
+-- expire. The ramp runs on every CLIENT (Combat.VFXFade ->
+-- VFXFadeController -> vfxFade): stepped here it replicated a rebuilt
+-- NumberSequence per emitter per frame. Opt-in per aura.
 return function(auraName: string, options: { transparencyFade: boolean? }?)
 	return function(player: Player, character: Model, duration: number?)
-		local hrp = character and character:FindFirstChild("HumanoidRootPart")
+		local hrp = getRoot(character)
 		if not hrp or hrp:FindFirstChild(auraName) ~= nil then
 			return
 		end
@@ -126,11 +129,14 @@ return function(auraName: string, options: { transparencyFade: boolean? }?)
 			end
 
 			if options and options.transparencyFade then
-				-- Capture at expiry (the rig is at authored opacity) and
-				-- breathe the whole thing out across the grace. vfxFade.run
-				-- yields, so the Debris timer below still owns destruction.
-				local fadeTargets = vfxFade.capture(marker)
-				task.spawn(vfxFade.run, fadeTargets, 1, 0, grace)
+				-- Every client breathes the rig out across the grace; the
+				-- Debris timer below still owns destruction.
+				CombatNetwork.VFXFade.FireAll({
+					Rigs = { marker },
+					FromAlpha = 1,
+					ToAlpha = 0,
+					Duration = grace,
+				})
 			end
 
 			Debris:AddItem(marker, grace)

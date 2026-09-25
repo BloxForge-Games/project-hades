@@ -31,20 +31,19 @@ local ScreenGradientInterfaceController = {
 	PULSE_HOLD_SECONDS = 0.45,
 }
 
-ScreenGradientInterfaceController._deathPulse = false
 -- Token guarding the most recently scheduled reset callback. Every fire of
--- OnPulseGradient stamps a fresh token; the task.delay callback bails when
--- the token has moved on. Without this, a stale 0.25s reset (queued by a
--- HumanoidStateController HealthChanged pulse the tick BEFORE death) fires
--- mid-death-pulse and yanks the visual back to invisible at t=0.25s — the
--- 5s death-pulse never gets to render.
-ScreenGradientInterfaceController._pulseToken = nil
+-- OnPulseGradient takes a fresh token; the task.delay reset bails when the
+-- token has moved on. Without this a pulse fired 0.1 s after another (a
+-- HumanoidStateController HealthChanged flash under a relic pickup, say)
+-- is cut short by the EARLIER pulse's timer: the reset lands PULSE_HOLD
+-- after the first fire and yanks the second flash off the screen early.
+-- Same pattern as GameOverGradientInterfaceController.
+ScreenGradientInterfaceController._pulseToken = nil :: {}?
 ScreenGradientInterfaceController.Signals = {
-	-- One-shot flash: damage red, dodge white, relic rarity, etc.
-	-- Auto-resets after 0.25s (normal) — death-flag path latches and
-	-- only clears externally. Existing call sites unchanged by the
-	-- hold-mode addition below.
-	OnPulseGradient = Signal.new(), -- (color3, death?: boolean)
+	-- One-shot flash: damage red, dodge white, relic rarity, etc. Tweens
+	-- in, holds until PULSE_HOLD_SECONDS after the fire, tweens out. A
+	-- fire during the hold restarts the clock from the new colour.
+	OnPulseGradient = Signal.new(), -- (color3)
 
 	-- Persistent overlay: holds at the given color + transparency until
 	-- OnClearHold is fired. Calling OnSetHold while a hold is already
@@ -85,14 +84,17 @@ function ScreenGradientInterfaceController._render(self: typeof(ScreenGradientIn
 			table.insert(
 				conns,
 				self.Signals.OnPulseGradient:Connect(function(color3: Color3)
-					if self._deathPulse then
-						return
-					end
+					local token = {}
+					self._pulseToken = token
 
 					setPulseGradient(true)
 					setPulseColor(color3)
 
 					task.delay(self.PULSE_HOLD_SECONDS, function()
+						if self._pulseToken ~= token then
+							return -- a later pulse owns the screen now
+						end
+						self._pulseToken = nil
 						setPulseGradient(false)
 					end)
 				end)

@@ -10,20 +10,21 @@
 -- expects, so the sticks join base × (1 + Σ bonuses) like everything else.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+
+type RelicSnapshot = DamageService.RelicSnapshot
 
 local WEAPON_RELICS: { string } = { RelicNames["Linked Sword"], RelicNames["Newtrat's Tuskinator"] }
 local MAGIC_RELICS: { string } = { RelicNames["Wizard Orb"] }
 
-return function(player: Player, damage: number, isMagic: boolean): number
+return function(_player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean): number
 	local totalFraction = 0
 	local relics: { string } = if isMagic then MAGIC_RELICS else WEAPON_RELICS
 	for _, relicName in relics do
-		if RelicService:GetSpecificRelicRegistry(player, relicName) > 0 then
-			totalFraction += RelicService:GetRelicEffect(player, relicName) or 0
+		if DamageService.RelicCount(snapshot, relicName) > 0 then
+			totalFraction += DamageService.RelicEffect(snapshot, relicName) or 0
 		end
 	end
 	if totalFraction <= 0 then

@@ -17,26 +17,23 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+
+type RelicSnapshot = DamageService.RelicSnapshot
 
 local BONUS_HEALTH_PERCENT_ATTRIBUTE = "BonusHealthPercent"
 local BONUS_MANA_PERCENT_ATTRIBUTE = "BonusManaPercent"
 
-return function(player: Player, damage: number, isMagic: boolean)
-	if not RelicService then
-		return 0
-	end
-
+return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean)
 	local fraction = 0
 
-	if not isMagic and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Red Laser Scythe"]) or 0) > 0 then
+	if not isMagic and DamageService.RelicCount(snapshot, RelicNames["Red Laser Scythe"]) > 0 then
 		fraction += (player:GetAttribute(BONUS_HEALTH_PERCENT_ATTRIBUTE) :: number?) or 0
 	end
 
-	if isMagic and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Blue Laser Scythe"]) or 0) > 0 then
+	if isMagic and DamageService.RelicCount(snapshot, RelicNames["Blue Laser Scythe"]) > 0 then
 		fraction += (player:GetAttribute(BONUS_MANA_PERCENT_ATTRIBUTE) :: number?) or 0
 	end
 

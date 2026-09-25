@@ -19,26 +19,28 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
 local VFXService = require(ServerScriptService.Services.VFXService)
+local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+
+type RelicSnapshot = DamageService.RelicSnapshot
 
 local OWNER_MAGIC_BONUS = 0.40
 local SIGIL_MAGIC_BONUS = 0.25
 
-return function(player: Player, damage: number, isMagic: boolean)
+return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean)
 	if not isMagic then
 		return 0
 	end
 
 	local bonus = 0
 
-	if RelicService and RelicService:GetSpecificRelicRegistry(player, RelicNames["Mystical Staff of Cyan"]) > 0 then
+	if DamageService.RelicCount(snapshot, RelicNames["Mystical Staff of Cyan"]) > 0 then
 		bonus += damage * OWNER_MAGIC_BONUS
 	end
 
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot.fromPlayer(player)
 	if hrp and VFXService and VFXService:IsInSigilZone(hrp.Position) then
 		bonus += damage * SIGIL_MAGIC_BONUS
 	end

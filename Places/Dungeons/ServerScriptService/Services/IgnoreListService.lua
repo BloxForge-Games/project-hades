@@ -1,4 +1,5 @@
 --!strict
+local PhysicsService = game:GetService("PhysicsService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -7,10 +8,27 @@ local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Se
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local IgnoreListData = require(ReplicatedStorage.Submodules.Core.Shared.Data.IgnoreListData)
+local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CollisionGroups)
 
+-- Mob RaycastHitbox parts (the invisible aim-assist boxes on every mob)
+-- used to be appended to the replicated weapon ignore list one by one:
+-- every spawn and every death was a read-clone-mutate-Set that rebroadcast
+-- the whole array to every client. They are kept out of weapon queries
+-- STRUCTURALLY now: each one is moved into CollisionGroups.MobRaycastHitbox,
+-- which is registered as non-collidable with CollisionGroups.WeaponQuery,
+-- and every weapon / magic OverlapParams (MeleeWeapon, VFXService) sets the
+-- latter as its CollisionGroup — an overlap query skips parts whose group
+-- cannot collide with its own. Nothing else changes for the part: the
+-- client's aim ray queries with the Default group, which still collides
+-- with it, and the new group collides with every other group exactly as
+-- Default does.
 local IgnoreListService = {
 	Name = "IgnoreListService",
 	Dependencies = { PlayerEventService } :: { any },
+
+	-- The CollisionGroup weapon / magic overlap queries must use so that mob
+	-- RaycastHitbox parts are skipped (see the note above).
+	WeaponQueryCollisionGroup = CollisionGroups.WeaponQuery,
 }
 
 -- Blink sends arrays by length, so a list must have no holes: folders
@@ -85,8 +103,12 @@ function IgnoreListService.SetZombieMagicSpellIgnoreList(self: typeof(IgnoreList
 	self._zombieMagicSpellIgnoreList:Set(newIgnoreList)
 end
 
+-- READ-ONLY: this is the live replicated array, not a copy. Every caller
+-- that just hands it to an OverlapParams (which copies it) reads it
+-- directly; a caller that needs to append must table.clone it first, and
+-- the writers in this file do.
 function IgnoreListService.GetWeaponIgnoreList(self: typeof(IgnoreListService)): { Instance }
-	return table.clone(self._weaponIgnoreList:Get()) :: { Instance }
+	return self._weaponIgnoreList:Get() :: { Instance }
 end
 
 function IgnoreListService.GetBuildingTransparencyIgnoreList(self: typeof(IgnoreListService)): { Instance }
@@ -105,24 +127,35 @@ function IgnoreListService.GetZombieMagicSpellIgnoreList(self: typeof(IgnoreList
 	return table.clone(self._zombieMagicSpellIgnoreList:Get()) :: { Instance }
 end
 
--- Per-zombie hookup that adds the mob's RaycastHitbox to the weapon
--- ignore list the moment it's available on the model, and removes it
--- the moment the part is destroyed (or the zombie is reparented out).
+-- Registers the two collision groups and makes them mutually
+-- non-collidable. Idempotent: a place that already defines them keeps
+-- its definitions.
+function IgnoreListService._registerCollisionGroups(_self: typeof(IgnoreListService))
+	for _, groupName in { CollisionGroups.MobRaycastHitbox, CollisionGroups.WeaponQuery } do
+		if not PhysicsService:IsCollisionGroupRegistered(groupName) then
+			PhysicsService:RegisterCollisionGroup(groupName)
+		end
+	end
+	PhysicsService:CollisionGroupSetCollidable(CollisionGroups.MobRaycastHitbox, CollisionGroups.WeaponQuery, false)
+end
+
+-- Per-zombie hookup that moves the mob's RaycastHitbox into the
+-- MobRaycastHitbox collision group the moment it's available on the
+-- model. The part needs no de-registration: the group travels with it,
+-- and death destroys it.
 --
 -- Why this is keyed on Zombies.ChildAdded + WaitForChild rather than
 -- ZombieSpawnService.OnZombieSpawn:
 --   The OnZombieSpawn signal fires from MobBase only AFTER the fade-in
 --   delay (~0.25s + the spawn animation). During that window the
---   zombie's RaycastHitbox already exists in workspace but isn't in
---   the ignore list yet, and any projectile fired into that window
---   takes a snapshot of the list that doesn't include the new hitbox
---   — so the projectile hits the (invisible, aim-assist-only)
+--   zombie's RaycastHitbox already exists in workspace, and a weapon
+--   query in that window would hit the (invisible, aim-assist-only)
 --   RaycastHitbox instead of the actual zombie geometry.
 --
 --   ChildAdded fires the instant the model is parented, and
---   WaitForChild blocks until the part appears, so the registration
---   races the projectile pipeline reliably.
-function IgnoreListService._registerZombieRaycastHitbox(self: typeof(IgnoreListService), zombie: Instance)
+--   WaitForChild blocks until the part appears, so the hookup races
+--   the first swing reliably.
+function IgnoreListService._registerZombieRaycastHitbox(_self: typeof(IgnoreListService), zombie: Instance)
 	if not zombie:IsA("Model") then
 		return
 	end
@@ -134,50 +167,18 @@ function IgnoreListService._registerZombieRaycastHitbox(self: typeof(IgnoreListS
 	if not hitbox or not hitbox:IsA("BasePart") then
 		return
 	end
-	-- Guard against the zombie having been reparented out (e.g. early
-	-- death) while we were waiting.
-	if not zombie:IsDescendantOf(workspace.IgnoreInstances.Zombies) then
-		return
-	end
 
-	local weaponIgnoreList = self:GetWeaponIgnoreList()
-	if not table.find(weaponIgnoreList, hitbox) then
-		table.insert(weaponIgnoreList, hitbox)
-		self:SetWeaponIgnoreList(weaponIgnoreList)
-	end
-
-	-- Drop the entry the moment the part is destroyed. Previously the
-	-- de-register path ran on OnZombieDespawn, but MobBase destroys
-	-- the RaycastHitbox during _relocateToDeadFolder which runs BEFORE
-	-- the despawn signal — so `zombie:FindFirstChild("RaycastHitbox")`
-	-- returned nil and the original reference leaked in the list.
-	-- Listening to Destroying on the part itself sidesteps that race.
-	hitbox.Destroying:Connect(function()
-		local list = self:GetWeaponIgnoreList()
-		local idx = table.find(list, hitbox)
-		if idx then
-			table.remove(list, idx)
-			self:SetWeaponIgnoreList(list)
-		end
-	end)
+	hitbox.CollisionGroup = CollisionGroups.MobRaycastHitbox
 end
 
 function IgnoreListService._initWeaponIgnoreList(self: typeof(IgnoreListService))
-	-- ORDER MATTERS. Every WeaponIgnoreList mutation in this file
-	-- is a read-modify-write on the RemoteProperty (Get → mutate
-	-- clone → Set). The static inserts below MUST happen and commit
-	-- BEFORE any async zombie registration kicks off — otherwise the
-	-- async tasks Set their list, then this code Sets a stale local
-	-- snapshot, and the async additions are lost.
-	--
-	-- This was the actual reason RaycastHitbox was still being hit
-	-- after the first pass at this fix: the existing-zombies loop
-	-- task.spawn'd registrations whose WaitForChild yielded; this
-	-- function then continued, snapshotted a list that didn't yet
-	-- include those zombies' hitboxes, appended the static folders,
-	-- and Set the property — clobbering the registrations that were
-	-- in flight.
-	local weaponIgnoreList = self:GetWeaponIgnoreList()
+	-- Every WeaponIgnoreList mutation in this file is a read-clone-mutate-
+	-- Set on the RemoteProperty, with no yield between the Get and the
+	-- Set. The static inserts below are the only thing that ever grows the
+	-- list besides player characters: mob RaycastHitbox parts are handled
+	-- by collision group (see the top of the file), so the list no longer
+	-- churns per mob.
+	local weaponIgnoreList = table.clone(self:GetWeaponIgnoreList())
 
 	-- Not the Client folder since we want the player to hit those for realistic collisions
 	if workspace.IgnoreInstances:FindFirstChild("EscortObjects") then
@@ -192,14 +193,11 @@ function IgnoreListService._initWeaponIgnoreList(self: typeof(IgnoreListService)
 
 	self:SetWeaponIgnoreList(weaponIgnoreList)
 
-	-- Now (and only now) register zombies. Each registration is a
-	-- self-contained Get → insert → Set, so as long as no other write
-	-- racer exists outside this file, they layer cleanly on top of
-	-- the static commit above.
-	--
-	-- Using Zombies.ChildAdded (instead of
-	-- ZombieSpawnService.OnZombieSpawn) closes the spawn-window race
-	-- described in _registerZombieRaycastHitbox above.
+	-- Mob RaycastHitbox parts: collision group per mob, for every mob
+	-- already present and every one parented from now on. Using
+	-- Zombies.ChildAdded (instead of ZombieSpawnService.OnZombieSpawn)
+	-- closes the spawn-window race described in
+	-- _registerZombieRaycastHitbox above.
 	for _, zombie in workspace.IgnoreInstances.Zombies:GetChildren() do
 		task.spawn(function()
 			self:_registerZombieRaycastHitbox(zombie)
@@ -260,7 +258,7 @@ end
 
 -- No yields between each Get and Set (see the note in Start).
 function IgnoreListService._pruneDestroyedEntries(self: typeof(IgnoreListService))
-	local weaponIgnoreList = self:GetWeaponIgnoreList()
+	local weaponIgnoreList = table.clone(self:GetWeaponIgnoreList())
 	removeDestroyed(weaponIgnoreList)
 	self:SetWeaponIgnoreList(weaponIgnoreList)
 
@@ -274,6 +272,7 @@ function IgnoreListService._pruneDestroyedEntries(self: typeof(IgnoreListService
 end
 
 function IgnoreListService.Start(self: typeof(IgnoreListService))
+	self:_registerCollisionGroups()
 	self:_initWeaponIgnoreList()
 	self:_initBuildingTransparencyIgnoreList()
 	self:_initMagicSpellIgnoreList()
@@ -289,7 +288,7 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 	for _, player in Players:GetPlayers() do
 		local character = player.Character or player.CharacterAdded:Wait()
 
-		local weaponIgnoreList = self:GetWeaponIgnoreList()
+		local weaponIgnoreList = table.clone(self:GetWeaponIgnoreList())
 		table.insert(weaponIgnoreList, character)
 		self:SetWeaponIgnoreList(weaponIgnoreList)
 
@@ -305,7 +304,7 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)
 		local character = player.Character or player.CharacterAdded:Wait()
 
-		local weaponIgnoreList = self:GetWeaponIgnoreList()
+		local weaponIgnoreList = table.clone(self:GetWeaponIgnoreList())
 		local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
 		local proximityRayIgnoreList = self:GetProximityRayIgnoreList()
 

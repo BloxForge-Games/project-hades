@@ -135,44 +135,6 @@ end
 
 --[ Public Functions ]--
 
-function CutsceneController.Shake(self: typeof(CutsceneController), strength: number, speed: number, duration: number)
-	self._shakeTime = 0
-	self._shakeStrength = strength
-	self._shakeSpeed = speed
-	self._currentShakeOffset = CFrame.new()
-
-	local SMOOTHNESS = 15 -- higher = smoother
-
-	local shakeConnection
-
-	shakeConnection = RunService.RenderStepped:Connect(function(dt)
-		self._shakeTime += dt
-
-		local camera = workspace.CurrentCamera
-		local baseCFrame = camera.CFrame
-
-		local t = self._shakeTime * self._shakeSpeed
-
-		local offsetX = math.noise(t, 1, 0) * self._shakeStrength
-		local offsetY = math.noise(0, t, 1) * self._shakeStrength
-		local roll = math.noise(1, 0, t) * self._shakeStrength * 2
-
-		local targetOffset = CFrame.new(offsetX, offsetY, 0) * CFrame.Angles(0, 0, math.rad(roll))
-
-		-- Smooth interpolation
-		self._currentShakeOffset = self._currentShakeOffset:Lerp(targetOffset, dt * SMOOTHNESS)
-
-		camera.CFrame = baseCFrame * self._currentShakeOffset
-	end)
-
-	task.delay(duration, function()
-		if shakeConnection then
-			shakeConnection:Disconnect()
-			shakeConnection = nil
-		end
-	end)
-end
-
 function CutsceneController.PlayCutscene(self: typeof(CutsceneController), cutsceneName: string)
 	local cutscene = self._cutscenes[cutsceneName]
 	if not cutscene then

@@ -10,11 +10,14 @@
 	trust the client with an outcome, only with a request.
 
 	--- WIRING ---
-	Rooms arrive from getDungeonService().Signals.OnDungeonGenerated. Every
-	Event room is recognised by its PREFAB NAME (SwordStone, MerchantShop,
-	CursedShrine — the clone keeps it), and its interactables are wired
-	here at runtime: NPC tag + DialogueGraph attribute, plus a server-side
-	registry entry so a client can never hand us a model we didn't bless.
+	Rooms arrive from DungeonService.Signals.OnFloorReady (reached by name
+	through Blitz.OptionalService; this module is never allowed to require
+	DungeonService). Every Event room is recognised by its PREFAB NAME
+	(SwordStone, MerchantShop, CursedShrine — the clone keeps it), and its
+	interactables are wired here at runtime: NPC tag + DialogueGraph
+	attribute, plus a server-side registry entry so a client can never hand
+	us a model we didn't bless. The per-floor state is dropped on
+	OnFloorTeardown, before the old room models are destroyed.
 
 	--- PER-PLAYER, EVERYTHING ---
 	Success state, merchant stock, and drops are all keyed per player.
@@ -58,16 +61,15 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
 
 -- CoffinEventService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -652,7 +654,7 @@ function EventService._wireDungeon(self: typeof(EventService), dungeon)
 		wired += 1
 	end
 
-	print(("[EventService] Wired %d event interactable(s) this floor"):format(wired))
+	Log.debug(("[EventService] Wired %d event interactable(s) this floor"):format(wired))
 end
 
 -- DungeonService polls this during the event exit-door hold.
@@ -1566,6 +1568,33 @@ function EventService._onSellRelic(self: typeof(EventService), player: Player, r
 	return price
 end
 
+-- Drops everything keyed on this floor's rooms and models: the old room
+-- models are destroyed with the floor, so a wholesale reset both drops
+-- the dead Instance keys and re-arms the per-player latches for the next
+-- floor's events. Runs on OnFloorTeardown, BEFORE the models go.
+function EventService._resetFloorState(self: typeof(EventService))
+	self._eventModels = {}
+	self._swordDone = {}
+	self._pendingRelicFans = {}
+	self._shrineDone = {}
+	self._fountainDone = {}
+	self._greaterShrineDone = {}
+	self._greaterShrinePending = {}
+	-- Offers are keyed on statue models, which die with the floor.
+	-- _greaterShrineTaken is NOT reset here: exclusion is run-scoped.
+	self._greaterShrineOffers = {}
+	self._forgeDone = {}
+	self._merchantStock = {}
+	self._merchantRooms = {}
+	self._merchantUnlocked = {}
+	self._interactions = {}
+	-- The coffin's per-floor state goes with ours, so the next floor's
+	-- wiring registers its coffin into a clean slate.
+	if getCoffinEventService() then
+		getCoffinEventService():ResetForFloor()
+	end
+end
+
 --[ Lifecycle ]--
 
 function EventService.Start(self: typeof(EventService))
@@ -1615,44 +1644,31 @@ function EventService.Start(self: typeof(EventService))
 		return self:_onSellRelic(player, relicName)
 	end)
 
-	getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
-		-- Fresh floor: everything here is per-floor state — old room
-		-- models are destroyed with the floor, so wholesale reset both
-		-- drops the dead Instance keys and re-arms the per-player
-		-- latches for the new floor's events.
-		self._eventModels = {}
-		self._swordDone = {}
-		self._pendingRelicFans = {}
-		self._shrineDone = {}
-		self._fountainDone = {}
-		self._greaterShrineDone = {}
-		self._greaterShrinePending = {}
-		-- Offers are keyed on statue models, which die with the floor.
-		-- _greaterShrineTaken is NOT reset here: exclusion is run-scoped.
-		self._greaterShrineOffers = {}
-		self._forgeDone = {}
-		self._merchantStock = {}
-		self._merchantRooms = {}
-		self._merchantUnlocked = {}
-		self._interactions = {}
-		-- The coffin's per-floor state goes with ours, BEFORE the wiring
-		-- below registers the new floor's coffin with it.
-		if getCoffinEventService() then
-			getCoffinEventService():ResetForFloor()
-		end
-		self:_wireDungeon(dungeon)
+	-- Floor lifecycle. Every generation after the first is preceded by a
+	-- teardown, so the two hooks pair up: TEARDOWN drops the per-floor
+	-- state while the old room models still exist (no dead Instance key
+	-- ever lingers), READY wires the new floor's rooms.
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if dungeonService then
+		dungeonService.Signals.OnFloorTeardown:Connect(function(_dungeon)
+			self:_resetFloorState()
+		end)
 
-		-- (A first-room shop used to be pre-unlocked here because it had
-		-- no fight to unlock it. Entry-time unlock covers it: walking out
-		-- of the Start area into it fires OnRoomEntered like any room.)
-	end)
+		dungeonService.Signals.OnFloorReady:Connect(function(dungeon)
+			self:_wireDungeon(dungeon)
 
-	-- Merchant stock unlocks when a player first ENTERS the shop — see
-	-- _unlockMerchantRoom for why nothing earlier is safe. Per player:
-	-- each party member unlocks it by walking in themselves.
-	getDungeonService().Signals.OnRoomEntered:Connect(function(player: Player, room)
-		self:_unlockMerchantRoom(player, room)
-	end)
+			-- (A first-room shop used to be pre-unlocked here because it had
+			-- no fight to unlock it. Entry-time unlock covers it: walking out
+			-- of the Start area into it fires OnRoomEntered like any room.)
+		end)
+
+		-- Merchant stock unlocks when a player first ENTERS the shop — see
+		-- _unlockMerchantRoom for why nothing earlier is safe. Per player:
+		-- each party member unlocks it by walking in themselves.
+		dungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
+			self:_unlockMerchantRoom(player, room)
+		end)
+	end
 
 	game:GetService("Players").PlayerRemoving:Connect(function(player)
 		self._swordDone[player.UserId] = nil

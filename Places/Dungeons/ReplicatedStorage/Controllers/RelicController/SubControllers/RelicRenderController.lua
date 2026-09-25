@@ -21,6 +21,9 @@ local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Re
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local PickupHoverStyle = require(ReplicatedStorage.Submodules.Core.Shared.Data.PickupHoverStyle)
+local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 -- GearDropsRenderController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -49,19 +52,15 @@ local RelicRenderController = {
 
 local VISIBILITY_RELIC_TRANSPARENCY = 0.85
 local TWEEN_DURATION = 0.5
--- Hover dim of every OTHER owned ground relic: model parts, and the
--- billboard text separately (text reads through a lighter dim than mesh).
-local TOGGLE_TRANSPARENCY = 0.7
-local TOGGLE_TEXT_TRANSPARENCY = 0.8
-local VENDING_MACHINE_TRANSPARENCY = 0.75
-
--- Particle brightness targets used by the dim/restore loop on ground
--- relics. Promoted from inline magic numbers so the unified hover
--- entry point (`_applyGroundRelicsDim`) can swap between them.
-local PARTICLE_DIMMED_BRIGHTNESS = 0.15
-local PARTICLE_RESTORED_BRIGHTNESS_LAYER = 4
-local PARTICLE_RESTORED_BRIGHTNESS_SPARK = 4
-local PARTICLE_RESTORED_BRIGHTNESS_SHINE = 1
+-- The hover dim of every OTHER owned pickup on the floor -- ground relic
+-- meshes, billboard text, sparkle brightness, vending machines -- reads
+-- PickupHoverStyle, the one palette GearDropsRenderController dims from
+-- too. Enter / exit is committed HOVER_DEBOUNCE_SECONDS after the last
+-- change (see _scheduleAmbienceCommit).
+local HOVER_DEBOUNCE_SECONDS = PickupHoverStyle.HoverDebounceSeconds
+-- The per-relic applied-dim record is keyed by models that die with the
+-- floor: weak keys.
+local WEAK_KEYS = { __mode = "k" }
 
 --[ Types ]--
 
@@ -109,19 +108,128 @@ RelicRenderController._landingHidden = false
 -- the landing flag; the two are OR'd.
 RelicRenderController._cutsceneHidden = false
 RelicRenderController._promptOverride = false
-RelicRenderController._defaultVisible = true
-RelicRenderController._relicHighlight = Instance.new("Highlight")
+-- The hover AMBIENCE (orbit semi-hide, owned machine dim, owned ground
+-- relic dim, gear-drop dim) is DERIVED from two inputs -- this side's own
+-- hovered relic / rune / stall display, and the gear side's hover
+-- (SetExternalHover) -- OR'd into one wanted state, committed
+-- HOVER_DEBOUNCE_SECONDS after the last change and applied only where the
+-- floor differs from it. Walking across a loot pile used to restore and
+-- re-dim every relic on every footfall.
+RelicRenderController._ownHoverActive = false
+RelicRenderController._ownHoverModel = nil :: Model?
+RelicRenderController._externalHoverActive = false
+RelicRenderController._ambienceCommitPending = false
+-- What the last commit applied: the machine dim, and per ground relic.
+RelicRenderController._machinesDimmed = false
+RelicRenderController._groundDimApplied = setmetatable({}, WEAK_KEYS) :: any
 RelicRenderController._clientRenderedRelics = {} :: { [number]: RenderedRelicEntry }
-RelicRenderController._relics = {} :: { [Instance]: true }
-RelicRenderController._machines = {} :: { [Instance]: true }
-RelicRenderController._relicRegistry = nil :: { [any]: any }?
+-- Every player's { [relicName] = count } as the server last told us,
+-- keyed by NUMERIC UserId -- the same key RelicController uses, so the
+-- two caches can never disagree on a player. Seeded by RelicsSnapshot,
+-- kept current by RelicsReplicated deltas.
+RelicRenderController._relicRegistry = {} :: { [number]: { [string]: number } }
 
 --[ Private Functions ]--
+
+-- Brings ONE player's orbiting models in line with `relics` ({ [relicName]
+-- = count }, or nil when the player is gone): models for relics they no
+-- longer hold are destroyed, new ones are cloned in, counts are refreshed.
+-- Called per delta and per snapshot entry.
+function RelicRenderController._syncPlayerRelics(
+	self: typeof(RelicRenderController),
+	userId: number,
+	relics: { [string]: number }?
+)
+	if not relics then
+		local gone = self._clientRenderedRelics[userId]
+		if not gone then
+			return
+		end
+		for _relicName, data in pairs(gone.parts) do
+			self._radiusSpiralState[data.part] = nil
+			self._localSpinState[data.part] = nil
+			data.part:Destroy()
+		end
+		self._clientRenderedRelics[userId] = nil
+		return
+	end
+
+	self._clientRenderedRelics[userId] = self._clientRenderedRelics[userId]
+		or {
+			parts = {},
+			count = 0,
+			visible = self:ComputeVisibility(),
+		}
+
+	local entry = self._clientRenderedRelics[userId]
+
+	-- Remove relics that no longer exist
+	for relicName, data in pairs(entry.parts) do
+		if not relics[relicName] then
+			data.part:Destroy()
+			self._radiusSpiralState[data.part] = nil
+			self._localSpinState[data.part] = nil
+			entry.parts[relicName] = nil
+			entry.count -= 1
+		end
+	end
+
+	-- Add new relics
+	for relicName, count in pairs(relics) do
+		if entry.parts[relicName] then
+			entry.parts[relicName].count = count
+			continue
+		end
+
+		local rarity = RelicData[relicName] and RelicData[relicName].rarity
+		if not rarity then
+			warn("Relic data not found for", relicName)
+			continue
+		end
+
+		local template = getRelicModelTemplate(relicName, rarity)
+		if not template then
+			warn("Relic template not found for", relicName)
+			continue
+		end
+
+		local model = template:Clone() :: Model
+		local primaryPart = model.PrimaryPart :: BasePart
+		primaryPart.Anchored = true
+		-- Enforce PrimaryPart invisibility — anchor / adornee part, must
+		-- never render. Templates SHOULD author it at Transparency=1, but a
+		-- missed authoring shows up as an orange box around the orbiting
+		-- relic. Mirrors the same enforcement in Client/Components/Relic.lua
+		-- :Start.
+		primaryPart.Transparency = 1
+		model:AddTag("FloatingRelic")
+
+		entry.parts[relicName] = {
+			part = model,
+			count = count,
+		}
+
+		entry.count += 1
+
+		local hrp = getRoot.fromPlayer(Players:GetPlayerByUserId(userId))
+		if hrp then
+			model:PivotTo(CFrame.new(hrp.Position + Vector3.new(0, -10, 0)))
+			model.Parent = workspace.IgnoreInstances.MagicSpells
+		end
+	end
+end
 
 function RelicRenderController._renderRelics(self: typeof(RelicRenderController), dt: number)
 	self._orbitClock += dt * 0.35
 
 	local visible = self:ComputeVisibility()
+	-- The full hide (landing, cutscene, the viewer dead) is the same for
+	-- every player's set, so it is read once per frame. The viewer has no
+	-- character between death and respawn.
+	local viewerCharacter = Players.LocalPlayer.Character
+	local hideAll = self._landingHidden
+		or self._cutsceneHidden
+		or (viewerCharacter ~= nil and viewerCharacter:GetAttribute(Attributes.Death) == true)
 
 	for userId, entry in pairs(self._clientRenderedRelics) do
 		local player = Players:GetPlayerByUserId(userId)
@@ -134,15 +242,17 @@ function RelicRenderController._renderRelics(self: typeof(RelicRenderController)
 			continue
 		end
 
-		local hrp = character:FindFirstChild("HumanoidRootPart")
+		local hrp = getRoot(character)
 		if not hrp then
 			continue
 		end
 
-		local hideAll = self._landingHidden
-			or self._cutsceneHidden
-			or Players.LocalPlayer.Character:GetAttribute(Attributes.Death) == true
-		if entry.visible ~= visible or entry.hiddenAll ~= hideAll or hideAll then
+		-- Applied ON CHANGE only. This used to also re-run every frame
+		-- while any hide was active, which walked every model's
+		-- descendants and started a tween per part toward the value it
+		-- already held, for as long as a cutscene lasted. A relic that
+		-- joins the set mid-hide is caught below, on its first frame.
+		if entry.visible ~= visible or entry.hiddenAll ~= hideAll then
 			entry.visible = visible
 			entry.hiddenAll = hideAll
 			self:ApplyVisibility(entry, visible, hideAll)
@@ -164,6 +274,12 @@ function RelicRenderController._renderRelics(self: typeof(RelicRenderController)
 					bobFrequency = 0,
 					bobPhase = 0,
 				}
+				-- First frame for this model: a fresh clone arrives at its
+				-- authored, fully visible look, so a set that is currently
+				-- semi-hidden or hidden takes it to that state now.
+				if not visible or hideAll then
+					self:_applyModelVisibility(model, visible, hideAll)
+				end
 			end
 
 			local s = self._radiusSpiralState[model]
@@ -197,50 +313,57 @@ end
 --[ Public Functions ]--
 
 function RelicRenderController.ApplyVisibility(
-	_self: typeof(RelicRenderController),
+	self: typeof(RelicRenderController),
 	entry: RenderedRelicEntry,
 	visible: boolean,
 	isDead: boolean
 )
 	for _, data in pairs(entry.parts) do
-		local model = data.part
+		self:_applyModelVisibility(data.part, visible, isDead)
+	end
+end
 
-		local transparency = visible and 0 or VISIBILITY_RELIC_TRANSPARENCY
-		local targetTransparency = isDead and 1 or transparency
+-- One orbiting model's visibility: visible, semi-hidden (combat / a prompt
+-- up) or fully hidden (landing, cutscene, the viewer dead).
+function RelicRenderController._applyModelVisibility(
+	_self: typeof(RelicRenderController),
+	model: Model,
+	visible: boolean,
+	isDead: boolean
+)
+	local transparency = visible and 0 or VISIBILITY_RELIC_TRANSPARENCY
+	local targetTransparency = isDead and 1 or transparency
 
-		-- Tween every BasePart's transparency EXCEPT PrimaryPart. The
-		-- iterate-all path was added to cover multi-handle relics
-		-- (Handle + Handle2), but it pulled PrimaryPart visible too
-		-- when targetTransparency was 0 (visible state) — that part
-		-- is an animation anchor + BillboardGui adornee and must stay
-		-- at Transparency=1 forever.
-		for _, descendant in model:GetDescendants() do
-			if descendant:IsA("BasePart") and descendant ~= model.PrimaryPart then
-				TweenService:Create(
-					descendant,
-					TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-					{ Transparency = targetTransparency }
-				):Play()
-			end
-		end
+	-- Tween every BasePart's transparency EXCEPT PrimaryPart. The
+	-- iterate-all path was added to cover multi-handle relics
+	-- (Handle + Handle2), but it pulled PrimaryPart visible too
+	-- when targetTransparency was 0 (visible state) — that part
+	-- is an animation anchor + BillboardGui adornee and must stay
+	-- at Transparency=1 forever.
+	fadeSubtree(model, {
+		targetTransparency = targetTransparency,
+		tweenInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
+		skip = function(descendant)
+			return descendant == model.PrimaryPart
+		end,
+	})
 
-		-- Particles ramp with the model instead of snapping: brightness is
-		-- tweened over the same window, so a relic returning after the landing
-		-- hide glows back up as it fades in.
-		if model.PrimaryPart then
-			local attachment = model.PrimaryPart:FindFirstChild("RelicParticleAttachment")
-			if attachment then
-				local brightnessInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-				local targets: { [string]: number } = {
-					Layer = isDead and 0 or (visible and 4 or 0.05),
-					Spark = isDead and 0 or (visible and 4 or 0.05),
-					Shine = isDead and 0 or (visible and 1 or 0.05),
-				}
-				for emitterName, brightness in targets do
-					local emitter = attachment:FindFirstChild(emitterName)
-					if emitter and emitter:IsA("ParticleEmitter") then
-						TweenService:Create(emitter, brightnessInfo, { Brightness = brightness }):Play()
-					end
+	-- Particles ramp with the model instead of snapping: brightness is
+	-- tweened over the same window, so a relic returning after the landing
+	-- hide glows back up as it fades in.
+	if model.PrimaryPart then
+		local attachment = model.PrimaryPart:FindFirstChild("RelicParticleAttachment")
+		if attachment then
+			local brightnessInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+			local targets: { [string]: number } = {
+				Layer = isDead and 0 or (visible and 4 or 0.05),
+				Spark = isDead and 0 or (visible and 4 or 0.05),
+				Shine = isDead and 0 or (visible and 1 or 0.05),
+			}
+			for emitterName, brightness in targets do
+				local emitter = attachment:FindFirstChild(emitterName)
+				if emitter and emitter:IsA("ParticleEmitter") then
+					TweenService:Create(emitter, brightnessInfo, { Brightness = brightness }):Play()
 				end
 			end
 		end
@@ -256,7 +379,7 @@ function RelicRenderController.ComputeVisibility(self: typeof(RelicRenderControl
 		return false
 	end
 
-	return self._defaultVisible
+	return true
 end
 
 -- Landing hide (LandingController): true hides every relic model + particle
@@ -291,9 +414,15 @@ end
 -- Components/EncounterChest), so its text dims here too. Only the text:
 -- the chest meshes stay put (an opened chest is scenery, not a pickup).
 function RelicRenderController._setOwnedMachinesDimmed(self: typeof(RelicRenderController), dim: boolean)
-	local modelTransparency = dim and 0.5 or 0
-	local textTransparency = dim and VENDING_MACHINE_TRANSPARENCY or 0
-	local tweenInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+	-- Already there: nothing to sweep.
+	if self._machinesDimmed == dim then
+		return
+	end
+	self._machinesDimmed = dim
+
+	local modelTransparency = dim and PickupHoverStyle.MachineModelTransparency or 0
+	local textTransparency = dim and PickupHoverStyle.MachineTextTransparency or 0
+	local tweenInfo = PickupHoverStyle.TweenInfo
 
 	for _, machine in pairs(workspace:QueryDescendants(".RelicMachine")) do
 		if machine:GetAttribute("OwnerId") ~= Players.LocalPlayer.UserId then
@@ -351,42 +480,106 @@ function RelicRenderController.SetExternalRelicHover(
 	active: boolean,
 	skipModel: Model?
 )
-	self:SetPromptState(active)
-	self:_setOwnedMachinesDimmed(active)
-	self:_applyGroundRelicsDim(skipModel, active)
+	self:_setOwnHover(active, skipModel)
+end
+
+-- This side's own hover input: a relic / rune prompt, or a stall display
+-- through SetExternalRelicHover. Schedules the ambience commit and tells
+-- the gear side at once (it debounces its own commit); that call never
+-- comes back, so there is no loop.
+function RelicRenderController._setOwnHover(self: typeof(RelicRenderController), active: boolean, model: Model?)
+	self._ownHoverActive = active
+	self._ownHoverModel = if active then model else nil
+	self:_scheduleAmbienceCommit()
 	if getGearDropsRenderController() then
 		getGearDropsRenderController():SetExternalHover(active)
 	end
 end
 
+-- Schedules a commit HOVER_DEBOUNCE_SECONDS out. Every input change in
+-- that window folds into the one commit, which then applies only the
+-- difference between what is on the floor and what is wanted.
+function RelicRenderController._scheduleAmbienceCommit(self: typeof(RelicRenderController))
+	if self._ambienceCommitPending then
+		return
+	end
+	self._ambienceCommitPending = true
+	task.delay(HOVER_DEBOUNCE_SECONDS, function()
+		self._ambienceCommitPending = false
+		self:_commitAmbience()
+	end)
+end
+
+-- The ambience as it should be RIGHT NOW: the orbit semi-hide, the owned
+-- machine dim and the owned ground-relic dim, each applied only where it
+-- differs from what the last commit left.
+function RelicRenderController._commitAmbience(self: typeof(RelicRenderController))
+	local active = self._ownHoverActive or self._externalHoverActive
+	local skipModel = if self._ownHoverActive then self._ownHoverModel else nil
+	self:SetPromptState(active)
+	self:_setOwnedMachinesDimmed(active)
+	self:_applyGroundRelicsDim(skipModel, active)
+end
+
+-- The dim (or restore) of ONE ground relic: the shared fade walk
+-- (fadeSubtree), riding its one pass for the billboard flag and the
+-- sparkle set too, where the labels, the meshes and the sparkles used
+-- to be three separate lookups / walks.
+--   * Every BasePart EXCEPT PrimaryPart, which is an anchor / BillboardGui
+--     adornee and must stay invisible regardless of hover / dim state.
+--   * The billboard's labels and strokes (name, rarity, the owner / price
+--     line from applyOwnerLabel alike) take the TEXT value, and the
+--     billboard drops behind geometry while dimmed. The prompt is a
+--     custom style (no UI in the model), so every label here is card text.
+--   * The sparkle set (Layer / Spark / Shine) is written directly. Active-
+--     form relics (Fireworks / Volleyball) destroy their attachment, and a
+--     display model may lack the authored set: then there is simply
+--     nothing to dim.
+function RelicRenderController._applyRelicDim(_self: typeof(RelicRenderController), relic: Model, dim: boolean)
+	local primaryPart = relic.PrimaryPart
+	fadeSubtree(relic, {
+		targetTransparency = if dim then PickupHoverStyle.ModelTransparency else 0,
+		textTransparency = if dim then PickupHoverStyle.TextTransparency else 0,
+		tweenInfo = PickupHoverStyle.TweenInfo,
+		includeGuis = true,
+		skip = function(descendant)
+			return descendant == primaryPart
+		end,
+		visit = function(descendant)
+			if descendant:IsA("BillboardGui") then
+				descendant.AlwaysOnTop = not dim
+			elseif descendant:IsA("ParticleEmitter") then
+				local restored = PickupHoverStyle.ParticleRestoredBrightness[descendant.Name]
+				if restored then
+					descendant.Brightness = if dim then PickupHoverStyle.ParticleDimmedBrightness else restored
+				end
+			end
+		end,
+	})
+end
+
+-- Every owned ground relic, rune and stall display: dimmed while `dim`
+-- and not the hovered `skipModel`, restored otherwise -- touching only
+-- the ones whose recorded state differs.
 function RelicRenderController._applyGroundRelicsDim(
-	_self: typeof(RelicRenderController),
+	self: typeof(RelicRenderController),
 	skipModel: Model?,
 	dim: boolean
 )
-	local targetTransparency = dim and TOGGLE_TRANSPARENCY or 0
-	local textTransparency = dim and TOGGLE_TEXT_TRANSPARENCY or 0
-	local layerBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_LAYER
-	local sparkBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_SPARK
-	local shineBrightness = dim and PARTICLE_DIMMED_BRIGHTNESS or PARTICLE_RESTORED_BRIGHTNESS_SHINE
-	local alwaysOnTop = not dim
-
-	local tweenInfo = TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-
-	local groundDrops = workspace:QueryDescendants(".Relic")
-	for _, rune in pairs(workspace:QueryDescendants(".Rune")) do
-		table.insert(groundDrops, rune)
-	end
-	-- Merchant stall displays (EventController's client-local clones).
-	-- They carry the same RelicName billboard + OwnerId attribute as
-	-- real drops, so the dim body below treats them identically.
-	for _, stall in pairs(workspace:QueryDescendants(".ShopRelicDisplay")) do
-		table.insert(groundDrops, stall)
-	end
-	for _, relic in pairs(groundDrops) do
-		if relic == skipModel then
-			continue
+	-- Ground relics, runes, and the merchant stall displays
+	-- (MerchantStallRenderController's client-local clones, which carry the same
+	-- RelicName billboard + OwnerId attribute as real drops, so the dim
+	-- treats them identically). Tagged lookups rather than a workspace
+	-- walk; a tagged template outside workspace is not on the floor.
+	local groundDrops: { Instance } = {}
+	for _, tag in { "Relic", "ShopRelicDisplay" } do
+		for _, tagged in CollectionService:GetTagged(tag) do
+			if tagged:IsA("Model") and tagged:IsDescendantOf(workspace) then
+				table.insert(groundDrops, tagged)
+			end
 		end
+	end
+	for _, relic in groundDrops do
 		-- Already claimed: its own pickup fade owns its Transparency now.
 		-- Without this the restore leg fought that fade and won — disabling
 		-- the prompt on pickup fires PromptHidden, whose restore tweened
@@ -406,75 +599,33 @@ function RelicRenderController._applyGroundRelicsDim(
 		then
 			continue
 		end
-		if not (relic.PrimaryPart and relic.PrimaryPart:FindFirstChild("RelicName")) then
+		local primaryPart = (relic :: Model).PrimaryPart
+		if not (primaryPart and primaryPart:FindFirstChild("RelicName")) then
 			continue
 		end
 
-		relic.PrimaryPart.RelicName.AlwaysOnTop = alwaysOnTop
-		TweenService
-			:Create(relic.PrimaryPart.RelicName.Frame.NameText, tweenInfo, { TextTransparency = textTransparency })
-			:Play()
-		TweenService
-			:Create(relic.PrimaryPart.RelicName.Frame.NameText.UIStroke, tweenInfo, { Transparency = textTransparency })
-			:Play()
-		TweenService
-			:Create(relic.PrimaryPart.RelicName.Frame.RarityText, tweenInfo, { TextTransparency = textTransparency })
-			:Play()
-		TweenService
-			:Create(
-				relic.PrimaryPart.RelicName.Frame.RarityText.UIStroke,
-				tweenInfo,
-				{ Transparency = textTransparency }
-			)
-			:Play()
-		-- The owner / price line (Shared/Functions/Drop/applyOwnerLabel)
-		-- dims with the rest of the card.
-		local userText = relic.PrimaryPart.RelicName.Frame:FindFirstChild("UserText")
-		if userText then
-			TweenService:Create(userText, tweenInfo, { TextTransparency = textTransparency }):Play()
-			local userStroke = userText:FindFirstChild("UIStroke")
-			if userStroke then
-				TweenService:Create(userStroke, tweenInfo, { Transparency = textTransparency }):Play()
-			end
+		local wanted = dim and relic ~= skipModel
+		local applied = self._groundDimApplied[relic] == true
+		if wanted == applied then
+			continue
 		end
-		-- Tween every BasePart EXCEPT PrimaryPart. PrimaryPart is an
-		-- anchor / BillboardGui adornee — must stay invisible
-		-- regardless of hover/dim state.
-		for _, descendant in relic:GetDescendants() do
-			if descendant:IsA("BasePart") and descendant ~= relic.PrimaryPart then
-				TweenService:Create(descendant, tweenInfo, { Transparency = targetTransparency }):Play()
-			end
-		end
-
-		-- Guarded lookup: active-form relics (Fireworks / Volleyball)
-		-- destroy their attachment, and a display model missing the
-		-- authored set should skip the sparkle dim, not error.
-		local relicHandle = relic:FindFirstChild("Handle")
-		local particleAttachment = relicHandle and relicHandle:FindFirstChild("RelicParticleAttachment")
-		if particleAttachment then
-			particleAttachment.Layer.Brightness = layerBrightness
-			particleAttachment.Spark.Brightness = sparkBrightness
-			particleAttachment.Shine.Brightness = shineBrightness
-		end
+		self:_applyRelicDim(relic :: Model, wanted)
+		self._groundDimApplied[relic] = if wanted then true else nil
 	end
 end
 
--- Called by GearDropsRenderController when a gear drop's prompt is
--- shown / hidden so the relic side participates in the unified hover
--- state. When `active` is true: hide orbiting relics (SetPromptState)
--- AND dim every ground relic the local player owns (no model to skip
--- — no relic is the "hovered" one in this path). When false: restore
--- both.
+-- Called by GearDropsRenderController when a gear drop is hovered /
+-- released so the relic side participates in the unified hover state:
+-- orbiting relics semi-hide, and every owned ground relic and machine
+-- dims (no model to skip — no relic is the "hovered" one in this path).
+-- The caller has already debounced; this records the input and schedules
+-- the commit, and never calls back.
 --
 -- Symmetric counterpart: RelicRenderController calls
--- `GearDropsRenderController:SetExternalHover(...)` from its own
--- PromptShown / PromptHidden handlers below.
+-- `GearDropsRenderController:SetExternalHover(...)` from _setOwnHover.
 function RelicRenderController.SetExternalHover(self: typeof(RelicRenderController), active: boolean)
-	self:SetPromptState(active)
-	self:_applyGroundRelicsDim(nil :: any, active)
-	-- Machines too, so a gear hover reads exactly like a relic hover from
-	-- the player's side: everything else in the room steps back.
-	self:_setOwnedMachinesDimmed(active)
+	self._externalHoverActive = active
+	self:_scheduleAmbienceCommit()
 end
 
 --[ Initializers ]--
@@ -497,137 +648,40 @@ end
 
 function RelicRenderController.Start(self: typeof(RelicRenderController))
 	self:_watchViewerCutscene()
-	-- Cross-controller resolve for the unified hover state. The Blitz
-	-- requires every controller before any Start runs, so this is
-	-- always non-nil here. Used in PromptShown / PromptHidden below.
-
-	self._relicHighlight.Name = "RelicHighlight"
-	self._relicHighlight.FillColor = Color3.fromRGB(255, 255, 255)
-	self._relicHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-	self._relicHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	self._relicHighlight.FillTransparency = 1
-	self._relicHighlight.Parent = nil
-
-	for _, relic in ipairs(CollectionService:GetTagged("Relic")) do
-		self._relics[relic] = true
-	end
-
-	for _, machine in ipairs(CollectionService:GetTagged("RelicMachine")) do
-		self._machines[machine] = true
-	end
-
-	CollectionService:GetInstanceAddedSignal("Relic"):Connect(function(obj)
-		self._relics[obj] = true
-	end)
-
-	CollectionService:GetInstanceRemovedSignal("Relic"):Connect(function(obj)
-		self._relics[obj] = nil
-	end)
-
-	CollectionService:GetInstanceAddedSignal("RelicMachine"):Connect(function(obj)
-		self._machines[obj] = true
-	end)
-
-	CollectionService:GetInstanceRemovedSignal("RelicMachine"):Connect(function(obj)
-		self._machines[obj] = nil
-	end)
 
 	RunService.RenderStepped:Connect(function(...)
 		self:_renderRelics(...)
 	end)
 
-	RelicNetwork.RelicsReplicated.On(
-		function(payload: { UserId: number, Registry: { [any]: any }, List: { [any]: any } })
-			local relicRegistry = payload.Registry
-			self._relicRegistry = relicRegistry
+	-- The whole table, once, on join: players missing from it lose their
+	-- orbit, everyone in it is reconciled.
+	RelicNetwork.RelicsSnapshot.On(function(snapshot)
+		local registry: { [number]: { [string]: number } } = {}
+		for userId, entry in snapshot do
+			registry[userId] = entry.Registry
+		end
+		self._relicRegistry = registry
 
-			-- Remove players that no longer exist in registry
-			for userId, entry in pairs(self._clientRenderedRelics) do
-				if not relicRegistry[userId] then
-					print("Cleaning up relics for player", userId)
-
-					for _relicName, data in pairs(entry.parts) do
-						self._radiusSpiralState[data.part] = nil
-						self._localSpinState[data.part] = nil
-						data.part:Destroy()
-					end
-
-					self._clientRenderedRelics[userId] = nil
-				end
-			end
-
-			for userId, relics in pairs(relicRegistry) do
-				self._clientRenderedRelics[userId] = self._clientRenderedRelics[userId]
-					or {
-						parts = {},
-						count = 0,
-						visible = self:ComputeVisibility(),
-					}
-
-				local entry = self._clientRenderedRelics[userId]
-
-				-- Remove relics that no longer exist
-				for relicName, data in pairs(entry.parts) do
-					if not relics[relicName] then
-						data.part:Destroy()
-						self._radiusSpiralState[data.part] = nil
-						self._localSpinState[data.part] = nil
-						entry.parts[relicName] = nil
-						entry.count -= 1
-					end
-				end
-
-				-- Add new relics
-				for relicName, count in pairs(relics) do
-					if entry.parts[relicName] then
-						entry.parts[relicName].count = count
-						continue
-					end
-
-					local rarity = RelicData[relicName] and RelicData[relicName].rarity
-					if not rarity then
-						warn("Relic data not found for", relicName)
-						continue
-					end
-
-					local template = getRelicModelTemplate(relicName, rarity)
-					if not template then
-						warn("Relic template not found for", relicName)
-						continue
-					end
-
-					local model = template:Clone() :: Model
-					local primaryPart = model.PrimaryPart :: BasePart
-					primaryPart.Anchored = true
-					-- Enforce PrimaryPart invisibility — anchor / adornee
-					-- part, must never render. Templates SHOULD author
-					-- it at Transparency=1, but a missed authoring
-					-- shows up as an orange box around the orbiting
-					-- relic. Mirrors the same enforcement in
-					-- Client/Components/Relic.lua :Start.
-					primaryPart.Transparency = 1
-					model:AddTag("FloatingRelic")
-
-					entry.parts[relicName] = {
-						part = model,
-						count = count,
-					}
-
-					entry.count += 1
-
-					local player = Players:GetPlayerByUserId(userId)
-
-					if player and player.Character then
-						local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-						if hrp then
-							model:PivotTo(CFrame.new(hrp.Position + Vector3.new(0, -10, 0)))
-							model.Parent = workspace.IgnoreInstances.MagicSpells
-						end
-					end
-				end
+		for userId in pairs(self._clientRenderedRelics) do
+			if not registry[userId] then
+				self:_syncPlayerRelics(userId, nil)
 			end
 		end
-	)
+		for userId, relics in registry do
+			self:_syncPlayerRelics(userId, relics)
+		end
+	end)
+
+	-- One player's relics changed (or they left: Removed).
+	RelicNetwork.RelicsReplicated.On(function(payload)
+		if payload.Removed then
+			self._relicRegistry[payload.UserId] = nil
+			self:_syncPlayerRelics(payload.UserId, nil)
+			return
+		end
+		self._relicRegistry[payload.UserId] = payload.Registry
+		self:_syncPlayerRelics(payload.UserId, payload.Registry)
+	end)
 
 	InCombatController.Signals.InCombatStatusChanged:Connect(function(inCombat: boolean)
 		self:SetCombatState(inCombat)
@@ -660,8 +714,6 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 		end
 		table.clear(hoverWatchers)
 
-		self:SetPromptState(false)
-
 		relicHighlight.Adornee = nil
 		relicHighlight.Parent = nil
 
@@ -687,18 +739,11 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 
 		relicHighlight.FillTransparency = 1
 
-		self:_setOwnedMachinesDimmed(false)
-
-		-- Restore every owned ground relic. No skip -- original
-		-- restore behavior walked the full set (the now-unhovered
-		-- model is restored alongside everything else; its
-		-- RelicName.Enabled = true is set inline above).
-		self:_applyGroundRelicsDim(nil :: any, false)
-
-		-- Cross-system: restore the gear-drop side.
-		if getGearDropsRenderController() then
-			getGearDropsRenderController():SetExternalHover(false)
-		end
+		-- The ambience -- orbit semi-hide, owned machines, owned ground
+		-- relics, the gear-drop side -- comes back through the debounced
+		-- commit (the now-unhovered model's RelicName.Enabled = true is set
+		-- inline above).
+		self:_setOwnHover(false, nil)
 	end
 
 	ProximityPromptService.PromptShown:Connect(function(prompt: ProximityPrompt)
@@ -706,7 +751,7 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 
 		-- Runes share the whole relic hover treatment (billboard hidden,
 		-- highlight, scale-up) -- they are relics as far as presentation goes.
-		if model and (model:HasTag("Relic") or model:HasTag("Rune")) then
+		if model and model:HasTag("Relic") then
 			-- Already claimed: nothing here is takeable, so no hover. A
 			-- disabled prompt cannot be shown, but the attribute can land in
 			-- the same step as the prompt service's decision.
@@ -740,8 +785,6 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 				end)
 			)
 
-			self:SetPromptState(true)
-
 			local handle = assert(model:FindFirstChild("Handle"), "Relic model has no Handle")
 			relicHighlight.Adornee = handle
 			relicHighlight.Parent = handle
@@ -764,33 +807,27 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 				{ FillTransparency = 0.75 }
 			):Play()
 
-			self:_setOwnedMachinesDimmed(true)
-
-			-- Dim every OTHER owned ground relic. Skips `model` (the
-			-- hovered one) -- its RelicName was already Enabled=false
-			-- via the inline block above.
-			self:_applyGroundRelicsDim(model, true)
-
-			-- Cross-system: notify the gear-drop side so all owned
-			-- gear drops dim in lockstep. Unified hover state means
+			-- Everything else steps back through the debounced commit:
+			-- orbiting relics semi-hide, owned machines dim, every OTHER
+			-- owned ground relic dims (`model`, the hovered one, is skipped
+			-- -- its RelicName was already Enabled=false above), and the
+			-- gear-drop side dims in lockstep. Unified hover state means
 			-- only ONE pickup-class thing is highlighted at a time.
-			if getGearDropsRenderController() then
-				getGearDropsRenderController():SetExternalHover(true)
-			end
+			self:_setOwnHover(true, model)
 		end
 	end)
 
 	ProximityPromptService.PromptHidden:Connect(function(prompt: ProximityPrompt)
 		local model = prompt:FindFirstAncestorOfClass("Model")
 
-		if model and (model:HasTag("Relic") or model:HasTag("Rune")) then
+		if model and model:HasTag("Relic") then
 			endHover(model)
 		end
 	end)
 
 	-- Untagged under a live hover (the component's teardown, or a relic
 	-- re-purposed by its own logic): same exit as a destroy.
-	for _, tag in { "Relic", "Rune" } do
+	for _, tag in { "Relic" } do
 		CollectionService:GetInstanceRemovedSignal(tag):Connect(function(obj)
 			if obj:IsA("Model") then
 				endHover(obj)

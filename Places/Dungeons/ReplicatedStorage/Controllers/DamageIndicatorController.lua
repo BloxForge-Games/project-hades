@@ -16,9 +16,15 @@ local HighlightIndicators = require(ReplicatedStorage.Submodules.Core.Shared.Enu
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
 local isMagicCutscenePlaying =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Cutscene.isMagicCutscenePlaying)
+local playHitBurst = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.playHitBurst)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local DEFAULT_TWEEN_INFO_PROPS = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, false, 0)
 local FONT_SCALED = 1.25
+-- The number's face. One Font, built once: it used to be a Font.new per
+-- damage number, which under a spray of hits was an allocation per hit.
+local DAMAGE_FONT =
+	Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
 
 -- Motion ARC: two chained tweens on the BillboardGui's offset. RISE eases
 -- OUT (fast launch, slowing into the apex), then FALL eases IN (slow tip-
@@ -52,9 +58,6 @@ local CRITICAL_COLOR3 = Color3.fromRGB(255, 96, 10)
 local CRITICAL_SIZE_DESKTOP = UDim2.fromOffset(100 / FONT_SCALED, 52 / FONT_SCALED)
 local CRITICAL_SIZE_MOBILE = UDim2.fromOffset(70 / FONT_SCALED, 34 / FONT_SCALED)
 
--- then UDim2.fromOffset(75 / FONT_SCALED, 40 / FONT_SCALED)
--- 	else UDim2.fromOffset(60 / FONT_SCALED, 25 / FONT_SCALED)
-
 -- Status DoT ticks draw at this fraction of a normal hit's frame (0.5 =
 -- half size). Ticks never crit, so this only ever scales the non-crit size.
 local STATUS_SIZE_SCALE = 0.85
@@ -68,6 +71,9 @@ local STATUS_SIZE_SCALE = 0.85
 local CRIT_JITTER_DURATION = 0.5
 local CRIT_JITTER_PX = 5
 local CRIT_JITTER_DEGREES = 10
+
+-- One crit number mid-rattle: its label and when the rattle began.
+type CritJitter = { label: TextLabel, startedAt: number }
 
 -- Impact size-pulse for WEAPON / MAGIC hit numbers (status DoT ticks skip
 -- it — they're a steady readout, not an impact). Two beats: overshoot, then
@@ -130,9 +136,60 @@ local STATUS_VFX_CLEANUP_MARGIN = 0.5
 local DamageIndicatorController = {
 	Name = "DamageIndicatorController",
 	Dependencies = { InputPlatformController, CharacterHighlightController } :: { any },
+
+	-- Every crit number still rattling, driven by ONE Heartbeat that exists
+	-- only while this list does (see _addCritJitter). It used to be a
+	-- Heartbeat connection per crit.
+	_critJitters = {} :: { CritJitter },
+	_critJitterConnection = nil :: RBXScriptConnection?,
 }
 
 DamageIndicatorController.OnIndicatorRequested = Signal.new()
+
+-- One frame of the crit rattle for every live crit number: a fresh random
+-- offset and tilt scaled by an envelope that decays to zero over
+-- CRIT_JITTER_DURATION, so each lands calm at its apex and falls clean.
+-- Finished (or torn down early) numbers are reset and dropped; the
+-- connection goes with the last one.
+function DamageIndicatorController._stepCritJitters(self: typeof(DamageIndicatorController))
+	local now = os.clock()
+	local jitters = self._critJitters
+	for index = #jitters, 1, -1 do
+		local jitter = jitters[index]
+		local label = jitter.label
+		local envelope = 1 - math.clamp((now - jitter.startedAt) / CRIT_JITTER_DURATION, 0, 1)
+		if envelope <= 0 or not label.Parent then
+			if label.Parent then
+				label.Rotation = 0
+				label.Position = UDim2.fromScale(0.5, 0.5)
+			end
+			table.remove(jitters, index)
+			continue
+		end
+		label.Rotation = (math.random() * 2 - 1) * CRIT_JITTER_DEGREES * envelope
+		label.Position = UDim2.new(
+			0.5,
+			(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope,
+			0.5,
+			(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope
+		)
+	end
+	if #jitters == 0 and self._critJitterConnection then
+		self._critJitterConnection:Disconnect()
+		self._critJitterConnection = nil
+	end
+end
+
+-- Starts the rattle on a crit number's label, connecting the shared
+-- Heartbeat if this is the first live one.
+function DamageIndicatorController._addCritJitter(self: typeof(DamageIndicatorController), label: TextLabel)
+	table.insert(self._critJitters, { label = label, startedAt = os.clock() })
+	if not self._critJitterConnection then
+		self._critJitterConnection = RunService.Heartbeat:Connect(function()
+			self:_stepCritJitters()
+		end)
+	end
+end
 
 function DamageIndicatorController.Start(self: typeof(DamageIndicatorController))
 	Combat.DamageVFX.On(function(payload)
@@ -162,33 +219,20 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			return
 		end
 
-		local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFXNew:Clone()
-		-- Random roll about the attachment's own Z. The slash is a flat
-		-- streak, so without this every hit stamps it at the identical
-		-- angle and a combo reads as one frame repeated. Applied to the
-		-- attachment rather than the emitter so the whole burst turns
-		-- together, and multiplied onto the authored CFrame so the
-		-- asset's own orientation is preserved.
-		hitVFX.CFrame = hitVFX.CFrame * CFrame.Angles(0, 0, math.random() * 2 * math.pi)
-		hitVFX.Parent = character:FindFirstChild("HumanoidRootPart") :: BasePart
-
-		-- Resisted hits tint the impact sparks to match the grey number.
-		-- Keyed off the shared enum, not a colour literal, so a retune of
-		-- the resist colour can't silently desync this.
-		if color3 == DamageIndicatorColors.Resisted then
-			hitVFX.Balls.Color = ColorSequence.new(color3 :: Color3)
-			hitVFX.Hit.Color = ColorSequence.new(color3 :: Color3)
+		-- No root (mid-despawn) means nowhere to burst.
+		local root = getRoot(character)
+		if not root then
+			return
 		end
-
-		for _, particle in pairs(hitVFX:GetDescendants()) do
-			if not particle:IsA("ParticleEmitter") then
-				continue
-			end
-
-			particle:Emit(2)
-		end
-
-		Debris:AddItem(hitVFX, 2)
+		-- The shared hit burst, rolled a random angle per hit so a combo
+		-- never reads as one frame repeated. Resisted hits tint the impact
+		-- sparks to match the grey number -- keyed off the shared enum, not
+		-- a colour literal, so a retune of the resist colour can't silently
+		-- desync this.
+		playHitBurst(root.CFrame, {
+			roll = true,
+			color = if color3 == DamageIndicatorColors.Resisted then color3 :: Color3 else nil,
+		})
 	end)
 
 	-- Status proc burst. Clones the dedicated StatusFX asset (NOT the HitFX
@@ -206,7 +250,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		local vfxName = payload.VFXName
 		-- A proc can land on the same frame the mob dies, by which point
 		-- the model may already be gone on this client.
-		local hrp = character and character.Parent and character:FindFirstChild("HumanoidRootPart")
+		local hrp = if character and character.Parent then getRoot(character) else nil
 		if not hrp then
 			return
 		end
@@ -267,13 +311,20 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			return
 		end
 
+		-- Where the number spawns: the Head, or the root of a target that
+		-- has none (a breakable, a headless rig). Neither means nothing to
+		-- anchor to, so no number -- and no sound for one.
+		local anchor = character:FindFirstChild("Head") or character.PrimaryPart or getRoot(character)
+		if not (anchor and anchor:IsA("BasePart")) then
+			return
+		end
+
 		self.OnIndicatorRequested:Fire()
 
 		local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()
 		local indicator = damageIndicator.Indicator
 		local textLabel = damageIndicator.Indicator.TextLabel
-		textLabel.FontFace =
-			Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+		textLabel.FontFace = DAMAGE_FONT
 		local indicatorSize
 
 		if resistKind == "Projectile" then
@@ -330,7 +381,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		end
 
 		-- Part prop changes
-		damageIndicator.Position = (character:FindFirstChild("Head") :: BasePart).Position
+		damageIndicator.Position = anchor.Position
 
 		-- The BillboardGui frame is FIXED at the final size, immediately —
 		-- never tweened (see the pulse constants for why). The label is
@@ -379,30 +430,10 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		local lateral = math.random(ARC_LATERAL_MIN, ARC_LATERAL_MAX) * (if math.random() < 0.5 then -1 else 1)
 		indicator.ExtentsOffset = Vector3.zero
 
-		-- Crit rattle on the way up (see CRIT_JITTER_*). One Heartbeat
-		-- connection per crit, self-disconnecting when the envelope hits
-		-- zero or the number is torn down early.
+		-- Crit rattle on the way up (see CRIT_JITTER_*), on the shared
+		-- Heartbeat.
 		if critical then
-			local jitterStart = os.clock()
-			local jitterConn: RBXScriptConnection
-			jitterConn = RunService.Heartbeat:Connect(function()
-				local envelope = 1 - math.clamp((os.clock() - jitterStart) / CRIT_JITTER_DURATION, 0, 1)
-				if envelope <= 0 or not textLabel.Parent then
-					jitterConn:Disconnect()
-					if textLabel.Parent then
-						textLabel.Rotation = 0
-						textLabel.Position = UDim2.fromScale(0.5, 0.5)
-					end
-					return
-				end
-				textLabel.Rotation = (math.random() * 2 - 1) * CRIT_JITTER_DEGREES * envelope
-				textLabel.Position = UDim2.new(
-					0.5,
-					(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope,
-					0.5,
-					(math.random() * 2 - 1) * CRIT_JITTER_PX * envelope
-				)
-			end)
+			self:_addCritJitter(textLabel)
 		end
 
 		TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {

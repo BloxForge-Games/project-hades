@@ -17,6 +17,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local InCombatController = {
 	Name = "InCombatController",
@@ -56,7 +57,7 @@ function InCombatController.Start(self: typeof(InCombatController))
 
 		while task.wait(COMBAT_CHECK_INTERVAL) do
 			local character = Players.LocalPlayer.Character
-			local hrp = character and character:FindFirstChild("HumanoidRootPart")
+			local hrp = getRoot(character)
 			if not hrp then
 				continue
 			end

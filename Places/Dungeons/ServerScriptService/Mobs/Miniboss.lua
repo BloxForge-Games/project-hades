@@ -1,4 +1,3 @@
-local TweenService = game:GetService("TweenService")
 --[[
 	Module: Miniboss.lua
 	Description: Miniboss mob — MobBase with two behavioral changes, nothing
@@ -22,7 +21,12 @@ local TweenService = game:GetService("TweenService")
 	Bosses extend THIS class (see Boss.lua) and add HP-threshold phase changes.
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
 local MobBase = require(script.Parent.MobBase)
+local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
 
 local Miniboss = setmetatable({}, MobBase)
 Miniboss.__index = Miniboss
@@ -59,8 +63,6 @@ end
 function Miniboss:_onDeathAnimation()
 	-- TODO: load + play the miniboss/boss death animation track here.
 	-- Placeholder until the animation asset exists.
-	print(("[Miniboss] %s death animation placeholder"):format(self._model.Name))
-
 	task.wait(7)
 
 	self._model.PrimaryPart.Anchored = true
@@ -71,17 +73,14 @@ function Miniboss:_onDeathAnimation()
 		end
 	end
 
-	for _, descendant in self._model:GetDescendants() do
-		if descendant:IsA("BasePart") or descendant:IsA("Decal") then
-			TweenService:Create(
-				descendant,
-				TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
-				{ Transparency = 1 }
-			):Play()
-		elseif descendant:IsA("ParticleEmitter") or descendant:IsA("Beam") then
-			descendant.Enabled = false
-		end
-	end
+	-- The dissolve runs on every client off one cue (Combat.MobFade ->
+	-- ZombieController) rather than a server tween per part; the server
+	-- only waits it out, then destroys the body.
+	CombatNetwork.MobFade.FireAll({
+		Mob = self._model,
+		Phase = "Out",
+		Duration = MobFadeData.EncounterDespawnFadeSeconds,
+	})
 
 	task.wait(5)
 

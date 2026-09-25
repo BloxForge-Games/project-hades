@@ -11,13 +11,13 @@
 	      1. Clones the same Hitbox Model the server used (from
 	         GameAssets.Hitboxes.<hitboxName>), positions via the
 	         server-computed world hitboxCFrame.
-	      2. Phase 1 (windup): Tween Transparency 1 → 0 over windUpDuration.
+	      2. Phase 1 (windup): Tween Transparency 1 → 0.75 over windUpDuration.
 	         Color stays at the template (red). Visual: red ramps in.
-	      3. Snap (instant, at hit-frame start): Set Color = white directly.
-	         This is the "flash" — a hard color snap at the moment damage
-	         starts applying server-side.
+	      3. Flash (at hit-frame start): tween Color to white over
+	         hitFrameDuration, and half-way through that tween Transparency
+	         0.75 → 0 — the peak lands while damage is applying server-side.
 	      4. Phase 2 (hit-frame): Tween Transparency 0 → 1 over hitFrameDuration.
-	         Color stays white from the snap. Visual: white fades to invisible.
+	         Color stays white from the flash. Visual: white fades to invisible.
 	    Net visual sequence: red ramp-in → white flash → fade out.
 
 	  OnReplicateZombieAttack(zombieModel, startCFrame, goalCFrame, _ts)
@@ -26,6 +26,22 @@
 	    "step into swing" effect. Tween duration is a fixed client-side
 	    constant — the lunge is purely visual, server-side position is
 	    set authoritatively via PivotTo.
+
+	It also runs the MOB BODY FADES for every mob on this screen. The
+	server fires Combat.MobFade once per spawn (Phase In: the parts it
+	spawned at Transparency 1 bloom to 0) and once per despawn (Phase Out:
+	every part and decal dissolves to 1); this controller tweens the parts
+	locally, so a 20-part mob costs one packet instead of 20 replicated
+	property streams. MobFadeData holds the numbers both sides share; the
+	server lands Transparency 0 itself once the In fade is over, so a
+	client that joins mid-fade catches up from replication.
+
+	And the overhead HEALTH BAR: every mob under
+	workspace.IgnoreInstances.Zombies has its Humanoid.HealthChanged
+	watched here and its RedBar tweened locally (the billboard itself is
+	server-cloned; only its animation is client-driven). The bar is
+	snapped to the live ratio when the mob is first seen, so a late joiner
+	never sees a full bar over a wounded mob.
 
 	It also owns the MAGIC-CUTSCENE DIM (SetCutsceneDim): for the length
 	of a magic cutscene every mob under workspace.IgnoreInstances.Zombies
@@ -56,6 +72,10 @@ local VFXController = require(ReplicatedStorage.Controllers.VFXController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
+local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
+local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local ZombieController = {
 	Name = "ZombieController",
@@ -87,6 +107,23 @@ local HITBOX_Y_JITTER_MAX = 0.05
 -- hitbox clones live. Same folder the prior implementation used so
 -- LifeController's clearZombieHitboxes sweep still picks them up.
 local HITBOX_PARENT = workspace.IgnoreInstances.MagicSpells
+
+-- Where live mobs are parented (a corpse moves to DeadZombies on death,
+-- keeping its connections until it is destroyed).
+local ZOMBIES_FOLDER = workspace.IgnoreInstances.Zombies
+
+-- The overhead health bar: GameAssets.BillboardGuis.HealthInterface, cloned
+-- under the mob's Head by MobBase._buildHealthUI (regular mobs only;
+-- minibosses and bosses have none and are skipped by the nil check).
+local HEALTH_INTERFACE_NAME = "HealthInterface"
+local HEALTH_BAR_INNER_FRAME_NAME = "InnerFrame"
+local HEALTH_BAR_NAME = "RedBar"
+-- The fill's authored height scale, and the per-hit tween length.
+local HEALTH_BAR_HEIGHT_SCALE = 1.3
+local HEALTH_BAR_TWEEN_SECONDS = 0.1
+-- How long to wait for a mob model's Humanoid to replicate before giving
+-- up on it (a model with no Humanoid is not a mob).
+local HUMANOID_WAIT_SECONDS = 5
 
 --[ Cutscene dim ]--
 
@@ -208,12 +245,14 @@ local function fadeOutHitbox(state: FlashState)
 end
 
 -- Drives the telegraph → fade chain. Two phases:
---   Phase 1 (windup): Transparency 1 → 0 over windUpDuration.
+--   Phase 1 (windup): Transparency 1 → 0.75 over windUpDuration.
 --                     Visual builds in intensity as the swing winds up.
+--   Flash (hit-frame start): Color tweens to white over hitFrameDuration,
+--                     and half-way through Transparency 0.75 → 0.
 --   Phase 2 (hit-frame): Transparency 0 → 1 over hitFrameDuration.
---                        Visual peaks at the windup→hit-frame transition
---                        (which is exactly when damage starts applying
---                        server-side) and fades as the damage window closes.
+--                        Visual peaks inside the hit-frame (damage is
+--                        applying server-side) and fades as the damage
+--                        window closes.
 --
 -- Multi-part Hitbox Models flash all parts in parallel by creating one
 -- tween per part. They all share the same tween duration so they
@@ -417,21 +456,109 @@ local function spawnHitboxFlash(
 	end)
 end
 
+--[ Mob body fades ]--
+
+-- One Combat.MobFade cue: every client tweens the parts locally. In
+-- covers the parts the server spawned invisible (MobFadeData's exclusion
+-- list mirrors MobBase._fadeInOnSpawn); Out covers every part and decal,
+-- like the corpse dissolve always did. Emitters are already off (the
+-- server flips them, one replicated bool each).
+local function runMobFade(mob: Model, phase: "In" | "Out", duration: number)
+	local tweenInfo = TweenInfo.new(duration, MobFadeData.EasingStyle, MobFadeData.EasingDirection)
+	if phase == "In" then
+		fadeSubtree(mob, {
+			targetTransparency = 0,
+			tweenInfo = tweenInfo,
+			skip = function(part)
+				return MobFadeData.SpawnFadeExcludedParts[part.Name] == true
+			end,
+		})
+		return
+	end
+	fadeSubtree(mob, { targetTransparency = 1, tweenInfo = tweenInfo, includeDecals = true })
+end
+
+--[ Health bar ]--
+
+-- The fill frame of a mob's overhead bar, or nil (no billboard yet, or
+-- an encounter mob that never gets one).
+local function findHealthBar(mob: Model): GuiObject?
+	local head = mob:FindFirstChild("Head")
+	local interface = head and head:FindFirstChild(HEALTH_INTERFACE_NAME)
+	local inner = interface and interface:FindFirstChild(HEALTH_BAR_INNER_FRAME_NAME)
+	local bar = inner and inner:FindFirstChild(HEALTH_BAR_NAME)
+	return if bar and bar:IsA("GuiObject") then bar else nil
+end
+
+local function healthBarSize(humanoid: Humanoid): UDim2
+	local ratio = if humanoid.MaxHealth > 0 then humanoid.Health / humanoid.MaxHealth else 0
+	return UDim2.fromScale(math.clamp(ratio, 0, 1), HEALTH_BAR_HEIGHT_SCALE)
+end
+
+-- Per mob: the HealthChanged watch that drives its bar. Keyed by model so
+-- a model seen twice (folder churn) is wired once; dropped on destroy.
+ZombieController._healthWatches = {} :: { [Model]: RBXScriptConnection }
+
+function ZombieController._watchMobHealth(self: typeof(ZombieController), mob: Instance)
+	if not mob:IsA("Model") or self._healthWatches[mob] then
+		return
+	end
+	local humanoid = mob:FindFirstChildOfClass("Humanoid") or mob:WaitForChild("Humanoid", HUMANOID_WAIT_SECONDS)
+	if not humanoid or not humanoid:IsA("Humanoid") or self._healthWatches[mob] then
+		return
+	end
+
+	-- Snap, no tween: this client may be seeing a wounded mob for the
+	-- first time (late join, stream-in), and the bar must not animate
+	-- down from full.
+	local bar = findHealthBar(mob)
+	if bar then
+		bar.Size = healthBarSize(humanoid)
+	end
+
+	self._healthWatches[mob] = humanoid.HealthChanged:Connect(function()
+		-- Looked up per hit: the billboard is cloned in after the model
+		-- (MobBase.Start), so it may not have been there on registration.
+		local liveBar = findHealthBar(mob)
+		if liveBar then
+			tweenGui.size(
+				liveBar,
+				healthBarSize(humanoid),
+				Enum.EasingDirection.Out,
+				Enum.EasingStyle.Quad,
+				HEALTH_BAR_TWEEN_SECONDS,
+				true
+			)
+		end
+	end)
+	mob.Destroying:Once(function()
+		local watch = self._healthWatches[mob]
+		if watch then
+			watch:Disconnect()
+			self._healthWatches[mob] = nil
+		end
+	end)
+end
+
 --[ Cutscene dim ]--
 
 -- Takes one part under the dim: remembers what it looks like, dims it,
 -- and follows every later write to it for as long as the dim lasts.
 --
--- A write this client did not make is the new truth. The server's spawn
--- fade-in (1 -> 0 over 0.75s, MobBase._fadeInOnSpawn) and death fade-out
--- (-> 1, MobBase / Miniboss) both replicate per tween step and land on top
--- of the local value; each such step replaces the remembered original and
--- is dimmed again if it dropped below the dim. That is what keeps a mob
--- that spawns mid-cutscene dim as it fades in (and restores it to the
--- opaque value the fade ended on, not the transparent one it started at),
--- and what lets a corpse fade out through the cutscene without snapping
--- back to solid when it ends. Our own write is recognised by its value
--- and ignored, so the re-dim inside the handler cannot loop.
+-- A write the DIM did not make is the new truth. The other writers are
+-- this controller's own fade tweens -- the spawn bloom (1 -> 0 over
+-- MobFadeData.SpawnFadeSeconds) and the despawn dissolve (-> 1), run
+-- locally off Combat.MobFade (runMobFade) -- and the server's single
+-- landing write of 0 once the bloom is over. Each such write, whether a
+-- tween step or the replicated landing, replaces the remembered original
+-- and is dimmed again if it dropped below the dim. That is what keeps a
+-- mob that spawns mid-cutscene dim as it fades in (and restores it to
+-- the opaque value the fade ended on, not the transparent one it started
+-- at), and what lets a corpse fade out through the cutscene without
+-- snapping back to solid when it ends. The dim's own write is recognised
+-- by its value and ignored, so the re-dim inside the handler cannot loop.
+-- There is exactly ONE fade owner on this client -- runMobFade -- and it
+-- never reads the dim, so the two cannot deadlock.
 function ZombieController._trackCutsceneDim(self: typeof(ZombieController), instance: Instance)
 	if not isFadeable(instance) then
 		return
@@ -503,10 +630,11 @@ end
 -- magic cutscene runs (active = true) and restores them when it ends
 -- (active = false). Reference-counted, so two overlapping cutscenes dim
 -- once and restore once, when the last of them releases; a release with
--- nothing outstanding is a no-op. Local-only -- nothing here replicates,
--- and no other client system tweens mob body parts, so there is no
--- second writer to fight (CharacterHighlightController drives the mob
--- Highlight, never part Transparency).
+-- nothing outstanding is a no-op. Local-only -- nothing here replicates.
+-- The only other client writer of mob part Transparency is this
+-- controller's runMobFade, which the dim's tracker is written for (see
+-- _trackCutsceneDim); CharacterHighlightController drives the mob
+-- Highlight, never part Transparency.
 function ZombieController.SetCutsceneDim(self: typeof(ZombieController), active: boolean)
 	if active then
 		self._cutsceneDimDepth += 1
@@ -527,7 +655,7 @@ end
 
 --[ Initializers ]--
 
-function ZombieController.Start(_self: typeof(ZombieController))
+function ZombieController.Start(self: typeof(ZombieController))
 	-- Stamps the death-cinematic suppression window (see
 	-- isLocalDeathCinematicPlaying above). Re-wired per character so a
 	-- respawn's fresh instance gets its own listener.
@@ -580,7 +708,7 @@ function ZombieController.Start(_self: typeof(ZombieController))
 			return
 		end
 
-		local root = zombieModel:FindFirstChild("HumanoidRootPart")
+		local root = getRoot(zombieModel)
 		if not root then
 			warn("[ZombieController] Replicated zombie model is missing HumanoidRootPart.")
 			return
@@ -588,6 +716,25 @@ function ZombieController.Start(_self: typeof(ZombieController))
 
 		TweenService:Create(root, TweenInfo.new(LUNGE_TWEEN_DURATION, Enum.EasingStyle.Cubic), { CFrame = goalCFrame })
 			:Play()
+	end)
+
+	-- Body fades: see the module header and runMobFade. Not gated on the
+	-- death cinematic -- a mob that blooms in behind the cinematic must
+	-- still be opaque when it ends.
+	Combat.MobFade.On(function(payload)
+		if not payload.Mob then
+			return
+		end
+		runMobFade(payload.Mob, payload.Phase, payload.Duration)
+	end)
+
+	-- Health bars: every live mob now, and every one that arrives. The
+	-- Humanoid wait yields, so each registration runs in its own thread.
+	for _, mob in ZOMBIES_FOLDER:GetChildren() do
+		task.spawn(self._watchMobHealth, self, mob)
+	end
+	ZOMBIES_FOLDER.ChildAdded:Connect(function(mob: Instance)
+		task.spawn(self._watchMobHealth, self, mob)
 	end)
 
 	-- Ranged projectile cast. Delegates to VFXController's

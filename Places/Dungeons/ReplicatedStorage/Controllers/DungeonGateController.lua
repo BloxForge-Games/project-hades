@@ -3,7 +3,7 @@
 	Module: DungeonGateController.lua
 	Description:
 	Client half of the Dungeon Gate cycle (server: DungeonService
-	_startGateCycle). The gate part itself never moves on the SERVER — the
+	GateService's gate hold). The gate part itself never moves on the SERVER — the
 	server owns collision + timing and cues this controller to animate
 	everything locally, which is what makes the door one-way PER PLAYER:
 

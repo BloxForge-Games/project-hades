@@ -14,7 +14,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -22,7 +21,7 @@ local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
-local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
+local DropFloatController = require(ReplicatedStorage.Controllers.DropFloatController)
 local GearDropsRenderController = require(ReplicatedStorage.Controllers.GearDropsRenderController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local WeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WeaponData)
@@ -32,10 +31,12 @@ local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.Rarit
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
-local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
-local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
+local dressRelicDisplay = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.dressRelicDisplay)
+local buildPromptCard = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.buildPromptCard)
 
 --[ Constants ]--
 
@@ -62,14 +63,9 @@ local SPIN_RAD_PER_SEC_MAX = math.rad(25)
 -- ProximityPrompt tuning.
 local PROMPT_MAX_DISTANCE = 5
 local PROMPT_KEY = Enum.KeyCode.F
+-- The card's Style attribute: the gear card, not the relic size classes
+-- buildPromptCard would pick from the description's length.
 local PROMPT_STYLE_ATTRIBUTE = "GearDrop"
--- Pixels the prompt card sits ABOVE the carrier. The custom prompt module
--- turns this into a fraction of the card's own height, and on touch and
--- gamepad it then drops the card by 0.55 of that height (the taller
--- Gamepad template). The relic prompt lifts 60 and reads right on every
--- input; 15 here left the gear card a touch low on keyboard and, once
--- the 0.55 drop ate it, well below the gear on mobile.
-local PROMPT_UI_OFFSET = Vector2.new(0, 60)
 
 -- Drops always spawn at level 1 today. Pulled from the GearLevel attribute
 -- on the carrier (controller sets it) so when variable-level drops land
@@ -80,6 +76,7 @@ local DEFAULT_GEAR_LEVEL = 1
 
 -- Fade-out duration on expire.
 local FADE_DURATION = 0.5
+local FADE_OUT_INFO = TweenInfo.new(FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 -- How long Construct waits for a streamed-in descendant before giving up.
 local STREAM_WAIT_SECONDS = 10
@@ -162,9 +159,6 @@ local ATTR_PICKUP_PENDING = "PickupPending"
 -- RarityText, UserText), so the shared owner-label helper and the
 -- render controller's billboard dim both work on it unchanged.
 local BILLBOARD_NAME = "GearName"
--- Mobile text sizes, matching Client/Components/Relic.lua.
-local MOBILE_NAME_TEXT_SIZE = 12
-local MOBILE_RARITY_TEXT_SIZE = 10
 
 -- The prompt card's UserText line: "(name)" of the player who DROPPED this
 -- item from their tray (DroppedByName, stamped by DropService /
@@ -224,24 +218,24 @@ function GearDrop:_buildPrompt(): ProximityPrompt
 	local description = self:_resolveDescription()
 
 	local prompt = Instance.new("ProximityPrompt")
-	-- Format: "Lvl. 1 AK-47". Level pulled from the carrier attribute so a
-	-- future variable-level drop system (harder dungeons → higher-level
-	-- gear) won't require a component-side change — only the controller /
-	-- service that writes the attribute.
-	prompt.ActionText = "Lvl. " .. tostring(level) .. " " .. gearName
-	prompt.ObjectText = description -- per user spec: ObjectText = gear description
 	prompt.KeyboardKeyCode = PROMPT_KEY
 	prompt.RequiresLineOfSight = false
 	prompt.MaxActivationDistance = PROMPT_MAX_DISTANCE
-	prompt.Style = Enum.ProximityPromptStyle.Custom
 	prompt.Enabled = false -- enabled after the bezier lands
-	prompt:SetAttribute("Style", PROMPT_STYLE_ATTRIBUTE)
-	prompt.UIOffset = PROMPT_UI_OFFSET
-
-	prompt:SetAttribute("Rarity", rarity)
+	-- The shared card. Name format: "Lvl. 1 AK-47", level pulled from the
+	-- carrier attribute so a future variable-level drop system (harder
+	-- dungeons → higher-level gear) won't require a component-side change
+	-- — only the controller / service that writes the attribute.
+	buildPromptCard(prompt, {
+		name = "Lvl. " .. tostring(level) .. " " .. gearName,
+		description = description,
+		rarity = rarity,
+		style = PROMPT_STYLE_ATTRIBUTE,
+		userText = ownerUserText(self.Instance),
+	})
+	-- The gear card's own extras.
 	prompt:SetAttribute("RarityColor", RarityColors:Get(rarity))
 	prompt:SetAttribute("GearName", gearName)
-	prompt:SetAttribute("UserText", ownerUserText(self.Instance))
 	prompt.Parent = self._carrier
 	return prompt
 end
@@ -309,13 +303,11 @@ end
 -- loop so a passing owner-drop hover doesn't tween these parts back
 -- toward visible.
 function GearDrop:_hideForNonOwner()
-	for _, descendant in self.Instance:GetDescendants() do
-		if descendant:IsA("BasePart") or descendant:IsA("Decal") or descendant:IsA("Texture") then
-			descendant.Transparency = 1
-		elseif descendant:IsA("ParticleEmitter") or descendant:IsA("BillboardGui") then
-			descendant.Enabled = false
-		end
-	end
+	fadeSubtree(self.Instance, {
+		targetTransparency = 1,
+		includeDecals = true,
+		disable = { "ParticleEmitter", "BillboardGui" },
+	})
 end
 
 -- Returns a random radians-per-second spin rate in the [MIN, MAX] range
@@ -330,31 +322,18 @@ function GearDrop:_buildBillboard()
 	if not self._carrier then
 		return
 	end
-	local assets = ReplicatedStorage:FindFirstChild("GameAssets")
-	local billboards = assets and assets:FindFirstChild("BillboardGuis")
-	local template = billboards and billboards:FindFirstChild(BILLBOARD_NAME)
-	if not template then
-		warn("[GearDrop] Missing GameAssets.BillboardGuis." .. BILLBOARD_NAME)
-		return
-	end
-
 	local gearName = self.Instance:GetAttribute(ATTR_NAME) or "Gear"
 	local level = self.Instance:GetAttribute(ATTR_LEVEL) or DEFAULT_GEAR_LEVEL
 	local rarity = self.Instance:GetAttribute(ATTR_RARITY) or ""
-
-	local billboard = template:Clone()
-	billboard.Adornee = self._carrier
-	billboard.Frame.NameText.Text = "Lvl. " .. tostring(level) .. " " .. tostring(gearName)
-	billboard.Frame.RarityText.Text = rarity
-	billboard.Frame.RarityText.TextColor3 = RarityColors:Get(rarity)
-	applyOwnerLabel(billboard.Frame, self.Instance:GetAttribute(ATTR_DROPPED_BY))
-
-	if ScreenSizeController and ScreenSizeController:GetScreenSizeData().name == ScreenSizes.Mobile then
-		billboard.Frame.NameText.TextSize = MOBILE_NAME_TEXT_SIZE
-		billboard.Frame.RarityText.TextSize = MOBILE_RARITY_TEXT_SIZE
-	end
-
-	billboard.Parent = self._carrier
+	-- The relic's dressing on the gear prefab: no glow (the rarity aura
+	-- is the gear's light).
+	dressRelicDisplay(self._carrier, {
+		prefab = BILLBOARD_NAME,
+		name = "Lvl. " .. tostring(level) .. " " .. tostring(gearName),
+		rarity = rarity,
+		rarityColor = RarityColors:Get(rarity),
+		droppedByName = self.Instance:GetAttribute(ATTR_DROPPED_BY),
+	})
 end
 
 function GearDrop:_randomSpinRate(): number
@@ -365,20 +344,20 @@ function GearDrop:_randomSpinRate(): number
 	return magnitude
 end
 
+-- The resting float: one shared Heartbeat (DropFloatController) poses the
+-- carrier from its resting position -- the bob and the Y spin, at this
+-- drop's own rates -- and the janitor takes it out on pickup / expire.
 function GearDrop:_startRestingLoop()
-	local startTime = tick()
-	self._janitor:Add(RunService.Heartbeat:Connect(function(_dt: number)
-		if not self._carrier or not self._carrier.Parent then
-			return
-		end
-
-		local elapsed = tick() - startTime
-		local bobOffset = self._bobAmplitude * math.sin((elapsed * 2 * math.pi) / self._bobCycleDuration)
-		local spinAngle = elapsed * self._spinRateY
-
-		self._carrier.CFrame = CFrame.new(self._restingPosition + Vector3.new(0, bobOffset, 0))
-			* CFrame.Angles(0, spinAngle, 0)
-	end))
+	DropFloatController:Register(self._carrier, {
+		base = CFrame.new(self._restingPosition),
+		bobAmplitude = self._bobAmplitude,
+		bobCycle = self._bobCycleDuration,
+		spinAxis = Vector3.yAxis,
+		spinRate = self._spinRateY,
+	})
+	self._janitor:Add(function()
+		DropFloatController:Unregister(self._carrier)
+	end, true)
 end
 
 function GearDrop:_setupScale()
@@ -423,9 +402,8 @@ function GearDrop:_fadeOutAndDestroy()
 			Color = burstColor,
 			LifetimeScale = COLLECT_VFX_LIFETIME_SCALE,
 		})
-		local character = collector.Character
-		local root = character and character:FindFirstChild("HumanoidRootPart")
-		if root and root:IsA("BasePart") then
+		local root = getRoot.fromPlayer(collector)
+		if root then
 			emitVFXPart(COLLECT_CHARACTER_VFX_NAME, root.CFrame, nil, {
 				Color = burstColor,
 				LifetimeScale = COLLECT_CHARACTER_VFX_LIFETIME_SCALE,
@@ -438,31 +416,22 @@ function GearDrop:_fadeOutAndDestroy()
 		self._prompt.Enabled = false
 	end
 
-	-- Collect every fadeable thing on the carrier + gear: BaseParts get
-	-- Transparency tweened to 1, Decals/Textures same, ParticleEmitters
-	-- get Enabled=false (their existing particles fade naturally based
-	-- on their own Lifetime). Skip the invisible carrier itself.
-	local tweenInfo = TweenInfo.new(FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-	for _, descendant in self.Instance:GetDescendants() do
-		if
-			(descendant:IsA("BasePart") and descendant ~= self._carrier)
-			or descendant:IsA("Decal")
-			or descendant:IsA("Texture")
-		then
-			TweenService:Create(descendant, tweenInfo, { Transparency = 1 }):Play()
-		elseif
-			descendant:IsA("BillboardGui")
-			or descendant:IsA("ProximityPrompt")
-			or descendant:IsA("ParticleEmitter")
-		then
-			-- OFF at once rather than faded with the model. A label and a
-			-- pickup prompt over a claimed drop read as still-takeable for as
-			-- long as they stay legible, which is exactly what the old
-			-- fade-the-text-too version left on everyone else's screen.
-			descendant.Enabled = false
-		end
-	end
+	-- Every fadeable thing on the carrier + gear: BaseParts and Decals /
+	-- Textures tween to 1, skipping the invisible carrier itself. The
+	-- label, the prompt and the emitters go OFF at once rather than faded
+	-- with the model: a label and a pickup prompt over a claimed drop read
+	-- as still-takeable for as long as they stay legible, which is exactly
+	-- what the old fade-the-text-too version left on everyone else's
+	-- screen (an emitter's live particles die on their own Lifetime).
+	fadeSubtree(self.Instance, {
+		targetTransparency = 1,
+		tweenInfo = FADE_OUT_INFO,
+		includeDecals = true,
+		skip = function(descendant)
+			return descendant == self._carrier
+		end,
+		disable = { "BillboardGui", "ProximityPrompt", "ParticleEmitter" },
+	})
 
 	task.delay(FADE_DURATION + 0.1, function()
 		if self.Instance and self.Instance.Parent then

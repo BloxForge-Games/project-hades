@@ -36,6 +36,7 @@ local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicC
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Incremental Relics
 local Fireworks = require(script.Incremental.Fireworks)
@@ -62,15 +63,19 @@ local function getEncounterService(): any
 	return encounterServiceLazy
 end
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
+
+-- One owned relic as DamageService's hit path reads it (GetRelicSnapshot).
+-- `effect` is the callback's value, resolved ONCE when the snapshot is
+-- built; `live` entries carry no effect and must be resolved through
+-- GetRelicEffect on every read (see LIVE_EFFECT_RELICS).
+export type RelicSnapshotEntry = { count: number, effect: any?, live: boolean }
+export type RelicSnapshot = { player: Player, relics: { [string]: RelicSnapshotEntry } }
 
 local RelicService = {
 	Name = "RelicService",
@@ -98,6 +103,14 @@ local RelicService = {
 	_relicOrigins = {},
 	_incrementalCount = 0,
 	_incrementalRegistry = {} :: { [number]: number },
+	-- [userId] = true while the player owns at least one INCREMENTAL_RELICS
+	-- entry. The 1 Hz tick walks this set, not every registry.
+	_incrementalOwners = {} :: { [number]: boolean },
+	-- [userId] = the owned-relic snapshot the hit path reads. Built lazily
+	-- by GetRelicSnapshot and dropped on every registry write, so a hit
+	-- costs one table read per relic instead of a registry walk plus a
+	-- callback call each.
+	_relicSnapshots = {} :: { [number]: RelicSnapshot },
 	-- [userId] = OPEN relic slots this run. Starts at RelicCapData's
 	-- StartingSlots with the registry and is never saved; a future shop
 	-- unlock raises it through SetRelicSlots. Mirrored onto the Player as
@@ -136,6 +149,21 @@ for relicName, data in RelicData do
 	table.insert(relicsByRarity[rarity], relicName)
 end
 
+-- The relics the 1 Hz incremental tick exists for. Owning any of them puts
+-- a player in _incrementalOwners; owning none keeps the tick idle.
+local INCREMENTAL_RELICS: { string } = { RelicNames["Summer Fireworks"], RelicNames["Ghost Dragon"] }
+
+-- Relics whose callback must NOT be pre-resolved into a snapshot: the two
+-- hyperlasers read the owner's CURRENT health on every call, and Ghost
+-- Dragon's callback builds its rig as a side effect. (Every `active`
+-- relic is treated the same way — those callbacks are pickup side
+-- effects, not values.)
+local LIVE_EFFECT_RELICS: { [string]: boolean } = {
+	[RelicNames["Hyperlaser Gun"]] = true,
+	[RelicNames["Red Hyperlaser Gun"]] = true,
+	[RelicNames["Ghost Dragon"]] = true,
+}
+
 --[ Properties ]--
 
 RelicService.Signals = {
@@ -166,6 +194,11 @@ end
 
 function RelicService._fireworks(self: typeof(RelicService), userId: number)
 	local player = Players:GetPlayerByUserId(userId)
+	-- A userId still in the books whose Player has gone: an error here
+	-- would kill the tick thread for everyone, permanently.
+	if not player then
+		return
+	end
 	-- Periodic relics (Fireworks, Ghost Dragon) never fire into a cutscene.
 	if
 		getEncounterService()
@@ -209,8 +242,13 @@ function RelicService._fireworks(self: typeof(RelicService), userId: number)
 end
 
 function RelicService._incrementalRelicEffects(self: typeof(RelicService))
-	for userId, _ in self._relicRegistry do
-		self._incrementalRegistry[userId] += 1
+	-- Nobody owns an incremental relic: nothing to tick.
+	if next(self._incrementalOwners) == nil then
+		return
+	end
+
+	for userId in self._incrementalOwners do
+		self._incrementalRegistry[userId] = (self._incrementalRegistry[userId] or 0) + 1
 
 		self:_fireworks(userId)
 
@@ -218,6 +256,32 @@ function RelicService._incrementalRelicEffects(self: typeof(RelicService))
 			self._incrementalRegistry[userId] = 0
 		end
 	end
+end
+
+-- Re-derives the player's _incrementalOwners membership from their
+-- registry. Called after every registry write.
+function RelicService._refreshIncrementalOwner(self: typeof(RelicService), player: Player)
+	local registry = self._relicRegistry[player.UserId]
+	local owns = false
+	if registry then
+		for _, relicName in INCREMENTAL_RELICS do
+			if (registry[relicName] or 0) > 0 then
+				owns = true
+				break
+			end
+		end
+	end
+	if owns then
+		self._incrementalOwners[player.UserId] = true
+	else
+		self._incrementalOwners[player.UserId] = nil
+	end
+end
+
+-- Drops the player's cached snapshot; the next GetRelicSnapshot rebuilds
+-- it. Called after every registry write.
+function RelicService._invalidateRelicSnapshot(self: typeof(RelicService), userId: number)
+	self._relicSnapshots[userId] = nil
 end
 
 --[ Public Functions ]--
@@ -312,12 +376,84 @@ function RelicService.GetEffectiveBaseWalkSpeed(self: typeof(RelicService), play
 	return total
 end
 
+--[ Replication ]--
+
+-- ONE player's relics to every client (Relic.blink RelicsReplicated): the
+-- typed delta, keyed by UserId, which every client merges into its own
+-- cache. A joining client is seeded with the whole table once
+-- (_sendRelicRegistrySnapshot). Before this every change pushed ALL players'
+-- registries to ALL clients as two untyped tables.
+function RelicService._replicateRelics(self: typeof(RelicService), player: Player)
+	RelicNetwork.RelicsReplicated.FireAll({
+		UserId = player.UserId,
+		Registry = self._relicRegistry[player.UserId] or {},
+		List = self._relicsList[player.UserId] or {},
+	})
+end
+
+-- A player left: every client drops their entry.
+function RelicService._replicateRelicsRemoved(_self: typeof(RelicService), player: Player)
+	RelicNetwork.RelicsReplicated.FireAll({
+		UserId = player.UserId,
+		Registry = {},
+		List = {},
+		Removed = true,
+	})
+end
+
+-- The whole table, to ONE joining client (Relic.blink RelicsSnapshot). The
+-- deltas that follow keep it current; nothing is ever replayed.
+function RelicService._sendRelicRegistrySnapshot(self: typeof(RelicService), player: Player)
+	local snapshot: { [number]: { Registry: { [string]: number }, List: { string } } } = {}
+	for userId, registry in self._relicRegistry do
+		snapshot[userId] = { Registry = registry, List = self._relicsList[userId] or {} }
+	end
+	RelicNetwork.RelicsSnapshot.Fire(player, snapshot)
+end
+
 function RelicService.GetRelicsRegistry(self: typeof(RelicService), player: Player)
 	return table.clone(self._relicRegistry[player.UserId] or {})
 end
 
 function RelicService.GetSpecificRelicRegistry(self: typeof(RelicService), player: Player, relic: string)
 	return self._relicRegistry[player.UserId] and self._relicRegistry[player.UserId][relic] or 0
+end
+
+-- The player's owned relics with each callback's value already resolved,
+-- for the per-hit readers in DamageService. Cached per player; rebuilt on
+-- the first read after any registry write. Only owned relics (count > 0)
+-- appear, so "not in the snapshot" reads as "not owned". Entries in
+-- LIVE_EFFECT_RELICS (or `active` relics) are listed with `live = true`
+-- and NO effect: readers resolve those through GetRelicEffect per hit.
+function RelicService.GetRelicSnapshot(self: typeof(RelicService), player: Player): RelicSnapshot
+	local userId = player.UserId
+	local snapshot = self._relicSnapshots[userId]
+	-- Same Player object, or the entry belongs to a previous session under
+	-- this userId and must be rebuilt.
+	if snapshot and snapshot.player == player then
+		return snapshot
+	end
+
+	local relics: { [string]: RelicSnapshotEntry } = {}
+	local registry = self._relicRegistry[userId]
+	if registry then
+		for relicName, count in registry do
+			if count <= 0 then
+				continue
+			end
+			local data = RelicData[relicName]
+			local live = LIVE_EFFECT_RELICS[relicName] == true or (data ~= nil and data.active == true)
+			relics[relicName] = {
+				count = count,
+				effect = if live or data == nil then nil else data.callback(player, count),
+				live = live,
+			}
+		end
+	end
+
+	local built: RelicSnapshot = { player = player, relics = relics }
+	self._relicSnapshots[userId] = built
+	return built
 end
 
 -- Grants a relic to the player. Per the single-stack design rule,
@@ -369,16 +505,14 @@ function RelicService.AddRelicsRegistry(
 	end
 
 	registry[relic] = math.clamp(currentCount + count, 0, cap)
+	self:_invalidateRelicSnapshot(player.UserId)
+	self:_refreshIncrementalOwner(player)
 
 	if RelicData[relic].active then
 		RelicData[relic].callback(player, registry[relic])
 	end
 
-	RelicNetwork.RelicsReplicated.FireAll({
-		UserId = player.UserId,
-		Registry = self._relicRegistry,
-		List = self._relicsList,
-	})
+	self:_replicateRelics(player)
 
 	RelicService.Signals.OnRelicsUpdated:Fire(player, relic, registry[relic], self._relicsList)
 	self:_publishOwnedRelicCount(player)
@@ -545,6 +679,7 @@ function RelicService.RemoveRelicsRegistry(self: typeof(RelicService), player: P
 	end
 
 	registry[relic] = math.clamp((registry[relic] or 0) - count, 0, RelicStackData[RelicData[relic].rarity])
+	self:_invalidateRelicSnapshot(player.UserId)
 
 	if registry[relic] == 0 then
 		registry[relic] = nil
@@ -563,12 +698,9 @@ function RelicService.RemoveRelicsRegistry(self: typeof(RelicService), player: P
 			self:_cleanupGhostDragon(player.UserId)
 		end
 	end
+	self:_refreshIncrementalOwner(player)
 
-	RelicNetwork.RelicsReplicated.FireAll({
-		UserId = player.UserId,
-		Registry = self._relicRegistry,
-		List = self._relicsList,
-	})
+	self:_replicateRelics(player)
 
 	RelicService.Signals.OnRelicsUpdated:Fire(player, relic, registry[relic], self._relicsList)
 	self:_publishOwnedRelicCount(player)
@@ -901,13 +1033,13 @@ end
 
 -- Run stage, used ONLY for the rarity table (Early / Mid / Late odds), read
 -- from the existing run progression: DungeonService's 1-based dungeon index
--- over Shared/Data/DungeonSequence. No run in progress (lobby, Studio solo)
--- falls back to Early.
+-- over Shared/Data/DungeonSequence, looked up at call time. No run in
+-- progress (lobby, Studio solo) or no DungeonService mounted falls back to
+-- Early.
 function RelicService.GetRunStage(_self: typeof(RelicService)): string
-	local ok, index = pcall(function()
-		return getDungeonService():GetRunDungeonIndex()
-	end)
-	if not ok or type(index) ~= "number" or index <= 1 then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local index = dungeonService and dungeonService:GetRunDungeonIndex()
+	if type(index) ~= "number" or index <= 1 then
 		return "Early"
 	elseif index == 2 then
 		return "Mid"
@@ -1183,19 +1315,22 @@ function RelicService.Start(self: typeof(RelicService))
 		end
 	end
 
-	getDungeonService().Signals.OnSegmentCleared:Connect(function(_dungeon, _lastChunk)
-		healApplePieOwners()
-	end)
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if dungeonService then
+		dungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, _lastChunk)
+			healApplePieOwners()
+		end)
 
-	getDungeonService().Signals.OnDungeonCompleted:Connect(function(_dungeon)
-		healApplePieOwners()
-	end)
+		dungeonService.Signals.OnDungeonCompleted:Connect(function(_dungeon)
+			healApplePieOwners()
+		end)
 
-	getDungeonService().Signals.OnRoomEntered:Connect(function(player: Player, room)
-		if room and room.roomType == RoomTypes.Event then
-			healApplePieOwner(player)
-		end
-	end)
+		dungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
+			if room and room.roomType == RoomTypes.Event then
+				healApplePieOwner(player)
+			end
+		end)
+	end
 
 	for _, module in script.Active:GetChildren() do
 		if module:IsA("ModuleScript") then
@@ -1209,10 +1344,6 @@ function RelicService.Start(self: typeof(RelicService))
 		end
 	end)
 
-	-- ELEMENT LOCK. Assigned per RUN, for everyone present when it starts.
-	-- DungeonService fires OnRunStarted just before the first dungeon
-	-- generates, which is early enough that the starter machine (dropped on
-	-- the landing that follows) already sees the assignment.
 	-- Crimson aura + Holiday Ham size re-application: on pickup and on
 	-- every respawn. Both are character-level relic effects that a fresh
 	-- character does not inherit.
@@ -1228,17 +1359,18 @@ function RelicService.Start(self: typeof(RelicService))
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)
 		self._relicRegistry[player.UserId] = {}
 		self._incrementalRegistry[player.UserId] = 0
+		self._incrementalOwners[player.UserId] = nil
+		self:_invalidateRelicSnapshot(player.UserId)
 		self._relicsList[player.UserId] = {}
 		-- The open slot count starts over with the registry: it is a
 		-- per-run number, so it must never outlive the relics it caps.
 		self._relicSlots[player.UserId] = RelicCapData.StartingSlots
 		self:_publishRelicSlots(player)
 
-		RelicNetwork.RelicsReplicated.FireAll({
-			UserId = player.UserId,
-			Registry = self._relicRegistry,
-			List = self._relicsList,
-		})
+		-- The joiner gets everyone's relics once; everyone else learns the
+		-- joiner's (empty) entry as an ordinary delta.
+		self:_sendRelicRegistrySnapshot(player)
+		self:_replicateRelics(player)
 
 		-- OnPlayerAdded fires from the client's SetupCharacter request, once
 		-- its character exists; this indexed it directly before as well.
@@ -1256,82 +1388,18 @@ function RelicService.Start(self: typeof(RelicService))
 		player.CharacterRemoving:Connect(function()
 			self:_cleanupGhostDragon(player.UserId)
 		end)
-
-		task.delay(3, function()
-			-- EARTH RELICS
-			-- self:AddRelicsRegistry(player, RelicNames["Robloxian Battle Shield"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Riot Shield"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Bundle of TNT"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Earth Summoning Horn"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Golden Steampunk Gloves"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Spartan Sword and Shield"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Golem's Hammer"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Space Sandwich"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Leland the Lolturtle"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Earth Protection Orb"], 1)
-
-			-- BLAZE RELICS
-			-- self:AddRelicsRegistry(player, RelicNames["Faux Firebrand"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Fire Breathing Dragon Friend"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Ye Olde Fire Breath Potion"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Flaming Bo Staff"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Flaming Mace"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames.Phoenix, 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Trick Or Trap"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Dragon's Flame Sword"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Berserker's Claymore"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Flame Ronin Katana"], 1)
-
-			-- FROST RELICS
-			-- self:AddRelicsRegistry(player, RelicNames["Korblox Spell Book"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Ice Cream"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Frozen Flail"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Frozen Blue Ice Crossbow"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Blizzard Wand"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Icy Arctic Fowl"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Ice Breaker"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Ice Dragon Slayer"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Korblox Mage Staff"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Staff of Azure Ever Ice"], 1)
-
-			-- VENOM RELICS
-			-- self:AddRelicsRegistry(player, RelicNames["Korblox Evil Eye"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Zombie Axe"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Zombie Bomb"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Poison Picnic"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Poisonous Butterfly"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Overseer's Short Sword"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Overseer's Battleaxe"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Skeletal Scythe"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Foul Poison Fowl"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Mechatronic Spider"], 1)
-
-			-- -- STORM RELICS
-			-- self:AddRelicsRegistry(player, RelicNames["Lightning Orb"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Static Shock Sheep"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Ninja Whip"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Throwing Bolts"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Lightning Wand"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames.Katana, 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Deluxe Coil Gun"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Sparkle Time Hoverboard"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Lightning Bolt Sword"], 1)
-			-- self:AddRelicsRegistry(player, RelicNames["Lightning Horn of the Heavens"], 1)
-		end)
 	end)
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		self._relicRegistry[player.UserId] = nil
 		self._incrementalRegistry[player.UserId] = nil
+		self._incrementalOwners[player.UserId] = nil
+		self:_invalidateRelicSnapshot(player.UserId)
 		self._relicsList[player.UserId] = nil
 		self._relicOrigins[player.UserId] = nil
 		self._relicSlots[player.UserId] = nil
 
-		RelicNetwork.RelicsReplicated.FireAll({
-			UserId = player.UserId,
-			Registry = self._relicRegistry,
-			List = self._relicsList,
-		})
+		self:_replicateRelicsRemoved(player)
 
 		-- Final cleanup of the workspace-parented Ghost Dragon visual —
 		-- CharacterRemoving handles respawns; this catches the disconnect.

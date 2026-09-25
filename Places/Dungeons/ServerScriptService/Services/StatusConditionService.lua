@@ -109,6 +109,28 @@ type StatusConfig = {
 -- One refcounted status rig on a mob (see _visuals).
 type VisualSlot = { count: number, emitters: { ParticleEmitter } }
 
+-- One live status instance (see _active). The first block is the
+-- gameplay record; the second is what the sweep needs to find the record
+-- again and to run its DoT without a thread of its own.
+type StatusRecord = {
+	expiresAt: number,
+	sourcePlayer: Player,
+	dotMultiplier: number,
+	dotTickDamageCap: number,
+	slowFraction: number,
+	weakenFraction: number,
+	visualKey: string,
+	model: Model,
+	humanoid: Humanoid,
+	status: string,
+	userId: number?,
+	config: StatusConfig,
+	-- DoT records only.
+	percentPerTick: number?,
+	tickInterval: number?,
+	nextTickAt: number?,
+}
+
 local StatusConditionService = {
 	Name = "StatusConditionService",
 	Dependencies = { DataService, DamageIndicatorService } :: { any },
@@ -119,6 +141,8 @@ local StatusConditionService = {
 local STATUS_ATTRIBUTE_PREFIX = "Status"
 local SLOW_ATTRIBUTE = "StatusSlowMultiplier"
 local VFX_FADE_SECONDS = 1.5
+-- Cadence of the ONE sweep that expires instances and lands DoT ticks
+-- (_sweepActiveRecords). Expiry and tick timing resolve to this.
 local EXPIRY_POLL_SECONDS = 0.1
 
 -- The DoT statuses stack PER PLAYER (default one stack each;
@@ -191,10 +215,15 @@ local SOUND_DEBOUNCE_SECONDS = 0.1
 --   * shared statuses (Chill/Shock/CoilShocked/Paint): the live record
 --   * stackable statuses: { [userId] = { record, ... } } — an ARRAY per
 --     player, length capped by StatusConditionData.stackLimit (default 1).
--- A record:
---   { expiresAt, sourcePlayer, dotTickDamageCap, dotMultiplier,
---     slowFraction, weakenFraction, visualKey }
+-- A record is a StatusRecord (see the type above).
 StatusConditionService._active = {}
+
+-- The sweep thread runs only while _active has something in it: it exits
+-- when the books empty and ApplyStatus starts it again on the next
+-- application. `_sweepBuffer` is the scratch array one sweep collects its
+-- records into (reused, never reallocated).
+StatusConditionService._sweepRunning = false
+StatusConditionService._sweepBuffer = {} :: { StatusRecord }
 
 -- Refcounted visuals per mob: [model] = { [visualKey] = { count, emitters } }.
 -- visualKey is the GameAssets.Auras folder name ("Burn", "BlackFlame",
@@ -890,97 +919,137 @@ function StatusConditionService:ApplyMagicOnHitStatuses(sourcePlayer: Player, ta
 	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus)
 end
 
--- Starts the per-instance DoT loop + expiry watcher. `getLive` verifies
--- the record still sits in its slot so a superseded/expired instance stops
--- its threads.
-function StatusConditionService:_startInstanceThreads(
-	model: Model,
-	humanoid: Humanoid,
-	status: string,
-	config: StatusConfig,
-	record,
-	userId: number?
-)
-	local function getLive(): boolean
-		local entry = self._active[model]
-		local value = entry and entry[status]
-		if not value then
-			return false
-		end
-		if STACKABLE[status] then
-			local stack = userId and value[userId]
-			return stack ~= nil and table.find(stack, record) ~= nil
-		end
-		return value == record
+-- True while the record still sits in its slot — a superseded or already
+-- expired instance fails this and the sweep leaves it alone.
+function StatusConditionService:_isRecordLive(record: StatusRecord): boolean
+	local entry = self._active[record.model]
+	local value = entry and entry[record.status]
+	if not value then
+		return false
 	end
+	if STACKABLE[record.status] then
+		local stack = record.userId and value[record.userId]
+		return stack ~= nil and table.find(stack, record) ~= nil
+	end
+	return (value :: any) == record
+end
 
-	-- DoT loop. Per-tick damage = total % of max health spread over the
-	-- BASE duration's ticks — refresh/bonus-duration extends the ticking
-	-- at the same rate. Each STACK runs its own loop on its own applier's
-	-- magnitudes. DoT ticks sit OUTSIDE the damage amplifier chain and can
-	-- never crit or roll appliers.
+-- One DoT tick. Per-tick damage = total % of max health spread over the
+-- BASE duration's ticks — refresh/bonus-duration extends the ticking at
+-- the same rate. Each STACK ticks on its own applier's magnitudes. DoT
+-- ticks sit OUTSIDE the damage amplifier chain and can never crit or roll
+-- appliers.
+function StatusConditionService:_dotTick(record: StatusRecord)
+	local config = record.config
+	local humanoid = record.humanoid
+	local damage = math.floor(
+		math.clamp(humanoid.MaxHealth * (record.percentPerTick or 0) * record.dotMultiplier, 1, record.dotTickDamageCap)
+	)
+	-- Tick number renders in THIS status's colour — the same
+	-- StatusConditionData tint the proc burst uses.
+	DamageService:TakeDamage(record.sourcePlayer, humanoid, damage, false, true, nil, nil, nil, config.color)
+
+	-- A status with its own authored hit VFX (Black Flame) bursts per
+	-- tick, not just on landing.
+	if config.hitVFXName and DamageIndicatorService then
+		DamageIndicatorService:ShowStatusVFX(record.model, config.color, config.hitVFXName)
+	end
+end
+
+-- Hands a FRESH record to the sweep. A DoT record ticks once right here —
+-- the per-instance loop this replaced dealt its first tick synchronously
+-- on application — and schedules the next; then the sweep is started if
+-- it isn't already running.
+function StatusConditionService:_armRecord(record: StatusRecord)
+	local config = record.config
 	if config.dotPercentOfMaxHealth then
 		local tickInterval = config.tickInterval or 1
 		local ticksInBaseDuration = math.max(1, math.floor(config.duration / tickInterval))
-		local percentPerTick = config.dotPercentOfMaxHealth / ticksInBaseDuration
+		record.percentPerTick = config.dotPercentOfMaxHealth / ticksInBaseDuration
+		record.tickInterval = tickInterval
+		self:_dotTick(record)
+		record.nextTickAt = os.clock() + tickInterval
+	end
+	self:_ensureSweepRunning()
+end
 
-		task.spawn(function()
-			while true do
-				if not getLive() or not model.Parent or humanoid.Health <= 0 then
-					break
-				end
-				if os.clock() >= record.expiresAt then
-					break
-				end
-				local damage = math.floor(
-					math.clamp(humanoid.MaxHealth * percentPerTick * record.dotMultiplier, 1, record.dotTickDamageCap)
-				)
-				-- Tick number renders in THIS status's colour — the same
-				-- StatusConditionData tint the proc burst uses.
-				DamageService:TakeDamage(
-					record.sourcePlayer,
-					humanoid,
-					damage,
-					false,
-					true,
-					nil,
-					nil,
-					nil,
-					config.color
-				)
-
-				-- A status with its own authored hit VFX (Black Flame) bursts
-				-- per tick, not just on landing.
-				if config.hitVFXName and DamageIndicatorService then
-					DamageIndicatorService:ShowStatusVFX(model, config.color, config.hitVFXName)
-				end
-
-				task.wait(tickInterval)
-			end
-		end)
+-- One record's share of a sweep: expire on model loss or timeout, release
+-- (aura kept on the corpse) on death, otherwise land a DoT tick when one
+-- is due. Refreshes extend the SAME record, because the sweep reads
+-- `expiresAt` live rather than arming a task.delay.
+function StatusConditionService:_sweepRecord(record: StatusRecord, now: number)
+	-- Superseded, or removed earlier in this same sweep.
+	if not self:_isRecordLive(record) then
+		return
 	end
 
-	-- Expiry watcher. Polls instead of task.delay so refreshes extend the
-	-- SAME instance.
+	local model = record.model
+	local humanoid = record.humanoid
+
+	if not model.Parent then
+		self:_expireInstance(model, record.status, record.userId, record)
+		return
+	end
+	-- Death: the aura STAYS on the corpse (no fade) — MobBase's despawn
+	-- sweep owns the fade. Release just the bookkeeping.
+	if humanoid.Health <= 0 then
+		self:_releaseInstanceKeepEmitters(model, record.status, record.userId, record)
+		return
+	end
+	if now >= record.expiresAt then
+		self:_expireInstance(model, record.status, record.userId, record)
+		return
+	end
+
+	local nextTickAt = record.nextTickAt
+	if nextTickAt and now >= nextTickAt then
+		self:_dotTick(record)
+		record.nextTickAt = now + (record.tickInterval or 1)
+	end
+end
+
+-- ONE pass over every live record. Records are collected first and then
+-- processed: expiring one rewrites _active, and a DoT tick can kill a mob
+-- whose death hooks apply statuses elsewhere — a table must not gain keys
+-- while it is being traversed.
+function StatusConditionService:_sweepActiveRecords()
+	local due = self._sweepBuffer
+	table.clear(due)
+	for _, entry in self._active do
+		for status, value in entry do
+			if STACKABLE[status] then
+				for _, stack in value do
+					for _, record in stack do
+						table.insert(due, record)
+					end
+				end
+			else
+				table.insert(due, value)
+			end
+		end
+	end
+
+	local now = os.clock()
+	for _, record in due do
+		self:_sweepRecord(record, now)
+	end
+	table.clear(due)
+end
+
+-- The single 10 Hz sweep that replaced the two threads every instance
+-- used to spawn (a DoT loop and an expiry poller, per mob x status x
+-- player x stack). Runs only while something is active.
+function StatusConditionService:_ensureSweepRunning()
+	if self._sweepRunning then
+		return
+	end
+	self._sweepRunning = true
 	task.spawn(function()
-		while model.Parent do
-			if not getLive() then
-				return -- superseded / already cleaned up
-			end
-			-- Death: the aura STAYS on the corpse (no fade) — MobBase's
-			-- despawn sweep owns the fade. Release just the bookkeeping.
-			if humanoid.Health <= 0 then
-				self:_releaseInstanceKeepEmitters(model, status, userId, record)
-				return
-			end
-			if os.clock() >= record.expiresAt then
-				break
-			end
+		while next(self._active) ~= nil do
 			task.wait(EXPIRY_POLL_SECONDS)
+			self:_sweepActiveRecords()
 		end
-		if getLive() then
-			self:_expireInstance(model, status, userId, record)
-		end
+		self._sweepRunning = false
 	end)
 end
 
@@ -1107,14 +1176,23 @@ function StatusConditionService:ApplyStatus(
 
 	-- FRESH application (a new stack for stackables below the limit).
 	local visualKey = config.auraName
-	local record = {
+	-- Through any: the checker loses the method's declared number return
+	-- on this self-call and leaves a free type behind.
+	local dotTickDamageCap: number = (self:_resolveTickCap(sourcePlayer :: Player, config) :: any) :: number
+	local record: StatusRecord = {
 		expiresAt = os.clock() + duration,
-		sourcePlayer = sourcePlayer,
+		-- `sourcePlayer` is a plain Player (see the userId note above).
+		sourcePlayer = sourcePlayer :: Player,
 		dotMultiplier = dotMultiplier,
-		dotTickDamageCap = self:_resolveTickCap(sourcePlayer, config),
+		dotTickDamageCap = dotTickDamageCap,
 		slowFraction = slowFraction,
 		weakenFraction = weakenFraction,
 		visualKey = visualKey,
+		model = targetModel,
+		humanoid = humanoid,
+		status = status,
+		userId = if isStackable then userId else nil,
+		config = config,
 	}
 
 	if isStackable then
@@ -1147,7 +1225,7 @@ function StatusConditionService:ApplyStatus(
 		playApplyVFX(config.applyVFXName, hrp)
 	end
 
-	self:_startInstanceThreads(targetModel, humanoid, status, config, record, if isStackable then userId else nil)
+	self:_armRecord(record)
 
 	return true
 end

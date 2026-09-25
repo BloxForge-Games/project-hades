@@ -11,6 +11,7 @@ local IgnoreListService = require(ServerScriptService.Services.IgnoreListService
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 return function(player: Player)
 	local character = player.Character or player.CharacterAdded:Wait()
@@ -110,13 +111,16 @@ return function(player: Player)
 			return
 		end
 
+		local root = getRoot(character)
+		if not root then
+			return
+		end
+
 		local attackVFXPart = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].AttackPart:Clone()
 		local range = MagicData[MagicNames["Susanoo Armor"]].range
 		local hitboxCFrame = CFrame.new(
-			susanooRig.PrimaryPart.CFrame.Position
-				+ (character:FindFirstChild("HumanoidRootPart") :: BasePart).CFrame.LookVector * range
-				+ Vector3.new(0, -7.5, 0)
-		) * CFrame.Angles(0, (character:FindFirstChild("HumanoidRootPart") :: BasePart).CFrame:ToEulerAnglesYXZ(), 0)
+			susanooRig.PrimaryPart.CFrame.Position + root.CFrame.LookVector * range + Vector3.new(0, -7.5, 0)
+		) * CFrame.Angles(0, root.CFrame:ToEulerAnglesYXZ(), 0)
 
 		attackVFXPart.CFrame = hitboxCFrame
 		attackVFXPart.Parent = workspace.IgnoreInstances.MagicSpells

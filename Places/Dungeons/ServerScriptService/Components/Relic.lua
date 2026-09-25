@@ -21,6 +21,41 @@ local POST_FADE_DESTROY_DELAY = PICKUP_FADE_SECONDS + 0.25
 
 local collectRouter = InstanceRouter.Server(RelicNetwork.RelicCollectRequested)
 
+-- Every live OWNED relic on the floor, by owner: what a claim-one pickup
+-- sweeps. The components keep it themselves (Start adds, Stop removes),
+-- so a pickup never has to QueryDescendants the whole workspace for the
+-- rest of its fan. PUBLIC drops carry no OwnerId at all (DropService) and
+-- are never in here -- exactly the set the workspace query matched.
+local relicsByOwner: { [number]: { [Instance]: true } } = {}
+
+local function registerOwnedRelic(relic: Instance)
+	local ownerId = relic:GetAttribute(Attributes.OwnerId)
+	if typeof(ownerId) ~= "number" then
+		return
+	end
+	local owned = relicsByOwner[ownerId]
+	if not owned then
+		owned = {}
+		relicsByOwner[ownerId] = owned
+	end
+	owned[relic] = true
+end
+
+local function unregisterOwnedRelic(relic: Instance)
+	local ownerId = relic:GetAttribute(Attributes.OwnerId)
+	if typeof(ownerId) ~= "number" then
+		return
+	end
+	local owned = relicsByOwner[ownerId]
+	if not owned then
+		return
+	end
+	owned[relic] = nil
+	if next(owned) == nil then
+		relicsByOwner[ownerId] = nil
+	end
+end
+
 local Relic = Component.new({
 	Tag = TagList.Relic,
 })
@@ -38,6 +73,8 @@ function Relic:Construct()
 end
 
 function Relic:Start()
+	registerOwnedRelic(self.Instance)
+
 	collectRouter:Bind(self.Instance, function(player: Player)
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
@@ -181,13 +218,21 @@ function Relic:Start()
 			-- vending-machine pull the claimant still has open stays open.
 			collect(self.Instance)
 		else
-			for _, relic in pairs(workspace:QueryDescendants(".Relic")) do
-				if relic:GetAttribute("OwnerId") == player.UserId then
+			-- The rest of this owner's fan: every relic they own that is
+			-- still on the floor, this one included. collect() only stamps
+			-- and schedules, so the registry is not mutated mid-walk.
+			local owned = relicsByOwner[player.UserId]
+			if owned then
+				for relic in owned do
 					collect(relic)
 				end
 			end
 		end
 	end)
+end
+
+function Relic:Stop()
+	unregisterOwnedRelic(self.Instance)
 end
 
 return Relic

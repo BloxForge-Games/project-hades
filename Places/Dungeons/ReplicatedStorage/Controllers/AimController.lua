@@ -18,21 +18,10 @@ local MagicController = require(ReplicatedStorage.Controllers.MagicController)
 local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateController)
 local CastModeController = require(ReplicatedStorage.Controllers.CastModeController)
 local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DataController)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local player: Player = Players.LocalPlayer
 local mouse: Mouse = player:GetMouse()
-
--- The Roblox type definitions no longer allow indexing the Humanoid or the
--- root part straight off the character. These look the children up by name
--- and CAST rather than guard, so a missing child still errors where the old
--- direct index did.
-local function getHumanoid(character: Model): Humanoid
-	return character:FindFirstChildOfClass("Humanoid") :: Humanoid
-end
-
-local function getRootPart(character: Model): BasePart
-	return character:FindFirstChild("HumanoidRootPart") :: BasePart
-end
 
 local INDEX: number = 0.15
 -- MINIMUM cast lock (see BeginCastLock). The server builds a spell's
@@ -180,18 +169,6 @@ function AimController._applyAutoAimProfile(self: typeof(AimController), profile
 end
 
 function AimController.GetMobileMoveVectorOffset(_self: typeof(AimController)): number
-	-- local x, _, z = IsometricCameraController:GetDepthValues()
-
-	-- if x > 0 and z > 0 then
-	-- 	return 45
-	-- elseif x > 0 and z < 0 then
-	-- 	return 135
-	-- elseif x < 0 and z < 0 then
-	-- 	return 225
-	-- elseif x < 0 and z > 0 then
-	-- 	return 315
-	-- end
-
 	local x, _, z = (IsometricCameraController :: any):GetDepthValues()
 
 	return (math.deg(math.atan2(x, z)) + 360) % 360
@@ -227,7 +204,7 @@ end
 function AimController._keyboardMouseUpdate(self: typeof(AimController))
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local rootPart = getRoot(character)
 	if not character or not humanoid or not rootPart then
 		return
 	end
@@ -279,7 +256,7 @@ end
 function AimController._snapFacingToCursorNow(_self: typeof(AimController))
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local rootPart = getRoot(character)
 	if not humanoid or not rootPart then
 		return
 	end
@@ -375,25 +352,31 @@ function AimController.RequestCursorFacing(self: typeof(AimController))
 end
 
 function AimController._mobileUpdate(self: typeof(AimController))
+	-- Same guard as the keyboard loop: between death and respawn there is
+	-- no character, and for a frame after one there may be no root or
+	-- humanoid yet. Nothing to steer, so nothing to do -- this used to
+	-- cast and throw inside Stepped.
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local rootPart = getRoot(character)
+	if not character or not humanoid or not rootPart then
+		return
+	end
+
 	-- Cast lock (BeginCastLock), the same one the keyboard loop honours:
 	-- the heading is pinned for the cast so the server's hitbox matches
 	-- what the player aimed. Was the SkillshotDelay attribute.
 	if os.clock() < self._castLockUntil then
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			humanoid.AutoRotate = false
-		end
+		humanoid.AutoRotate = false
 		return
 	end
 
 	if PlayerStateController:AimActionEnabled() == false then
-		local character = player.Character :: Model
 		if
 			character:GetAttribute(Attributes.IsDodging) == true
 			or character:GetAttribute(Attributes.MagicEnabled) == true
 		then
-			getHumanoid(character).AutoRotate = false
+			humanoid.AutoRotate = false
 		end
 
 		return
@@ -403,7 +386,7 @@ function AimController._mobileUpdate(self: typeof(AimController))
 		-- Nothing steering: hand rotation back to the humanoid — unless a
 		-- weapon-stick release hold is still running, in which case keep
 		-- the current facing (see HoldFacing).
-		getHumanoid(player.Character :: Model).AutoRotate = os.clock() >= self._facingHoldUntil
+		humanoid.AutoRotate = os.clock() >= self._facingHoldUntil
 
 		return
 	end
@@ -411,8 +394,6 @@ function AimController._mobileUpdate(self: typeof(AimController))
 	if not self._mobileTargetCFrame or not self._mobileRotationActivated then
 		return
 	end
-
-	local rootPart = getRootPart(player.Character :: Model)
 
 	local currentAngle = rootPart.CFrame - rootPart.CFrame.Position
 	local desiredAngle = self._mobileTargetCFrame - self._mobileTargetCFrame.Position
@@ -437,21 +418,28 @@ function AimController.RotatePlayerToMoveVector(self: typeof(AimController), act
 
 		self._mobileRotationActivated = activated
 
+		-- Mid-respawn there is no character to turn; the state above still
+		-- latches so the next stick event finds the new one.
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local rootPart = getRoot(character)
+
 		-- Activating takes rotation NOW. Deactivating hands it back via
 		-- _MobileUpdate next Stepped rather than here — that path is what
 		-- honours a running facing hold (writing AutoRotate = true here
 		-- would flicker it on for a frame and defeat the hold).
 		if self._mobileRotationActivated then
-			((player.Character :: Model):WaitForChild("Humanoid") :: Humanoid).AutoRotate = false
+			if humanoid then
+				humanoid.AutoRotate = false
+			end
 		else
 			self._mobileFirstClick = true
 		end
 
-		if not direction then
+		if not direction or not rootPart then
 			return
 		end
 
-		local rootPart = getRootPart(player.Character :: Model)
 		local targetDirection = Vector3.new(direction.X, 0, direction.Z).Unit
 		local targetPosition = Vector3.new(rootPart.Position.X, rootPart.Position.Y, rootPart.Position.Z)
 
@@ -461,7 +449,7 @@ function AimController.RotatePlayerToMoveVector(self: typeof(AimController), act
 
 		if self._mobileFirstClick then
 			self._mobileFirstClick = false
-			getRootPart(player.Character :: Model).CFrame = targetCFrame
+			rootPart.CFrame = targetCFrame
 		end
 	end
 end
@@ -472,8 +460,7 @@ end
 -- character, or nil. Pure distance — no line-of-sight filtering, by design:
 -- rooms are open arenas and a raycast miss would read as a dead button.
 function AimController._findNearestEnemy(_self: typeof(AimController), rangeStuds: number): BasePart?
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot.fromPlayer(player)
 	if not hrp then
 		return nil
 	end
@@ -491,7 +478,7 @@ function AimController._findNearestEnemy(_self: typeof(AimController), rangeStud
 			continue
 		end
 		local zombieHumanoid = zombie:FindFirstChildOfClass("Humanoid")
-		local zombieRoot = (zombie:FindFirstChild("HumanoidRootPart") or zombie.PrimaryPart) :: BasePart?
+		local zombieRoot = getRoot(zombie) or zombie.PrimaryPart
 		if not zombieHumanoid or zombieHumanoid.Health <= 0 or not zombieRoot then
 			continue
 		end
@@ -518,8 +505,7 @@ end
 -- the camera-yaw offset — feeding it a world direction would aim wrong by
 -- the camera's rotation.
 function AimController._snapFacing(_self: typeof(AimController), targetPosition: Vector3)
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot.fromPlayer(player)
 	if not hrp then
 		return
 	end
@@ -538,8 +524,7 @@ function AimController._isAutoAttackTargetValid(self: typeof(AimController)): bo
 		return false
 	end
 
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot.fromPlayer(player)
 	if not hrp then
 		return false
 	end
@@ -560,7 +545,7 @@ end
 -- their own fire-rate / swing debounce.
 function AimController._autoAttackStep(self: typeof(AimController))
 	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot(character)
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if not hrp or not humanoid or PlayerStateController:GeneralActionEnabled() == false then

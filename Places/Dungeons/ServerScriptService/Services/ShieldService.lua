@@ -52,6 +52,8 @@ local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNam
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 
 -- DamageService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -228,7 +230,7 @@ function ShieldService._burstEmitters(_self: typeof(ShieldService), state: Shiel
 end
 
 function ShieldService._spawnVisuals(self: typeof(ShieldService), state: ShieldState, _player: Player)
-	local hrp = state.character:FindFirstChild("HumanoidRootPart")
+	local hrp = getRoot(state.character)
 	if not hrp then
 		return
 	end
@@ -269,7 +271,7 @@ function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: numbe
 		return
 	end
 
-	local hrp = holderCharacter and holderCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot(holderCharacter)
 	local ownerHumanoid = owner.Character and owner.Character:FindFirstChildOfClass("Humanoid")
 	if not hrp or not ownerHumanoid then
 		return
@@ -297,24 +299,11 @@ function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: numbe
 		RelicNetwork.TntExplosionEffect.FireAll(blastPosition)
 
 		if getDamageService() then
-			local overlapParams = OverlapParams.new()
-			overlapParams.FilterType = Enum.RaycastFilterType.Include
-			overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Zombies }
-			local struck = {}
-			for _, part in workspace:GetPartBoundsInRadius(blastPosition, TNT_EXPLOSION_RADIUS, overlapParams) do
-				local model = part:FindFirstAncestorWhichIsA("Model")
-				if not model or struck[model] then
-					continue
-				end
-				local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
-				if not targetHumanoid or targetHumanoid.Health <= 0 then
-					continue
-				end
-				struck[model] = true
+			forEachEnemyInRadius(blastPosition, TNT_EXPLOSION_RADIUS, function(_model, targetHumanoid)
 				-- Relic-sourced flat damage (never rolls appliers as a weapon
 				-- swing would).
 				getDamageService():TakeDamage(owner, targetHumanoid, blastDamage, false, false, nil, true)
-			end
+			end)
 		end
 	end)
 end
@@ -409,7 +398,7 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 		end
 
 		while state.character.Parent and #state.buckets > 0 do
-			local hrp = state.character:FindFirstChild("HumanoidRootPart") :: BasePart?
+			local hrp = getRoot(state.character)
 			local humanoid = state.character:FindFirstChildOfClass("Humanoid")
 			local owned = (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) > 0
 
@@ -487,22 +476,9 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 				end
 
 				if tremorDamage > 0 and getDamageService() then
-					local overlapParams = OverlapParams.new()
-					overlapParams.FilterType = Enum.RaycastFilterType.Include
-					overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Zombies }
-					local struck = {}
-					for _, part in workspace:GetPartBoundsInRadius(hrp.Position, TREMOR_RADIUS, overlapParams) do
-						local model = part:FindFirstAncestorWhichIsA("Model")
-						if not model or struck[model] then
-							continue
-						end
-						local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
-						if not targetHumanoid or targetHumanoid.Health <= 0 then
-							continue
-						end
-						struck[model] = true
+					forEachEnemyInRadius(hrp.Position, TREMOR_RADIUS, function(_model, targetHumanoid)
 						getDamageService():TakeDamage(player, targetHumanoid, tremorDamage, false, false, nil, true)
-					end
+					end)
 				end
 			else
 				clearEmpower()
@@ -551,7 +527,7 @@ function ShieldService.GrantShield(
 			if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Earth Protection Orb"]) or 0) <= 0 then
 				return false
 			end
-			local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			local hrp = getRoot.fromPlayer(player)
 			return hrp ~= nil and hrp:FindFirstChild(AuraNames.Stonebound) ~= nil
 		end
 		if orbBoost(applierPlayer) or (targetPlayer ~= applierPlayer and orbBoost(targetPlayer)) then
@@ -582,7 +558,7 @@ function ShieldService.GrantShield(
 
 	if wasEmpty then
 		local gainAuraSound = ReplicatedStorage.GameAssets.Sounds.GainAura:Clone()
-		gainAuraSound.Parent = state.character:FindFirstChild("HumanoidRootPart")
+		gainAuraSound.Parent = getRoot(state.character)
 		gainAuraSound:Play()
 
 		Debris:AddItem(gainAuraSound, 2)
@@ -594,9 +570,7 @@ function ShieldService.GrantShield(
 
 	-- Pop on EVERY grant — fresh or stacked.
 	if TextIndicatorService then
-		local head = (
-			state.character:FindFirstChild("Head") or state.character:FindFirstChild("HumanoidRootPart")
-		) :: BasePart?
+		local head = (state.character:FindFirstChild("Head") or getRoot(state.character)) :: BasePart?
 		if head then
 			TextIndicatorService:ShowIndicator(
 				targetPlayer,
@@ -623,12 +597,11 @@ function ShieldService.GrantShield(
 		and (RelicService:GetSpecificRelicRegistry(applierPlayer, RelicNames["Earth Summoning Horn"]) or 0) > 0
 	then
 		local shareFraction = RelicService:GetRelicEffect(applierPlayer, RelicNames["Earth Summoning Horn"]) or 0
-		local hrp = state.character:FindFirstChild("HumanoidRootPart") :: BasePart?
+		local hrp = getRoot(state.character)
 		if shareFraction > 0 and hrp then
 			for _, ally in Players:GetPlayers() do
 				if ally ~= applierPlayer then
-					local allyCharacter = ally.Character
-					local allyHrp = allyCharacter and allyCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+					local allyHrp = getRoot.fromPlayer(ally)
 					if allyHrp and (allyHrp.Position - hrp.Position).Magnitude <= SUMMONING_HORN_RADIUS then
 						self:GrantShield(applierPlayer, ally, fraction * shareFraction, duration)
 					end

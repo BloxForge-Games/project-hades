@@ -9,6 +9,7 @@
 
 local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -54,10 +55,15 @@ local MYSTICAL_SIGIL_RADIUS = 13
 -- model is destroyed this many seconds later so in-flight particles
 -- finish their lifetime instead of vanishing mid-air.
 local MYSTICAL_SIGIL_FADE_SECONDS = 1
+-- How far below the caster the sigil looks for the map floor: a short ray
+-- on purpose, so a mid-jump cast over the void drops no sigil.
+local MYSTICAL_SIGIL_GROUND_RAY_STUDS = 50
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
 local toggleWeaponSheath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.toggleWeaponSheath)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 
 -- RelicService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -112,6 +118,11 @@ local AURA_ACTIVATION_DELAY = 2
 -- (range + travel + half the hitbox). Covers the caster moving between
 -- the cast and the request, and latency. See _isHitboxPlacementValid.
 local HITBOX_PLACEMENT_SLACK_STUDS = 12
+-- Sweep spells (Hollow Purple) step a hitbox along their travel line. The
+-- authored stepDistance (1 stud over 100) meant ~100 spatial queries per
+-- cast; the step is raised so one cast issues at most this many, but never
+-- past the hitbox radius, so nothing can slip between two steps.
+local SWEEP_MAX_QUERIES = 25
 
 local vfxServer = script.VFXServer
 
@@ -134,8 +145,14 @@ local VFXService = {
 --[ Properties ]--
 
 -- [userId][vfxName] = the Models this cast already hit (dedupe), plus a
--- `hitboxCount` for multi-hitbox spells.
+-- `hitboxCount` for multi-hitbox spells. WEAK-keyed on the Model: a dead
+-- mob is not pinned in memory until the same player's next cast of the
+-- same spell happens to reset the table.
 type DetectedParts = { [Model]: boolean, hitboxCount: number? }
+local DETECTED_PARTS_WEAK_KEYS = { __mode = "k" }
+local function newDetectedParts(): DetectedParts
+	return setmetatable({}, DETECTED_PARTS_WEAK_KEYS) :: any
+end
 VFXService._playerDetectedPartsRegistry = {} :: { [number]: { [string]: DetectedParts } }
 VFXService._vfxReplicationQueue = {}
 -- Per player, bumped per accepted cast. The end-of-duration timer clears
@@ -153,8 +170,6 @@ VFXService._vfxAttackRegistry = {}
 -- every read/write.
 VFXService._activeSigils = {}
 VFXService._vfxRegistry = {}
-VFXService._persistentHitboxes = {}
-VFXService._weaponOverlapParams = OverlapParams.new()
 
 VFXService.OnBuildingBroken = Signal.new()
 
@@ -267,12 +282,11 @@ function VFXService.RegisterHitbox(
 	end
 
 	if not self._playerDetectedPartsRegistry[userId][vfxName] then
-		self._playerDetectedPartsRegistry[userId][vfxName] = {}
+		self._playerDetectedPartsRegistry[userId][vfxName] = newDetectedParts()
 	end
 
 	local detectedRegistry = self._playerDetectedPartsRegistry[userId][vfxName]
-	local character = activePlayer.Character
-	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local rootPart = getRoot.fromPlayer(activePlayer)
 
 	local partsTable = nil
 	local hitParts = workspace:GetPartBoundsInRadius(cframe.Position, radius, overlapParams)
@@ -286,7 +300,7 @@ function VFXService.RegisterHitbox(
 		end
 
 		if model:HasTag(targetTag) then
-			local humanoid = model:FindFirstChild("Humanoid")
+			local humanoid = model:FindFirstChildOfClass("Humanoid")
 
 			if not humanoid then
 				continue
@@ -444,7 +458,7 @@ function VFXService.CreateHitbox(
 		return
 	end
 
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	local rootPart = getRoot(character)
 	if not rootPart then
 		warn("[VFXService] HumanoidRootPart not found for player " .. activePlayer.Name)
 		return
@@ -466,12 +480,18 @@ function VFXService.CreateHitbox(
 			self._playerDetectedPartsRegistry[activePlayer.UserId] = {}
 		end
 
-		self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+		self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 	end
 
-	local overlapParams = self._weaponOverlapParams
+	-- A fresh OverlapParams per call. The old shared instance had its filter
+	-- list swapped by every caller, and the sweep / persistent loops yield
+	-- between calls, so one cast could query with another's exclusions.
+	-- The collision group is what keeps mob RaycastHitbox parts out (see
+	-- IgnoreListService) now that they are no longer in the ignore list.
+	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 	overlapParams.FilterDescendantsInstances = overlapParamsRef
+	overlapParams.CollisionGroup = IgnoreListService.WeaponQueryCollisionGroup
 
 	self:RegisterHitbox(activePlayer, cframe, radius, overlapParams, targetTag, callback, vfxName, canBreakBuildings)
 end
@@ -510,24 +530,13 @@ end
 -- caster can't become the "floor". No hit (mid-jump over the void) =
 -- no sigil, cast otherwise unaffected.
 function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot.fromPlayer(player)
 	if not hrp then
 		return
 	end
 
-	local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
-	local map = ignoreInstances and ignoreInstances:FindFirstChild("Map")
-	if not map then
-		return
-	end
-
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Include
-	raycastParams.FilterDescendantsInstances = { map }
-
-	local result = workspace:Raycast(hrp.Position, Vector3.new(0, -50, 0), raycastParams)
-	if not result then
+	local floorPosition = snapToGround(hrp.Position, { maxDistance = MYSTICAL_SIGIL_GROUND_RAY_STUDS, mapOnly = true })
+	if not floorPosition then
 		return
 	end
 
@@ -546,7 +555,7 @@ function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
 			part.CanQuery = false
 		end
 	end
-	sigil:PivotTo(CFrame.new(result.Position + Vector3.new(0, 1.75, 0)))
+	sigil:PivotTo(CFrame.new(floorPosition + Vector3.new(0, 1.75, 0)))
 	sigil.Parent = workspace.IgnoreInstances.MagicSpells
 
 	-- Smooth lifecycle. Burst 1 particle from every emitter AFTER
@@ -575,7 +584,7 @@ function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
 
 	self:_pruneExpiredSigils()
 	table.insert(self._activeSigils, {
-		position = result.Position,
+		position = floorPosition,
 		expiresAt = tick() + MYSTICAL_SIGIL_DURATION,
 	})
 end
@@ -620,8 +629,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		manaCostMultiplier = manaCostMultiplier * FORBIDDEN_BOX_MANA_MULTIPLIER
 	end
 	do
-		local casterCharacter = player.Character
-		local casterHrp = casterCharacter and casterCharacter:FindFirstChild("HumanoidRootPart")
+		local casterHrp = getRoot.fromPlayer(player)
 		if
 			casterHrp
 			and casterHrp:FindFirstChild(AuraNames.Frostburst)
@@ -763,7 +771,10 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		}
 	end
 
-	local casterRoot = character:FindFirstChild("HumanoidRootPart") :: BasePart
+	local casterRoot = getRoot(character)
+	if not casterRoot then
+		return
+	end
 	if (cframe.Position - casterRoot.Position).Magnitude > 10 then
 		warn("[VFXService] Player attempted to cast magic too far from their character:", player)
 		cframe = casterRoot.CFrame
@@ -791,9 +802,8 @@ function VFXService._isHitboxPlacementValid(
 	cframe: CFrame,
 	includeTravel: boolean
 ): boolean
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not root or not root:IsA("BasePart") then
+	local root = getRoot.fromPlayer(player)
+	if not root then
 		return false
 	end
 	local magicIndexData = MagicData[vfxName] or {}
@@ -843,7 +853,7 @@ function VFXService._onHitboxRequested(
 
 	local magicIndexData = MagicData[vfxName] or {}
 
-	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 
 	if magicIndexData.hitboxCount and magicIndexData.hitboxCount > 1 then
 		local detected = self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName]
@@ -910,10 +920,18 @@ function VFXService._onSweepHitboxRequested(
 		self._playerDetectedPartsRegistry[activePlayer.UserId] = {}
 	end
 
-	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 
-	local stepDistance = magicIndexData.stepDistance
+	local authoredStep = magicIndexData.stepDistance
 	local travelDistance = magicIndexData.travelDistance
+	local hitboxRadius = magicIndexData.hitboxSize.X
+	-- At most SWEEP_MAX_QUERIES steps over the travel line (the loop below
+	-- is inclusive of both ends), never coarser than the hitbox radius.
+	local stepDistance = math.max(authoredStep, math.min(hitboxRadius, travelDistance / (SWEEP_MAX_QUERIES - 1)))
+	-- The old loop advanced ONE authored step per task.wait(0.01), i.e. one
+	-- frame; waiting that many frames per (larger) step keeps the damage
+	-- front moving at the speed the client's beam was tuned against.
+	local framesPerStep = math.max(1, math.round(stepDistance / authoredStep))
 
 	-- ONE cast shake up front (players around the launch point feel it the
 	-- moment the beam fires). The per-step CreateHitbox calls below skip
@@ -932,7 +950,9 @@ function VFXService._onSweepHitboxRequested(
 	end
 
 	for distance = 0, travelDistance, stepDistance do
-		task.wait(0.01)
+		for _ = 1, framesPerStep do
+			RunService.Heartbeat:Wait()
+		end
 
 		local stepCFrame = cframe + (direction * distance)
 
@@ -975,13 +995,27 @@ function VFXService._onPersistentHitboxRequested(
 		self._playerDetectedPartsRegistry[activePlayer.UserId] = {}
 	end
 
-	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = {}
+	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 
 	local hitboxDuration = magicIndexData.hitboxDuration
 	local elapsed = 0
 
 	task.spawn(function()
 		while elapsed < hitboxDuration do
+			-- Caster gone (left, or a fresh character) or dead: nothing to
+			-- deal damage for, so the domain stops instead of ticking out
+			-- the full duration against a missing character.
+			local casterCharacter = player.Character
+			local casterHumanoid = casterCharacter and casterCharacter:FindFirstChildOfClass("Humanoid")
+			if
+				not casterCharacter
+				or not casterHumanoid
+				or casterHumanoid.Health <= 0
+				or casterCharacter:GetAttribute(Attributes.Death) == true
+			then
+				break
+			end
+
 			self:CreateHitbox(
 				vfxName,
 				activePlayer,
@@ -1000,10 +1034,10 @@ function VFXService._onPersistentHitboxRequested(
 		end
 
 		if vfxName == MagicNames["Domain Expansion"] then
-			-- Indexed directly before too: a caster gone by now throws here
-			-- and leaves the replication flag set, as it always has.
-			local casterCharacter = player.Character :: Model
-			casterCharacter:SetAttribute(Attributes.DomainExpansionActive, false)
+			local casterCharacter = player.Character
+			if casterCharacter then
+				casterCharacter:SetAttribute(Attributes.DomainExpansionActive, false)
+			end
 		end
 	end)
 end
@@ -1061,9 +1095,6 @@ function VFXService.Start(self: typeof(VFXService))
 			self._vfxAttackRegistry[player] = nil
 		end
 	end)
-
-	self._weaponOverlapParams.FilterType = Enum.RaycastFilterType.Exclude
-	self._weaponOverlapParams.FilterDescendantsInstances = IgnoreListService:GetWeaponIgnoreList()
 end
 
 return VFXService

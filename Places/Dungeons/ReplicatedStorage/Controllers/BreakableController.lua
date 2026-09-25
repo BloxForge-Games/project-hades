@@ -18,7 +18,6 @@
 ]]
 
 --[ Roblox Services ]--
-local Debris = game:GetService("Debris")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -29,6 +28,7 @@ local TweenService = game:GetService("TweenService")
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
+local playHitBurst = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.playHitBurst)
 
 local BreakableController = {
 	Name = "BreakableController",
@@ -95,7 +95,7 @@ function BreakableController._startShake(self: typeof(BreakableController), mode
 	local state: ShakeState = { cancelled = false, connection = nil }
 	self._activeShakes[model] = state
 
-	local startTime = tick()
+	local startTime = os.clock()
 
 	state.connection = RunService.Heartbeat:Connect(function()
 		if state.cancelled then
@@ -112,7 +112,7 @@ function BreakableController._startShake(self: typeof(BreakableController), mode
 			return
 		end
 
-		local elapsed = tick() - startTime
+		local elapsed = os.clock() - startTime
 		local current: CFrame
 
 		if elapsed < SHAKE_OUT_DURATION then
@@ -170,9 +170,9 @@ function BreakableController.Start(self: typeof(BreakableController))
 	end)
 end
 
--- The melee impact sparks on a breakable: the shared HitFX asset, every
--- emitter included -- the blade arc is right for a sword hit, and this
--- only runs for one.
+-- The melee impact sparks on a breakable: the shared hit burst
+-- (playHitBurst), every emitter included -- the blade arc is right for
+-- a sword hit, and this only runs for one.
 --
 -- Placed at `hitPosition` -- where the swing actually met the model, as
 -- computed by the server from the part it overlapped -- so a crate hit
@@ -183,31 +183,10 @@ function BreakableController._playHitFX(
 	buildTemplate: Instance,
 	hitPosition: Vector3?
 )
-	local partVFX = Instance.new("Part")
-	partVFX.Size = Vector3.new(1, 1, 1)
-	partVFX.Transparency = 1
-	partVFX.Anchored = true
-	partVFX.CanCollide = false
-	partVFX.CanQuery = false
-	partVFX.CanTouch = false
-	partVFX.CFrame = if hitPosition
+	local cframe = if hitPosition
 		then CFrame.new(hitPosition)
 		else (buildTemplate :: PVInstance):GetPivot() + (buildTemplate :: PVInstance):GetPivot().LookVector * -1
-	partVFX.Parent = workspace.IgnoreInstances.MagicSpells
-
-	local hitVFX = ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFXNew:Clone()
-	hitVFX.Parent = partVFX
-
-	for _, particle in pairs(hitVFX:GetDescendants()) do
-		if not particle:IsA("ParticleEmitter") then
-			continue
-		end
-
-		particle:Emit(2)
-	end
-
-	Debris:AddItem(hitVFX, 2)
-	Debris:AddItem(partVFX, 2)
+	playHitBurst(cframe)
 end
 
 return BreakableController

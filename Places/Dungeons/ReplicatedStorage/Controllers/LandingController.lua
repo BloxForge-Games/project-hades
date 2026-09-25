@@ -4,7 +4,7 @@
 	Description:
 	Client half of the join "landing" sequence. The player spawns at a hidden,
 	off-map staging SpawnLocation and stays behind the loading screen while their
-	character + assets load. The server (DungeonService) then teleports them to
+	character + assets load. The server (LandingService) then teleports them to
 	the dungeon start, anchors them, plays the landing animation, and drives this
 	controller through three signals:
 

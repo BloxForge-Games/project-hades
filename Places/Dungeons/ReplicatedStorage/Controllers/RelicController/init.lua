@@ -29,8 +29,12 @@ local RelicController = {
 	Name = "RelicController",
 	Dependencies = { QuadraticBezierController } :: { any },
 
-	_relicRegistry = {} :: { [string]: any },
-	_clientRenderedRelics = {}, -- [userId] = { parts = {}, count = number, visible = bool },
+	-- Every player's relics as the server last told us, keyed by NUMERIC
+	-- UserId (RelicRenderController keys its copy the same way): seeded by
+	-- RelicsSnapshot on join, kept current by RelicsReplicated deltas, one
+	-- player per packet.
+	_relicRegistry = {} :: { [number]: { [string]: number } },
+	_relicsList = {} :: { [number]: { string } },
 }
 
 RelicController.Signals = {
@@ -39,18 +43,20 @@ RelicController.Signals = {
 	OnRelicsUpdated = Signal.new() :: SignalTypes.Signal<number, any, any>,
 }
 
-function RelicController.GetRelicEffect(self: typeof(RelicController), player: Player, relicName: RelicNames.RelicNames)
-	if
-		self._relicRegistry[tostring(player.UserId)]
-		and self._relicRegistry[tostring(player.UserId)][relicName]
-		and self._relicRegistry[tostring(player.UserId)][relicName] > 0
-	then
-		return RelicData[relicName].callback(player, self._relicRegistry[tostring(player.UserId)][relicName])
+-- `relicName` is a RelicNames VALUE (the enum's type is the table itself,
+-- which is why the parameter is typed as the string it actually is).
+function RelicController.GetRelicEffect(self: typeof(RelicController), player: Player, relicName: string)
+	local registry = self._relicRegistry[player.UserId]
+	local count = registry and registry[relicName]
+	if count and count > 0 then
+		return RelicData[relicName].callback(player, count)
 	end
 end
 
+-- { [relicName] = count } for that player, or nil when the server has
+-- told us nothing about them.
 function RelicController.GetRelicsFromUserId(self: typeof(RelicController), userId: number)
-	return self._relicRegistry[tostring(userId)] or nil
+	return self._relicRegistry[userId] or nil
 end
 
 -- See the PerfectDodgeBurst handler in Start.
@@ -121,20 +127,38 @@ end
 local TNT_EXPLOSION_VFX_PATH = "BundleOfTNT/Explosion/Explosion"
 
 function RelicController.Start(self: typeof(RelicController))
-	RelicNetwork.RelicsReplicated.On(
-		function(payload: { UserId: number, Registry: { [any]: any }, List: { [any]: any } })
-			local playerId, relicRegistry, relicsList = payload.UserId, payload.Registry, payload.List
-			self._relicRegistry = relicRegistry
-
-			if playerId == Players.LocalPlayer.UserId then
-				RelicController.Signals.OnRelicsUpdated:Fire(
-					playerId,
-					RelicController:GetRelicsFromUserId(playerId),
-					relicsList[tostring(playerId)]
-				)
-			end
+	-- Registry cache: one player's entry at a time, from either path. Only
+	-- the LOCAL player's change wakes the tray and the other listeners.
+	local function applyEntry(userId: number, registry: { [string]: number }?, list: { string }?)
+		if registry and list then
+			self._relicRegistry[userId] = registry
+			self._relicsList[userId] = list
+		else
+			self._relicRegistry[userId] = nil
+			self._relicsList[userId] = nil
 		end
-	)
+		if userId == Players.LocalPlayer.UserId then
+			RelicController.Signals.OnRelicsUpdated:Fire(userId, registry, list)
+		end
+	end
+
+	-- The whole table, once, on join.
+	RelicNetwork.RelicsSnapshot.On(function(snapshot)
+		table.clear(self._relicRegistry)
+		table.clear(self._relicsList)
+		for userId, entry in snapshot do
+			applyEntry(userId, entry.Registry, entry.List)
+		end
+	end)
+
+	-- One player's relics changed (or they left: Removed).
+	RelicNetwork.RelicsReplicated.On(function(payload)
+		if payload.Removed then
+			applyEntry(payload.UserId, nil, nil)
+			return
+		end
+		applyEntry(payload.UserId, payload.Registry, payload.List)
+	end)
 
 	RelicNetwork.FireworksEffect.On(
 		function(payload: { Caster: Player?, Target: Model?, StartTime: number, Duration: number })

@@ -39,6 +39,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local DungeonService = require(ServerScriptService.Services.DungeonService)
 local DropService = require(ServerScriptService.Services.DropService)
 local GearDropService = require(ServerScriptService.Services.GearDropService)
 local RelicMachineService = require(ServerScriptService.Services.RelicMachineService)
@@ -128,7 +129,7 @@ type ChestBatch = {
 
 local EncounterChestService = {
 	Name = "EncounterChestService",
-	Dependencies = { DropService, GearDropService, RelicMachineService } :: { any },
+	Dependencies = { DungeonService, DropService, GearDropService, RelicMachineService } :: { any },
 	_batchByChest = {} :: { [Model]: ChestBatch },
 	_activeBatch = nil :: ChestBatch?,
 }
@@ -264,7 +265,7 @@ local function placeChestAtRest(player: Player, chest: Model): boolean
 
 	local extents = chest:GetExtentsSize()
 	local footprintRadius = math.max(extents.X, extents.Z) / 2
-	local frontXZ, groundY, _floorPart = RelicMachineService:_pickMachineLanding(hrp, footprintRadius)
+	local frontXZ, groundY, _floorPart = RelicMachineService:PickMachineLanding(hrp, footprintRadius)
 
 	-- Seat the BOTTOM on the ground: pivot height above the model's
 	-- lowest point, preserved.
@@ -588,11 +589,24 @@ function EncounterChestService.HasPlayerOpenedChest(self: typeof(EncounterChestS
 	return batch.opened[player.UserId] == true
 end
 
--- True once the current batch has fully resolved (every chest opened,
--- its owner gone, or the backstop timeout).
-function EncounterChestService.AllChestsOpened(self: typeof(EncounterChestService)): boolean
-	local batch = self._activeBatch
-	return batch == nil or batch.done == true or batch.pending <= 0
+-- The floor is being replaced. Batches are per encounter and their chests
+-- die with the floor's rooms, but the two lookups only ever emptied at
+-- boot: the previous floor's batch stayed the ACTIVE one, so
+-- HasPlayerOpenedChest on the new floor answered from
+-- stale state until its first encounter, and a still-pending batch's
+-- BATCH_TIMEOUT could fire its callback into a floor that no longer
+-- existed. Every live batch is retired (done, so neither the timeout
+-- nor a chest's teardown-destroy can complete it) and both lookups are
+-- cleared. Mirrors CoffinEventService.ResetForFloor.
+function EncounterChestService.ResetForFloor(self: typeof(EncounterChestService))
+	for _, batch in self._batchByChest do
+		batch.done = true
+	end
+	if self._activeBatch then
+		self._activeBatch.done = true
+	end
+	table.clear(self._batchByChest)
+	self._activeBatch = nil
 end
 
 --[ Lifecycle ]--
@@ -611,6 +625,13 @@ function EncounterChestService.Start(self: typeof(EncounterChestService))
 				self:_resolveChest(chest)
 			end
 		end
+	end)
+
+	-- Floor reset (see ResetForFloor). OnFloorTeardown fires at the START
+	-- of the teardown, before it destroys the old chests, so their batch is
+	-- already retired when those Destroying signals fire.
+	DungeonService.Signals.OnFloorTeardown:Connect(function()
+		self:ResetForFloor()
 	end)
 end
 

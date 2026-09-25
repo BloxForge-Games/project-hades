@@ -19,10 +19,13 @@
 	FADING: the rig FADES onto the character on grant and fades away on
 	expiry rather than popping. The asset mixes ParticleEmitters, Trails,
 	Beams (all NumberSequence transparency — not tweenable) and BaseParts
-	(float transparency), so the fade captures every element's AUTHORED
-	transparency at clone time and lerps the whole set between invisible
-	and authored by rebuilding the sequences per step. Replacement by a
-	stronger Stonebound gets a fast fade instead of an instant pop.
+	(float transparency), which is exactly what Shared/Functions/VFX/
+	vfxFade handles -- and it runs on every CLIENT: the server parents the
+	rig as authored and fires ONE Combat.VFXFade cue naming every piece
+	(VFXFadeController). Stepping the fade here used to replicate a
+	rebuilt NumberSequence per emitter per frame to every player.
+	Replacement by a stronger Stonebound gets a fast fade instead of an
+	instant pop.
 
 	The MARKER is a bare Attachment named "Stonebound" on the HRP carrying
 	the deadline AND the payload attributes (StoneboundDamageBonus /
@@ -35,7 +38,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
+local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local STONEBOUND_DAMAGE_ATTRIBUTE = "StoneboundDamageBonus"
@@ -69,74 +74,25 @@ local function awaitExpiry(marker: Instance)
 	end
 end
 
---[ Fade machinery ]--
+--[ Fade cue ]--
 
--- One captured element: the instance plus its AUTHORED transparency, so
--- alpha 1 always lands exactly on what was built in Studio.
---   ParticleEmitter / Trail / Beam -> NumberSequence
---   BasePart                       -> number
-type FadeTarget = { instance: Instance, sequence: NumberSequence?, number: number? }
-
-local function collectFadeTargets(root: Instance, targets: { FadeTarget })
-	local function capture(instance: Instance)
-		if instance:IsA("ParticleEmitter") or instance:IsA("Trail") or instance:IsA("Beam") then
-			local target: FadeTarget = { instance = instance, sequence = instance.Transparency }
-			table.insert(targets, target)
-		elseif instance:IsA("BasePart") then
-			local target: FadeTarget = { instance = instance, number = instance.Transparency }
-			table.insert(targets, target)
-		end
-	end
-	capture(root)
-	for _, descendant in root:GetDescendants() do
-		capture(descendant)
-	end
-end
-
--- alpha 0 = fully invisible, alpha 1 = exactly as authored. Sequences are
--- rebuilt per step (NumberSequence isn't tweenable); every keypoint is
--- dragged toward transparency 1, which preserves a multi-stop gradient's
--- SHAPE instead of flattening it.
-local function applyFadeAlpha(targets: { FadeTarget }, alpha: number)
-	for _, target in targets do
-		local instance = target.instance
-		if not instance.Parent then
-			continue
-		end
-		if target.sequence then
-			local keypoints = {}
-			for index, keypoint in target.sequence.Keypoints do
-				keypoints[index] = NumberSequenceKeypoint.new(
-					keypoint.Time,
-					1 - (1 - keypoint.Value) * alpha,
-					keypoint.Envelope * alpha
-				)
-			end
-			(instance :: ParticleEmitter).Transparency = NumberSequence.new(keypoints)
-		elseif target.number ~= nil then
-			(instance :: BasePart).Transparency = 1 - (1 - target.number) * alpha
-		end
-	end
-end
-
--- Steps the whole set from `fromAlpha` to `toAlpha` over `duration`.
--- Frame-stepped on the server heartbeat — the rig is a handful of
--- elements, so the per-step sequence rebuilds are cheap.
-local function fade(targets: { FadeTarget }, fromAlpha: number, toAlpha: number, duration: number)
-	applyFadeAlpha(targets, fromAlpha)
-	local elapsed = 0
-	while elapsed < duration do
-		elapsed += task.wait()
-		local progress = math.clamp(elapsed / duration, 0, 1)
-		applyFadeAlpha(targets, fromAlpha + (toAlpha - fromAlpha) * progress)
-	end
-	applyFadeAlpha(targets, toAlpha)
+-- Asks every client to fade the rig's pieces together (VFXFadeController
+-- runs vfxFade on them). alpha 0 = invisible, 1 = as authored. Fired
+-- AFTER the pieces are parented, so they exist on every client when the
+-- cue lands; a piece destroyed in between arrives nil and is skipped.
+local function cueFade(rigs: { Instance }, fromAlpha: number, toAlpha: number, duration: number)
+	CombatNetwork.VFXFade.FireAll({
+		Rigs = rigs,
+		FromAlpha = fromAlpha,
+		ToAlpha = toAlpha,
+		Duration = duration,
+	})
 end
 
 type Payload = { ownerId: number, damageBonus: number, damageReduction: number }
 
 return function(player: Player, character: Model, duration: number?, payload: Payload)
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot(character)
 	if not hrp or hrp:FindFirstChild(AuraNames.Stonebound) ~= nil then
 		return
 	end
@@ -147,8 +103,9 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 		return
 	end
 
+	-- Every piece of the rig: what expiry destroys, and what the fade cue
+	-- names.
 	local cleanupInstances: { Instance } = {}
-	local fadeTargets: { FadeTarget } = {}
 
 	-- Main attachment -> Torso (UpperTorso on R15).
 	local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
@@ -156,7 +113,6 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 	if mainTemplate and torso and torso:IsA("BasePart") then
 		local mainClone = mainTemplate:Clone()
 		mainClone.Name = FX_NAME
-		collectFadeTargets(mainClone, fadeTargets)
 		mainClone.Parent = torso
 		table.insert(cleanupInstances, mainClone)
 	elseif not mainTemplate then
@@ -175,7 +131,6 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 				if clone:IsA("ParticleEmitter") then
 					clone.Enabled = true
 				end
-				collectFadeTargets(clone, fadeTargets)
 				clone.Parent = part
 				table.insert(cleanupInstances, clone)
 			end
@@ -207,17 +162,16 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 		weld.Part1 = hrp
 		weld.Parent = modelClone.PrimaryPart
 
-		collectFadeTargets(modelClone, fadeTargets)
 		modelClone.Parent = character
 		table.insert(cleanupInstances, modelClone)
 	elseif modelTemplate then
 		warn("[Stonebound] GameAssets.Auras.Stonebound.Model needs a PrimaryPart to weld")
 	end
 
-	-- Everything spawns INVISIBLE (alpha 0 applied before this frame
-	-- renders) and blooms in — the fade, not a pop.
-	applyFadeAlpha(fadeTargets, 0)
-	task.spawn(fade, fadeTargets, 0, 1, FADE_IN_SECONDS)
+	-- Everything blooms in on every client — the fade, not a pop. The cue
+	-- goes out in the same frame as the parenting above, so each client
+	-- snaps the pieces to alpha 0 before it renders them.
+	cueFade(cleanupInstances, 0, 1, FADE_IN_SECONDS)
 
 	-- Fresh-grant pop, same beat as every other aura (small random delay so
 	-- simultaneous procs stagger instead of stacking on one pixel).
@@ -251,7 +205,8 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 			-- marker outright) or the character died. Fast fade rather than
 			-- an instant pop — the replacement's own bloom-in overlaps it,
 			-- reading as one rig handing over to the next.
-			fade(fadeTargets, 1, 0, REPLACEMENT_FADE_SECONDS)
+			cueFade(cleanupInstances, 1, 0, REPLACEMENT_FADE_SECONDS)
+			task.wait(REPLACEMENT_FADE_SECONDS)
 			destroyRig()
 			return
 		end
@@ -260,15 +215,22 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 		marker.Name = AuraNames.Stonebound .. "Fading"
 		Debris:AddItem(marker, FADE_OUT_SECONDS)
 
-		-- Stop NEW particles immediately, then breathe the whole rig out —
-		-- trails, beams and parts fade in lockstep while in-flight
-		-- particles thin away with the falling emitter transparency.
-		for _, target in fadeTargets do
-			if target.instance:IsA("ParticleEmitter") and target.instance.Parent then
-				target.instance.Enabled = false
+		-- Stop NEW particles immediately (one replicated bool each), then
+		-- breathe the whole rig out on every client — trails, beams and
+		-- parts fade in lockstep while in-flight particles thin away with
+		-- the falling emitter transparency.
+		for _, instance in cleanupInstances do
+			if instance:IsA("ParticleEmitter") and instance.Parent then
+				instance.Enabled = false
+			end
+			for _, descendant in instance:GetDescendants() do
+				if descendant:IsA("ParticleEmitter") then
+					descendant.Enabled = false
+				end
 			end
 		end
-		fade(fadeTargets, 1, 0, FADE_OUT_SECONDS)
+		cueFade(cleanupInstances, 1, 0, FADE_OUT_SECONDS)
+		task.wait(FADE_OUT_SECONDS)
 		destroyRig()
 	end)
 end

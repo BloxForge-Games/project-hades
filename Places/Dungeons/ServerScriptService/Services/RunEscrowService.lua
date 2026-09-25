@@ -16,15 +16,24 @@
 	    drop that a teammate, or the player after a late revive, can pick
 	    up. Coins stay. (Solo, a full death is always a wipe; the loot
 	    still spills.)
-	  * DISCARD (escrow lost): what is left after the spill on a party
-	    wipe (the coins), or leaving the server mid-run. Knowledge is the
-	    only thing the Spire can't take back.
+	  * LEAVE (disconnect mid-run): the gear SPILLS from where the player
+	    stood, exactly as a full death spills it, so the party can carry
+	    it on; the coins are lost with the escrow.
+	  * DISCARD (escrow lost): what is left after a spill -- the coins on
+	    a party wipe or a leave. Knowledge is the only thing the Spire
+	    can't take back.
 
 	Beating the boss is not the same as getting out. The escrow stays
 	full and visible in the Spire's Bounty panel after the boss dies, and
 	is still losable, until the player physically walks through the exit
 	portal — that walk is the claim. Nothing is hooked to
-	OnDungeonCompleted; the portal calls :ClaimRewards(player) itself.
+	OnDungeonCompleted; the claim rides LifeService's
+	OnPlayerLeavingToLobby, fired once the lobby teleport has gone out.
+
+	Run coins have ONE writer, _commitCoins: it writes the escrow table
+	and republishes both mirrors (the EscrowData property and the RunCoins
+	attribute) from it. Every reader outside this module goes through
+	GetCoins.
 
 	Design rules (locked):
 	  * MAX_RUN_ITEMS cap per player per run. A pickup past the cap is
@@ -56,16 +65,7 @@ local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Inv
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 local RunEscrowService = {
 	Name = "RunEscrowService",
@@ -138,6 +138,25 @@ function RunEscrowService._replicate(self: typeof(RunEscrowService), player: Pla
 	player:SetAttribute(RUN_COINS_ATTRIBUTE, entry.coins)
 end
 
+-- The ONLY writer of a player's run-coin count. Credit, tax, spend, bank
+-- and discard all land here: the escrow table is written, then both
+-- mirrors are republished from it (_replicate), so the table, the
+-- EscrowData property and the RunCoins attribute can never disagree.
+function RunEscrowService._commitCoins(self: typeof(RunEscrowService), player: Player, value: number)
+	local entry = self:_getOrCreate(player)
+	entry.coins = value
+	self:_replicate(player)
+end
+
+-- Empties the whole escrow (a bank or a discard). A NEW entry replaces
+-- the old one, so a spill loop mid-flight (DropAllOnDeath) sees the
+-- identity change and stops; the coin wipe then republishes through
+-- _commitCoins like any other coin change.
+function RunEscrowService._clearEscrow(self: typeof(RunEscrowService), player: Player)
+	self._escrow[player.UserId] = { items = {}, coins = 0 }
+	self:_commitCoins(player, 0)
+end
+
 --[ Public API ]--
 
 -- Adds a rolled gear entry to the player's run escrow. Returns false
@@ -180,9 +199,7 @@ end
 -- Credits run coins (post-multiplier value from DropService's credit
 -- path). Cargo only — nothing spends these mid-run.
 function RunEscrowService.AddCoins(self: typeof(RunEscrowService), player: Player, amount: number)
-	local entry = self:_getOrCreate(player)
-	entry.coins += amount
-	self:_replicate(player)
+	self:_commitCoins(player, self:_getOrCreate(player).coins + amount)
 end
 
 -- Dragon Lantern's drawback: strips `fraction` of the player's UNBANKED
@@ -197,12 +214,7 @@ function RunEscrowService.TaxCoins(self: typeof(RunEscrowService), player: Playe
 	if loss <= 0 then
 		return
 	end
-	entry.coins -= loss
-	self:_replicate(player)
-end
-
-function RunEscrowService.GetItemCount(self: typeof(RunEscrowService), player: Player): number
-	return #self:_getOrCreate(player).items
+	self:_commitCoins(player, entry.coins - loss)
 end
 
 -- Debits run coins if the balance covers it; false (and no change)
@@ -213,8 +225,7 @@ function RunEscrowService.SpendCoins(self: typeof(RunEscrowService), player: Pla
 	if amount <= 0 or entry.coins < amount then
 		return false
 	end
-	entry.coins -= amount
-	self:_replicate(player)
+	self:_commitCoins(player, entry.coins - amount)
 	return true
 end
 
@@ -273,10 +284,9 @@ function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player
 		)
 	end
 
-	print(("[RunEscrowService] Banked %d items + %d coins for %s"):format(#entry.items, entry.coins, player.Name))
+	Log.debug(("[RunEscrowService] Banked %d items + %d coins for %s"):format(#entry.items, entry.coins, player.Name))
 
-	self._escrow[player.UserId] = { items = {}, coins = 0 }
-	self:_replicate(player)
+	self:_clearEscrow(player)
 end
 
 -- THE claim entry point — call this when a player walks through the exit
@@ -318,7 +328,7 @@ function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player
 		return
 	end
 
-	print(
+	Log.debug(
 		("[RunEscrowService] Discarded %d items + %d coins for %s (%s)"):format(
 			#entry.items,
 			entry.coins,
@@ -327,8 +337,7 @@ function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player
 		)
 	)
 
-	self._escrow[player.UserId] = { items = {}, coins = 0 }
-	self:_replicate(player)
+	self:_clearEscrow(player)
 end
 
 -- Takes the escrow item at `index` out of the player's run inventory and
@@ -418,13 +427,7 @@ function RunEscrowService.DropAllOnDeath(self: typeof(RunEscrowService), player:
 	if not entry or #entry.items == 0 then
 		return
 	end
-
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	local origin: Vector3? = hrp and hrp.Position or nil
-	if not origin then
-		origin = LifeService:GetDeathPosition(player)
-	end
+	local origin = self:_spillOrigin(player)
 	if not origin then
 		warn(
 			("[RunEscrowService] %s died with %d run items but has no character or death position — nothing dropped"):format(
@@ -434,7 +437,50 @@ function RunEscrowService.DropAllOnDeath(self: typeof(RunEscrowService), player:
 		)
 		return
 	end
-	local dropOrigin: Vector3 = origin
+	self:_spillAll(player, origin, "died")
+end
+
+-- LEAVE spill: a player who disconnects mid-run leaves their run gear on
+-- the floor where they stood, the same public ring the death spill lays
+-- out, so a teammate can carry it on. Runs inside PlayerRemoving, where
+-- the Player is still parented and (normally) still has a character; a
+-- downed leaver spills from the body. The coins go with the escrow.
+function RunEscrowService.DropAllOnLeave(self: typeof(RunEscrowService), player: Player)
+	local entry = self._escrow[player.UserId]
+	if not entry or #entry.items == 0 then
+		return
+	end
+	local origin = self:_spillOrigin(player)
+	if not origin then
+		warn(
+			("[RunEscrowService] %s left with %d run items but has no character or death position — nothing dropped"):format(
+				player.Name,
+				#entry.items
+			)
+		)
+		return
+	end
+	self:_spillAll(player, origin, "left")
+end
+
+-- Where a spill starts: the character's root, else the recorded death
+-- position (the corpse of a fully dead player whose character is gone).
+function RunEscrowService._spillOrigin(_self: typeof(RunEscrowService), player: Player): Vector3?
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if hrp then
+		return hrp.Position
+	end
+	return LifeService:GetDeathPosition(player)
+end
+
+-- The spill itself, shared by the death and the leave paths: every item
+-- in ONE burst from `dropOrigin`, ring layout, one pop.
+function RunEscrowService._spillAll(self: typeof(RunEscrowService), player: Player, dropOrigin: Vector3, reason: string)
+	local entry = self._escrow[player.UserId]
+	if not entry or #entry.items == 0 then
+		return
+	end
 
 	-- Ring layout: the circle around the corpse is cut into one wedge per
 	-- item, each item lands inside its own wedge at a random angle within
@@ -461,7 +507,9 @@ function RunEscrowService.DropAllOnDeath(self: typeof(RunEscrowService), player:
 		end
 	end
 
-	print(("[RunEscrowService] %s died — dropped %d run items from the body"):format(player.Name, droppedCount))
+	Log.debug(
+		("[RunEscrowService] %s %s — dropped %d run items from the body"):format(player.Name, reason, droppedCount)
+	)
 end
 
 --[ Lifecycle ]--
@@ -514,17 +562,28 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 	-- NOT hooked to OnDungeonCompleted. Boss defeat used to bank here
 	-- immediately, which emptied the escrow the instant the boss died and
 	-- blanked the Spire's Bounty panel mid-victory. Claiming happens when the
-	-- player actually walks out through the ExitPortal (DungeonService fires
-	-- OnPlayerExtracted BEFORE issuing the lobby teleport, so the escrow is
-	-- still fully present here) -- the run's winnings stay on screen, and
-	-- stay at risk, until then.
-	getDungeonService().Signals.OnPlayerExtracted:Connect(function(player: Player)
+	-- player actually walks out through the ExitPortal -- the run's winnings
+	-- stay on screen, and stay at risk, until then.
+	--
+	-- And NOT hooked to DungeonService.OnPlayerExtracted either: that fires
+	-- when the portal prompt is triggered, BEFORE the lobby teleport is
+	-- attempted, and a teleport that never goes out (Studio; a TeleportAsync
+	-- failure) left the player standing in the run with an emptied escrow.
+	-- LifeService fires OnPlayerLeavingToLobby only once TeleportAsync has
+	-- been issued, so the bank is the walk-out itself. The player is still
+	-- on this server at that point (the teleport is asynchronous), with
+	-- their profile loaded, so the bank lands before PlayerRemoving.
+	LifeService.Signals.OnPlayerLeavingToLobby:Connect(function(player: Player)
 		self:ClaimRewards(player)
 	end)
 
-	-- Disconnect mid-run = loss (the escrow was never in the profile, so
-	-- dropping the in-memory entry IS the discard).
+	-- Disconnect mid-run: the gear spills where the player stood (a
+	-- teammate can carry it on), THEN the escrow is dropped -- the coins
+	-- were never in the profile, so removing the in-memory entry IS the
+	-- discard. The spill runs first, on the same frame, so the entry is
+	-- still there for it.
 	Players.PlayerRemoving:Connect(function(player: Player)
+		self:DropAllOnLeave(player)
 		self._escrow[player.UserId] = nil
 	end)
 end

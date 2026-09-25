@@ -60,6 +60,8 @@ local UserNotificationService = require(ServerScriptService.Submodules.Core.Sour
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 --[ Constants ]--
 
@@ -431,14 +433,14 @@ end
 -- Publishes the countdown through EncounterService's lobby property, so
 -- the miniboss / boss approach widget counts this down too. Refuses to
 -- clobber a live encounter lobby (cannot happen inside an event room;
--- guarded anyway). `readyLabel` replaces the widget's pad count with
--- the kill tally.
+-- guarded anyway -- PublishLobbyData refuses it too). `readyLabel`
+-- replaces the widget's pad count with the kill tally.
 function CoffinEventService._publishLobby(_self: typeof(CoffinEventService), state: CoffinState, remaining: number?)
-	if not EncounterService or EncounterService._activeLobby ~= nil then
+	if not EncounterService or EncounterService:IsLobbyActive() then
 		return
 	end
 	if remaining == nil then
-		EncounterService._lobbyProperty:Set(nil)
+		EncounterService:PublishLobbyData(nil)
 		return
 	end
 	local total = state.total or 0
@@ -446,7 +448,7 @@ function CoffinEventService._publishLobby(_self: typeof(CoffinEventService), sta
 	local alive = #ZombieSpawnService:GetZombiesInRoom(state.room)
 	local slain = math.max(0, total - queued - alive)
 	local anchor = state.coffin.PrimaryPart
-	EncounterService._lobbyProperty:Set({
+	EncounterService:PublishLobbyData({
 		kind = "Coffin",
 		label = LOBBY_LABEL,
 		remainingSeconds = remaining,
@@ -499,7 +501,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 	end
 	self:_publishLobby(state, seconds)
 	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name), NOTIFY_TITLE_COLOR)
-	print(
+	Log.debug(
 		("[CoffinEventService] Challenge started by %s: %d zombies, cap %d, %ds"):format(
 			player.Name,
 			total,
@@ -573,15 +575,15 @@ function CoffinEventService._finish(self: typeof(CoffinEventService), state: Cof
 				return
 			end
 			released = true
-			print("[CoffinEventService] Rewards collected / reward clock done: releasing the exit")
+			Log.debug("[CoffinEventService] Rewards collected / reward clock done: releasing the exit")
 			DungeonService:ReleaseEventHold(state.room.id)
 		end
 		task.delay(REWARD_HOLD_SECONDS, release)
 		-- The room's own clear celebration, same as a combat segment.
-		DungeonService:_emitDungeonDoneEffect(state.room.model)
+		DungeonService:EmitDungeonDoneEffect(state.room.model)
 		-- A beat, then the chests fall.
 		task.delay(CHEST_DROP_DELAY_SECONDS, function()
-			print("[CoffinEventService] Dropping Event Chests")
+			Log.debug("[CoffinEventService] Dropping Event Chests")
 			if not self:DropRewardChests(release) then
 				release()
 			end
@@ -635,8 +637,8 @@ function CoffinEventService.RegisterRoom(self: typeof(CoffinEventService), room:
 	-- whose door never opens.
 	local gate = room.model and room.model:FindFirstChild("ExitGate")
 	if gate then
-		gate:GetAttributeChangedSignal("GateState"):Connect(function()
-			if gate:GetAttribute("GateState") == "open" then
+		gate:GetAttributeChangedSignal(Attributes.GateState):Connect(function()
+			if gate:GetAttribute(Attributes.GateState) == "open" then
 				self:_expire(state)
 			end
 		end)
@@ -724,6 +726,12 @@ function CoffinEventService.Start(self: typeof(CoffinEventService))
 		if state then
 			self:_expire(state)
 		end
+	end)
+
+	-- The floor is being torn down: every live challenge ends here (see
+	-- ResetForFloor).
+	DungeonService.Signals.OnFloorTeardown:Connect(function()
+		self:ResetForFloor()
 	end)
 end
 

@@ -12,7 +12,6 @@ local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local RunService = game:GetService("RunService")
-local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
@@ -28,16 +27,14 @@ local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTyp
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
 
 --[ Constants ]--
 
@@ -177,10 +174,11 @@ end
 -- and .perEnemyType sub-tables), or nil if no dungeon is active OR the
 -- difficulty doesn't have one defined.
 function GearDropService._getActiveDropConfig(_self: typeof(GearDropService))
-	if not getDungeonService() then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
 		return nil
 	end
-	local active = getDungeonService():GetActiveDungeon()
+	local active = dungeonService:GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -194,10 +192,11 @@ end
 -- Shape: { [ItemRarity.Common] = N, [ItemRarity.Uncommon] = N, ... }
 -- See DungeonData[id].difficulties[diff].rarityWeights for authoring.
 function GearDropService._getActiveRarityWeights(_self: typeof(GearDropService))
-	if not getDungeonService() then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
 		return nil
 	end
-	local active = getDungeonService():GetActiveDungeon()
+	local active = dungeonService:GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -211,10 +210,11 @@ end
 -- Shape: `{ min = N, max = N }` (named keys, matches DungeonData
 -- authoring convention).
 function GearDropService._getActiveLevelRange(_self: typeof(GearDropService))
-	if not getDungeonService() then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
 		return nil
 	end
-	local active = getDungeonService():GetActiveDungeon()
+	local active = dungeonService:GetActiveDungeon()
 	if not active then
 		return nil
 	end

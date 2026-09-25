@@ -44,6 +44,7 @@ local InterfaceManagerController =
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 --[ Constants ]--
 
@@ -168,8 +169,7 @@ function LobbyLandingController._snapToLanding(_self: typeof(LobbyLandingControl
 	if typeof(targetCFrame) ~= "CFrame" then
 		return
 	end
-	local character = Players.LocalPlayer.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = getRoot.fromPlayer(Players.LocalPlayer)
 	if not hrp then
 		return
 	end

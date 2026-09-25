@@ -31,21 +31,20 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local RelicService = require(ServerScriptService.Services.RelicService)
 local AuraService = require(ServerScriptService.Services.AuraService)
+local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+
+type RelicSnapshot = DamageService.RelicSnapshot
 
 local SHIELD_ATTRIBUTE = "ShieldValue"
-return function(player: Player, damage: number, isMagic: boolean)
-	if not RelicService then
-		return 0
-	end
-
+return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean)
 	local character: Model? = player.Character
 
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = getRoot(character)
 	if not character or not hrp then
 		return 0
 	end
@@ -57,13 +56,13 @@ return function(player: Player, damage: number, isMagic: boolean)
 
 		-- Faux Firebrand rides the same window. Raw fraction, not a
 		-- multiplier: its callback returns 0.20, not 1.20.
-		if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Faux Firebrand"]) or 0) > 0 then
-			fraction += RelicService:GetRelicEffect(player, RelicNames["Faux Firebrand"]) or 0
+		if DamageService.RelicCount(snapshot, RelicNames["Faux Firebrand"]) > 0 then
+			fraction += DamageService.RelicEffect(snapshot, RelicNames["Faux Firebrand"]) or 0
 		end
 
 		-- Berserker's Claymore rides the same window.
-		if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Berserker's Claymore"]) or 0) > 0 then
-			fraction += (RelicService:GetRelicEffect(player, RelicNames["Berserker's Claymore"]) or 1) - 1
+		if DamageService.RelicCount(snapshot, RelicNames["Berserker's Claymore"]) > 0 then
+			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Berserker's Claymore"]) or 1) - 1
 		end
 	end
 
@@ -72,18 +71,18 @@ return function(player: Player, damage: number, isMagic: boolean)
 
 		-- Blizzard Wand rides the same window. Raw fraction like Faux
 		-- Firebrand, its Frost-side counterpart.
-		if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Blizzard Wand"]) or 0) > 0 then
-			fraction += RelicService:GetRelicEffect(player, RelicNames["Blizzard Wand"]) or 0
+		if DamageService.RelicCount(snapshot, RelicNames["Blizzard Wand"]) > 0 then
+			fraction += DamageService.RelicEffect(snapshot, RelicNames["Blizzard Wand"]) or 0
 		end
 
 		-- Icy Arctic Fowl's damage half rides Frostburst too.
-		if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Icy Arctic Fowl"]) or 0) > 0 then
-			fraction += (RelicService:GetRelicEffect(player, RelicNames["Icy Arctic Fowl"]) or 1) - 1
+		if DamageService.RelicCount(snapshot, RelicNames["Icy Arctic Fowl"]) > 0 then
+			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Icy Arctic Fowl"]) or 1) - 1
 		end
 
 		-- Staff of Azure Ever Ice: +50% Magic Damage in the same window.
-		if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0 then
-			fraction += (RelicService:GetRelicEffect(player, RelicNames["Staff of Azure Ever Ice"]) or 1) - 1
+		if DamageService.RelicCount(snapshot, RelicNames["Staff of Azure Ever Ice"]) > 0 then
+			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Staff of Azure Ever Ice"]) or 1) - 1
 		end
 	end
 
@@ -100,9 +99,9 @@ return function(player: Player, damage: number, isMagic: boolean)
 	-- percentage bonuses instead of `flat`.
 	if
 		(character:GetAttribute(SHIELD_ATTRIBUTE) or 0) > 0
-		and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golden Steampunk Gloves"]) or 0) > 0
+		and DamageService.RelicCount(snapshot, RelicNames["Golden Steampunk Gloves"]) > 0
 	then
-		fraction += (RelicService:GetRelicEffect(player, RelicNames["Golden Steampunk Gloves"]) or 1) - 1
+		fraction += (DamageService.RelicEffect(snapshot, RelicNames["Golden Steampunk Gloves"]) or 1) - 1
 	end
 
 	return math.round(damage * fraction)

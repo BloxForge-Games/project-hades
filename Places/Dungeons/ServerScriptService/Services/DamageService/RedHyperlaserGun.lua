@@ -10,16 +10,18 @@
 -- += this(...)` sum picks it up identically to Linked Sword + friends.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local RelicService = require(ServerScriptService.Services.RelicService)
+local DamageService = require(script.Parent)
 
-return function(player: Player, damage: number, _isMagic: boolean)
+type RelicSnapshot = DamageService.RelicSnapshot
+
+return function(_player: Player, snapshot: RelicSnapshot, damage: number, _isMagic: boolean)
 	-- No damage-type gate — the bonus applies to weapon AND magic; the
 	-- linear low-HP curve lives in the RelicData callback, read fresh on
-	-- every hit.
-	local effect = RelicService:GetRelicEffect(player, RelicNames["Red Hyperlaser Gun"]) or 1
+	-- every hit (the snapshot lists this relic as `live`, so RelicEffect
+	-- invokes the callback rather than a cached value).
+	local effect = DamageService.RelicEffect(snapshot, RelicNames["Red Hyperlaser Gun"]) or 1
 	if effect == 1 then
 		return 0
 	end

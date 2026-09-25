@@ -36,7 +36,8 @@ local function getRelicService(): any
 end
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local vfxFade = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxFade)
+local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -56,14 +57,14 @@ local GLYPH_FADE_OUT_SECONDS = 1
 -- tracking tables that could leak across respawns.
 local FX_NAME = "FrostburstFX"
 
--- Builds, welds and blooms the glyph onto the character. Returns the rig
--- and its fade targets, or nil when the asset is missing.
-local function spawnGlyph(character: Model, hrp: BasePart): (Model?, { vfxFade.FadeTarget }?)
+-- Builds, welds and blooms the glyph onto the character. Returns the rig,
+-- or nil when the asset is missing.
+local function spawnGlyph(character: Model, hrp: BasePart): Model?
 	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
 	local template = vfxFolder and vfxFolder:FindFirstChild(GLYPH_ASSET_NAME)
 	if not template or not template:IsA("Model") or not template.PrimaryPart then
 		warn("[Frostburst] Missing GameAssets.VFX." .. GLYPH_ASSET_NAME .. " (Model with a PrimaryPart)")
-		return nil, nil
+		return nil
 	end
 
 	local glyph = template:Clone()
@@ -93,14 +94,20 @@ local function spawnGlyph(character: Model, hrp: BasePart): (Model?, { vfxFade.F
 	rootWeld.Part1 = glyph.PrimaryPart
 	rootWeld.Parent = glyph.PrimaryPart
 
-	-- Invisible BEFORE parenting, then bloom in — particles, beams and
-	-- lights all ride the same alpha (vfxFade).
-	local fadeTargets = vfxFade.capture(glyph)
-	vfxFade.apply(fadeTargets, 0)
+	-- Parent as authored, then cue every client to bloom it in from
+	-- invisible — particles, beams and lights all ride the same alpha
+	-- (Combat.VFXFade -> VFXFadeController -> vfxFade). The cue goes out
+	-- in the same frame as the parenting, so no client renders the glyph
+	-- at full opacity first.
 	glyph.Parent = character
-	task.spawn(vfxFade.run, fadeTargets, 0, 1, GLYPH_FADE_IN_SECONDS)
+	CombatNetwork.VFXFade.FireAll({
+		Rigs = { glyph },
+		FromAlpha = 0,
+		ToAlpha = 1,
+		Duration = GLYPH_FADE_IN_SECONDS,
+	})
 
-	return glyph, fadeTargets
+	return glyph
 end
 
 local function awaitExpiry(marker: Instance)
@@ -114,7 +121,7 @@ local function awaitExpiry(marker: Instance)
 end
 
 return function(player: Player, character: Model, duration: number?)
-	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local hrp = getRoot(character)
 	if not hrp or hrp:FindFirstChild(AuraNames.Frostburst) ~= nil then
 		return
 	end
@@ -171,12 +178,11 @@ return function(player: Player, character: Model, duration: number?)
 	-- Azure glyph: only for Staff of Azure Ever Ice owners. Checked at
 	-- GRANT — a mid-aura relic change neither adds nor removes it.
 	local glyph: Model? = nil
-	local glyphFadeTargets: { vfxFade.FadeTarget }? = nil
 	if
 		getRelicService()
 		and (getRelicService():GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
 	then
-		glyph, glyphFadeTargets = spawnGlyph(character, hrp)
+		glyph = spawnGlyph(character, hrp)
 	end
 
 	task.spawn(function()
@@ -197,13 +203,24 @@ return function(player: Player, character: Model, duration: number?)
 			end
 		end
 
-		-- The glyph expires WITH the aura: emitters off, then the whole rig
-		-- (beams and lights included) breathes out on one alpha.
-		if glyph and glyph.Parent and glyphFadeTargets then
-			local dyingGlyph, dyingTargets = glyph, glyphFadeTargets
-			task.spawn(function()
-				vfxFade.disableEmitters(dyingTargets)
-				vfxFade.run(dyingTargets, 1, 0, GLYPH_FADE_OUT_SECONDS)
+		-- The glyph expires WITH the aura: emitters off (one replicated
+		-- bool each), then every client breathes the whole rig (beams and
+		-- lights included) out on one alpha, and the server destroys it
+		-- once that has played.
+		if glyph and glyph.Parent then
+			local dyingGlyph = glyph
+			for _, descendant in dyingGlyph:GetDescendants() do
+				if descendant:IsA("ParticleEmitter") then
+					descendant.Enabled = false
+				end
+			end
+			CombatNetwork.VFXFade.FireAll({
+				Rigs = { dyingGlyph },
+				FromAlpha = 1,
+				ToAlpha = 0,
+				Duration = GLYPH_FADE_OUT_SECONDS,
+			})
+			task.delay(GLYPH_FADE_OUT_SECONDS, function()
 				dyingGlyph:Destroy()
 			end)
 		end

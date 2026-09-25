@@ -154,11 +154,12 @@ function MagicController.IsSlotOnCooldown(self: typeof(MagicController), equipSl
 	if not entry then
 		return false
 	end
-	return tick() - entry.lastUsed < entry.cooldown
+	return os.clock() - entry.lastUsed < entry.cooldown
 end
 
 -- Every gate a cast must pass, WITH the player-facing feedback a failed
--- attempt gives (no-mana signal, cooldown warn). Returns (true, vfxName,
+-- attempt gives (the no-mana signal; a cooldown click is silently
+-- refused). Returns (true, vfxName,
 -- character, effectiveManaCost) when the spell in `equipSlot` can fire
 -- right now, else false. Shared by :CastMagic and by CastModeController's
 -- Normal Cast, which refuses to even open aim mode for a spell that would
@@ -199,8 +200,7 @@ function MagicController.CanCastMagic(
 		}
 	end
 
-	if tick() - self._magicCooldownRegistry[vfxName].lastUsed < self._magicCooldownRegistry[vfxName].cooldown then
-		warn("[MagicController] Magic is still on cooldown for equip slot: " .. tostring(equipSlot))
+	if os.clock() - self._magicCooldownRegistry[vfxName].lastUsed < self._magicCooldownRegistry[vfxName].cooldown then
 		return false
 	end
 
@@ -246,7 +246,7 @@ function MagicController.CastMagic(self: typeof(MagicController), equipSlot: num
 
 	self._magicCooldownRegistry[vfxName] = {
 		cooldown = newCooldown,
-		lastUsed = tick(),
+		lastUsed = os.clock(),
 	}
 
 	self.Signals.OnMagicCasted:Fire(vfxName, equipSlot, newCooldown)
