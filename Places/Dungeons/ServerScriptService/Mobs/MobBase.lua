@@ -88,6 +88,7 @@ local DamageService = require(ServerScriptService.Services.DamageService)
 local StatusConditionService = require(ServerScriptService.Services.StatusConditionService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local EnemyScalingService = require(ServerScriptService.Services.EnemyScalingService)
+local ExpRewardService = require(ServerScriptService.Services.ExpRewardService)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local MagicService = require(ServerScriptService.Services.MagicService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
@@ -1433,6 +1434,13 @@ function MobBase.OnDeath(self: MobBase)
 	self:_interruptAttack()
 
 	getFaceDecal(self._model).Texture = DEAD_FACE_ID
+
+	-- A player's kill pays EXP to the whole living party (ExpRewardService),
+	-- whether or not the killer is still here.
+	local slainBy = self._model:GetAttribute(Attributes.SlainBy)
+	if type(slainBy) == "string" and slainBy ~= "" then
+		ExpRewardService:GrantKill(self._enemyType)
+	end
 
 	if self._model:GetAttribute(Attributes.SlainBy) ~= "" then
 		local killer = Players:FindFirstChild(self._model:GetAttribute(Attributes.SlainBy))

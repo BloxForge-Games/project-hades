@@ -1031,20 +1031,14 @@ function RelicService.IsRelicRollEligible(
 	return hasStatus and hasAura -- C2
 end
 
--- Run stage, used ONLY for the rarity table (Early / Mid / Late odds), read
--- from the existing run progression: DungeonService's 1-based dungeon index
--- over Shared/Data/DungeonSequence, looked up at call time. No run in
--- progress (lobby, Studio solo) or no DungeonService mounted falls back to
--- Early.
+-- Run stage, used ONLY to pick the rarity table (RelicRollConfig). A run is
+-- one dungeon floor now, and every roll uses ONE flat table for the whole
+-- run (2026-09-25 design call): the Mid odds. The Early / Late tables stay
+-- in RelicRollConfig so per-room staging is a one-function change here.
+local RUN_STAGE = "Mid"
+
 function RelicService.GetRunStage(_self: typeof(RelicService)): string
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	local index = dungeonService and dungeonService:GetRunDungeonIndex()
-	if type(index) ~= "number" or index <= 1 then
-		return "Early"
-	elseif index == 2 then
-		return "Mid"
-	end
-	return "Late"
+	return RUN_STAGE
 end
 
 -- Rarity for one offer. Rolled INDEPENDENTLY of relic selection and of how

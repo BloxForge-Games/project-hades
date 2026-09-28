@@ -14,8 +14,9 @@
 	    mob at 5% stays at 5% and never dies (or heals to full) because the
 	    party changed shape.
 
-	The multiplier is 1 + active players (solo 2x base, duo 3x, ...), the
-	curve the base numbers were tuned against; the same curve applies to
+	The multiplier is (1 + active players) x the run's difficulty health
+	(DifficultyData), so solo Normal is 2x base, duo 3x, ...: the curve the
+	base numbers were tuned against; the same curve applies to
 	zombies, minibosses and bosses alike. "Active" is LifeService's count:
 	alive or DOWNED (a downed player may yet buy a revive); fully dead
 	players no longer count, which is why a party of two fighting a boss
@@ -29,6 +30,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local LifeService = require(ServerScriptService.Services.LifeService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 local EnemyScalingService = {
 	Name = "EnemyScalingService",
@@ -46,10 +48,17 @@ end
 
 --[ Public API ]--
 
--- 1 + active players. `excluding` is a player mid PlayerRemoving, still
--- listed by Players:GetPlayers() while its handlers run.
+-- The run's difficulty health multiplier; 1 outside a run. DungeonService
+-- is reached at call time (this service is a consumer of it).
+local function difficultyHealthMultiplier(): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	return if dungeonService then dungeonService:GetDifficultyScale().enemyHealth else 1
+end
+
+-- (1 + active players) x difficulty. `excluding` is a player mid
+-- PlayerRemoving, still listed by Players:GetPlayers() while its handlers run.
 function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingService), excluding: Player?): number
-	return 1 + LifeService:GetActivePlayerCount(excluding)
+	return (1 + LifeService:GetActivePlayerCount(excluding)) * difficultyHealthMultiplier()
 end
 
 -- Spawn-time scaling. `baseHealth` is the ZombieData number (already
@@ -75,9 +84,9 @@ end
 -- BEFORE Health so the HealthChanged listeners (overhead bar,
 -- EncounterService's HP stream) read a consistent pair. Mobs already at
 -- this multiplier are skipped, so a no-op trigger touches nothing.
-function EnemyScalingService.RescaleAll(_self: typeof(EnemyScalingService), excluding: Player?)
+function EnemyScalingService.RescaleAll(self: typeof(EnemyScalingService), excluding: Player?)
 	local activePlayers = LifeService:GetActivePlayerCount(excluding)
-	local multiplier = 1 + activePlayers
+	local multiplier = self:GetHealthMultiplier(excluding)
 
 	local rescaled = 0
 	local zombies = getZombiesFolder()
@@ -113,7 +122,7 @@ function EnemyScalingService.RescaleAll(_self: typeof(EnemyScalingService), excl
 	end
 
 	Log.debug(
-		("[EnemyScalingService] x%d for %d active players; %d mobs rescaled"):format(
+		("[EnemyScalingService] x%.2f for %d active players; %d mobs rescaled"):format(
 			multiplier,
 			activePlayers,
 			rescaled

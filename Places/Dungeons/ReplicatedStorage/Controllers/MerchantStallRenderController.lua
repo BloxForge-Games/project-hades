@@ -85,7 +85,7 @@ local COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE = 2
 -- The merchant's price, on the stall nameplate's owner line. Gold, the
 -- same colour the price already uses on the relic card's description.
 local STALL_PRICE_COLOR = Color3.fromRGB(255, 170, 0)
-local STALL_PRICE_FORMAT = "(%d Coins)"
+local STALL_PRICE_FORMAT = "(%d Gold)"
 
 -- Stall-display particle tints — the RelicParticleAttachment set ONLY
 -- (nameplate text and the RarityGlow PointLight keep the standard

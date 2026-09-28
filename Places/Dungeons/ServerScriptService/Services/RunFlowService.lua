@@ -2,8 +2,9 @@
 --[[
      Author(s):
      Module: RunFlowService.lua
-     Description: The RUN LOOP. StartRun begins a run at DungeonSequence[1];
-                  AdvanceRun (the vote passed) fades every screen to black,
+     Description: The RUN LOOP. StartRun begins a run at sequence[1] (a
+                  normal run is ONE dungeon: the one this place hosts, at
+                  the difficulty the party arrived with); AdvanceRun (the vote passed) fades every screen to black,
                   freezes the party, tears the floor down and generates the
                   next one; GenerateDungeon is the generate-and-wire step
                   both share (DungeonGenerator places, this module flips the
@@ -16,6 +17,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -29,7 +31,10 @@ local EncounterService = require(ServerScriptService.Services.EncounterService)
 local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
-local DungeonSequence = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonSequence)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
+local getPlaceDungeonId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.getPlaceDungeonId)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -60,20 +65,29 @@ local EXIT_GATE_NAME = "ExitGate"
 
 local AUTO_GENERATE_DELAY = 5
 
-local AUTO_GENERATE_DIFFICULTY = "Normal"
+-- The run's difficulty when nothing asks otherwise (Studio, a direct join
+-- without teleport data). A request is still clamped to the leader's unlocks.
+local DEFAULT_DIFFICULTY = Difficulty.Normal
+-- How long the run waits for the leader's profile before starting without
+-- the unlock check.
+local LEADER_PROFILE_WAIT_SECONDS = 15
+-- Studio only: workspace attributes that pick the difficulty (and skip the
+-- unlock clamp, since Studio profiles are fresh).
+local DEBUG_DIFFICULTY_ATTRIBUTE = "DebugDifficulty"
+local DEBUG_ASCENSION_ATTRIBUTE = "DebugAscension"
 
 -- RUN LOOP (see StartRun / AdvanceRun). After a boss: outro + rewards
 -- (EncounterService) -> EXIT_PORTAL_DELAY -> the ExitPortal rises out of the
--- floor (Medium shake) and, unless this was the run's LAST dungeon, the
--- "next dungeon" vote pad appears (EncounterService lobby, kind NextDungeon:
+-- floor (Medium shake) and, only mid-chain (a run of several dungeons, the
+-- future Keystone Trial), the "next dungeon" vote pad appears (EncounterService lobby, kind NextDungeon:
 -- 30s auto / 3s when everyone remaining is on it). Vote expiry ->
 -- AdvanceRun: fade every screen to black, tear the whole map down,
 -- generate the next DungeonSequence entry, land everyone (same landing as
 -- a fresh join). Walking into the portal fires OnPlayerExtracted and sends
 -- THAT player to the lobby place (the escrow banks off LifeService's
 -- OnPlayerLeavingToLobby once the teleport is issued); they leave the
--- vote's required count. Last dungeon: NOTHING spawns; only
--- OnFinalDungeonCompleted fires (the ending is future work).
+-- vote's required count. Last dungeon (every normal run): OnFinalDungeonCompleted
+-- fires (progress records off it) and the portal rises with no vote pad.
 local EXIT_PORTAL_DELAY = 3
 -- The ExitPortal is a Model AUTHORED INSIDE each Boss prefab, sitting
 -- UNDERGROUND at its resting pose. After the boss it rises straight up by
@@ -166,15 +180,23 @@ function RunFlowService.GenerateDungeon(
 	return dungeon
 end
 
--- Starts a fresh RUN at DungeonSequence[1] with `difficulty` for every
--- dungeon in it. The de-facto game start; called by the auto-generate below.
-function RunFlowService.StartRun(self: typeof(RunFlowService), difficulty: string, originCFrame: CFrame?): Dungeon
-	local sequence = table.clone(DungeonSequence)
-	assert(#sequence > 0, "[RunFlowService] DungeonSequence is empty")
+-- Starts a fresh RUN over `sequence` (dungeon ids, in order) at
+-- `difficulty` / `ascension` for every dungeon in it. A normal run is one
+-- dungeon; a longer sequence is the Keystone Trial's chain. Called by the
+-- auto-start below.
+function RunFlowService.StartRun(
+	self: typeof(RunFlowService),
+	sequence: { string },
+	difficulty: string,
+	ascension: number,
+	originCFrame: CFrame?
+): Dungeon
+	assert(#sequence > 0, "[RunFlowService] StartRun needs at least one dungeon")
 	local run: Run = {
-		sequence = sequence,
+		sequence = table.clone(sequence),
 		index = 1,
 		difficulty = difficulty,
+		ascension = if difficulty == Difficulty.Ascension then ascension else 0,
 		exited = {},
 		originCFrame = originCFrame,
 	}
@@ -477,9 +499,9 @@ function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room
 		return
 	end
 
-	if DungeonService:IsFinalDungeon() then
+	local isFinal = DungeonService:IsFinalDungeon()
+	if isFinal then
 		DungeonService.Signals.OnFinalDungeonCompleted:Fire(dungeon, run)
-		return
 	end
 
 	task.delay(EXIT_PORTAL_DELAY, function()
@@ -488,12 +510,78 @@ function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room
 		end
 		self:_raiseExitPortal(room)
 
-		if EncounterService then
+		-- The vote to move on only exists mid-chain.
+		if not isFinal and EncounterService then
 			local gate = room.model:FindFirstChild(EXIT_GATE_NAME)
 			local gateCFrame = (gate and gate:IsA("BasePart") and gate.CFrame) or room.model:GetPivot()
 			EncounterService:StartNextDungeonVote(room, gateCFrame)
 		end
 	end)
+end
+
+--[ Run request ]--
+
+-- What the arriving party asked for: the hub queue's teleport data
+-- ({ Difficulty, Ascension, partyLeaderUserId }), read off the FIRST player
+-- to arrive (yields until someone does). Returns the request and the
+-- leader whose unlocks bound it (the first arrival when the leader is not
+-- here yet or none was named).
+function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string, number, Player)
+	local first = Players:GetPlayers()[1] or Players.PlayerAdded:Wait()
+	local difficulty = DEFAULT_DIFFICULTY
+	local ascension = 1
+	local leader = first
+	local joinData = first:GetJoinData()
+	local data = if type(joinData) == "table" then joinData.TeleportData else nil
+	if type(data) == "table" then
+		if DifficultyData.IsValid(data.Difficulty) then
+			difficulty = data.Difficulty
+		end
+		if type(data.Ascension) == "number" then
+			ascension = data.Ascension
+		end
+		if type(data.partyLeaderUserId) == "number" then
+			leader = Players:GetPlayerByUserId(data.partyLeaderUserId) or leader
+		end
+	end
+	return difficulty, ascension, leader
+end
+
+-- The difficulty this run plays: the request, clamped DOWN to the highest
+-- rank the leader has unlocked in this dungeon (DungeonProgressService).
+-- Studio uses the DebugDifficulty / DebugAscension workspace attributes,
+-- or the default, and skips the clamp.
+function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dungeonId: string): (string, number)
+	local requested, ascension, leader = self:_readRunRequest()
+
+	if RunService:IsStudio() then
+		local debugDifficulty = workspace:GetAttribute(DEBUG_DIFFICULTY_ATTRIBUTE)
+		if DifficultyData.IsValid(debugDifficulty) then
+			requested = debugDifficulty
+			ascension = tonumber(workspace:GetAttribute(DEBUG_ASCENSION_ATTRIBUTE)) or 1
+		end
+		return requested, ascension
+	end
+
+	local rank = DifficultyData.Rank(requested, ascension) or 1
+	-- A consumer of this service's facade: resolved at call time.
+	local progressService = Blitz.OptionalService("DungeonProgressService")
+	local unlocked = progressService
+		and progressService:GetHighestUnlockedRank(leader, dungeonId, LEADER_PROFILE_WAIT_SECONDS)
+	if unlocked == nil then
+		warn(
+			("[RunFlowService] Could not read %s's unlocks in time -- starting %s unchecked"):format(
+				leader.Name,
+				requested
+			)
+		)
+	elseif rank > unlocked then
+		Log.debug(
+			("[RunFlowService] Requested rank %d clamped to %s's unlocked %d"):format(rank, leader.Name, unlocked)
+		)
+		rank = unlocked
+	end
+	return DifficultyData.FromRank(rank)
 end
 
 --[ Initializers ]--
@@ -511,11 +599,15 @@ function RunFlowService.Start(self: typeof(RunFlowService))
 		self._transitionFrozen[player] = nil
 	end)
 
-	-- Auto-start the RUN (DungeonSequence[1] first). Fail-soft so a missing
-	-- prefab folder doesn't crash boot.
+	-- Auto-start the RUN: the dungeon this place hosts, at the difficulty
+	-- the party arrived with (which waits for the first arrival). Fail-soft
+	-- so a missing prefab folder doesn't crash boot.
 	task.delay(AUTO_GENERATE_DELAY, function()
 		local ok, err = pcall(function()
-			self:StartRun(AUTO_GENERATE_DIFFICULTY, workspace.IgnoreInstances.DungeonSpawnPoint.CFrame)
+			local dungeonId = getPlaceDungeonId()
+			local difficulty, ascension = self:_resolveRunDifficulty(dungeonId)
+			Log.debug(("[RunFlowService] Starting %s on %s (ascension %d)"):format(dungeonId, difficulty, ascension))
+			self:StartRun({ dungeonId }, difficulty, ascension, workspace.IgnoreInstances.DungeonSpawnPoint.CFrame)
 		end)
 		if not ok then
 			warn("[RunFlowService] Auto-generation failed: " .. tostring(err))

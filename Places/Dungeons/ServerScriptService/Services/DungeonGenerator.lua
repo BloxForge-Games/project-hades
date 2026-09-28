@@ -119,11 +119,12 @@ DungeonGenerator._floorBuildings = {} :: { Model }
 
 --[ Private Functions ]--
 
--- ServerStorage.GameAssets.DungeonRooms.<dungeonId> -- each dungeon has its
--- own prefab folder (Combat / Shrine / Miniboss / Boss / Treasure pools +
--- Start). Resolves the dungeon being GENERATED (or the active one), and
--- falls back to the flat DungeonRooms folder with a warn so an unauthored
--- dungeon still generates rather than asserting.
+-- ServerStorage.GameAssets.DungeonRooms.<assetFolder> -- each dungeon has
+-- its own prefab folder (Combat / Shrine / Miniboss / Boss / Treasure
+-- pools + Start), named by its DungeonData assetFolder (placeholder
+-- dungeons share one). Resolves the dungeon being GENERATED (or the active
+-- one), and falls back to the flat DungeonRooms folder with a warn so an
+-- unauthored dungeon still generates rather than asserting.
 function DungeonGenerator._getPrefabRoot(self: typeof(DungeonGenerator)): Folder?
 	local gameAssets = ServerStorage:FindFirstChild("GameAssets")
 	local root = gameAssets and gameAssets:FindFirstChild(PREFAB_FOLDER_NAME)
@@ -133,13 +134,15 @@ function DungeonGenerator._getPrefabRoot(self: typeof(DungeonGenerator)): Folder
 	local active = DungeonService:GetActiveDungeon()
 	local dungeonId = self._generatingDungeonId or (active and active.id)
 	if dungeonId then
-		local perDungeon = root:FindFirstChild(dungeonId)
+		local config = DungeonData[dungeonId]
+		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
+		local perDungeon = root:FindFirstChild(folderName)
 		if perDungeon then
 			return perDungeon
 		end
 		warn(
 			("[DungeonGenerator] No prefab folder GameAssets.DungeonRooms.%s -- using the flat folder"):format(
-				dungeonId
+				folderName
 			)
 		)
 	end

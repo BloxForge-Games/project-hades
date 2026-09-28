@@ -69,6 +69,14 @@ local function relicData(relicName: string, field: string, fallback: number): nu
 end
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
 local rollDamageVariance = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Damage.rollDamageVariance)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+
+-- The run's difficulty damage multiplier on mob hits; 1 outside a run.
+-- DungeonService is reached at call time (this service is a consumer).
+local function difficultyDamageMultiplier(): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	return if dungeonService then dungeonService:GetDifficultyScale().enemyDamage else 1
+end
 
 -- The attacker's owned relics for ONE hit, from RelicService (re-exported
 -- so the on-hit modules can name it without their own RelicService import).
@@ -322,6 +330,9 @@ function DamageService.PlayerTakeDamage(
 	-- number that is then discarded costs nothing and leaves the block
 	-- readable as one continuous mitigation pipeline.
 	local fixedAmount = if fixedDamage then damage else nil
+
+	-- Difficulty (DifficultyData): every mob hit scales with the run's tier.
+	damage *= difficultyDamageMultiplier()
 
 	-- ±10% variance on every mob → player hit. Keep intermediate values as
 	-- floats; the final humanoid:TakeDamage below rounds once.

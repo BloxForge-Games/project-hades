@@ -279,8 +279,8 @@ function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player
 	if entry.coins > 0 then
 		CurrencyService:SetCurrencyValue(
 			player,
-			CurrencyTypes.Coins,
-			CurrencyService:GetCurrencyValue(player, CurrencyTypes.Coins) + entry.coins
+			CurrencyTypes.Gold,
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) + entry.coins
 		)
 	end
 

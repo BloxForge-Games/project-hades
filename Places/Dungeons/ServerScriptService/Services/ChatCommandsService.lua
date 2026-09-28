@@ -58,9 +58,28 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local LifeService = require(ServerScriptService.Services.LifeService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+
+-- The spells the profile now has equipped, for the /wipedata reply. It
+-- reads the WIPED profile, so it shows what this server's template holds:
+-- an unexpected spell here means this server runs an older build.
+local function describeEquippedMagic(player: Player): string
+	local inventory = DataService:GetProfileData(player).Inventory
+	local magic = if type(inventory) == "table" then inventory[InventoryType.Magic] else nil
+	local equipped = {}
+	if type(magic) == "table" then
+		for _, entry in magic do
+			if type(entry) == "table" and type(entry.equipSlot) == "number" and entry.equipSlot >= 3 then
+				table.insert(equipped, ("%d: %s"):format(entry.equipSlot, tostring(entry.name)))
+			end
+		end
+	end
+	table.sort(equipped)
+	return if #equipped > 0 then table.concat(equipped, ", ") else "none"
+end
 
 -- [player] = their group rank, looked up ONCE per session (GetRankInGroup
 -- is a web call). Weak keys: a leaver takes their entry with it.
@@ -308,7 +327,8 @@ COMMANDS = {
 				end
 			end)
 
-			return "Data wiped. Kicking you so it reloads..."
+			local equipped = describeEquippedMagic(player)
+			return ("Data wiped (magic %s). Kicking you so it reloads..."):format(equipped)
 		end,
 	},
 

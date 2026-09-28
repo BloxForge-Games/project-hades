@@ -29,6 +29,7 @@ local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Se
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local ScreenSweepData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ScreenSweepData)
 
 type Dungeon = DungeonService.Dungeon
 
@@ -51,7 +52,7 @@ local START_SPAWN_FALLBACK_OFFSET = Vector3.new(0, 5, 0)
 -- DURATION are measured from the drop start (impact VFX, then unanchor + relic).
 -- 1s (was 2): the loader is already down for the assets and the character's
 -- gear welds well inside a second; the join felt slow behind the loader.
-local LANDING_START_DELAY = 1
+local LANDING_START_DELAY = 0
 local LANDING_POSE_SETTLE = 0.2
 -- How long the character HOLDS its frozen first frame, in place, before
 -- the screen reveals and the drop begins. The settle above only gave
@@ -71,6 +72,12 @@ local LANDING_IMPACT_DELAY = 1.6
 local LANDING_STAGGER_MIN_SECONDS = 0.1
 local LANDING_STAGGER_MAX_SECONDS = 0.5
 local LANDING_DURATION = 1.7
+-- Join landing: the drop waits until the screen is fully revealed (the
+-- loader fade, then the cascade, both started by the landing cue) and a
+-- further beat, so the player SEES themselves fall rather than landing
+-- under the tiles.
+local LANDING_DROP_AFTER_REVEAL_SECONDS = 0.35
+local JOIN_DROP_DELAY_SECONDS = ScreenSweepData.JoinRevealSeconds + LANDING_DROP_AFTER_REVEAL_SECONDS
 
 -- Landing spread: players fan out sideways from the start CFrame so a
 -- party doesn't land in one overlapping pile.
@@ -281,6 +288,8 @@ function LandingService._runPlayerLanding(self: typeof(LandingService), player: 
 			local holdSeconds = LANDING_POSE_HOLD_SECONDS + LANDING_DURATION
 			if isTransitionLanding then
 				holdSeconds += RUN_TRANSITION_REVEAL_HOLD_SECONDS
+			else
+				holdSeconds += JOIN_DROP_DELAY_SECONDS
 			end
 			self:_holdLandingPosition(character, hrp, targetCFrame, dungeon, holdSeconds)
 		end
@@ -333,6 +342,21 @@ function LandingService._runPlayerLanding(self: typeof(LandingService), player: 
 		-- + lock controls. Carries the landing CFrame: the client OWNS its
 		-- root, so its own snap to it is the authoritative one.
 		DungeonNetwork.LandingStart.Fire(player, targetCFrame)
+
+		-- Join only: hold the frozen pose until the screen has revealed.
+		-- A run transition fades back in over the drop instead.
+		if not isTransitionLanding then
+			task.wait(JOIN_DROP_DELAY_SECONDS)
+			if not character.Parent or not hrp.Parent or DungeonService:GetActiveDungeon() ~= dungeon then
+				if character.Parent then
+					character:SetAttribute(Attributes.Landing, nil)
+				end
+				if not character.Parent or not hrp.Parent then
+					self._landed[player] = nil
+				end
+				return
+			end
+		end
 
 		-- Drop: resume the animation from the frozen +25 pose down to the ground.
 		if landAnimationTrack then

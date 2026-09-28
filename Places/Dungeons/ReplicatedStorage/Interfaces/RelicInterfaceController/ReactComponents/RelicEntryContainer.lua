@@ -5,6 +5,7 @@ local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
+local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
 
 -- A LOCKED slot: a padlock on a dark box, past the run's open count. The
 -- tray look is the default; the description card passes its own lighter
@@ -92,6 +93,11 @@ local function RelicEntryContainer(props: any)
 		Interactable = interactable,
 
 		[React.Event.MouseEnter] = function()
+			-- The inventory's sounds: a hover tick on any slot you can click
+			-- (a relic or a locked box); empty open boxes stay silent.
+			if interactable then
+				uiSound:PlayHover()
+			end
 			TweenService:Create(
 				containerRef.current,
 				TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -126,6 +132,7 @@ local function RelicEntryContainer(props: any)
 		end,
 
 		[React.Event.Activated] = function()
+			uiSound:PlayClick()
 			if locked then
 				props.onClick({
 					locked = true,

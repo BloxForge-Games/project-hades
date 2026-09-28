@@ -6,7 +6,7 @@ local DropService = require(ServerScriptService.Services.DropService)
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local ChestCoinData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ChestCoinData)
-local PlaceIdData = require(ReplicatedStorage.Submodules.Core.Shared.Data.PlaceIdData)
+local getPlaceDungeonId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.getPlaceDungeonId)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local LifeService = require(ServerScriptService.Services.LifeService)
 
@@ -78,7 +78,7 @@ function Chest:Start()
 		-- Every client's Chest component swings the lid off this edge.
 		self.Instance:SetAttribute(OPENED_ATTRIBUTE, true)
 
-		local coinData = ChestCoinData[PlaceIdData[game.PlaceId]]
+		local coinData = ChestCoinData[getPlaceDungeonId()] or ChestCoinData.Default
 
 		if not coinData then
 			return warn("[Chest] Indexed `coinData` returned as incorrect datatype.")

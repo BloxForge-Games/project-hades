@@ -27,6 +27,7 @@ local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 type Room = DungeonService.Room
@@ -95,7 +96,23 @@ local ROOM_TYPES = {
 -- Teleport offset: how many studs forward of the gate (along LookVector) the
 -- party lands at when the cinematic fades to black.
 local ENCOUNTER_TELEPORT_FORWARD_OFFSET = 6
-local ENCOUNTER_LEVEL_PLACEHOLDER = 1 -- TODO: derive from difficulty / mob data
+
+-- The level on the encounter bar: the top of the run's Item Level range for
+-- this dungeon and difficulty, plus Ascension's growth. 1 outside a run.
+local function encounterLevel(): number
+	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+	if not dungeon then
+		return 1
+	end
+	local config = DungeonData[dungeon.id]
+	local tier = config and config.difficulties[dungeon.difficulty]
+	if not tier then
+		return 1
+	end
+	local base = DifficultyData.Tiers[dungeon.difficulty]
+	local growth = if base then DungeonService:GetDifficultyScale().levelRange.max - base.levelRange.max else 0
+	return tier.levelRange.max + growth
+end
 
 -- Cinematic intro timings. The server orchestrates the whole sequence; clients
 -- run their local fade / walk / control-lock logic in response to the
@@ -886,7 +903,7 @@ function EncounterService._startFight(
 			local healthData: EncounterData = {
 				kind = kind,
 				name = mobName,
-				level = ENCOUNTER_LEVEL_PLACEHOLDER,
+				level = encounterLevel(),
 				currentHP = newHealth,
 				maxHP = humanoid.MaxHealth,
 			}
@@ -920,7 +937,7 @@ function EncounterService._startFight(
 		local revealData: EncounterData = {
 			kind = kind,
 			name = mobName,
-			level = ENCOUNTER_LEVEL_PLACEHOLDER,
+			level = encounterLevel(),
 			currentHP = humanoid.Health,
 			maxHP = humanoid.MaxHealth,
 		}

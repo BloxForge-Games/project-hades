@@ -46,27 +46,16 @@ Boss.__index = Boss
 -- override its own cutoff via healthThreshold.
 local PHASE_THRESHOLDS = { 0.66, 0.33 }
 
--- Difficulty → number of phase changes, used when a boss defers to difficulty
--- (the default). Easy = none, Normal = 1, Hard / Nightmare = 2. Tune here. If
--- per-dungeon control is ever needed this can move into
--- DungeonData.difficulties[diff].phaseChanges and be read off the dungeon.
-local DIFFICULTY_PHASE_COUNT: { [string]: number } = {
-	Easy = 0,
-	Normal = 1,
-	Hard = 2,
-	Nightmare = 2,
-}
-
--- Resolves how many of the boss's declared phases are active this run.
-local function resolvePhaseCount(data, difficulty: string?): number
+-- Resolves how many of the boss's declared phases are active this run: the
+-- boss's own phaseCount when it sets one, else the run's difficulty tier
+-- (DifficultyData bossPhases: Easy none, Normal 1, Hard and up 2).
+local function resolvePhaseCount(data, tierPhases: number): number
 	local phases = data.phases or {}
 	local declared = data.phaseCount
 	if type(declared) == "number" then
 		return math.clamp(declared, 0, #phases)
 	end
-	-- "difficulty" or unset → difficulty map; unknown difficulty → 0.
-	local count = (difficulty and DIFFICULTY_PHASE_COUNT[difficulty]) or 0
-	return math.min(count, #phases)
+	return math.min(tierPhases, #phases)
 end
 
 function Boss.new(model: Model)
@@ -74,9 +63,8 @@ function Boss.new(model: Model)
 	setmetatable(self, Boss)
 
 	-- Resolve which phases are active for this run (boss config + difficulty).
-	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
-	local difficulty = dungeon and dungeon.difficulty
-	local count = resolvePhaseCount(self._data, difficulty)
+	local tierPhases = if DungeonService then DungeonService:GetDifficultyScale().bossPhases else 0
+	local count = resolvePhaseCount(self._data, tierPhases)
 
 	self._activePhases = {}
 	for i = 1, count do

@@ -53,6 +53,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local SignalTypes = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 local Container = require(script.RoactComponents.Container)
 
@@ -120,6 +121,12 @@ function RunInventoryInterfaceController.Open(self: typeof(RunInventoryInterface
 		return
 	end
 	if self._visible then
+		return
+	end
+	-- Not over the relic tray: while it is open, C and the toolbar button
+	-- do nothing. Resolved at call time (both are place interfaces).
+	local relicInterface = Blitz.OptionalController("RelicInterfaceController")
+	if relicInterface and relicInterface:IsOpen() then
 		return
 	end
 	self._visible = true

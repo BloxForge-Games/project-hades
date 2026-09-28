@@ -44,6 +44,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local RelicService = require(ServerScriptService.Services.RelicService)
+local RelicOfferService = require(ServerScriptService.Services.RelicOfferService)
 local DropService = require(ServerScriptService.Services.DropService)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
@@ -171,9 +172,10 @@ local DROP_SLOT_ORDER: { [number]: { number } } = {
 -- high on its stone.
 local DROP_GROUND_RAY_UP = 8
 local DROP_GROUND_RAY_DOWN = 100
--- Beat between drops on a STAGGERED fan (the Shrine and the Forge). The
--- Sword pays out a single relic, so it has nothing to stagger.
-local DROP_STAGGER_SECONDS = 0.25
+-- The pick-one hands (RelicOfferService) dealt as cards on the player's
+-- screen: the source label under the cards' title.
+local OFFER_SOURCE_FORGE = "Forge"
+local OFFER_SOURCE_SHRINE = "Shrine"
 
 -- The vending machine's dispense sting. It is authored as a child of the
 -- machine's PrimaryPart (Server/Components/RelicMachine plays it once per
@@ -197,6 +199,7 @@ local EventService = {
 	Name = "EventService",
 	Dependencies = {
 		RelicService,
+		RelicOfferService,
 		DropService,
 		LifeService,
 		TextIndicatorService,
@@ -228,11 +231,13 @@ local EventService = {
 	_greaterShrinePending = {},
 	_forgeDone = {},
 
-	-- [userId] = { model = Model, relics = { string } } — a WON sword
-	-- pull, or an accepted shrine bargain, whose relic fan is DEFERRED
-	-- until the conversation ends; the close-path MarkEventInteracted
-	-- releases it. Costs always land immediately — only the REWARD
-	-- waits for the bars to come down.
+	-- [userId] = { model = Model, relics = { string }, offer = boolean?,
+	--              source = string? } — a WON sword pull, an accepted
+	-- shrine bargain or a reforge, whose reward is DEFERRED until the
+	-- conversation ends; the close-path MarkEventInteracted releases it.
+	-- Costs always land immediately — only the REWARD waits for the bars
+	-- to come down. `offer` = a pick-one hand dealt as cards on the
+	-- player's screen (RelicOfferService); otherwise a physical fan.
 	_pendingRelicFans = {},
 
 	-- [userId] = { [roomId] = { { relicName, price, sold } } }
@@ -714,12 +719,19 @@ function EventService._onMarkEventInteracted(_self: typeof(EventService), player
 		EventService:NotifyWishesToContinue(player)
 	end
 
-	-- A WON sword pull or an accepted shrine bargain queued its relic
-	-- fan for this moment — the conversation is over, pop the rewards.
+	-- A WON sword pull, an accepted shrine bargain or a reforge queued
+	-- its reward for this moment — the conversation is over, pay out.
+	-- The pick-one hands (Shrine, Forge) are dealt as cards on the
+	-- player's screen; the Sword's single Legendary still pops out of the
+	-- stone, since there is nothing to choose.
 	local pending = EventService._pendingRelicFans[player.UserId]
 	if pending and pending.model == model then
 		EventService._pendingRelicFans[player.UserId] = nil
-		EventService:_spawnRelicFan(player, pending.model, pending.relics, pending.inFront, pending.stagger)
+		if pending.offer then
+			RelicOfferService:Offer(player, pending.relics, pending.source)
+		else
+			EventService:_spawnRelicFan(player, pending.model, pending.relics, pending.inFront, pending.stagger)
+		end
 	end
 end
 
@@ -798,9 +810,9 @@ function EventService._onAcceptCurse(_self: typeof(EventService), player: Player
 	-- Completely random among unowned Cursed relics — no usability gate,
 	-- matching the merchant's anything-goes rule.
 	local curses = EventService:_rollUsableRelics(player, ItemRarity.Cursed, SHRINE_CURSE_COUNT, true)
-	-- DEFERRED: the cost just landed; the fan pops at conversation end.
+	-- DEFERRED: the cost just landed; the hand is dealt at conversation end.
 	EventService._pendingRelicFans[player.UserId] =
-		{ model = shrineModel :: Model, relics = curses, stagger = DROP_STAGGER_SECONDS }
+		{ model = shrineModel :: Model, relics = curses, offer = true, source = OFFER_SOURCE_SHRINE }
 
 	return "struck"
 end
@@ -1172,11 +1184,9 @@ function EventService._onReforgeRelic(
 	EventService._forgeDone[player.UserId] = EventService._forgeDone[player.UserId] or {}
 	EventService._forgeDone[player.UserId][forgeModel] = true
 
-	-- DEFERRED: pops from the blacksmith once the dialogue closes.
-	-- inFront: the blacksmith faces the player, so its reward has to land
-	-- on the anvil side rather than in the wall behind it.
+	-- DEFERRED: dealt as cards once the dialogue closes.
 	EventService._pendingRelicFans[player.UserId] =
-		{ model = forgeModel :: Model, relics = offers, inFront = true, stagger = DROP_STAGGER_SECONDS }
+		{ model = forgeModel :: Model, relics = offers, offer = true, source = OFFER_SOURCE_FORGE }
 	return "reforged"
 end
 
@@ -1410,10 +1420,10 @@ function EventService._onBuyMerchantRelic(
 	end
 
 	if not RunEscrowService:SpendCoins(player, slot.price) then
-		-- Server-side feedback so the "Not enough coins" pop can't be
+		-- Server-side feedback so the "Not enough gold" pop can't be
 		-- suppressed or spoofed client-side.
 		if TextIndicatorService and hrp then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough coins", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough gold", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"
@@ -1476,7 +1486,7 @@ function EventService._onBuyRelicSlot(_self: typeof(EventService), player: Playe
 	end
 	if not RunEscrowService:SpendCoins(player, price) then
 		if TextIndicatorService then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough coins", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough gold", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"

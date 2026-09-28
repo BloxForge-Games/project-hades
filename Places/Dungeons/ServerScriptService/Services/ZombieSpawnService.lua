@@ -135,18 +135,22 @@ end
 
 --[ Per-dungeon zombie pool ]--
 
--- ReplicatedStorage.GameAssets.Zombies.<dungeonId> -- each dungeon has its
--- own folder of mob templates. Falls back to the flat Zombies folder (with
+-- ReplicatedStorage.GameAssets.Zombies.<assetFolder> -- each dungeon has its
+-- own folder of mob templates, named by its DungeonData assetFolder. Falls back to the flat Zombies folder (with
 -- a warn) so a missing folder degrades to "same mobs everywhere" instead
 -- of a dead dungeon.
 function ZombieSpawnService._zombieFolder(_self: typeof(ZombieSpawnService), dungeonId: string?): Instance
 	local root = ReplicatedStorage.GameAssets.Zombies
 	if dungeonId then
-		local folder = root:FindFirstChild(dungeonId)
+		local config = DungeonData[dungeonId]
+		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
+		local folder = root:FindFirstChild(folderName)
 		if folder then
 			return folder
 		end
-		warn(("[ZombieSpawnService] No zombie folder GameAssets.Zombies.%s -- using the flat folder"):format(dungeonId))
+		warn(
+			("[ZombieSpawnService] No zombie folder GameAssets.Zombies.%s -- using the flat folder"):format(folderName)
+		)
 	end
 	return root
 end

@@ -43,6 +43,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Planner = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.Planner)
+local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 
 -- A placed room (see _makeRoom). Everything stamped on it later --
 -- branch, combatSegmentIndex, exitPortal, buildings -- is optional here.
@@ -76,6 +78,8 @@ export type Run = {
 	sequence: { string },
 	index: number,
 	difficulty: string,
+	-- Ascension level (1..MaxAscension) when difficulty is Ascension, else 0.
+	ascension: number,
 	exited: { [Player]: true },
 	originCFrame: CFrame?,
 }
@@ -308,6 +312,16 @@ end
 
 function DungeonService.GetRun(self: typeof(DungeonService)): Run?
 	return self._run
+end
+
+-- The tier the run plays (DifficultyData.Resolve, Ascension growth
+-- applied): enemy health and damage, EXP, boss phases. Normal outside a run.
+function DungeonService.GetDifficultyScale(self: typeof(DungeonService)): DifficultyData.TierConfig
+	local run = self._run
+	if not run then
+		return DifficultyData.Resolve(Difficulty.Normal)
+	end
+	return DifficultyData.Resolve(run.difficulty, run.ascension)
 end
 
 function DungeonService.GetRunDungeonIndex(self: typeof(DungeonService)): number

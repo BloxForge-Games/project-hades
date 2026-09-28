@@ -202,6 +202,15 @@ local function Container(props: any)
 		end
 	end, { visible })
 
+	-- Reports every open / close upward (the toggle button flips `visible`
+	-- without firing any signal, so this is the one place that sees all
+	-- of them).
+	React.useEffect(function()
+		if props.onVisibilityChanged then
+			props.onVisibilityChanged(visible)
+		end
+	end, { visible })
+
 	React.useEffect(function()
 		selectedRelicRef.current = selectedRelic
 	end, { selectedRelic })
