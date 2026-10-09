@@ -46,6 +46,7 @@ local ItemViewport = require(
 
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+local UpgradeCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.UpgradeCapData)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
@@ -494,10 +495,14 @@ local function Container(props: any)
 		local upgrades = selectedItem.upgrades or 0
 		local upgradeSuffix = if upgrades > 0 then string.format(" (+%d)", upgrades) else ""
 		detailNameText = tostring(selectedItem.name) .. upgradeSuffix
+		-- The cap rides on the rarity line: rarity is what SETS it, so the
+		-- two read together ("Epic ... +3 / +10").
 		detailLevelRarityText = string.format(
-			"Level %d  •  %s",
+			"Level %d  •  %s  •  +%d / +%d",
 			selectedItem.level or 1,
-			tostring(selectedItem.rarity or ItemRarity.Common)
+			tostring(selectedItem.rarity or ItemRarity.Common),
+			UpgradeCapData.Clamp(upgrades, selectedItem.rarity),
+			UpgradeCapData.For(selectedItem.rarity)
 		)
 		detailDescription = getItemDescription(selectedItem.name)
 

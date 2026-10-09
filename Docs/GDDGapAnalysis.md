@@ -63,7 +63,7 @@ priority list in section 4.
 | D1 | **Rename DONE 2026-10-09** — `Zombie*` → `Mob*` (MobNames, MobData, MobService, MobSpawnService, MobController, Mobs/Mob.lua; 60 files). Rig-internal names (animations, hitboxes, sounds, the `Zombie` tag) and the relics Zombie Bomb / Zombie Axe deliberately kept. **Prune DONE 2026-10-09**: the Water + Shadow sets (12 mobs, -1145 lines) are gone; Emberforge/Frostveil/Stormcrest point at the Undead set until their GDD rosters exist. The Undead King stays as dungeon-1 boss. |
 | D2 | **Keep the firearms.** They are in-fiction as BOTW-style ancient technology. The 30-ranged-weapon plan proceeds on that basis. |
 | D3 | **DONE 2026-10-09.** `Mythic` removed from `ItemRarity`, `RarityMultipliers`, `RarityColors` and both inventory frames' `TOP_RARITY`. Legendary (1.8×) is now the ceiling. |
-| D4 | **Add the upgrade caps** exactly as the GDD lists them (+4 / +6 / +8 / +10 / +15). The +5%-per-level curve was not retuned — revisit when the caps land. |
+| D4 | **DONE 2026-10-09.** `UpgradeCapData` holds the GDD ladder (+4 / +6 / +8 / +10 / +15); `computeMainStat` clamps on the one shared read path; both inventory detail panels show `+N / +cap`. Per-level gain stays +5% flat (decided), so a maxed Legendary is +75% over base, a maxed Common +20%. |
 | D5 | **Still open.** Stormcrest *Mountains* (code) vs Stormcrest *Temple* (GDD) was not decided. |
 | D6 | GDD is corrected to **Emberforge Mines** and **Frostveil Castle**. The code was already right. |
 | D7 | **DONE 2026-10-09.** `Magic*` → `Arcane*` across both repos (157 files, Blink domain regenerated). The damage TYPE stayed `Magic Damage` / `ResistKind.Magic`, matching the GDD. The collection layer (chests, scrolls, ranks, dust, Trainer, 2 slots) is P1.2, built on the renamed runtime. |
@@ -223,8 +223,7 @@ field and a `Forge` dialogue entry, and `computeMainStat` already consumes
 the shortest path from "loot drops" to "loot matters", and it needs D4's caps
 decided first.
 
-**P0.3 — Upgrade caps by rarity (D4).** Small, but it gates P0.2 and defines
-the gear power curve.
+**P0.3 — Upgrade caps by rarity (D4). DONE 2026-10-09** — see D4.
 
 ### P1 — The endgame loop the GDD is built around
 
