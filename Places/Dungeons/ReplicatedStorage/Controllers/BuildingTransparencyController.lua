@@ -38,7 +38,7 @@ local TweenService = game:GetService("TweenService")
 
 local IgnoreListController = require(ReplicatedStorage.Controllers.IgnoreListController)
 local OcclusionController = require(ReplicatedStorage.Controllers.OcclusionController)
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
@@ -347,10 +347,10 @@ function BuildingTransparencyController.Start(self: typeof(BuildingTransparencyC
 	overlapParams.FilterDescendantsInstances = self._buildingIgnoreList
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
-	-- A broken piece leaves its building (it is reparented to MagicSpells
+	-- A broken piece leaves its building (it is reparented to ArcaneSpells
 	-- and flung): it comes back to its authored look on its own, whatever
 	-- fade its building was under.
-	Magic.BuildingsBroken.On(function(parts)
+	Arcane.BuildingsBroken.On(function(parts)
 		for _, part in parts do
 			-- A piece destroyed before this arrived is nil in the list.
 			if not part or not part.Parent then

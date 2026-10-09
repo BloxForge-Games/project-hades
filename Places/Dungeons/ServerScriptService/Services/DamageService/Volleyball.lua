@@ -31,10 +31,10 @@ local VOLLEY_BALL_DESYNC_DELAY = 0.5
 local SPIKE_INTERVAL = 3
 
 -- PRIVATE ranged-only hit counter. The orchestrator used to hand every
--- module a shared counter of EVERY damage event — melee swings, magic hits,
+-- module a shared counter of EVERY damage event — melee swings, arcane hits,
 -- relic procs — so reading it made "every 3rd ranged attack" fire on the
 -- 3rd damage event of any type. A melee-and-gun player got spikes at
--- effectively random points in their gun's cadence, and a pure-magic player
+-- effectively random points in their gun's cadence, and a pure-arcane player
 -- advanced the counter without ever being able to trigger it. Same fix
 -- GeneralsFortyFive already carries for its 6th-shot bonus.
 --

@@ -14,7 +14,7 @@
 	                        stacked on top for the ShieldValue attribute
 	                        (LoL rescale, same as the HUD bar)
 	            ManaBar   : Mana / MaxMana character attributes (stamped by
-	                        MagicService -- other clients can't read the
+	                        ArcaneService -- other clients can't read the
 	                        owner's per-player mana property, so the
 	                        attributes are how it gets here)
 	  * HIDE  every billboard on a character is disabled while

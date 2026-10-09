@@ -18,11 +18,11 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
-local MagicService = require(ServerScriptService.Services.MagicService)
-local MagicLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.MagicLoadoutService)
+local ArcaneService = require(ServerScriptService.Services.ArcaneService)
+local ArcaneLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.ArcaneLoadoutService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
-local Magic = require(ServerScriptService.Submodules.Core.Source.Network.Magic)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local Arcane = require(ServerScriptService.Submodules.Core.Source.Network.Arcane)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -30,22 +30,22 @@ local Breakable = require(script.Parent.Parent.Components.Breakable)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 
--- Cast-site relic knobs. MUST mirror MagicController's client chain.
--- Forbidden Box (Cursed): mana costs from Magic are DOUBLED.
+-- Cast-site relic knobs. MUST mirror ArcaneController's client chain.
+-- Forbidden Box (Cursed): mana costs from Arcane are DOUBLED.
 local FORBIDDEN_BOX_MANA_MULTIPLIER = 2
--- Cast-cutscene i-frame length when a MagicData `cutscene` entry sets no
--- duration. MUST match CutsceneController's DEFAULT_MAGIC_CUTSCENE_SECONDS.
-local DEFAULT_MAGIC_CUTSCENE_SECONDS = 2
--- Cutscene magic is invulnerable for its whole cutscene PLUS this: the
+-- Cast-cutscene i-frame length when a ArcaneData `cutscene` entry sets no
+-- duration. MUST match CutsceneController's DEFAULT_ARCANE_CUTSCENE_SECONDS.
+local DEFAULT_ARCANE_CUTSCENE_SECONDS = 2
+-- Cutscene arcane is invulnerable for its whole cutscene PLUS this: the
 -- client's camera path and the server's timer start a replication hop
 -- apart, and the player is still recovering (animation tail, walkspeed
 -- restore) as the bars come down. A frame of exposure at either end is
 -- exactly what the window exists to prevent.
-local MAGIC_CUTSCENE_INVULNERABLE_GRACE_SECONDS = 1.5
+local ARCANE_CUTSCENE_INVULNERABLE_GRACE_SECONDS = 1.5
 -- Icy Arctic Fowl: x0.75 mana while Frostburst is up (its +30% damage
 -- half rides the AuraDamage module; the callback owns that value).
 local ICY_ARCTIC_FOWL_MANA_MULTIPLIER = 0.75
--- Mystical Staff of Cyan: every equipped cast drops a Magic Sigil at the
+-- Mystical Staff of Cyan: every equipped cast drops a Arcane Sigil at the
 -- caster's feet. The registry below is consumed by DamageService's
 -- MysticalSigil module via :IsInSigilZone. Radius is the BUFF zone --
 -- the visual ring is smaller; forgiving on purpose.
@@ -60,7 +60,7 @@ local MYSTICAL_SIGIL_FADE_SECONDS = 1
 local MYSTICAL_SIGIL_GROUND_RAY_STUDS = 50
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local toggleWeaponSheath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.toggleWeaponSheath)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
@@ -132,8 +132,8 @@ local VFXService = {
 		IgnoreListService,
 		PlayerEventService,
 		CameraShakeService,
-		MagicService,
-		MagicLoadoutService,
+		ArcaneService,
+		ArcaneLoadoutService,
 		InvulnerabilityService,
 	} :: { any },
 }
@@ -156,7 +156,7 @@ end
 VFXService._playerDetectedPartsRegistry = {} :: { [number]: { [string]: DetectedParts } }
 VFXService._vfxReplicationQueue = {}
 -- Per player, bumped per accepted cast. The end-of-duration timer clears
--- MagicEnabled / restores the weapon only while its serial is the latest:
+-- ArcaneEnabled / restores the weapon only while its serial is the latest:
 -- an earlier cast's timer used to clear the flag a later cast had set
 -- (Fire Blast into Wind Bomb), and the false replicated over the client's
 -- true and unlocked dodging mid-cast.
@@ -164,7 +164,7 @@ VFXService._castSerials = {} :: { [number]: number }
 VFXService._vfxAuraRegistry = {}
 VFXService._vfxAttackRegistry = {}
 
--- Live Magic Sigil zones -- { position: Vector3, expiresAt: number }.
+-- Live Arcane Sigil zones -- { position: Vector3, expiresAt: number }.
 -- Every cast APPENDS (sigils stack on the floor; the BUFF doesn't --
 -- IsInSigilZone is boolean). Expired entries are pruned lazily on
 -- every read/write.
@@ -176,36 +176,36 @@ VFXService.OnBuildingBroken = Signal.new()
 --[ Private Functions ]--
 
 local function shouldResetHitRegistry(vfxName: string): boolean
-	return vfxName == MagicNames["Pumpkin Explosion"]
-		or vfxName == MagicNames["Big Pumpkin Explosion"]
+	return vfxName == ArcaneNames["Pumpkin Explosion"]
+		or vfxName == ArcaneNames["Big Pumpkin Explosion"]
 		-- Was missing: without the reset a zombie grazed by one Fuse Bomb was
 		-- immune to every later one for the session.
-		or vfxName == MagicNames["Fuse Bomb Explosion"]
-		or vfxName == MagicNames["Fireworks Explosion"]
-		or vfxName == MagicNames["Ghost Dragon"]
-		or vfxName == MagicNames["Susanoo Armor"]
-		or vfxName == MagicNames["Domain Expansion"]
+		or vfxName == ArcaneNames["Fuse Bomb Explosion"]
+		or vfxName == ArcaneNames["Fireworks Explosion"]
+		or vfxName == ArcaneNames["Ghost Dragon"]
+		or vfxName == ArcaneNames["Susanoo Armor"]
+		or vfxName == ArcaneNames["Domain Expansion"]
 end
 
 function VFXService._checkVFXOwned(_self: typeof(VFXService), player: Player, vfxName: string): boolean
-	local loadout = MagicLoadoutService:GetMagicLoadout(player)
+	local loadout = ArcaneLoadoutService:GetArcaneLoadout(player)
 
 	if not loadout then
-		print("[VFXService] No magic loadout found for player:", player.Name)
+		print("[VFXService] No arcane loadout found for player:", player.Name)
 		return false
 	end
 
 	local vfxOwned = false
 
-	for _, magicData in loadout do
-		if magicData and magicData.name == vfxName then
+	for _, arcaneData in loadout do
+		if arcaneData and arcaneData.name == vfxName then
 			vfxOwned = true
 			break
 		end
 	end
 
 	if not vfxOwned then
-		print("[VFXService] Player does not own the magic for this VFX:", player.Name, vfxName)
+		print("[VFXService] Player does not own the arcane for this VFX:", player.Name, vfxName)
 		return false
 	end
 
@@ -313,7 +313,7 @@ function VFXService.RegisterHitbox(
 			detectedRegistry[model] = true
 			hitCallback(model)
 		elseif canBreakBuildings and model:HasTag(TagList.Breakable) then
-			-- Magic spells that opt in via MagicData.canBreakBuildings can
+			-- Arcane spells that opt in via ArcaneData.canBreakBuildings can
 			-- instantly destroy Breakables (gates, barricades, props). Passive
 			-- relic procs like Ghost Dragon and Fireworks set this to false
 			-- so they don't shred the player's own barricades while ticking.
@@ -349,7 +349,7 @@ function VFXService.RegisterHitbox(
 	end
 
 	if partsTable then
-		Magic.BuildingsBroken.FireAll(partsTable)
+		Arcane.BuildingsBroken.FireAll(partsTable)
 	end
 end
 
@@ -371,7 +371,7 @@ function VFXService._breakBuildingPart(self: typeof(VFXService), part: BasePart,
 		joint:Destroy()
 	end
 
-	part.Parent = workspace.IgnoreInstances.MagicSpells
+	part.Parent = workspace.IgnoreInstances.ArcaneSpells
 	part.Anchored = false
 
 	local pathfindingModifier = Instance.new("PathfindingModifier")
@@ -436,7 +436,7 @@ function VFXService._collapseBuilding(self: typeof(VFXService), model: Model, or
 	for _, piece in remaining do
 		self:_breakBuildingPart(piece, origin)
 	end
-	Magic.BuildingsBroken.FireAll(remaining)
+	Arcane.BuildingsBroken.FireAll(remaining)
 end
 
 function VFXService.CreateHitbox(
@@ -450,7 +450,7 @@ function VFXService.CreateHitbox(
 	radius: number,
 	skipCameraShake: boolean?
 )
-	local magicIndexData = MagicData[vfxName] or {}
+	local arcaneIndexData = ArcaneData[vfxName] or {}
 	local character = activePlayer.Character
 
 	if not character then
@@ -467,13 +467,13 @@ function VFXService.CreateHitbox(
 	-- skipCameraShake: high-frequency callers (the sweep loop calls this
 	-- per STEP) fire their own single cast shake instead — per-step
 	-- re-triggers kept resetting the shake envelope and suppressed it.
-	if magicIndexData.cameraShake and not skipCameraShake then
-		-- Magic spell explosions read as Medium — punchier than the Small
+	if arcaneIndexData.cameraShake and not skipCameraShake then
+		-- Arcane spell explosions read as Medium — punchier than the Small
 		-- default other radius emitters fall back to.
 		CameraShakeService.OnGetBoundsInShakeRadius:Fire(character, cframe, radius, CameraShakePresets.Medium)
 	end
 
-	local canBreakBuildings = magicIndexData.canBreakBuildings or false
+	local canBreakBuildings = arcaneIndexData.canBreakBuildings or false
 
 	if shouldResetHitRegistry(vfxName) then
 		if not self._playerDetectedPartsRegistry[activePlayer.UserId] then
@@ -529,7 +529,7 @@ end
 -- EncounterService's chest floor snap), so mobs, spell debris, and the
 -- caster can't become the "floor". No hit (mid-jump over the void) =
 -- no sigil, cast otherwise unaffected.
-function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
+function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 	local hrp = getRoot.fromPlayer(player)
 	if not hrp then
 		return
@@ -540,10 +540,10 @@ function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
 		return
 	end
 
-	local template = ReplicatedStorage.GameAssets.VFX:FindFirstChild("MagicSigil")
+	local template = ReplicatedStorage.GameAssets.VFX:FindFirstChild("ArcaneSigil")
 	local model = template and template:FindFirstChild("Model")
 	if not model then
-		warn("[VFXService] MagicSigil model missing from GameAssets.VFX.MagicSigil")
+		warn("[VFXService] ArcaneSigil model missing from GameAssets.VFX.ArcaneSigil")
 		return
 	end
 
@@ -556,7 +556,7 @@ function VFXService._spawnMagicSigil(self: typeof(VFXService), player: Player)
 		end
 	end
 	sigil:PivotTo(CFrame.new(floorPosition + Vector3.new(0, 1.75, 0)))
-	sigil.Parent = workspace.IgnoreInstances.MagicSpells
+	sigil.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Smooth lifecycle. Burst 1 particle from every emitter AFTER
 	-- parenting (:Emit on an unparented emitter silently discards -- the
@@ -615,14 +615,14 @@ end
 
 function VFXService._onCastRequested(self: typeof(VFXService), player: Player, vfxName: string, cframe: CFrame)
 	if not self:_checkVFXOwned(player, vfxName) then
-		return warn("[VFXService] Player attempted to cast unowned magic:", player)
+		return warn("[VFXService] Player attempted to cast unowned arcane:", player)
 	end
 
 	-- Mana cost multipliers. MUST mirror the client's
-	-- MagicController:GetEffectiveManaCost -- that helper drives both the
+	-- ArcaneController:GetEffectiveManaCost -- that helper drives both the
 	-- cast precheck and the toolbar grey-out, and a drift here means the
 	-- UI lies about affordability:
-	--   * Forbidden Box (Cursed): x2 -- "Mana costs from Magic are doubled".
+	--   * Forbidden Box (Cursed): x2 -- "Mana costs from Arcane are doubled".
 	--   * Icy Arctic Fowl: x0.65 while Frostburst is up.
 	local manaCostMultiplier = 1
 	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Forbidden Box"]) > 0 then
@@ -644,53 +644,53 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	getShieldService():TryRobloxionShield(player)
 	getShieldService():TrySpartanStonebound(player)
 
-	local effectiveManaCost = MagicData[vfxName].manaCost * manaCostMultiplier
+	local effectiveManaCost = ArcaneData[vfxName].manaCost * manaCostMultiplier
 
-	local magicData = MagicService:GetPlayerMagicData(player)
-	if not magicData or magicData.mana - effectiveManaCost < 0 then
-		warn("[VFXService] Player attempted to cast magic without enough mana:", player)
+	local arcaneData = ArcaneService:GetPlayerArcaneData(player)
+	if not arcaneData or arcaneData.mana - effectiveManaCost < 0 then
+		warn("[VFXService] Player attempted to cast arcane without enough mana:", player)
 		return
 	end
 
-	if MagicService:GetPlayerMagicLastUsed(player, vfxName) == nil then
-		MagicService:SetPlayerMagicLastUsed(player, vfxName, 0)
+	if ArcaneService:GetPlayerArcaneLastUsed(player, vfxName) == nil then
+		ArcaneService:SetPlayerArcaneLastUsed(player, vfxName, 0)
 	end
 
 	if
-		tick() - MagicService:GetPlayerMagicLastUsed(player, vfxName)
-		< MagicService:GetPlayerMagicCooldown(player, vfxName)
+		tick() - ArcaneService:GetPlayerArcaneLastUsed(player, vfxName)
+		< ArcaneService:GetPlayerArcaneCooldown(player, vfxName)
 	then
-		warn("[VFXService] Player attempted to cast magic before cooldown was up:", player)
+		warn("[VFXService] Player attempted to cast arcane before cooldown was up:", player)
 
 		return
 	end
 
 	-- Cooldown reduction: the Mana runes' CDR, stamped as the replicated
 	-- CooldownReductionPercent attribute by PlayerStatsService (Abyss
-	-- doubling included). MUST mirror the client chain in MagicController.
+	-- doubling included). MUST mirror the client chain in ArcaneController.
 	local cooldownMultiplier = 1 - ((player:GetAttribute("CooldownReductionPercent") :: number?) or 0)
 
-	local newCooldown = MagicData[vfxName].cooldown * cooldownMultiplier
+	local newCooldown = ArcaneData[vfxName].cooldown * cooldownMultiplier
 
-	if MagicData[vfxName].isAura then
-		newCooldown = math.clamp(newCooldown, MagicData[vfxName].lifetime, MagicData[vfxName].cooldown)
+	if ArcaneData[vfxName].isAura then
+		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].lifetime, ArcaneData[vfxName].cooldown)
 	else
-		newCooldown = math.clamp(newCooldown, MagicData[vfxName].duration, MagicData[vfxName].cooldown)
+		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].duration, ArcaneData[vfxName].cooldown)
 	end
 
 	-- Re-read: the cooldown checks above may have yielded.
-	local latest = MagicService:GetPlayerMagicData(player) or magicData
-	MagicService:SetPlayerMagicData(player, latest.mana - effectiveManaCost, latest.maxMana)
-	MagicService:SetPlayerMagicLastUsed(player, vfxName, tick())
-	MagicService:SetPlayerMagicCooldown(player, vfxName, newCooldown)
+	local latest = ArcaneService:GetPlayerArcaneData(player) or arcaneData
+	ArcaneService:SetPlayerArcaneData(player, latest.mana - effectiveManaCost, latest.maxMana)
+	ArcaneService:SetPlayerArcaneLastUsed(player, vfxName, tick())
+	ArcaneService:SetPlayerArcaneCooldown(player, vfxName, newCooldown)
 
 	-- Mystical Staff of Cyan: the cast is COMMITTED (mana paid, cooldown
 	-- stamped), so drop a sigil at the caster's feet. Equipped casts
-	-- only -- relic magic never reaches this remote, same rule as the
+	-- only -- relic arcane never reaches this remote, same rule as the
 	-- aura procs above. Placed here, not in the proc block, so a cast
 	-- rejected for mana/cooldown can't paint the floor.
 	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Mystical Staff of Cyan"]) > 0 then
-		self:_spawnMagicSigil(player)
+		self:_spawnArcaneSigil(player)
 	end
 
 	if self._vfxReplicationQueue[player.UserId] == nil then
@@ -699,42 +699,43 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 
 	self._vfxReplicationQueue[player.UserId][vfxName] = true
 
-	local duration = MagicData[vfxName] and MagicData[vfxName].duration or 1
+	local duration = ArcaneData[vfxName] and ArcaneData[vfxName].duration or 1
 
 	-- The caster's character. A cast this far in (mana paid, cooldown
 	-- stamped) has one; the attribute writes below always indexed it
 	-- directly, so a nil here throws exactly as it did before.
 	local character = player.Character :: Model
 
-	character:SetAttribute(Attributes.MagicEnabled, true)
+	character:SetAttribute(Attributes.ArcaneEnabled, true)
 	local castSerial = (self._castSerials[player.UserId] or 0) + 1
 	self._castSerials[player.UserId] = castSerial
 
-	-- CAST CUTSCENE i-frames. A spell with `cutscene` in MagicData holds
+	-- CAST CUTSCENE i-frames. A spell with `cutscene` in ArcaneData holds
 	-- the caster in a cinematic beat on their client (bars, no control);
 	-- taking hits through it would be unfair and unseen. Server-owned,
 	-- because the client's CutscenePlaying attribute never replicates.
 	-- No highlight: the spell's own presentation is the feedback. The
 	-- duration mirrors the client's beat (CutsceneController's default
 	-- when the entry sets none).
-	-- Any magic with an enabled cutscene index -- bars-only beat OR camera
+	-- Any arcane with an enabled cutscene index -- bars-only beat OR camera
 	-- path -- makes its caster untouchable for the whole thing. A cast you
 	-- cannot move or dodge out of must not be one you can die during.
-	local cutscene = MagicData[vfxName].cutscene
+	local cutscene = ArcaneData[vfxName].cutscene
 	if cutscene and cutscene.enabled == true and InvulnerabilityService then
-		local window = (cutscene.duration or DEFAULT_MAGIC_CUTSCENE_SECONDS) + MAGIC_CUTSCENE_INVULNERABLE_GRACE_SECONDS
+		local window = (cutscene.duration or DEFAULT_ARCANE_CUTSCENE_SECONDS)
+			+ ARCANE_CUTSCENE_INVULNERABLE_GRACE_SECONDS
 		InvulnerabilityService:ApplyTo(character, window, "Cutscene")
 	end
 
 	self:_toggleWeaponTransparency(player, 1)
 
-	local magicIndexData = MagicData[vfxName]
+	local arcaneIndexData = ArcaneData[vfxName]
 	local activePlayer = player
 
-	if magicIndexData.superArmorDuration and magicIndexData.superArmorDuration > 0 then
+	if arcaneIndexData.superArmorDuration and arcaneIndexData.superArmorDuration > 0 then
 		character:SetAttribute(Attributes.SuperArmor, true)
 
-		task.delay(magicIndexData.superArmorDuration, function()
+		task.delay(arcaneIndexData.superArmorDuration, function()
 			if activePlayer.Character then
 				activePlayer.Character:SetAttribute(Attributes.SuperArmor, false)
 			end
@@ -748,13 +749,13 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		if activePlayer.Character then
 			self:_toggleWeaponTransparency(activePlayer, 0)
 
-			activePlayer.Character:SetAttribute(Attributes.MagicEnabled, false)
+			activePlayer.Character:SetAttribute(Attributes.ArcaneEnabled, false)
 		end
 	end)
 
 	local modifiedVfxName = vfxName:gsub(" ", "")
 
-	if vfxName == MagicNames["Domain Expansion"] then
+	if vfxName == ArcaneNames["Domain Expansion"] then
 		character:SetAttribute(Attributes.DomainExpansionActive, true)
 	end
 
@@ -765,7 +766,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 			name = vfxName,
 			attack = vfxAttack,
 			lastAttacked = 0,
-			attackInterval = MagicData[vfxName].attackInterval,
+			attackInterval = ArcaneData[vfxName].attackInterval,
 			-- The rig gets AURA_ACTIVATION_DELAY to arrive before it can swing.
 			readyAt = tick() + AURA_ACTIVATION_DELAY,
 		}
@@ -776,7 +777,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		return
 	end
 	if (cframe.Position - casterRoot.Position).Magnitude > 10 then
-		warn("[VFXService] Player attempted to cast magic too far from their character:", player)
+		warn("[VFXService] Player attempted to cast arcane too far from their character:", player)
 		cframe = casterRoot.CFrame
 	end
 
@@ -784,7 +785,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- effect module locally at cast time and skips it here, but other
 	-- listeners on this event (the cast dialogue strip) still need the
 	-- caster's own cast to arrive.
-	Magic.CastReplicated.FireAll({ Caster = activePlayer, MagicName = vfxName, CFrame = cframe })
+	Arcane.CastReplicated.FireAll({ Caster = activePlayer, ArcaneName = vfxName, CFrame = cframe })
 end
 
 -- A hitbox request carries the CFrame the CLIENT chose. The cast itself is
@@ -806,10 +807,10 @@ function VFXService._isHitboxPlacementValid(
 	if not root then
 		return false
 	end
-	local magicIndexData = MagicData[vfxName] or {}
-	local hitboxSize: Vector3 = magicIndexData.hitboxSize or Vector3.zero
-	local allowed = (magicIndexData.range or 0)
-		+ (if includeTravel then (magicIndexData.travelDistance or 0) else 0)
+	local arcaneIndexData = ArcaneData[vfxName] or {}
+	local hitboxSize: Vector3 = arcaneIndexData.hitboxSize or Vector3.zero
+	local allowed = (arcaneIndexData.range or 0)
+		+ (if includeTravel then (arcaneIndexData.travelDistance or 0) else 0)
 		+ hitboxSize.Magnitude / 2
 		+ HITBOX_PLACEMENT_SLACK_STUDS
 	local distance = (cframe.Position - root.Position).Magnitude
@@ -851,11 +852,11 @@ function VFXService._onHitboxRequested(
 		return
 	end
 
-	local magicIndexData = MagicData[vfxName] or {}
+	local arcaneIndexData = ArcaneData[vfxName] or {}
 
 	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 
-	if magicIndexData.hitboxCount and magicIndexData.hitboxCount > 1 then
+	if arcaneIndexData.hitboxCount and arcaneIndexData.hitboxCount > 1 then
 		local detected = self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName]
 		detected.hitboxCount = (detected.hitboxCount or 0) + 1
 	end
@@ -867,14 +868,14 @@ function VFXService._onHitboxRequested(
 		if (activePlayer :: Player?) == nil then TagList.Player else TagList.Zombie,
 		IgnoreListService:GetWeaponIgnoreList(),
 		function(model: Model)
-			onHitboxDamage(model, cframe, activePlayer, magicIndexData, true, false)
+			onHitboxDamage(model, cframe, activePlayer, arcaneIndexData, true, false)
 		end,
-		magicIndexData.hitboxSize.X
+		arcaneIndexData.hitboxSize.X
 	)
 
-	if magicIndexData.hitboxCount and magicIndexData.hitboxCount > 1 then
+	if arcaneIndexData.hitboxCount and arcaneIndexData.hitboxCount > 1 then
 		if
-			self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount == magicIndexData.hitboxCount
+			self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName].hitboxCount == arcaneIndexData.hitboxCount
 		then
 			self._vfxReplicationQueue[player.UserId][vfxName] = false
 		end
@@ -909,7 +910,7 @@ function VFXService._onSweepHitboxRequested(
 	-- second sweep off the same cast.
 	self._vfxReplicationQueue[player.UserId][vfxName] = false
 
-	local magicIndexData = MagicData[vfxName] or {}
+	local arcaneIndexData = ArcaneData[vfxName] or {}
 
 	local overlapIgnoreList = IgnoreListService:GetWeaponIgnoreList()
 
@@ -922,9 +923,9 @@ function VFXService._onSweepHitboxRequested(
 
 	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 
-	local authoredStep = magicIndexData.stepDistance
-	local travelDistance = magicIndexData.travelDistance
-	local hitboxRadius = magicIndexData.hitboxSize.X
+	local authoredStep = arcaneIndexData.stepDistance
+	local travelDistance = arcaneIndexData.travelDistance
+	local hitboxRadius = arcaneIndexData.hitboxSize.X
 	-- At most SWEEP_MAX_QUERIES steps over the travel line (the loop below
 	-- is inclusive of both ends), never coarser than the hitbox radius.
 	local stepDistance = math.max(authoredStep, math.min(hitboxRadius, travelDistance / (SWEEP_MAX_QUERIES - 1)))
@@ -940,11 +941,11 @@ function VFXService._onSweepHitboxRequested(
 	-- sweep ENDED — the "delayed shake" bug. Enemies damaged along the
 	-- path still fire their own shake from onHitboxDamage.
 	local character = activePlayer.Character
-	if magicIndexData.cameraShake and character then
+	if arcaneIndexData.cameraShake and character then
 		CameraShakeService.OnGetBoundsInShakeRadius:Fire(
 			character,
 			cframe,
-			magicIndexData.hitboxSize.X,
+			arcaneIndexData.hitboxSize.X,
 			CameraShakePresets.Medium
 		)
 	end
@@ -957,8 +958,8 @@ function VFXService._onSweepHitboxRequested(
 		local stepCFrame = cframe + (direction * distance)
 
 		self:CreateHitbox(vfxName, activePlayer, stepCFrame, TagList.Zombie, overlapIgnoreList, function(model: Model)
-			onHitboxDamage(model, stepCFrame, activePlayer, magicIndexData, true, false)
-		end, magicIndexData.hitboxSize.X, true)
+			onHitboxDamage(model, stepCFrame, activePlayer, arcaneIndexData, true, false)
+		end, arcaneIndexData.hitboxSize.X, true)
 	end
 end
 
@@ -988,7 +989,7 @@ function VFXService._onPersistentHitboxRequested(
 	-- window started ANOTHER full damage loop off the one cast.
 	self._vfxReplicationQueue[player.UserId][vfxName] = false
 
-	local magicIndexData = MagicData[vfxName] or {}
+	local arcaneIndexData = ArcaneData[vfxName] or {}
 
 	-- reset registry for this cast
 	if not self._playerDetectedPartsRegistry[activePlayer.UserId] then
@@ -997,7 +998,7 @@ function VFXService._onPersistentHitboxRequested(
 
 	self._playerDetectedPartsRegistry[activePlayer.UserId][vfxName] = newDetectedParts()
 
-	local hitboxDuration = magicIndexData.hitboxDuration
+	local hitboxDuration = arcaneIndexData.hitboxDuration
 	local elapsed = 0
 
 	task.spawn(function()
@@ -1023,17 +1024,17 @@ function VFXService._onPersistentHitboxRequested(
 				TagList.Zombie,
 				IgnoreListService:GetWeaponIgnoreList(),
 				function(model: Model)
-					onHitboxDamage(model, cframe, activePlayer, magicIndexData, true, false)
+					onHitboxDamage(model, cframe, activePlayer, arcaneIndexData, true, false)
 				end,
-				magicIndexData.hitboxSize.X
+				arcaneIndexData.hitboxSize.X
 			)
 
-			task.wait(magicIndexData.hitboxIncrement)
+			task.wait(arcaneIndexData.hitboxIncrement)
 
-			elapsed += magicIndexData.hitboxIncrement
+			elapsed += arcaneIndexData.hitboxIncrement
 		end
 
-		if vfxName == MagicNames["Domain Expansion"] then
+		if vfxName == ArcaneNames["Domain Expansion"] then
 			local casterCharacter = player.Character
 			if casterCharacter then
 				casterCharacter:SetAttribute(Attributes.DomainExpansionActive, false)
@@ -1045,25 +1046,25 @@ end
 --[ Initializers ]--
 
 function VFXService.Start(self: typeof(VFXService))
-	-- Magic domain requests. Every one is attributed to the SENDER: the
+	-- Arcane domain requests. Every one is attributed to the SENDER: the
 	-- old methods took an explicit caster from the packet (with a TODO
 	-- about exploiters naming someone else); now the caster is `player`.
-	Magic.CastRequested.On(function(player: Player, payload)
-		self:_onCastRequested(player, payload.MagicName, payload.CFrame)
+	Arcane.CastRequested.On(function(player: Player, payload)
+		self:_onCastRequested(player, payload.ArcaneName, payload.CFrame)
 	end)
-	Magic.HitboxRequested.On(function(player: Player, payload)
-		self:_onHitboxRequested(player, player, payload.MagicName, payload.CFrame)
+	Arcane.HitboxRequested.On(function(player: Player, payload)
+		self:_onHitboxRequested(player, player, payload.ArcaneName, payload.CFrame)
 	end)
-	Magic.SweepHitboxRequested.On(function(player: Player, payload)
-		self:_onSweepHitboxRequested(player, player, payload.MagicName, payload.CFrame)
+	Arcane.SweepHitboxRequested.On(function(player: Player, payload)
+		self:_onSweepHitboxRequested(player, player, payload.ArcaneName, payload.CFrame)
 	end)
-	Magic.PersistentHitboxRequested.On(function(player: Player, payload)
-		self:_onPersistentHitboxRequested(player, player, payload.MagicName, payload.CFrame)
+	Arcane.PersistentHitboxRequested.On(function(player: Player, payload)
+		self:_onPersistentHitboxRequested(player, player, payload.ArcaneName, payload.CFrame)
 	end)
-	Magic.AuraAttackStart.On(function(player: Player)
+	Arcane.AuraAttackStart.On(function(player: Player)
 		self:_onAuraAttackStart(player)
 	end)
-	Magic.AuraAttackStop.On(function(player: Player)
+	Arcane.AuraAttackStop.On(function(player: Player)
 		self:_onAuraAttackStop(player)
 	end)
 

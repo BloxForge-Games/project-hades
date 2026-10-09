@@ -3,7 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local MagicService = require(ServerScriptService.Services.MagicService)
+local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
@@ -133,7 +133,7 @@ type RelicDropOptions = {
 local DropService = {
 	Name = "DropService",
 	Dependencies = {
-		MagicService,
+		ArcaneService,
 		RunEscrowService,
 		RelicService,
 		ArmorSetBonusService,
@@ -372,15 +372,15 @@ function DropService.Start(self: typeof(DropService))
 			local BASE_MANA_FRACTION = 0.1
 			local manaMultiplier = RelicService:GetRelicEffect(player, RelicNames["Gear Recycler"]) or 1
 
-			local magicData = MagicService:GetPlayerMagicData(player)
-			if not magicData then
-				return -- no magic data yet: nothing to restore into
+			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
+			if not arcaneData then
+				return -- no arcane data yet: nothing to restore into
 			end
-			local currentMana = magicData.mana
-			local maxMana = magicData.maxMana
+			local currentMana = arcaneData.mana
+			local maxMana = arcaneData.maxMana
 			local manaRestored = currentMana + (maxMana * BASE_MANA_FRACTION * manaMultiplier)
 
-			MagicService:SetPlayerMagicData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
+			ArcaneService:SetPlayerArcaneData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
 		elseif dropType == DropTypes.Health then
 			-- Ahead of the humanoid guard below: you picked the orb up, so the
 			-- flourish plays even in the edge case where the heal cannot.

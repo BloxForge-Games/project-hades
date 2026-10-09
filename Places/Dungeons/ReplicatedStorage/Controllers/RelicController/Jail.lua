@@ -23,7 +23,7 @@ end
 -- 		) * CFrame.Angles(0, math.rad(math.random(-45, 45)), 0)
 -- 	)
 -- 	jail.PrimaryPart.Transparency = 1
--- 	jail.Parent = workspace.IgnoreInstances.MagicSpells
+-- 	jail.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 -- 	TweenService:Create(jail.PrimaryPart, TweenInfo.new(2, Enum.EasingStyle.Cubic), {
 -- 		Transparency = 0,
@@ -70,7 +70,7 @@ function Jail:PlayEffect()
 	jail:ScaleTo(self.targetCharacter:GetScale())
 	jail:PivotTo(CFrame.new(self.targetCharacter.HumanoidRootPart.Position))
 	jail.PrimaryPart.Transparency = 1
-	jail.Parent = workspace.IgnoreInstances.MagicSpells
+	jail.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	TweenService:Create(jail.PrimaryPart, TweenInfo.new(2, Enum.EasingStyle.Cubic), {
 		Transparency = 0,
@@ -98,7 +98,7 @@ function Jail:PlayEffect()
 		if not self.targetCharacter or not self.targetCharacter:FindFirstChild("HumanoidRootPart") then
 			connection:Disconnect()
 			-- Only the completion path released the model; a target that
-			-- died mid-drop left it standing in MagicSpells forever.
+			-- died mid-drop left it standing in ArcaneSpells forever.
 			jail:Destroy()
 			return
 		end

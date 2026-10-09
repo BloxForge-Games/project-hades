@@ -41,7 +41,7 @@
 	model — and resolves FIVE layers through the same single Instance,
 	highest first: DEATH flash (red, LifeController), DAMAGE flash (red),
 	DODGE flash (white, perfect dodge), INVULNERABLE (white fill, on while
-	Attributes.Invulnerable is true -- jetpack, life loss, cutscene magic
+	Attributes.Invulnerable is true -- jetpack, life loss, cutscene arcane
 	-- ramped over INVULN_FADE_DURATION) and the occlusion outline. Every
 	one of those used to be its OWN Highlight parented to the character,
 	and Roblox renders one per adornee -- the most recently added -- so a
@@ -360,7 +360,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 
 	-- Ramp the invulnerable intensity toward the attribute (1 / 0). NOT
 	-- during ANY cutscene: a cinematic framed on your character should not
-	-- also paint it white. That covers the magic casts (Susanoo, Domain
+	-- also paint it white. That covers the arcane casts (Susanoo, Domain
 	-- Expansion), whose own presentation is the feedback, and the encounter
 	-- intro / landing / event beats, which grant no i-frames but can
 	-- overlap one. The glow comes up as the cutscene ends and covers the
@@ -368,7 +368,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	-- Highlight) applies the same rule to windows this client cannot see
 	-- locally; the local checks stay as the extra guard.
 	local inCutscene = character:GetAttribute(Attributes.CutscenePlaying) == true
-		or character:GetAttribute(Attributes.MagicCutscenePlaying) == true
+		or character:GetAttribute(Attributes.ArcaneCutscenePlaying) == true
 	local jetpackInvuln = character:GetAttribute(Attributes.Invulnerable) == true
 		and character:GetAttribute(Attributes.InvulnerableReason) == INVULN_REASON_JETPACK
 	local invulnTarget = if wantsInvulnerableHighlight(character) and (jetpackInvuln or not inCutscene) then 1 else 0

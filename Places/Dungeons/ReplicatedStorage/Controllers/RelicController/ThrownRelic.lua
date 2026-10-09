@@ -96,7 +96,7 @@ function ThrownRelic:PlayEffect()
 		handle.Transparency = 1
 		TweenService:Create(handle, TweenInfo.new(FADE_SECONDS, Enum.EasingStyle.Cubic), { Transparency = 0 }):Play()
 	end
-	model.Parent = workspace.IgnoreInstances.MagicSpells
+	model.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	local originPosition = self.position
 	local targetPosition = self.targetPosition
@@ -146,7 +146,7 @@ function ThrownRelic:PlayEffect()
 			if blastTemplate then
 				local explosionVFX = blastTemplate:Clone()
 				explosionVFX.CFrame = CFrame.new(targetPosition)
-				explosionVFX.Parent = workspace.IgnoreInstances.MagicSpells
+				explosionVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 				explosionVFX.Explosion.Volume = EXPLOSION_VOLUME
 				explosionVFX.Explosion2.Volume = EXPLOSION_VOLUME

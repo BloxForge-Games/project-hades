@@ -81,11 +81,11 @@ local TOMBSTONE_RISE_OFFSET = 5
 local SPAWN_DELAY_AFTER_FULL_DEATH = 2
 
 -- Where to parent the tombstone in the world tree. Falls back to
--- workspace if IgnoreInstances.MagicSpells isn't present yet.
+-- workspace if IgnoreInstances.ArcaneSpells isn't present yet.
 local function getTombstoneContainer(): Instance
 	local ignore = workspace:FindFirstChild("IgnoreInstances")
-	local magicSpells = ignore and ignore:FindFirstChild("MagicSpells")
-	return magicSpells or workspace
+	local arcaneSpells = ignore and ignore:FindFirstChild("ArcaneSpells")
+	return arcaneSpells or workspace
 end
 
 -- Raycast filter for the ground-finding raycast. Excludes the dying

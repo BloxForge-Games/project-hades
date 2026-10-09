@@ -203,7 +203,7 @@ end
 -- STONEBOUND_SPREAD_RADIUS, and plays the shockwave once on the source.
 --
 -- Called from SetAura on any SELF-grant of Stonebound, so it covers every
--- source the tree has (melee hit, takedown, magic cast) and any future one
+-- source the tree has (melee hit, takedown, arcane cast) and any future one
 -- for free.
 --
 -- `ownerPlayer` rides along on each grant for two reasons: recipients get

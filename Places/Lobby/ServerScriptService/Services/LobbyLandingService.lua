@@ -154,7 +154,7 @@ function LobbyLandingService._holdLandingPosition(
 end
 
 -- Same dust + sound as DungeonService:_onLandingImpact. The Dungeons place
--- parents the clone under IgnoreInstances.MagicSpells; the Lobby may not
+-- parents the clone under IgnoreInstances.ArcaneSpells; the Lobby may not
 -- have that folder, so fall back to IgnoreInstances, then workspace.
 function LobbyLandingService._onLandingImpact(_self: typeof(LobbyLandingService), player: Player)
 	local character = player.Character
@@ -171,7 +171,7 @@ function LobbyLandingService._onLandingImpact(_self: typeof(LobbyLandingService)
 	end
 
 	local ignoreInstances = workspace:FindFirstChild(IGNORE_INSTANCES_NAME)
-	local parent = (ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")) or ignoreInstances or workspace
+	local parent = (ignoreInstances and ignoreInstances:FindFirstChild("ArcaneSpells")) or ignoreInstances or workspace
 
 	local dodgeVFX = template:Clone()
 	dodgeVFX:PivotTo(CFrame.new(root.Position) - Vector3.new(0, 3, 0))

@@ -66,12 +66,12 @@ local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constant
 -- The spells the profile now has equipped, for the /wipedata reply. It
 -- reads the WIPED profile, so it shows what this server's template holds:
 -- an unexpected spell here means this server runs an older build.
-local function describeEquippedMagic(player: Player): string
+local function describeEquippedArcane(player: Player): string
 	local inventory = DataService:GetProfileData(player).Inventory
-	local magic = if type(inventory) == "table" then inventory[InventoryType.Magic] else nil
+	local arcane = if type(inventory) == "table" then inventory[InventoryType.Arcane] else nil
 	local equipped = {}
-	if type(magic) == "table" then
-		for _, entry in magic do
+	if type(arcane) == "table" then
+		for _, entry in arcane do
 			if type(entry) == "table" and type(entry.equipSlot) == "number" and entry.equipSlot >= 3 then
 				table.insert(equipped, ("%d: %s"):format(entry.equipSlot, tostring(entry.name)))
 			end
@@ -327,8 +327,8 @@ COMMANDS = {
 				end
 			end)
 
-			local equipped = describeEquippedMagic(player)
-			return ("Data wiped (magic %s). Kicking you so it reloads..."):format(equipped)
+			local equipped = describeEquippedArcane(player)
+			return ("Data wiped (arcane %s). Kicking you so it reloads..."):format(equipped)
 		end,
 	},
 

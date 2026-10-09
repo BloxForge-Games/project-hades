@@ -85,8 +85,8 @@ local HttpService = game:GetService("HttpService")
 
 -- Folder under workspace.IgnoreInstances where transient hitbox Models
 -- live during their hit-frame window. Picked to match other transient
--- VFX placement (existing MagicSpells folder).
-local HITBOX_PARENT = workspace.IgnoreInstances.MagicSpells
+-- VFX placement (existing ArcaneSpells folder).
+local HITBOX_PARENT = workspace.IgnoreInstances.ArcaneSpells
 
 -- Pending ranged-cast registry. Server records each fired cast here;
 -- the client-side handler (targeted player's client) calls back via
@@ -289,7 +289,7 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 					perfectDodgedPart.CFrame = part.CFrame
 					perfectDodgedPart.Anchored = true
 					perfectDodgedPart.CanCollide = false
-					perfectDodgedPart.Parent = workspace.IgnoreInstances.MagicSpells
+					perfectDodgedPart.Parent = workspace.IgnoreInstances.ArcaneSpells
 					Debris:AddItem(perfectDodgedPart, 2)
 
 					-- One credit per roll, relics + floater (_creditPerfectDodge).

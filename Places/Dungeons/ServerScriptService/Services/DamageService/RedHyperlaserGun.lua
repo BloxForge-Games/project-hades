@@ -17,7 +17,7 @@ local DamageService = require(script.Parent)
 type RelicSnapshot = DamageService.RelicSnapshot
 
 return function(_player: Player, snapshot: RelicSnapshot, damage: number, _isMagic: boolean)
-	-- No damage-type gate — the bonus applies to weapon AND magic; the
+	-- No damage-type gate — the bonus applies to weapon AND arcane; the
 	-- linear low-HP curve lives in the RelicData callback, read fresh on
 	-- every hit (the snapshot lists this relic as `live`, so RelicEffect
 	-- invokes the callback rather than a cached value).

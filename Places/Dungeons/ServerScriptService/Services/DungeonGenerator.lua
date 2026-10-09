@@ -480,7 +480,7 @@ end
 -- Moves every building Model in the chunk's "Buildings" folder into
 -- workspace.IgnoreInstances.Map.Buildings and gives it the static-building
 -- setup (CollisionGroupService:SetupBuilding: tags, collision group, Base
--- to Terrain). Magic with canBreakBuildings then breaks them through
+-- to Terrain). Arcane with canBreakBuildings then breaks them through
 -- VFXService's Destructable path, and BuildingTransparencyController fades
 -- their roofs, with no code that knows they came from a chunk.
 --

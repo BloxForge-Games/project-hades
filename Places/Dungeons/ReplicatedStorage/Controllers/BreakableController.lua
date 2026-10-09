@@ -156,7 +156,7 @@ function BreakableController.Start(self: typeof(BreakableController))
 
 		-- The HitFX sparks are melee-only. A bullet draws its own BulletImpact
 		-- where it landed, so a second burst here reads as a double impact.
-		-- Magic never fires this signal (it breaks the model outright), so
+		-- Arcane never fires this signal (it breaks the model outright), so
 		-- "not melee" here means a bullet. Highlight and shake still run.
 		if isMelee then
 			self:_playHitFX(buildTemplate, hitPosition)

@@ -7,7 +7,7 @@ local Debris = game:GetService("Debris")
 
 --[[
 	SCREEN EFFECTS ARE CLAIMED, NOT WRITTEN. The tint, Sukuna's theme and
-	the ambient shake all go through MagicAmbienceController under one
+	the ambient shake all go through ArcaneAmbienceController under one
 	claim id per cast, which means:
 	  * two domains produce ONE tint, ONE theme and ONE shake, and they
 	    lift only when the LAST domain ends -- the first one ending used to
@@ -28,11 +28,11 @@ local SUKUNA_THEME_START_TIME = 96
 local SUKUNA_THEME_VOLUME = 0.075
 
 local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
-local MagicAmbienceController = require(ReplicatedStorage.Controllers.MagicAmbienceController)
+local ArcaneAmbienceController = require(ReplicatedStorage.Controllers.ArcaneAmbienceController)
 local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 
 -- Both shakes go through the PRESET system (Shared/Data/CameraShakeData),
@@ -42,7 +42,7 @@ local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enum
 -- (CameraShakeController's overlay composes after it).
 local DOMAIN_AMBIENT_SHAKE = CameraShakePresets.DomainAmbient
 local DOMAIN_RISE_SHAKE = CameraShakePresets.Medium
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
@@ -77,7 +77,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 	local shrineModel = ReplicatedStorage.GameAssets.VFX:FindFirstChild("Domain Expansion").Shrine:Clone()
 	shrineModel:PivotTo(cframe * CFrame.Angles(0, math.rad(90), 0) + cframe.LookVector * -11 + Vector3.new(0, -15, 0))
-	shrineModel.Parent = workspace.IgnoreInstances.Map.MagicSpells
+	shrineModel.Parent = workspace.IgnoreInstances.Map.ArcaneSpells
 
 	shrineModel.AppearPart.Position = getRootPart(character).Position + Vector3.new(0, -5, 0)
 	shrineModel.AppearPart.Transparency = 1
@@ -114,7 +114,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					ReplicatedStorage.GameAssets.Sounds.DomainExpansionCast:Play()
 				end
 				-- "Domain Expansion..." / "...Malevolent Shrine!" are
-				-- MagicData.dialogue beats (PlayerDialogueInterface), timed
+				-- ArcaneData.dialogue beats (PlayerDialogueInterface), timed
 				-- to this script's waits.
 			end)
 			task.wait(1)
@@ -222,8 +222,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 
 				-- Tint + theme + shake, as ONE proximity claim (see the header).
-				if MagicAmbienceController then
-					MagicAmbienceController:ClaimAtPosition(ambienceId, {
+				if ArcaneAmbienceController then
+					ArcaneAmbienceController:ClaimAtPosition(ambienceId, {
 						tint = DOMAIN_TINT_COLOR,
 						music = {
 							soundName = SUKUNA_THEME_SOUND_NAME,
@@ -261,12 +261,12 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 			end
 
-			Magic.PersistentHitboxRequested.Fire({
-				MagicName = MagicNames["Domain Expansion"],
+			Arcane.PersistentHitboxRequested.Fire({
+				ArcaneName = ArcaneNames["Domain Expansion"],
 				CFrame = shrineModel.PrimaryPart.CFrame,
 			})
 
-			task.delay(MagicData[MagicNames["Domain Expansion"]].hitboxDuration, function()
+			task.delay(ArcaneData[ArcaneNames["Domain Expansion"]].hitboxDuration, function()
 				-- Wait few extra seconds to account for delay from cutscenes and dialogues
 				if player ~= Players.LocalPlayer then
 					task.wait(2.5)
@@ -275,8 +275,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				-- Tint / theme / shake let go together. Another domain still
 				-- running keeps all three: the controller only lifts an
 				-- effect when its LAST claim is released.
-				if MagicAmbienceController then
-					MagicAmbienceController:Release(ambienceId)
+				if ArcaneAmbienceController then
+					ArcaneAmbienceController:Release(ambienceId)
 				end
 
 				local slashes = shrineModel.PrimaryPart:FindFirstChild("Slashes")
@@ -318,14 +318,14 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 	if player == Players.LocalPlayer and not preload then
 		task.defer(function()
-			-- Via the MagicData index (which names the "DomainExpansion"
+			-- Via the ArcaneData index (which names the "DomainExpansion"
 			-- camera path), so the cutscene and the server's invulnerability
 			-- window read the same numbers.
-			CutsceneController:PlayMagicCutscene(MagicNames["Domain Expansion"])
+			CutsceneController:PlayArcaneCutscene(ArcaneNames["Domain Expansion"])
 		end)
 	end
 
-	task.delay(MagicData[MagicNames["Domain Expansion"]].duration, function()
+	task.delay(ArcaneData[ArcaneNames["Domain Expansion"]].duration, function()
 		domainExpansionAnimation:Stop()
 
 		-- Only if this cast still OWNS the slow: weaving a swing (or

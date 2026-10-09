@@ -90,7 +90,7 @@ local EncounterService = require(ServerScriptService.Services.EncounterService)
 local EnemyScalingService = require(ServerScriptService.Services.EnemyScalingService)
 local ExpRewardService = require(ServerScriptService.Services.ExpRewardService)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
-local MagicService = require(ServerScriptService.Services.MagicService)
+local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
@@ -101,12 +101,12 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
@@ -173,7 +173,7 @@ local BOMB_LIMIT_PER_RELIC = 15
 -- two relics differ in.
 type BombSpec = {
 	relicName: string,
-	magicName: string,
+	arcaneName: string,
 	-- How many bombs this takedown lobs. A closure rather than a maximum so
 	-- the Fuse Bomb's fixed 1 never touches the RNG, exactly as before.
 	rollBombCount: () -> number,
@@ -188,7 +188,7 @@ type BombSpec = {
 -- now, so this is what STARTS the Blaze chain rather than paying it off.
 local TRICK_OR_TRAP_BOMBS: BombSpec = {
 	relicName = RelicNames["Trick Or Trap"],
-	magicName = MagicNames["Pumpkin Explosion"],
+	arcaneName = ArcaneNames["Pumpkin Explosion"],
 	rollBombCount = function()
 		return math.random(1, 3)
 	end,
@@ -197,7 +197,7 @@ local TRICK_OR_TRAP_BOMBS: BombSpec = {
 		-- Damage bonuses scale the blast, typed relics/crits never apply.
 		-- Still rolls the WEAPON applier hub via onHitboxDamage
 		-- (isMagic = false).
-		onHitboxDamage(model, targetCFrame, killer, MagicData[MagicNames["Pumpkin Explosion"]], false, true)
+		onHitboxDamage(model, targetCFrame, killer, ArcaneData[ArcaneNames["Pumpkin Explosion"]], false, true)
 
 		-- "...and burning them": the blast applies Burn outright rather
 		-- than rolling for it, which is what lets Trick Or Trap open the
@@ -215,22 +215,22 @@ local TRICK_OR_TRAP_BOMBS: BombSpec = {
 -- machinery (its OWN BOMB_LIMIT_PER_RELIC counter, not one shared with the
 -- pumpkins), same hitbox — but ONE bomb per takedown (no 1-3 roll), the
 -- Fuse Bomb model (relicName rides the client payload), and the blast is
--- PLAIN damage: neither weapon nor magic — the raw path, no amplifiers /
+-- PLAIN damage: neither weapon nor arcane — the raw path, no amplifiers /
 -- crit / appliers (Summer Fireworks' recipe). No Burn either.
 local FUSE_BOMBS: BombSpec = {
 	relicName = RelicNames["Fuse Bomb"],
-	magicName = MagicNames["Fuse Bomb Explosion"],
+	arcaneName = ArcaneNames["Fuse Bomb Explosion"],
 	rollBombCount = function()
 		return 1
 	end,
 	onHit = function(killer, model, _targetCFrame)
 		-- UNTYPED relic lane (isRelicSourced): unqualified Damage bonuses
-		-- scale the blast; Weapon/Magic-typed relics and crits never apply.
+		-- scale the blast; Weapon/Arcane-typed relics and crits never apply.
 		local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
 		if not targetHumanoid or not DamageService then
 			return
 		end
-		local config = MagicData[MagicNames["Fuse Bomb Explosion"]]
+		local config = ArcaneData[ArcaneNames["Fuse Bomb Explosion"]]
 		local damageRoll = if config.runtimeDamageCallback then config.runtimeDamageCallback(killer) else config.damage
 		DamageService:TakeDamage(killer, targetHumanoid, damageRoll, false, false, false, true, true)
 	end,
@@ -312,7 +312,7 @@ local function _ensureLOSRaycastParams(): RaycastParams
 		workspace.IgnoreInstances.Boundaries,
 		workspace.IgnoreInstances.ActBarriers,
 		workspace.IgnoreInstances.CameraPoints,
-		workspace.IgnoreInstances.MagicSpells,
+		workspace.IgnoreInstances.ArcaneSpells,
 		workspace.IgnoreInstances.MapMarkers,
 		workspace.IgnoreInstances.Regions,
 		workspace.IgnoreInstances.Terrain,
@@ -1489,7 +1489,7 @@ function MobBase._lobBombs(self: MobBase, killer: Player, spec: BombSpec)
 
 	local groundPosition = snapToGround(self._rootPart.Position) or self._rootPart.Position
 	local cachedCFrame = CFrame.new(groundPosition) + Vector3.new(0, BOMB_REST_HEIGHT_STUDS, 0)
-	local magicName = spec.magicName
+	local arcaneName = spec.arcaneName
 
 	for _ = 1, spec.rollBombCount() do
 		task.spawn(function()
@@ -1511,7 +1511,7 @@ function MobBase._lobBombs(self: MobBase, killer: Player, spec: BombSpec)
 				TargetPosition = targetCFrame.Position,
 				StartTime = workspace:GetServerTimeNow(),
 				Duration = BOMB_FLIGHT_SECONDS,
-				MagicName = magicName,
+				ArcaneName = arcaneName,
 				RelicName = spec.relicName,
 			})
 
@@ -1526,7 +1526,7 @@ function MobBase._lobBombs(self: MobBase, killer: Player, spec: BombSpec)
 					(RelicService:GetRelicLimitRegistry(spec.relicName) or 0) - 1
 				)
 				VFXService:CreateHitbox(
-					magicName,
+					arcaneName,
 					killer,
 					targetCFrame,
 					TagList.Zombie,
@@ -1534,7 +1534,7 @@ function MobBase._lobBombs(self: MobBase, killer: Player, spec: BombSpec)
 					function(model: Model)
 						spec.onHit(killer, model, targetCFrame)
 					end,
-					MagicData[magicName].hitboxSize.X
+					ArcaneData[arcaneName].hitboxSize.X
 				)
 			end)
 		end)
@@ -1573,7 +1573,7 @@ function MobBase._runZombieBombCloud(self: MobBase, killer: Player)
 				part.CanTouch = false
 			end
 		end
-		cloud.Parent = workspace.IgnoreInstances.MagicSpells
+		cloud.Parent = workspace.IgnoreInstances.ArcaneSpells
 	else
 		warn("[MobBase] Missing ReplicatedStorage.GameAssets.VFX.PoisonCloud")
 	end
@@ -1586,8 +1586,8 @@ function MobBase._runZombieBombCloud(self: MobBase, killer: Player)
 			elapsed += ZOMBIE_BOMB_CLOUD_TICK_SECONDS
 
 			forEachEnemyInRadius(cloudPosition, ZOMBIE_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
-				-- Relic damage, NEUTRAL type (isMagic = false): no magic
-				-- amplifiers, no magic resist, white number — the same bucket
+				-- Relic damage, NEUTRAL type (isMagic = false): no arcane
+				-- amplifiers, no arcane resist, white number — the same bucket
 				-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
 				-- (isRelicSourced = true).
 				if DamageService and tickDamage > 0 then
@@ -1675,11 +1675,11 @@ function MobBase._handleAssists(self: MobBase)
 
 		-- Midnight Sword: takedowns restore 5% of Maximum Mana.
 		if RelicService:GetSpecificRelicRegistry(player, RelicNames["Midnight Sword"]) > 0 then
-			local magicData = MagicService:GetPlayerMagicData(player)
-			if magicData and magicData.maxMana and magicData.mana < magicData.maxMana then
+			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
+			if arcaneData and arcaneData.maxMana and arcaneData.mana < arcaneData.maxMana then
 				local refunded =
-					math.min(magicData.mana + magicData.maxMana * MIDNIGHT_SWORD_MANA_FRACTION, magicData.maxMana)
-				MagicService:SetPlayerMagicData(player, refunded, magicData.maxMana)
+					math.min(arcaneData.mana + arcaneData.maxMana * MIDNIGHT_SWORD_MANA_FRACTION, arcaneData.maxMana)
+				ArcaneService:SetPlayerArcaneData(player, refunded, arcaneData.maxMana)
 			end
 		end
 

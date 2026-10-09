@@ -16,7 +16,7 @@
 3. [Gameplay Loop](#3-gameplay-loop)
 4. [Player Systems](#4-player-systems)
 5. [Combat](#5-combat)
-6. [Magic System](#6-magic-system)
+6. [Arcane System](#6-arcane-system)
 7. [Relic System](#7-relic-system)
 8. [Enemy Design](#8-enemy-design)
 9. [Room & Dungeon Structure](#9-room--dungeon-structure)
@@ -29,7 +29,7 @@
 
 ## 1. Game Overview
 
-Project Hades is a co-op isometric roguelike on Roblox. Players clear rooms of zombies and supernatural enemies using a combination of weapons, magic spells, and passive relics that stack into powerful synergistic builds — inspired directly by Hades's boon system. Each run rewards players with relics from defeated rooms; no two runs feel identical.
+Project Hades is a co-op isometric roguelike on Roblox. Players clear rooms of zombies and supernatural enemies using a combination of weapons, arcane spells, and passive relics that stack into powerful synergistic builds — inspired directly by Hades's boon system. Each run rewards players with relics from defeated rooms; no two runs feel identical.
 
 The game blends:
 - **Roguelike itemization** (stackable relics with set bonuses)
@@ -44,7 +44,7 @@ The game blends:
 Relics are the heart of the game. With 22+ relics, each stackable up to 3–5 times, and set bonuses that unlock at max stacks, players build completely different characters across runs. A run might focus on crit-stacking with Silver Ninja Stars, sustain tanking with Cheeseburger + Riot Shield, or burst mana cycling with Korblox Spell Book + Overcharged aura.
 
 ### 2.2 Moment-to-Moment Combat Is Expressive
-Combat is not just "click enemy." The dodge system rewards timing (Perfect Dodge mechanic), weapons have multi-hit combos with precise hitbox windows, and magic abilities have meaningful cooldowns and positioning requirements. Players must choose *when* to commit to an attack and when to evade.
+Combat is not just "click enemy." The dodge system rewards timing (Perfect Dodge mechanic), weapons have multi-hit combos with precise hitbox windows, and arcane abilities have meaningful cooldowns and positioning requirements. Players must choose *when* to commit to an attack and when to evade.
 
 ### 2.3 Risk / Reward Escalation
 Each cleared room presents a relic machine (vending machine) offering new relics. Players spend coins earned from combat to acquire them. Building out toward a set bonus is a risk — spending coins on stacks of one relic means forgoing others.
@@ -68,7 +68,7 @@ Spawn → Clear Room → Collect Drops (coins/mana) → Relic Machine Appears
 ### 3.1 In-Room Loop
 1. Players enter a room; the `RoomService` registers their `ActiveRoom` attribute and fires entry bonuses (Pot of Gold coin grant, Teddy Bloxpin heal).
 2. Zombies spawn continuously up to a per-player cap (`MAX_ZOMBIE_COUNT_PER_PLAYER = 6`). Spawn locations are chosen within 60 studs of a random player.
-3. Players fight using weapons and magic.
+3. Players fight using weapons and arcane.
 4. When all zombies are eliminated, a relic machine drops at each player's position.
 5. Players spend coins to buy relics, then move to the next room.
 
@@ -111,8 +111,8 @@ Starting coins: 100. Starting gems: 25.
 |------|-----|---------|
 | Primary Weapon | 1 | Melee or ranged |
 | Secondary Weapon | 2 | Melee or ranged |
-| Magic Slot A | 3 | Spell |
-| Magic Slot B | 4 | Spell |
+| Arcane Slot A | 3 | Spell |
+| Arcane Slot B | 4 | Spell |
 
 ### 4.4 Dodge
 
@@ -126,7 +126,7 @@ Starting coins: 100. Starting gems: 25.
 
 | Condition | Source | Effect |
 |-----------|--------|--------|
-| Burn | Fire Blast magic | 5 ticks over 5 seconds: `clamp(maxHP × 2.5%, 1, level × 25)` per tick |
+| Burn | Fire Blast arcane | 5 ticks over 5 seconds: `clamp(maxHP × 2.5%, 1, level × 25)` per tick |
 | Slowed | Aura system | Reduced walk speed |
 
 ---
@@ -186,7 +186,7 @@ Heavy hits and certain relics/spells can ragdoll enemies and players:
 
 ---
 
-## 6. Magic System
+## 6. Arcane System
 
 ### 6.1 Overview
 
@@ -210,7 +210,7 @@ Mana regenerates passively and via the Korblox Spell Book relic (weapon hits res
 
 Domain Expansion and Susanoo Armor trigger client-side cutscenes (camera transitions, animation sequences) before the ability activates, creating a cinematic moment in the midst of combat.
 
-### 6.4 Relic-Triggered Magic (Internal)
+### 6.4 Relic-Triggered Arcane (Internal)
 
 These are not player-equipped spells — they fire automatically from relic procs:
 
@@ -246,13 +246,13 @@ A player is only offered relics that still have available stacks (their pool exc
 
 | Relic | Effect per Stack | Set Bonus (max stacks) |
 |-------|-----------------|----------------------|
-| Bloxy Cola | -10% magic cooldown | TBD |
+| Bloxy Cola | -10% arcane cooldown | TBD |
 | Cheeseburger | +25 max HP | TBD |
 | Teddy Bloxpin | +3% max HP heal on room entry | TBD |
 | Fluffy Unicorn | +10% damage vs Minibosses/Bosses | TBD |
 | Gear Recycler | +10% mana orb drop chance | Spellburst aura on mana orb pickup |
 | Phoenix Bow | +15% damage to distant targets | TBD |
-| Wizard Orb | +20% magic damage | TBD |
+| Wizard Orb | +20% arcane damage | TBD |
 | Hyperlaser Gun | +10% damage when above 85% HP | Damage bonus threshold drops to 65% |
 | Linked Sword | +10% weapon damage | Frenzy aura on kill/assist |
 | Murder Knife | +20% damage to nearby enemies | TBD |
@@ -282,7 +282,7 @@ Auras are temporary, visually distinct buff states triggered by relic set bonuse
 |------|---------|----------|--------|
 | Frenzy | Linked Sword ×5 — kill or assist | 10s | Damage boost (via DamageService modifier) |
 | Spellburst | Gear Recycler ×5 — mana orb pickup | 10s | Magic damage boost |
-| Overcharged | Korblox Spell Book ×3 — full mana | Until mana depleted | Magic power enhanced |
+| Overcharged | Korblox Spell Book ×3 — full mana | Until mana depleted | Arcane power enhanced |
 | Slowed | Various enemy/status effects | Variable | Walk speed reduced |
 
 ---
@@ -353,14 +353,14 @@ workspace/
   Boundaries/         -- Map edge colliders
   Walls/              -- Transparent-on-approach walls
   Terrain/            -- Roblox terrain
-  MagicSpells/        -- Active spell instances
+  ArcaneSpells/        -- Active spell instances
   IgnoreInstances/
     Zombies/          -- Live zombie models
 ```
 
 ### 9.4 Camera
 
-The game uses a **fixed isometric camera** (not the default Roblox follow cam) implemented via a custom `IsometricCamera` library. Jump power is set to 0 — no jumping; the camera framing would break. The camera supports shake (CameraShaker) on hits and magic casts.
+The game uses a **fixed isometric camera** (not the default Roblox follow cam) implemented via a custom `IsometricCamera` library. Jump power is set to 0 — no jumping; the camera framing would break. The camera supports shake (CameraShaker) on hits and arcane casts.
 
 Walls and buildings between the camera and the player **auto-become transparent** (WallsTransparencyController, BuildingTransparencyController) to keep the player visible at all times.
 
@@ -390,7 +390,7 @@ Walls and buildings between the camera and the player **auto-become transparent*
 | TotalExp | int | 100 |
 | Level | int | 1 |
 | Weapon inventory | table | {} |
-| Magic inventory | table | {} |
+| Arcane inventory | table | {} |
 | Pets | table | {} |
 | Cosmetics | table | {} |
 | Missions | table | {} |
@@ -399,7 +399,7 @@ DataStore key: `TestData-098` (test key; must change before production launch).
 
 ### 10.3 Item Schema
 
-Each weapon/magic item stores:
+Each weapon/arcane item stores:
 - `name` — item identifier
 - `level` — item upgrade level
 - `equipSlot` — which slot it occupies
@@ -429,7 +429,7 @@ All UI is built with **React (Lua port) + ReactRoblox**, mounted by Blitz interf
 | Text Indicators | Status events (Perfect Dodge!, Burned!, etc.) | Billboard text |
 | Drop Indicators | Pickup spawns | 3D icon showing pickup type |
 | User Notifications | System events (room clear, event starts) | Toast notification |
-| Camera Shake | Taking damage, casting magic | Screen trauma shake |
+| Camera Shake | Taking damage, casting arcane | Screen trauma shake |
 | AfterImage | Dodging | Ghost trail on character |
 
 ### 11.3 Mobile Support

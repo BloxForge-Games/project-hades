@@ -9,7 +9,7 @@
 	                     fraction (BonusHealthPercent attribute — the
 	                     relic/rune HP sum PlayerStatsService stamps).
 	  Blue Laser Scythe  your bonus MAXIMUM MANA percentage joins the
-	                     MAGIC side the same way (BonusManaPercent — the
+	                     ARCANE side the same way (BonusManaPercent — the
 	                     mana-rune sum).
 
 	Returns BONUS damage (damage x fraction) for the orchestrator's

@@ -113,14 +113,14 @@ return function(
 		end
 	end
 
-	projectile.Parent = workspace.IgnoreInstances.MagicSpells
+	projectile.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Optional muzzle flash at the cast origin. Cheap and adds polish.
 	local castFXTemplate = vfxFolder:FindFirstChild("CastFX")
 	if castFXTemplate then
 		local castFX = castFXTemplate:Clone()
 		castFX:PivotTo(originCFrame)
-		castFX.Parent = workspace.IgnoreInstances.MagicSpells
+		castFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 		for _, descendant in castFX:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") then
 				descendant:Emit(25)
@@ -224,7 +224,7 @@ return function(
 		end
 
 		-- Move forward by speed * tickInterval along the initial
-		-- direction. Straight-line, no drop — this is a magic
+		-- direction. Straight-line, no drop — this is a arcane
 		-- fireball, not a thrown rock.
 		local previousPosition = projectile:GetPivot().Position
 		local moveStep = direction * speed * TICK_INTERVAL
@@ -335,7 +335,7 @@ return function(
 	-- if explosionTemplate then
 	-- 	local explosion = explosionTemplate:Clone()
 	-- 	explosion:PivotTo(CFrame.new(impactPosition))
-	-- 	explosion.Parent = workspace.IgnoreInstances.MagicSpells
+	-- 	explosion.Parent = workspace.IgnoreInstances.ArcaneSpells
 	-- 	for _, descendant in explosion:GetDescendants() do
 	-- 		if descendant:IsA("ParticleEmitter") then
 	-- 			descendant:Emit(25)

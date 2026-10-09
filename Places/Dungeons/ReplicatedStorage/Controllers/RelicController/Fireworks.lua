@@ -45,7 +45,7 @@ function Fireworks:PlayEffect()
 
 	fireworks.PrimaryPart.RelicParticleAttachment:Destroy()
 
-	fireworks.Parent = workspace.IgnoreInstances.MagicSpells
+	fireworks.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	local connection
 
@@ -95,7 +95,7 @@ function Fireworks:PlayEffect()
 
 			local explosionVFX = ReplicatedStorage.GameAssets.VFX["Fireworks Explosion"].Explosion:Clone()
 			explosionVFX:PivotTo(CFrame.new(targetRoot.Position))
-			explosionVFX.Parent = workspace.IgnoreInstances.MagicSpells
+			explosionVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 			explosionVFX.Explosion:Play()
 

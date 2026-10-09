@@ -168,7 +168,7 @@ function ExitGateWindService._placeWind(
 	end
 
 	wind:PivotTo(gate.CFrame + Vector3.new(0, -5.75, 0))
-	wind.Parent = workspace.IgnoreInstances.MagicSpells
+	wind.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	table.insert(self._winds, { model = wind, room = room, destination = destination })
 end

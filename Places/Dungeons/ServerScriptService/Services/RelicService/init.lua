@@ -173,7 +173,7 @@ RelicService.Signals = {
 --[ Private Functions ]--
 
 -- Destroys the player's Ghost Dragon visual if it exists. The part lives at
--- workspace.IgnoreInstances.MagicSpells.GhostDragon_<userId> (parented there
+-- workspace.IgnoreInstances.ArcaneSpells.GhostDragon_<userId> (parented there
 -- — instead of under the character — so Model:PivotTo on the character can't
 -- mangle its rotation during encounter teleports). Because it's outside the
 -- character tree, it does NOT get destroyed on character respawn the way a
@@ -182,11 +182,11 @@ RelicService.Signals = {
 -- fresh HRP) and on PlayerRemoving.
 function RelicService._cleanupGhostDragon(_self: typeof(RelicService), userId: number)
 	local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
-	local magicSpells = ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")
-	if not magicSpells then
+	local arcaneSpells = ignoreInstances and ignoreInstances:FindFirstChild("ArcaneSpells")
+	if not arcaneSpells then
 		return
 	end
-	local part = magicSpells:FindFirstChild("GhostDragon_" .. userId)
+	local part = arcaneSpells:FindFirstChild("GhostDragon_" .. userId)
 	if part then
 		part:Destroy()
 	end
@@ -315,7 +315,7 @@ end
 -- check, so calling this on every perfect dodge is always safe.
 --
 -- Attack Doge USED to flag DamageService for a forced crit on the
--- next non-magic hit, and later became a target-HP damage module.
+-- next non-arcane hit, and later became a target-HP damage module.
 -- Both designs were scrapped — it is now a crit-chance relic whose
 -- Adrenaline proc rides DamageService:_postDamage's `wasCrit`, so it
 -- needs no perfect-dodge hook either way.
@@ -340,7 +340,7 @@ function RelicService.OnPlayerPerfectDodged(self: typeof(RelicService), player: 
 
 	-- The element rework removed the other perfect-dodge relics (Speedy
 	-- Shoes' Adrenaline died with that aura; Robloxian Battle Shield now
-	-- procs on MAGIC USE via VFXService -> ShieldService).
+	-- procs on ARCANE USE via VFXService -> ShieldService).
 end
 
 -- Server-side effective BASE walkspeed — the authoritative mirror of
@@ -555,7 +555,7 @@ function RelicService.PlayRelicRemovedFX(_self: typeof(RelicService), player: Pl
 		shockwave.CanQuery = false
 	end
 	shockwave:PivotTo(hrp.CFrame)
-	shockwave.Parent = workspace.IgnoreInstances.MagicSpells
+	shockwave.Parent = workspace.IgnoreInstances.ArcaneSpells
 	-- Parent FIRST, burst SECOND — :Emit on an unparented emitter is
 	-- silently discarded.
 	for _, descendant in shockwave:GetDescendants() do

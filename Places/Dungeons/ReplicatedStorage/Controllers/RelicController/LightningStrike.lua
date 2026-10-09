@@ -4,7 +4,7 @@
 	Throwing Bolts (Epic) — the Lightning Strike that lands when a Critical
 	Hit connects with a Shocked enemy.
 
-	The VFX is a duplicate of the "Lighting Shatter" magic spell's model
+	The VFX is a duplicate of the "Lighting Shatter" arcane spell's model
 	(GroundImpact / Impact / Lightning / Starter, same child names), scaled
 	down and recoloured purple, so this plays it with the SAME emit cadence,
 	sounds and cleanup as Client/Controllers/VFXController/LightingShatter —
@@ -48,7 +48,7 @@ function LightningStrike:PlayEffect()
 	-- Scale is baked into the asset (0.451) — don't ScaleTo here, or tuning
 	-- the model in Studio stops taking effect.
 	strike:PivotTo(CFrame.new(self.position))
-	strike.Parent = workspace.IgnoreInstances.MagicSpells
+	strike.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Starter first, then everything else a beat later — the two-stage burst
 	-- is what makes the bolt read as descending rather than popping at once.

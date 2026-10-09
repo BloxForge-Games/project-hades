@@ -4,10 +4,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
 local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
@@ -46,10 +46,10 @@ return function(player: Player, preload: boolean, _: CFrame)
 		end)
 	end
 
-	local divergentFistRight = ReplicatedStorage.GameAssets.VFX[MagicNames["Divergent Fist"]].Fists:Clone()
+	local divergentFistRight = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Divergent Fist"]].Fists:Clone()
 	divergentFistRight.Parent = character:FindFirstChild("Right Arm")
 
-	local divergentFistLeft = ReplicatedStorage.GameAssets.VFX[MagicNames["Divergent Fist"]].Fists:Clone()
+	local divergentFistLeft = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Divergent Fist"]].Fists:Clone()
 	divergentFistLeft.Parent = character:FindFirstChild("Left Arm")
 
 	if not preload then
@@ -67,17 +67,17 @@ return function(player: Player, preload: boolean, _: CFrame)
 
 	task.delay(0.9, function()
 		local hitboxCFrame = getRootPart(character).CFrame
-			+ getRootPart(character).CFrame.LookVector * MagicData[MagicNames["Divergent Fist"]].range
+			+ getRootPart(character).CFrame.LookVector * ArcaneData[ArcaneNames["Divergent Fist"]].range
 		impactCFrame = hitboxCFrame
 		if player == Players.LocalPlayer and not preload then
-			Magic.HitboxRequested.Fire({ MagicName = MagicNames["Divergent Fist"], CFrame = hitboxCFrame })
+			Arcane.HitboxRequested.Fire({ ArcaneName = ArcaneNames["Divergent Fist"], CFrame = hitboxCFrame })
 		end
 	end)
 
 	task.delay(1, function()
 		local divergentFistExplosion =
-			ReplicatedStorage.GameAssets.VFX[MagicNames["Divergent Fist"]].ExplosionFX:Clone()
-		divergentFistExplosion.Parent = workspace.IgnoreInstances.MagicSpells
+			ReplicatedStorage.GameAssets.VFX[ArcaneNames["Divergent Fist"]].ExplosionFX:Clone()
+		divergentFistExplosion.Parent = workspace.IgnoreInstances.ArcaneSpells
 		divergentFistExplosion:PivotTo(getRootPart(character).CFrame + getRootPart(character).CFrame.LookVector * 5)
 
 		if not preload then

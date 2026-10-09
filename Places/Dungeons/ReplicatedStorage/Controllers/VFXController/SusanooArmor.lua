@@ -3,17 +3,17 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
-local MagicAmbienceController = require(ReplicatedStorage.Controllers.MagicAmbienceController)
+local ArcaneAmbienceController = require(ReplicatedStorage.Controllers.ArcaneAmbienceController)
 
--- The screen tint is CLAIMED through MagicAmbienceController, not written
+-- The screen tint is CLAIMED through ArcaneAmbienceController, not written
 -- to Lighting here: one global property cannot be owned by two casts, and
 -- writing it directly meant a Susanoo landing inside a Domain Expansion
 -- repainted the screen and then handed it back to the AUTHORED grade
 -- rather than to the domain that still owned it. First claim holds.
 local SUSANOO_TINT_COLOR = Color3.fromRGB(217, 156, 255)
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
@@ -22,7 +22,7 @@ local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.V
 -- attachment emitters carry their own EmitCount / EmitDelay /
 -- EmitDuration (emitVFXPart reads them). Played on every client ON THE
 -- SAME FRAME the server's CastPart lands: the server clones that part
--- into IgnoreInstances.MagicSpells at the caster's root once the rig
+-- into IgnoreInstances.ArcaneSpells at the caster's root once the rig
 -- has risen (VFXServer/SusanooArmor), and it reaches each client a
 -- replication hop later, so a fixed delay here always drifted from it.
 -- This watches the folder for a CastPart arriving within
@@ -46,7 +46,7 @@ return function(player: Player, preload: boolean?)
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooArmorAnimation")
 	)
 
-	-- The cast line ("I'll show you my true power.") is MagicData.dialogue,
+	-- The cast line ("I'll show you my true power.") is ArcaneData.dialogue,
 	-- played by PlayerDialogueInterface off the cast replication.
 
 	susanooAnimation:Play()
@@ -57,7 +57,7 @@ return function(player: Player, preload: boolean?)
 
 		-- Spawn burst, on the CastPart's own frame (see SPAWN_VFX_PATH).
 		local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
-		local spellsFolder = ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")
+		local spellsFolder = ignoreInstances and ignoreInstances:FindFirstChild("ArcaneSpells")
 		local burstPlayed = false
 		local castPartWatch: RBXScriptConnection? = nil
 		local function playSpawnBurst(at: CFrame)
@@ -100,28 +100,28 @@ return function(player: Player, preload: boolean?)
 
 	if player == Players.LocalPlayer and not preload then
 		task.defer(function()
-			-- MagicData.cutscene names the "Susanoo" camera path (two
+			-- ArcaneData.cutscene names the "Susanoo" camera path (two
 			-- waypoints pivoted to the caster, GameAssets.CutsceneWaypoints
 			-- .SusanooWaypoints). Going through the data index rather than
 			-- PlayCutscene directly keeps the camera move and the server's
 			-- invulnerability window reading the same numbers.
-			CutsceneController:PlayMagicCutscene(MagicNames["Susanoo Armor"])
+			CutsceneController:PlayArcaneCutscene(ArcaneNames["Susanoo Armor"])
 		end)
 
 		-- The viewer's OWN Susanoo, so no proximity: it is on their body.
 		local ambienceId = ("Susanoo_%d_%s"):format(player.UserId, tostring(os.clock()))
-		if MagicAmbienceController then
-			MagicAmbienceController:Claim(ambienceId, { tint = SUSANOO_TINT_COLOR })
+		if ArcaneAmbienceController then
+			ArcaneAmbienceController:Claim(ambienceId, { tint = SUSANOO_TINT_COLOR })
 		end
 
-		task.delay(MagicData[MagicNames["Susanoo Armor"]].lifetime + 0.1, function()
-			if MagicAmbienceController then
-				MagicAmbienceController:Release(ambienceId)
+		task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime + 0.1, function()
+			if ArcaneAmbienceController then
+				ArcaneAmbienceController:Release(ambienceId)
 			end
 		end)
 	end
 
-	task.delay(MagicData[MagicNames["Susanoo Armor"]].duration, function()
+	task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/

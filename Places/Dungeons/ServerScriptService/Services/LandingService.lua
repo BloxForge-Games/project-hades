@@ -411,7 +411,7 @@ function LandingService._onLandingImpact(_self: typeof(LandingService), player: 
 
 	local dodgeVFX = ReplicatedStorage.GameAssets.VFX.Dodge.Dodge:Clone()
 	dodgeVFX:PivotTo(CFrame.new(root.Position) - Vector3.new(0, 3, 0))
-	dodgeVFX.Parent = workspace.IgnoreInstances.MagicSpells
+	dodgeVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	for _, particle in dodgeVFX.Part.Attachment:GetChildren() do
 		if particle:IsA("ParticleEmitter") then

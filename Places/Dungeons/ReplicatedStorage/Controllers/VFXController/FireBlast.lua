@@ -4,10 +4,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
 local IgnoreListController = require(ReplicatedStorage.Controllers.IgnoreListController)
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
@@ -45,24 +45,24 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			Debris:AddItem(fireBlastSound, 5)
 		end
 
-		local castFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Fire Blast"]].CastFX:Clone()
+		local castFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Fire Blast"]].CastFX:Clone()
 		castFX:PivotTo(cframe + Vector3.new(0, 1, 0))
-		castFX.Parent = workspace.IgnoreInstances.MagicSpells
+		castFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		local projectile = castFX
 
 		local overlapParams = OverlapParams.new()
-		overlapParams.FilterDescendantsInstances = IgnoreListController:GetMagicSpellIgnoreList()
+		overlapParams.FilterDescendantsInstances = IgnoreListController:GetArcaneSpellIgnoreList()
 		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
-		for _ = 0, MagicData[MagicNames["Fire Blast"]].travelDistance, 0.35 do
+		for _ = 0, ArcaneData[ArcaneNames["Fire Blast"]].travelDistance, 0.35 do
 			task.wait(0.01)
 
 			projectile.CFrame = projectile.CFrame + projectile.CFrame.LookVector * 1
 
 			local partsArray = workspace:GetPartBoundsInRadius(
 				projectile.Position,
-				MagicData[MagicNames["Fire Blast"]].triggerRange,
+				ArcaneData[ArcaneNames["Fire Blast"]].triggerRange,
 				overlapParams
 			)
 
@@ -72,11 +72,11 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end
 
 		if player == Players.LocalPlayer and not preload then
-			Magic.HitboxRequested.Fire({ MagicName = MagicNames["Fire Blast"], CFrame = projectile.CFrame })
+			Arcane.HitboxRequested.Fire({ ArcaneName = ArcaneNames["Fire Blast"], CFrame = projectile.CFrame })
 		end
 
-		local fireBlastExplosionVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Fire Blast"]].ExplosionFX:Clone()
-		fireBlastExplosionVFX.Parent = workspace.IgnoreInstances.MagicSpells
+		local fireBlastExplosionVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Fire Blast"]].ExplosionFX:Clone()
+		fireBlastExplosionVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 		fireBlastExplosionVFX.CFrame = projectile.CFrame
 
 		if not preload then

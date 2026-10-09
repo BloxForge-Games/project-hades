@@ -14,8 +14,8 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local onDamageIndicator = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Highlight.onDamageIndicator)
 local HighlightIndicators = require(ReplicatedStorage.Submodules.Core.Shared.Enums.HighlightIndicators)
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
-local isMagicCutscenePlaying =
-	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Cutscene.isMagicCutscenePlaying)
+local isArcaneCutscenePlaying =
+	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Cutscene.isArcaneCutscenePlaying)
 local playHitBurst = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.playHitBurst)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
@@ -75,7 +75,7 @@ local CRIT_JITTER_DEGREES = 10
 -- One crit number mid-rattle: its label and when the rattle began.
 type CritJitter = { label: TextLabel, startedAt: number }
 
--- Impact size-pulse for WEAPON / MAGIC hit numbers (status DoT ticks skip
+-- Impact size-pulse for WEAPON / ARCANE hit numbers (status DoT ticks skip
 -- it — they're a steady readout, not an impact). Two beats: overshoot, then
 -- settle — "big, then small" — while the existing upward drift + fade run
 -- on top unchanged.
@@ -305,9 +305,9 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		local isMelee = payload.IsMelee
 		local resistKind = payload.ResistKind
 		local isStatus = payload.IsStatus
-		-- Magic cutscene: DROPPED, not deferred (see
+		-- Arcane cutscene: DROPPED, not deferred (see
 		-- TextIndicatorController for why nothing is deferred).
-		if isMagicCutscenePlaying() then
+		if isArcaneCutscenePlaying() then
 			return
 		end
 
@@ -350,7 +350,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		textLabel.UIStroke.Color = Color3.fromRGB(0, 0, 0)
 
 		-- Critical: bigger frame (TextScaled = bigger text) and the crit
-		-- gold. Gold wins over the damage-type colour (magic purple /
+		-- gold. Gold wins over the damage-type colour (arcane purple /
 		-- resist grey) — "this was a crit" is the louder signal to read
 		-- at a glance; the type is still carried by the hit VFX tint.
 		if critical then
@@ -390,10 +390,10 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		textLabel.AnchorPoint = Vector2.new(0.5, 0.5)
 		textLabel.Position = UDim2.fromScale(0.5, 0.5)
 
-		damageIndicator.Parent = workspace.IgnoreInstances.MagicSpells
+		damageIndicator.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		-- Size-in on the LABEL only, as a scale of the fixed frame.
-		-- Weapon / magic hits get the impact PULSE (overshoot past full
+		-- Weapon / arcane hits get the impact PULSE (overshoot past full
 		-- size, then settle to full); status ticks keep the plain grow-in
 		-- from small to full.
 		local fullSize = UDim2.fromScale(1, 1)

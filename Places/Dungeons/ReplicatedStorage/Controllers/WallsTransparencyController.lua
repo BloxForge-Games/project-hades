@@ -77,7 +77,7 @@ local WallsTransparencyController = {
 	_originalPartTransparencies = {} :: { [BasePart]: number },
 	_originalTextureTransparencies = {} :: { [Texture | Decal]: number },
 	-- Spell VFX props (the Domain Expansion shrine, IgnoreInstances.Map
-	-- .MagicSpells). They animate their OWN transparency, and this
+	-- .ArcaneSpells). They animate their OWN transparency, and this
 	-- system's capture-once "original" would fight that; per design the
 	-- character highlight is enough to keep you readable when you walk
 	-- under one -- which is also why they stay OUT of the shared ignore
@@ -270,7 +270,7 @@ end
 function WallsTransparencyController.Start(self: typeof(WallsTransparencyController))
 	local ignoreFolder = workspace:FindFirstChild("IgnoreInstances")
 	local map = ignoreFolder and ignoreFolder:FindFirstChild("Map")
-	self._spellPropsFolder = map and map:FindFirstChild("MagicSpells")
+	self._spellPropsFolder = map and map:FindFirstChild("ArcaneSpells")
 
 	-- The fades ride the shared pass, whichever character is alive: the
 	-- pass resolves the character itself, so nothing here re-binds on

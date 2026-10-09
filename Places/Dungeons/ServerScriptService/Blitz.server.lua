@@ -19,7 +19,7 @@ local clockOffset: number = os.clock()
 -- Every Blink server module is required up front so its remotes exist in
 -- THIS place before any client asks for them, whether or not the service
 -- that fires them is mounted here (the Lobby has no casts, but its clients
--- still load the Magic client module).
+-- still load the Arcane client module).
 for _, network in ServerScriptService.Submodules.Core.Source.Network:GetChildren() do
 	if network:IsA("ModuleScript") then
 		require(network)

@@ -21,7 +21,7 @@ local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 
 -- AimController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -43,14 +43,14 @@ local function getCastModeController(): any
 	return castModeControllerLazy
 end
 
--- MagicController requires this module at load, so this side reaches it
+-- ArcaneController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
-local magicControllerLazy: any = nil
-local function getMagicController(): any
-	if magicControllerLazy == nil then
-		magicControllerLazy = (require :: any)(ReplicatedStorage.Controllers.MagicController)
+local arcaneControllerLazy: any = nil
+local function getArcaneController(): any
+	if arcaneControllerLazy == nil then
+		arcaneControllerLazy = (require :: any)(ReplicatedStorage.Controllers.ArcaneController)
 	end
-	return magicControllerLazy
+	return arcaneControllerLazy
 end
 local getEffectiveBaseWalkSpeed =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveBaseWalkSpeed)
@@ -70,7 +70,7 @@ local PlayerStateController = {
 --
 -- Every action / movement lock in this game is a "set now, restore a
 -- moment later" pair owned by some other system: dodge sets IsDodging and
--- clears it at dodge end, a cast sets MagicEnabled and clears it after the
+-- clears it at dodge end, a cast sets ArcaneEnabled and clears it after the
 -- spell duration, a swing drops WalkSpeed and restores it when the swing
 -- animation finishes, the server flips MeleeWeaponEnabled off during a
 -- swing and back on after the hitbox delay, and so on. Any of those
@@ -140,16 +140,16 @@ local WATCHDOG_CUTSCENE_STUCK_SECONDS = 30 -- boss/miniboss cutscenes run long
 -- spare; a player who has stopped attacking clears it in one breath.
 local WATCHDOG_ATTACK_GRACE_SECONDS = 2
 
--- MagicEnabled legitimately stays true for the spell's full duration
--- (MagicController clears it after `duration`), so its threshold is the
--- LONGEST authored duration plus margin, read from MagicData rather than
+-- ArcaneEnabled legitimately stays true for the spell's full duration
+-- (ArcaneController clears it after `duration`), so its threshold is the
+-- LONGEST authored duration plus margin, read from ArcaneData rather than
 -- guessed here — a new long spell can't silently start getting cut off.
-local WATCHDOG_MAGIC_MARGIN_SECONDS = 2
+local WATCHDOG_ARCANE_MARGIN_SECONDS = 2
 local function longestSpellDuration(): number
 	local longest = 0
-	for _, magicIndex in MagicData do
-		if typeof(magicIndex) == "table" and typeof(magicIndex.duration) == "number" then
-			longest = math.max(longest, magicIndex.duration)
+	for _, arcaneIndex in ArcaneData do
+		if typeof(arcaneIndex) == "table" and typeof(arcaneIndex.duration) == "number" then
+			longest = math.max(longest, arcaneIndex.duration)
 		end
 	end
 	return longest
@@ -181,7 +181,7 @@ function PlayerStateController.AimActionEnabled(_self: typeof(PlayerStateControl
 		or player.Character and player.Character:FindFirstChild(ValueNames.RagdollTrigger) and player.Character:FindFirstChild(
 			ValueNames.RagdollTrigger
 		).Value == true
-		or player.Character and player.Character:GetAttribute(Attributes.MagicEnabled) == true
+		or player.Character and player.Character:GetAttribute(Attributes.ArcaneEnabled) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.CutscenePlaying) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.Death) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.TalkingToNPC) == true
@@ -194,7 +194,7 @@ end
 
 function PlayerStateController.GeneralActionEnabled(_self: typeof(PlayerStateController)): boolean
 	if
-		Players.LocalPlayer.Character:GetAttribute(Attributes.MagicEnabled) == true
+		Players.LocalPlayer.Character:GetAttribute(Attributes.ArcaneEnabled) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.IsDodging) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.CutscenePlaying) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.Death) == true
@@ -214,7 +214,7 @@ end
 
 function PlayerStateController.ToolBarActionEnabled(_self: typeof(PlayerStateController)): boolean
 	if
-		Players.LocalPlayer.Character:GetAttribute(Attributes.MagicEnabled) == true
+		Players.LocalPlayer.Character:GetAttribute(Attributes.ArcaneEnabled) == true
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.Death) == true
 	then
 		return false
@@ -267,7 +267,7 @@ end
 local function movementLegitimatelyLocked(character: Model): boolean
 	if
 		character:GetAttribute(Attributes.IsDodging) == true
-		or character:GetAttribute(Attributes.MagicEnabled) == true
+		or character:GetAttribute(Attributes.ArcaneEnabled) == true
 		or character:GetAttribute(Attributes.CutscenePlaying) == true
 		or character:GetAttribute(Attributes.Death) == true
 		-- A running weapon attack loop (held mouse / held mobile shoot
@@ -370,7 +370,7 @@ end
 -- own first-seen bookkeeping. Required for anything that can flicker
 -- between polls (see the watchdog header).
 function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateController)): { WatchdogCheck }
-	local magicThreshold = math.max(WATCHDOG_STUCK_SECONDS, longestSpellDuration() + WATCHDOG_MAGIC_MARGIN_SECONDS)
+	local arcaneThreshold = math.max(WATCHDOG_STUCK_SECONDS, longestSpellDuration() + WATCHDOG_ARCANE_MARGIN_SECONDS)
 
 	local function attributeStuckTrue(attribute: string, threshold: number): WatchdogCheck
 		return {
@@ -388,7 +388,7 @@ function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateCont
 	return {
 		-- Client-owned gate attributes whose delayed clear was lost.
 		attributeStuckTrue(Attributes.IsDodging, WATCHDOG_STUCK_SECONDS), -- dodges end in < 1s
-		attributeStuckTrue(Attributes.MagicEnabled, magicThreshold), -- cleared after spell duration
+		attributeStuckTrue(Attributes.ArcaneEnabled, arcaneThreshold), -- cleared after spell duration
 		attributeStuckTrue(Attributes.CutscenePlaying, WATCHDOG_CUTSCENE_STUCK_SECONDS),
 
 		-- Server-owned swing gate: the server flips MeleeWeaponEnabled off
@@ -607,10 +607,10 @@ function PlayerStateController.Start(self: typeof(PlayerStateController))
 		end)
 	end)
 
-	-- A cast that FIRED is an executed attack (magic weaved between swings
+	-- A cast that FIRED is an executed attack (arcane weaved between swings
 	-- is the exact case that tripped the WalkSpeed check).
-	if getMagicController() then
-		getMagicController().Signals.OnMagicCasted:Connect(function()
+	if getArcaneController() then
+		getArcaneController().Signals.OnArcaneCasted:Connect(function()
 			self:_noteAttackActivity()
 		end)
 	end

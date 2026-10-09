@@ -19,7 +19,7 @@
 	  OnLandingEnd    → restore controls.
 
 	Control-lock mirrors EncounterIntroController: disable the ControlScript,
-	zero residual movement, set CutscenePlaying (blocks aim / magic / abilities).
+	zero residual movement, set CutscenePlaying (blocks aim / arcane / abilities).
 	The server also anchors the HRP for the duration, so this is belt-and-
 	suspenders against stray input.
 
@@ -159,7 +159,7 @@ function LandingController._lockControls(self: typeof(LandingController), barsDe
 			-- while the ControlScript is disabled.
 			humanoid:Move(Vector3.zero, false)
 		end
-		-- Blocks aim / general / magic actions via PlayerStateController.
+		-- Blocks aim / general / arcane actions via PlayerStateController.
 		character:SetAttribute(Attributes.CutscenePlaying, true)
 	end
 end

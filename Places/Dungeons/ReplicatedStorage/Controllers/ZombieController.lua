@@ -43,11 +43,11 @@
 	snapped to the live ratio when the mob is first seen, so a late joiner
 	never sees a full bar over a wounded mob.
 
-	It also owns the MAGIC-CUTSCENE DIM (SetCutsceneDim): for the length
-	of a magic cutscene every mob under workspace.IgnoreInstances.Zombies
+	It also owns the ARCANE-CUTSCENE DIM (SetCutsceneDim): for the length
+	of a arcane cutscene every mob under workspace.IgnoreInstances.Zombies
 	-- regular, miniboss, boss, and any that spawn meanwhile -- is held
 	semi-transparent on this client only, and put back exactly where it
-	was when the cutscene ends. CutsceneController.PlayMagicCutscene is
+	was when the cutscene ends. CutsceneController.PlayArcaneCutscene is
 	the caller. See the "Cutscene dim" section for the rules.
 
 	==========================================================
@@ -106,7 +106,7 @@ local HITBOX_Y_JITTER_MAX = 0.05
 -- Folder under workspace.IgnoreInstances where the client-side visual
 -- hitbox clones live. Same folder the prior implementation used so
 -- LifeController's clearZombieHitboxes sweep still picks them up.
-local HITBOX_PARENT = workspace.IgnoreInstances.MagicSpells
+local HITBOX_PARENT = workspace.IgnoreInstances.ArcaneSpells
 
 -- Where live mobs are parented (a corpse moves to DeadZombies on death,
 -- keeping its connections until it is destroyed).
@@ -127,7 +127,7 @@ local HUMANOID_WAIT_SECONDS = 5
 
 --[ Cutscene dim ]--
 
--- Transparency every mob body part is held at while a magic cutscene runs
+-- Transparency every mob body part is held at while a arcane cutscene runs
 -- (SetCutsceneDim). The dim only ever makes a part MORE transparent: one
 -- already at or past this value -- the invisible HumanoidRootPart, the
 -- hitbox parts, a corpse mid-fade -- is left exactly where it is.
@@ -627,7 +627,7 @@ function ZombieController._stopCutsceneDim(self: typeof(ZombieController))
 end
 
 -- Public: renders every mob semi-transparent for the LOCAL player while a
--- magic cutscene runs (active = true) and restores them when it ends
+-- arcane cutscene runs (active = true) and restores them when it ends
 -- (active = false). Reference-counted, so two overlapping cutscenes dim
 -- once and restore once, when the last of them releases; a release with
 -- nothing outstanding is a no-op. Local-only -- nothing here replicates.
@@ -742,7 +742,7 @@ function ZombieController.Start(self: typeof(ZombieController))
 	-- per-projectile module (WizardFireball.lua etc.) that owns the
 	-- full client-side trajectory + impact callback. ZombieController
 	-- stays a thin plumbing layer; the actual VFX logic lives co-
-	-- located with the player magic spell modules under VFXController/.
+	-- located with the player arcane spell modules under VFXController/.
 	Combat.MobRangedAttack.On(function(payload)
 		local zombieModel = payload.Mob
 		if not zombieModel then

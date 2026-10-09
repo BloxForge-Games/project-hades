@@ -5,10 +5,10 @@ local Debris = game:GetService("Debris")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local groundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.groundFracture)
@@ -34,9 +34,9 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 	fireBlastAnimation:Play(0.25)
 
-	local castFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Hollow Purple"]].CastFX.Model:Clone()
+	local castFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Hollow Purple"]].CastFX.Model:Clone()
 	castFX:PivotTo(cframe + Vector3.new(0, 4, 0))
-	castFX.Parent = workspace.IgnoreInstances.MagicSpells
+	castFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	TweenService:Create(
 		castFX.Blue,
@@ -74,7 +74,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end
 
 		task.delay(0.5, function()
-			local chargedFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Hollow Purple"]].ChargeFX.Attachment:Clone()
+			local chargedFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Hollow Purple"]].ChargeFX.Attachment:Clone()
 			chargedFX.Parent = character:FindFirstChild("Right Arm")
 
 			task.delay(0.5, function()
@@ -96,19 +96,19 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	animationConnection = fireBlastAnimation:GetMarkerReachedSignal("MagicRelease"):Connect(function()
 		animationConnection:Disconnect()
 
-		local projectile = ReplicatedStorage.GameAssets.VFX[MagicNames["Hollow Purple"]].Projectile.Part:Clone()
+		local projectile = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Hollow Purple"]].Projectile.Part:Clone()
 		projectile.CFrame = cframe + Vector3.new(0, 1, 0)
-		projectile.Parent = workspace.IgnoreInstances.MagicSpells
+		projectile.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		local origin = cframe
 		local direction = origin.LookVector
 
-		local STEP_LENGTH = MagicData[MagicNames["Hollow Purple"]].stepDistance
-		local TRAVEL_DISTANCE = MagicData[MagicNames["Hollow Purple"]].travelDistance
+		local STEP_LENGTH = ArcaneData[ArcaneNames["Hollow Purple"]].stepDistance
+		local TRAVEL_DISTANCE = ArcaneData[ArcaneNames["Hollow Purple"]].travelDistance
 
 		-- SERVER HIT VALIDATION
 		if player == Players.LocalPlayer and not preload then
-			Magic.SweepHitboxRequested.Fire({ MagicName = MagicNames["Hollow Purple"], CFrame = origin })
+			Arcane.SweepHitboxRequested.Fire({ ArcaneName = ArcaneNames["Hollow Purple"], CFrame = origin })
 		end
 
 		task.delay(0.1, function()
@@ -168,7 +168,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					groundFracture:Spawn(
 						projectile.Position,
 						direction,
-						MagicData[MagicNames["Hollow Purple"]].hitboxSize.Z
+						ArcaneData[ArcaneNames["Hollow Purple"]].hitboxSize.Z
 					)
 				end
 			end

@@ -24,7 +24,7 @@
 	    limited by BARRIER_PROC_COOLDOWN (MeleeWeapon calls
 	    TryGoldenGlovesBarrier). This replaced Space Sandwich's
 	    damage-taken proc in the 2026-08 pass.
-	  * Spartan Sword and Shield: grants Stonebound on a magic cast
+	  * Spartan Sword and Shield: grants Stonebound on a arcane cast
 	    (VFXService calls TrySpartanStonebound).
 	  * Golem's Hammer: while holding a Barrier, the Empower rig sits on
 	    the HRP and a Tremor pulses every second for (Level x the relic
@@ -435,7 +435,7 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 					end
 					tremor:PivotTo(CFrame.new(hrp.Position - Vector3.new(0, TREMOR_Y_OFFSET, 0)))
 
-					tremor.Parent = workspace.IgnoreInstances.MagicSpells
+					tremor.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 					for _, descendant in tremor.EarthTremor.Explode:GetDescendants() do
 						if descendant:IsA("ParticleEmitter") then
@@ -654,7 +654,7 @@ function ShieldService.TryGoldenGlovesBarrier(self: typeof(ShieldService), playe
 	end
 end
 
--- Robloxian Battle Shield: called by VFXService on every successful magic
+-- Robloxian Battle Shield: called by VFXService on every successful arcane
 -- cast by its owner.
 function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: Player)
 	if not RelicService then
@@ -669,7 +669,7 @@ function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: P
 	end
 end
 
--- Spartan Sword and Shield: the same magic cast also grants Stonebound.
+-- Spartan Sword and Shield: the same arcane cast also grants Stonebound.
 -- Its OTHER half (the +25% damage rider on everyone Stonebound touches)
 -- lives in AuraService's payload, not here.
 --

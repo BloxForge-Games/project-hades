@@ -214,7 +214,7 @@ function RelicRenderController._syncPlayerRelics(
 		local hrp = getRoot.fromPlayer(Players:GetPlayerByUserId(userId))
 		if hrp then
 			model:PivotTo(CFrame.new(hrp.Position + Vector3.new(0, -10, 0)))
-			model.Parent = workspace.IgnoreInstances.MagicSpells
+			model.Parent = workspace.IgnoreInstances.ArcaneSpells
 		end
 	end
 end

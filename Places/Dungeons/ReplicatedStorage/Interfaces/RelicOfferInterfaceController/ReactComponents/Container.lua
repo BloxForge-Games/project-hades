@@ -16,7 +16,7 @@
 	through InterfaceManagerController, so a cutscene or death fade still
 	composes). The relic tray is a Windows interface, so it stays usable.
 	On mobile the combat controls hide with it (MobileActionButtonInterface:
-	Roll, Swap Weapon and the tagged magic sticks); the movement and aim
+	Roll, Swap Weapon and the tagged arcane sticks); the movement and aim
 	sticks stay.
 
 	The SERVER owns the offer (RelicOfferService): this component draws

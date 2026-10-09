@@ -352,7 +352,7 @@ function MerchantStallRenderController._placeStallClone(
 	clone:SetAttribute("OwnerId", Players.LocalPlayer.UserId)
 
 	local ignoreFolder = workspace:FindFirstChild("IgnoreInstances")
-	local spellsFolder = ignoreFolder and ignoreFolder:FindFirstChild("MagicSpells")
+	local spellsFolder = ignoreFolder and ignoreFolder:FindFirstChild("ArcaneSpells")
 	clone.Parent = spellsFolder or workspace
 	self._floatingClones[clone] = {
 		base = cframe,

@@ -16,7 +16,7 @@ local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.C
 -- the whole array to every client. They are kept out of weapon queries
 -- STRUCTURALLY now: each one is moved into CollisionGroups.MobRaycastHitbox,
 -- which is registered as non-collidable with CollisionGroups.WeaponQuery,
--- and every weapon / magic OverlapParams (MeleeWeapon, VFXService) sets the
+-- and every weapon / arcane OverlapParams (MeleeWeapon, VFXService) sets the
 -- latter as its CollisionGroup — an overlap query skips parts whose group
 -- cannot collide with its own. Nothing else changes for the part: the
 -- client's aim ray queries with the Default group, which still collides
@@ -26,7 +26,7 @@ local IgnoreListService = {
 	Name = "IgnoreListService",
 	Dependencies = { PlayerEventService } :: { any },
 
-	-- The CollisionGroup weapon / magic overlap queries must use so that mob
+	-- The CollisionGroup weapon / arcane overlap queries must use so that mob
 	-- RaycastHitbox parts are skipped (see the note above).
 	WeaponQueryCollisionGroup = CollisionGroups.WeaponQuery,
 }
@@ -53,18 +53,18 @@ IgnoreListService._buildingTransparencyIgnoreList = RemoteProperty.Server({
 	changed = DungeonNetwork.BuildingTransparencyIgnoreListChanged,
 	get = DungeonNetwork.GetBuildingTransparencyIgnoreList,
 }, table.clone(IgnoreListData))
-IgnoreListService._magicSpellIgnoreList = RemoteProperty.Server({
-	changed = DungeonNetwork.MagicSpellIgnoreListChanged,
-	get = DungeonNetwork.GetMagicSpellIgnoreList,
+IgnoreListService._arcaneSpellIgnoreList = RemoteProperty.Server({
+	changed = DungeonNetwork.ArcaneSpellIgnoreListChanged,
+	get = DungeonNetwork.GetArcaneSpellIgnoreList,
 }, table.clone(IgnoreListData))
 IgnoreListService._proximityRayIgnoreList = RemoteProperty.Server({
 	changed = DungeonNetwork.ProximityRayIgnoreListChanged,
 	get = DungeonNetwork.GetProximityRayIgnoreList,
 }, {})
-IgnoreListService._zombieMagicSpellIgnoreList = RemoteProperty.Server(
+IgnoreListService._zombieArcaneSpellIgnoreList = RemoteProperty.Server(
 	{
-		changed = DungeonNetwork.ZombieMagicSpellIgnoreListChanged,
-		get = DungeonNetwork.GetZombieMagicSpellIgnoreList,
+		changed = DungeonNetwork.ZombieArcaneSpellIgnoreListChanged,
+		get = DungeonNetwork.GetZombieArcaneSpellIgnoreList,
 	},
 	existing(
 		workspace.IgnoreInstances:FindFirstChild("Zombies"),
@@ -73,7 +73,7 @@ IgnoreListService._zombieMagicSpellIgnoreList = RemoteProperty.Server(
 		workspace.IgnoreInstances:FindFirstChild("MapMarkers"),
 		workspace.IgnoreInstances:FindFirstChild("Boundaries"),
 		workspace.IgnoreInstances:FindFirstChild("Regions"),
-		workspace.IgnoreInstances:FindFirstChild("MagicSpells"),
+		workspace.IgnoreInstances:FindFirstChild("ArcaneSpells"),
 		workspace.IgnoreInstances:FindFirstChild("Chests"),
 		workspace:FindFirstChild("PlayerBaseplates"),
 		workspace:FindFirstChild("Terrain")
@@ -91,16 +91,16 @@ function IgnoreListService.SetBuildingTransparencyIgnoreList(
 	self._buildingTransparencyIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService.SetMagicSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
-	self._magicSpellIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetArcaneSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._arcaneSpellIgnoreList:Set(newIgnoreList)
 end
 
 function IgnoreListService.SetProximityRayIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
 	self._proximityRayIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService.SetZombieMagicSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
-	self._zombieMagicSpellIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetZombieArcaneSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._zombieArcaneSpellIgnoreList:Set(newIgnoreList)
 end
 
 -- READ-ONLY: this is the live replicated array, not a copy. Every caller
@@ -115,16 +115,16 @@ function IgnoreListService.GetBuildingTransparencyIgnoreList(self: typeof(Ignore
 	return table.clone(self._buildingTransparencyIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService.GetMagicSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
-	return table.clone(self._magicSpellIgnoreList:Get()) :: { Instance }
+function IgnoreListService.GetArcaneSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._arcaneSpellIgnoreList:Get()) :: { Instance }
 end
 
 function IgnoreListService.GetProximityRayIgnoreList(self: typeof(IgnoreListService)): { Instance }
 	return table.clone(self._proximityRayIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService.GetZombieMagicSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
-	return table.clone(self._zombieMagicSpellIgnoreList:Get()) :: { Instance }
+function IgnoreListService.GetZombieArcaneSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._zombieArcaneSpellIgnoreList:Get()) :: { Instance }
 end
 
 -- Registers the two collision groups and makes them mutually
@@ -186,9 +186,9 @@ function IgnoreListService._initWeaponIgnoreList(self: typeof(IgnoreListService)
 		table.insert(weaponIgnoreList, workspace.IgnoreInstances.EscortObjects.Server)
 	end
 
-	table.insert(weaponIgnoreList, workspace.IgnoreInstances.MagicSpells)
+	table.insert(weaponIgnoreList, workspace.IgnoreInstances.ArcaneSpells)
 	table.insert(weaponIgnoreList, workspace.IgnoreInstances.Regions)
-	table.insert(weaponIgnoreList, workspace.IgnoreInstances.Map.MagicSpells)
+	table.insert(weaponIgnoreList, workspace.IgnoreInstances.Map.ArcaneSpells)
 	table.insert(weaponIgnoreList, workspace.IgnoreInstances.Map.Buildables)
 
 	self:SetWeaponIgnoreList(weaponIgnoreList)
@@ -214,33 +214,33 @@ function IgnoreListService._initBuildingTransparencyIgnoreList(self: typeof(Igno
 	local buildingTransparencyIgnoreList = self:GetBuildingTransparencyIgnoreList()
 
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.Zombies)
-	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.MagicSpells)
+	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.ArcaneSpells)
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.Terrain)
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances:FindFirstChild("EscortObjects") or nil)
 
 	self:SetBuildingTransparencyIgnoreList(buildingTransparencyIgnoreList)
 end
 
-function IgnoreListService._initMagicSpellIgnoreList(self: typeof(IgnoreListService))
-	local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
+function IgnoreListService._initArcaneSpellIgnoreList(self: typeof(IgnoreListService))
+	local arcaneSpellIgnoreList = self:GetArcaneSpellIgnoreList()
 
-	table.insert(magicSpellIgnoreList, workspace.IgnoreInstances.Terrain)
-	table.insert(magicSpellIgnoreList, workspace.IgnoreInstances:FindFirstChild("EscortObjects") or nil)
-	table.insert(magicSpellIgnoreList, workspace.IgnoreInstances.Map.MagicSpells)
-	table.insert(magicSpellIgnoreList, workspace.IgnoreInstances.Map.Buildables)
+	table.insert(arcaneSpellIgnoreList, workspace.IgnoreInstances.Terrain)
+	table.insert(arcaneSpellIgnoreList, workspace.IgnoreInstances:FindFirstChild("EscortObjects") or nil)
+	table.insert(arcaneSpellIgnoreList, workspace.IgnoreInstances.Map.ArcaneSpells)
+	table.insert(arcaneSpellIgnoreList, workspace.IgnoreInstances.Map.Buildables)
 
-	self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
+	self:SetArcaneSpellIgnoreList(arcaneSpellIgnoreList)
 end
 
 function IgnoreListService._initProximityRayIgnoreList(self: typeof(IgnoreListService))
 	local proximityRayIgnoreList = self:GetProximityRayIgnoreList()
 
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map)
-	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.MagicSpells)
+	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.ArcaneSpells)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.DeadZombies)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances:FindFirstChild("EscortObjects") or nil)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Chests)
-	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map.MagicSpells)
+	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map.ArcaneSpells)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map.Buildables)
 
 	self:SetProximityRayIgnoreList(proximityRayIgnoreList)
@@ -262,9 +262,9 @@ function IgnoreListService._pruneDestroyedEntries(self: typeof(IgnoreListService
 	removeDestroyed(weaponIgnoreList)
 	self:SetWeaponIgnoreList(weaponIgnoreList)
 
-	local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
-	removeDestroyed(magicSpellIgnoreList)
-	self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
+	local arcaneSpellIgnoreList = self:GetArcaneSpellIgnoreList()
+	removeDestroyed(arcaneSpellIgnoreList)
+	self:SetArcaneSpellIgnoreList(arcaneSpellIgnoreList)
 
 	local proximityRayList = self:GetProximityRayIgnoreList()
 	removeDestroyed(proximityRayList)
@@ -275,7 +275,7 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 	self:_registerCollisionGroups()
 	self:_initWeaponIgnoreList()
 	self:_initBuildingTransparencyIgnoreList()
-	self:_initMagicSpellIgnoreList()
+	self:_initArcaneSpellIgnoreList()
 	self:_initProximityRayIgnoreList()
 
 	-- Initialize players into ignore list. NEVER yield between Get
@@ -292,9 +292,9 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 		table.insert(weaponIgnoreList, character)
 		self:SetWeaponIgnoreList(weaponIgnoreList)
 
-		local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
-		table.insert(magicSpellIgnoreList, character)
-		self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
+		local arcaneSpellIgnoreList = self:GetArcaneSpellIgnoreList()
+		table.insert(arcaneSpellIgnoreList, character)
+		self:SetArcaneSpellIgnoreList(arcaneSpellIgnoreList)
 
 		local proximityRayIgnoreList = self:GetProximityRayIgnoreList()
 		table.insert(proximityRayIgnoreList, character)
@@ -305,7 +305,7 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 		local character = player.Character or player.CharacterAdded:Wait()
 
 		local weaponIgnoreList = table.clone(self:GetWeaponIgnoreList())
-		local magicSpellIgnoreList = self:GetMagicSpellIgnoreList()
+		local arcaneSpellIgnoreList = self:GetArcaneSpellIgnoreList()
 		local proximityRayIgnoreList = self:GetProximityRayIgnoreList()
 
 		if not table.find(weaponIgnoreList, character) then
@@ -313,9 +313,9 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 			self:SetWeaponIgnoreList(weaponIgnoreList)
 		end
 
-		if not table.find(magicSpellIgnoreList, character) then
-			table.insert(magicSpellIgnoreList, character)
-			self:SetMagicSpellIgnoreList(magicSpellIgnoreList)
+		if not table.find(arcaneSpellIgnoreList, character) then
+			table.insert(arcaneSpellIgnoreList, character)
+			self:SetArcaneSpellIgnoreList(arcaneSpellIgnoreList)
 		end
 
 		if not table.find(proximityRayIgnoreList, character) then

@@ -17,7 +17,7 @@
 	    Frame                 -- background track
 	    HealthBar / ManaBar   -- fill; the client scales its Y from the bottom
 	Mana values themselves reach other clients as the Mana / MaxMana
-	character attributes MagicService stamps (see Attributes.Mana).
+	character attributes ArcaneService stamps (see Attributes.Mana).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

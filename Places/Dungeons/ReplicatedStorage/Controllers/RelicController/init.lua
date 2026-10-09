@@ -101,7 +101,7 @@ function RelicController._playPerfectDodgeBurst(_self: typeof(RelicController), 
 	clone.CanTouch = false
 	clone.CFrame = cframe
 	local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")
-	clone.Parent = (ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")) or workspace
+	clone.Parent = (ignoreInstances and ignoreInstances:FindFirstChild("ArcaneSpells")) or workspace
 
 	local emitters: { ParticleEmitter } = {}
 	for _, descendant in clone:GetDescendants() do
@@ -192,7 +192,7 @@ function RelicController.Start(self: typeof(RelicController))
 		TargetPosition: Vector3,
 		StartTime: number,
 		Duration: number,
-		MagicName: string?,
+		ArcaneName: string?,
 		RelicName: string?,
 	})
 		local position, targetPosition, startTime, duration, relicName =
@@ -278,7 +278,7 @@ function RelicController.Start(self: typeof(RelicController))
 			local superStompBootsVFX =
 				ReplicatedStorage.GameAssets.VFX["Super Stomp Boots"]["Super Stomp Boots"]:Clone()
 			superStompBootsVFX:PivotTo(CFrame.new(landingPosition))
-			superStompBootsVFX.Parent = workspace.IgnoreInstances.MagicSpells
+			superStompBootsVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 			for _, particle in superStompBootsVFX.Part.Attachment:GetChildren() do
 				if particle:IsA("ParticleEmitter") then

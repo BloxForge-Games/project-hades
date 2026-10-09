@@ -63,7 +63,7 @@ local IGNORED_FOLDER_PATHS = {
 	{ "IgnoreInstances", "Terrain" },
 	{ "IgnoreInstances", "Boundaries" },
 	{ "IgnoreInstances", "MapMarkers" },
-	{ "IgnoreInstances", "MagicSpells" },
+	{ "IgnoreInstances", "ArcaneSpells" },
 	{ "IgnoreInstances", "Drops" },
 	{ "IgnoreInstances", "Zombies" },
 	{ "IgnoreInstances", "DeadZombies" },

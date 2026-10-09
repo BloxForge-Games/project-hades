@@ -12,8 +12,8 @@ local function getDamageService(): any
 	return damageServiceLazy
 end
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 
@@ -108,14 +108,14 @@ function Fireworks.InvokeFireworks(self: Fireworks)
 
 			task.delay(1, function()
 				self._vfxService:CreateHitbox(
-					MagicNames["Fireworks Explosion"],
+					ArcaneNames["Fireworks Explosion"],
 					self._player,
 					targetEnemy:GetPivot(),
 					TagList.Zombie,
 					self._ignoreListService:GetWeaponIgnoreList(),
 					function(model: Model)
 						-- UNTYPED relic lane (isRelicSourced): scales with
-						-- unqualified Damage bonuses; Weapon/Magic-typed
+						-- unqualified Damage bonuses; Weapon/Arcane-typed
 						-- relics and crits never apply. No applier hubs
 						-- (those live in onHitboxDamage; this spell's status
 						-- is None and cameraShake false, so nothing is lost).
@@ -123,7 +123,7 @@ function Fireworks.InvokeFireworks(self: Fireworks)
 						if not humanoid or not getDamageService() then
 							return
 						end
-						local config = MagicData[MagicNames["Fireworks Explosion"]]
+						local config = ArcaneData[ArcaneNames["Fireworks Explosion"]]
 						local damageRoll = if config.runtimeDamageCallback
 							then config.runtimeDamageCallback(self._player)
 							else config.damage
@@ -138,7 +138,7 @@ function Fireworks.InvokeFireworks(self: Fireworks)
 							true -- showHitVFX
 						)
 					end,
-					MagicData[MagicNames["Fireworks Explosion"]].hitboxSize.X
+					ArcaneData[ArcaneNames["Fireworks Explosion"]].hitboxSize.X
 				)
 			end)
 

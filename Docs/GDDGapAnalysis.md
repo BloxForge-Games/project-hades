@@ -66,7 +66,7 @@ priority list in section 4.
 | D4 | **Add the upgrade caps** exactly as the GDD lists them (+4 / +6 / +8 / +10 / +15). The +5%-per-level curve was not retuned — revisit when the caps land. |
 | D5 | **Still open.** Stormcrest *Mountains* (code) vs Stormcrest *Temple* (GDD) was not decided. |
 | D6 | GDD is corrected to **Emberforge Mines** and **Frostveil Castle**. The code was already right. |
-| D7 | **Rename `Magic*` → `Arcane*`.** The existing ability runtime *is* the Arcane system; the collection layer (chests, scrolls, ranks, dust, Trainer, 2 slots) is built on top of it. |
+| D7 | **DONE 2026-10-09.** `Magic*` → `Arcane*` across both repos (157 files, Blink domain regenerated). The damage TYPE stayed `Magic Damage` / `ResistKind.Magic`, matching the GDD. The collection layer (chests, scrolls, ranks, dust, Trainer, 2 slots) is P1.2, built on the renamed runtime. |
 | D8 | Not yet decided — shared bonus pool vs bespoke per-set bonuses. |
 | D9 | Not yet decided — the 3 orphaned `RelicNames`. |
 

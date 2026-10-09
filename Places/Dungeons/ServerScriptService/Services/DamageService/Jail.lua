@@ -3,7 +3,7 @@
 	Module: Server/Services/DamageService/Jail.lua
 	Description:
 	Portable Justice on-hit module. Fired by DamageService:TakeDamage
-	for every weapon hit (skipped on magic hits). Rolls per-mob jail
+	for every weapon hit (skipped on arcane hits). Rolls per-mob jail
 	chance and, on success, locks the mob's Jailed attribute on for
 	JAIL_DURATION. MobBase's _resyncWalkSpeed listener freezes
 	movement; the attack-pipeline gates added in MobBase / ZombieService

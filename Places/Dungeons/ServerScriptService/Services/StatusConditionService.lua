@@ -50,7 +50,7 @@
 	GRANT the owner an aura on hit), plus the Status Chance bonus —
 	percentage points added to every status the player already has a
 	qualifying applier row for (Blighted's +15, Mechatronic Spider's +15).
-	Direct weapon/magic hits and relic procs roll appliers; DoT ticks do
+	Direct weapon/arcane hits and relic procs roll appliers; DoT ticks do
 	NOT.
 ]]
 
@@ -426,7 +426,7 @@ local function playApplyVFX(vfxName: string?, hrp: BasePart)
 		warn("[StatusConditionService] GameAssets.VFX." .. vfxName .. " is not a Model or Part -- cannot place it")
 	end
 
-	burst.Parent = workspace.IgnoreInstances.MagicSpells
+	burst.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Parent FIRST, burst SECOND -- :Emit on an unparented emitter is
 	-- silently discarded.
@@ -777,7 +777,7 @@ function StatusConditionService:_sumApplierChances(
 
 	-- Korblox Mage Staff: ADDITIVE Chill chance, raised while Frostburst is
 	-- up. Lives in the shared hub because its card says "on ALL damage" —
-	-- it sat in the MAGIC-only path until this pass, a leftover from when it
+	-- it sat in the ARCANE-only path until this pass, a leftover from when it
 	-- read "your Magic Damage has triple the Chill chance".
 	--
 	-- Additive, not a multiplier: x3 of nothing is still nothing, so the old
@@ -820,7 +820,7 @@ end
 
 -- Rolls the aura-grant rows for one hit. `isWeaponHit` picks which side's
 -- rows qualify (Flaming Bo Staff is weapon-only, Korblox Spell Book
--- magic-only).
+-- arcane-only).
 function StatusConditionService:_rollAuraGrants(sourcePlayer: Player, isWeaponHit: boolean)
 	if not RelicService or not AuraService then
 		return
@@ -897,9 +897,9 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus)
 end
 
--- Magic-hit status entry point — called by onHitboxDamage after a spell's
--- damage lands on a mob (covers regular spells and relic-cast magic).
-function StatusConditionService:ApplyMagicOnHitStatuses(sourcePlayer: Player, targetModel: Model)
+-- Arcane-hit status entry point — called by onHitboxDamage after a spell's
+-- damage lands on a mob (covers regular spells and relic-cast arcane).
+function StatusConditionService:ApplyArcaneOnHitStatuses(sourcePlayer: Player, targetModel: Model)
 	if not RelicService then
 		return
 	end

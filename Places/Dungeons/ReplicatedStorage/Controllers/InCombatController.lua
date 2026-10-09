@@ -39,7 +39,7 @@ local STARTUP_DELAY = 10
 --[ Private Functions ]--
 
 -- Delegates to the SHARED proximity check so the server's mana-regen gate
--- (MagicService._isPlayerInCombat) and this visual state can never drift
+-- (ArcaneService._isPlayerInCombat) and this visual state can never drift
 -- apart on radius or on what counts as a live zombie.
 function InCombatController._isNearLivingZombie(_self: typeof(InCombatController), playerPosition: Vector3): boolean
 	return combatProximity.isNearLivingZombie(playerPosition)

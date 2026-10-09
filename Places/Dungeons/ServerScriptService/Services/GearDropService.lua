@@ -902,7 +902,7 @@ function GearDropService._fireSingleDrop(
 	-- vending-machine relic and gear drops roll the authored weights only.)
 	--
 	--   Applies to both Weapon and Armor drops (the only two GearTypes
-	--   that flow through this service). Magic spells drop via a
+	--   that flow through this service). Arcane spells drop via a
 	--   different path and are unaffected — matches the spec.
 	local rarity
 	if gearData and gearData.rarity then

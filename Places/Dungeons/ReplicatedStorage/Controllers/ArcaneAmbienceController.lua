@@ -1,8 +1,8 @@
 --!strict
 --[[
-	Module: MagicAmbienceController.lua
+	Module: ArcaneAmbienceController.lua
 	Description:
-	The single owner of the three SCREEN-WIDE effects big magic wants, none
+	The single owner of the three SCREEN-WIDE effects big arcane wants, none
 	of which can exist twice at once:
 
 	  * the colour grade (Lighting.ColorCorrection.TintColor -- one global
@@ -76,8 +76,8 @@ type Claim = {
 
 --[ Controller ]--
 
-local MagicAmbienceController = {
-	Name = "MagicAmbienceController",
+local ArcaneAmbienceController = {
+	Name = "ArcaneAmbienceController",
 	Dependencies = { CameraShakeController, MusicController } :: { any },
 
 	-- [id] = { config, getPosition?, radius?, inRange } for every live
@@ -94,7 +94,7 @@ local MagicAmbienceController = {
 
 -- Claims that currently count: unconditional ones always, proximity ones
 -- only while the viewer is inside their radius. In claim order.
-function MagicAmbienceController._activeClaims(self: typeof(MagicAmbienceController)): { string }
+function ArcaneAmbienceController._activeClaims(self: typeof(ArcaneAmbienceController)): { string }
 	local active: { string } = {}
 	for _, id in self._order do
 		local claim = self._claims[id]
@@ -106,7 +106,7 @@ function MagicAmbienceController._activeClaims(self: typeof(MagicAmbienceControl
 end
 
 -- The first active claim asking for `channel`, or nil.
-function MagicAmbienceController._ownerFor(self: typeof(MagicAmbienceController), channel: string): string?
+function ArcaneAmbienceController._ownerFor(self: typeof(ArcaneAmbienceController), channel: string): string?
 	for _, id in self:_activeClaims() do
 		if self._claims[id].config[channel] ~= nil then
 			return id
@@ -115,7 +115,7 @@ function MagicAmbienceController._ownerFor(self: typeof(MagicAmbienceController)
 	return nil
 end
 
-function MagicAmbienceController._applyTint(self: typeof(MagicAmbienceController), ownerId: string?)
+function ArcaneAmbienceController._applyTint(self: typeof(ArcaneAmbienceController), ownerId: string?)
 	if ownerId == self._tintOwner then
 		return
 	end
@@ -124,7 +124,7 @@ function MagicAmbienceController._applyTint(self: typeof(MagicAmbienceController
 	TweenService:Create(Lighting.ColorCorrection, TINT_TWEEN_INFO, { TintColor = target }):Play()
 end
 
-function MagicAmbienceController._applyMusic(self: typeof(MagicAmbienceController), ownerId: string?)
+function ArcaneAmbienceController._applyMusic(self: typeof(ArcaneAmbienceController), ownerId: string?)
 	if ownerId == self._musicOwner then
 		return
 	end
@@ -158,7 +158,7 @@ function MagicAmbienceController._applyMusic(self: typeof(MagicAmbienceControlle
 	local config = claim.config.music
 	local template = ReplicatedStorage.GameAssets.Sounds:FindFirstChild(config.soundName)
 	if not template then
-		warn("[MagicAmbienceController] No sound named " .. tostring(config.soundName))
+		warn("[ArcaneAmbienceController] No sound named " .. tostring(config.soundName))
 		return
 	end
 
@@ -174,7 +174,7 @@ function MagicAmbienceController._applyMusic(self: typeof(MagicAmbienceControlle
 	sound.Name = config.soundName .. "_Takeover"
 	sound.Volume = 0
 	sound.Looped = true
-	sound.Parent = workspace.IgnoreInstances.MagicSpells
+	sound.Parent = workspace.IgnoreInstances.ArcaneSpells
 	sound:Play()
 	if config.startTime then
 		sound.TimePosition = config.startTime
@@ -188,7 +188,7 @@ end
 -- re-arming the same preset EXTENDS it rather than restarting, keeping
 -- the oscillation and the fade envelope continuous, and it decays over
 -- the preset's own fade-out once nobody re-arms it.
-function MagicAmbienceController._applyShake(self: typeof(MagicAmbienceController), ownerId: string?)
+function ArcaneAmbienceController._applyShake(self: typeof(ArcaneAmbienceController), ownerId: string?)
 	if ownerId == self._shakeOwner then
 		return
 	end
@@ -201,7 +201,7 @@ end
 
 -- Recomputes every channel from the current claims. Cheap and total:
 -- called on claim, on release, and on every poll.
-function MagicAmbienceController._refresh(self: typeof(MagicAmbienceController))
+function ArcaneAmbienceController._refresh(self: typeof(ArcaneAmbienceController))
 	self:_applyTint(self:_ownerFor("tint"))
 	self:_applyMusic(self:_ownerFor("music"))
 
@@ -215,7 +215,7 @@ function MagicAmbienceController._refresh(self: typeof(MagicAmbienceController))
 	end
 end
 
-function MagicAmbienceController._viewerPosition(_self: typeof(MagicAmbienceController)): Vector3?
+function ArcaneAmbienceController._viewerPosition(_self: typeof(ArcaneAmbienceController)): Vector3?
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	return root and (root :: BasePart).Position or nil
@@ -228,7 +228,7 @@ end
 --   music = { soundName = string, volume = number?, startTime = number? }
 --   shake = a CameraShakePresets name, held while the claim holds
 -- Re-claiming a live id replaces its config.
-function MagicAmbienceController.Claim(self: typeof(MagicAmbienceController), id: string, config: { [string]: any })
+function ArcaneAmbienceController.Claim(self: typeof(ArcaneAmbienceController), id: string, config: { [string]: any })
 	if not self._claims[id] then
 		table.insert(self._order, id)
 	end
@@ -239,8 +239,8 @@ end
 -- A claim that only counts while the viewer is within `radius` studs of
 -- `getPosition()`. `getPosition` returning nil (the shrine was destroyed)
 -- reads as out of range.
-function MagicAmbienceController.ClaimAtPosition(
-	self: typeof(MagicAmbienceController),
+function ArcaneAmbienceController.ClaimAtPosition(
+	self: typeof(ArcaneAmbienceController),
 	id: string,
 	config: { [string]: any },
 	getPosition: () -> Vector3?,
@@ -253,7 +253,7 @@ function MagicAmbienceController.ClaimAtPosition(
 	self:_poll()
 end
 
-function MagicAmbienceController.Release(self: typeof(MagicAmbienceController), id: string)
+function ArcaneAmbienceController.Release(self: typeof(ArcaneAmbienceController), id: string)
 	local claim = self._claims[id]
 	if not claim then
 		return
@@ -285,7 +285,7 @@ end
 
 --[ Lifecycle ]--
 
-function MagicAmbienceController._poll(self: typeof(MagicAmbienceController))
+function ArcaneAmbienceController._poll(self: typeof(ArcaneAmbienceController))
 	local viewer = self:_viewerPosition()
 	local changed = false
 	for _, id in self._order do
@@ -309,7 +309,7 @@ function MagicAmbienceController._poll(self: typeof(MagicAmbienceController))
 	end
 end
 
-function MagicAmbienceController.Start(self: typeof(MagicAmbienceController))
+function ArcaneAmbienceController.Start(self: typeof(ArcaneAmbienceController))
 	local accumulated = 0
 	RunService.Heartbeat:Connect(function(deltaTime: number)
 		accumulated += deltaTime
@@ -323,4 +323,4 @@ function MagicAmbienceController.Start(self: typeof(MagicAmbienceController))
 	end)
 end
 
-return MagicAmbienceController
+return ArcaneAmbienceController

@@ -11,10 +11,10 @@ local Janitor = require(packages:FindFirstChild("Janitor"))
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local WorkspaceDependencies = require(ReplicatedStorage.Submodules.Core.Shared.Enums.WorkspaceDependencies)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local IsometricCameraController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.IsometricCameraController)
-local MagicController = require(ReplicatedStorage.Controllers.MagicController)
+local ArcaneController = require(ReplicatedStorage.Controllers.ArcaneController)
 local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateController)
 local CastModeController = require(ReplicatedStorage.Controllers.CastModeController)
 local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DataController)
@@ -38,7 +38,7 @@ local CAST_LOCK_MIN_SECONDS = 0.25
 -- the window and the body stays smoothly on the cursor throughout.
 local PC_CURSOR_LINGER_SECONDS = 0.75
 
--- Mobile auto-aim (the StartAutoAttack session + TapMagic below).
+-- Mobile auto-aim (the StartAutoAttack session + TapArcane below).
 --
 -- Weapon thumbstick model: PRESS starts an auto-attack session — the
 -- character snaps to the nearest living zombie within ACQUIRE range and
@@ -53,7 +53,7 @@ local PC_CURSOR_LINGER_SECONDS = 0.75
 -- alive and within DROP range (wider than ACQUIRE — hysteresis, so a target
 -- dancing on the 40-stud line doesn't flicker in and out), and re-acquires
 -- nearest only when the target dies / despawns / walks out.
--- TapMagic (both magic sticks) reads ACQUIRE too — one range for all
+-- TapArcane (both arcane sticks) reads ACQUIRE too — one range for all
 -- mobile nearest-enemy detection.
 local AUTO_AIM_ACQUIRE_RANGE_STUDS = 40
 local AUTO_AIM_DROP_RANGE_STUDS = 45
@@ -62,10 +62,10 @@ local AUTO_AIM_DROP_RANGE_STUDS = 45
 -- Settings.AutoAim -- default ON). Governs the two places the sticks acquire
 -- a target for the player:
 --   ON   press-and-hold on the shoot stick snaps to + tracks the nearest
---        enemy; a magic TAP faces the nearest enemy (canAim spells).
+--        enemy; a arcane TAP faces the nearest enemy (canAim spells).
 --   OFF  press-and-hold just attacks STRAIGHT AHEAD -- no acquisition, no
 --        rotation lock, so the humanoid keeps facing wherever the move stick
---        points and that's where the shots go; a magic TAP casts straight
+--        points and that's where the shots go; a arcane TAP casts straight
 --        ahead. DRAG-aim on any stick is untouched either way (it's a manual
 --        aim, not an auto one).
 -- The flag flips optimistically on click and is pushed to SettingsService;
@@ -89,7 +89,7 @@ local AimController = {
 	Name = "AimController",
 	Dependencies = {
 		IsometricCameraController,
-		MagicController,
+		ArcaneController,
 		PlayerStateController,
 		CastModeController,
 		DataController,
@@ -127,7 +127,7 @@ local AimController = {
 }
 
 AimController.OnWeaponActivate = Signal.new()
-AimController.OnMagicActivate = Signal.new()
+AimController.OnArcaneActivate = Signal.new()
 -- Fires (enabled: boolean) whenever the Auto Aim toggle flips.
 AimController.OnAutoAimChanged = Signal.new()
 
@@ -185,7 +185,7 @@ end
 -- tracking from movement-facing SNAPS once so that first attack is
 -- aimed; every later click inside the window lerps — no jumps.
 -- A dash or a spell owns the CFrame for its window (IsDodging /
--- MagicEnabled / SkillshotDelay): the humanoid must not steer and we
+-- ArcaneEnabled / SkillshotDelay): the humanoid must not steer and we
 -- must not track — the same rule _MobileUpdate applies.
 -- (A per-swing facing FREEZE for melee was tried between this and the
 -- old always-face-the-cursor model and removed: alternating track /
@@ -211,7 +211,7 @@ function AimController._keyboardMouseUpdate(self: typeof(AimController))
 
 	if
 		character:GetAttribute(Attributes.IsDodging) == true
-		or character:GetAttribute(Attributes.MagicEnabled) == true
+		or character:GetAttribute(Attributes.ArcaneEnabled) == true
 		or os.clock() < self._castLockUntil
 	then
 		humanoid.AutoRotate = false
@@ -250,7 +250,7 @@ end
 
 -- The snap itself, with no state gate. SnapFacingToCursor wraps it for
 -- the weapons; BeginCastLock calls it directly because a cast has
--- ALREADY raised MagicEnabled by the time it asks to face the cursor,
+-- ALREADY raised ArcaneEnabled by the time it asks to face the cursor,
 -- and AimActionEnabled reads false under that flag — the gate would
 -- refuse the very snap the cast exists to make.
 function AimController._snapFacingToCursorNow(_self: typeof(AimController))
@@ -268,7 +268,7 @@ function AimController._snapFacingToCursorNow(_self: typeof(AimController))
 	rootPart.CFrame = CFrame.lookAt(rootPart.Position, flatTarget)
 end
 
--- A spell cast begins — called by MagicController:CastMagic on BOTH
+-- A spell cast begins — called by ArcaneController:CastArcane on BOTH
 -- platforms, for the spell's whole cast time. It LOCKS the heading: while
 -- the lock holds, neither update loop steers the body and AutoRotate stays
 -- off, so the CFrame the server reads for the hitbox is the one the player
@@ -276,7 +276,7 @@ end
 -- tracks, otherwise AutoRotate comes back).
 --
 -- This REPLACED the mobile-only SkillshotDelay attribute, which did the
--- same job for a fixed 0.25s on the magic-stick path only. Same guard,
+-- same job for a fixed 0.25s on the arcane-stick path only. Same guard,
 -- one mechanism, driven from the one place that knows the spell.
 --
 -- The only per-platform part is the OPENING heading:
@@ -284,7 +284,7 @@ end
 --          weapon linger is wiped so it cannot expire mid-cast and hand
 --          AutoRotate back while the spell is still going).
 --   MOBILE keeps whatever the stick or auto-aim already chose — there is
---          no cursor to face, and TapMagic has aimed it already.
+--          no cursor to face, and TapArcane has aimed it already.
 function AimController.BeginCastLock(self: typeof(AimController), seconds: number)
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -374,7 +374,7 @@ function AimController._mobileUpdate(self: typeof(AimController))
 	if PlayerStateController:AimActionEnabled() == false then
 		if
 			character:GetAttribute(Attributes.IsDodging) == true
-			or character:GetAttribute(Attributes.MagicEnabled) == true
+			or character:GetAttribute(Attributes.ArcaneEnabled) == true
 		then
 			humanoid.AutoRotate = false
 		end
@@ -493,7 +493,7 @@ function AimController._findNearestEnemy(_self: typeof(AimController), rangeStud
 	return nearestRoot
 end
 
--- Position variant, kept for callers that only need a point (TapMagic).
+-- Position variant, kept for callers that only need a point (TapArcane).
 function AimController.GetNearestEnemyPosition(self: typeof(AimController), rangeStuds: number?): Vector3?
 	local root = self:_findNearestEnemy(rangeStuds or AUTO_AIM_ACQUIRE_RANGE_STUDS)
 	return root and root.Position
@@ -653,31 +653,31 @@ function AimController.HoldFacing(self: typeof(AimController), seconds: number?)
 	end
 end
 
--- TAP on a magic thumbstick: for a canAim spell (MagicData), face the
+-- TAP on a arcane thumbstick: for a canAim spell (ArcaneData), face the
 -- nearest zombie in range, then cast through the existing
--- OnMagicActivate(slot, false) path — which owns the indicator cleanup, the
--- cast lock, and CastMagic's own mana/cooldown gates. Spells
+-- OnArcaneActivate(slot, false) path — which owns the indicator cleanup, the
+-- cast lock, and CastArcane's own mana/cooldown gates. Spells
 -- with canAim = false (auras, self-centered bursts) cast with no rotation.
-function AimController.TapMagic(self: typeof(AimController), equipSlot: number)
+function AimController.TapArcane(self: typeof(AimController), equipSlot: number)
 	if PlayerStateController:GeneralActionEnabled() == false then
 		return
 	end
 
-	local castable, vfxName = MagicController:CanCastMagic(equipSlot)
+	local castable, vfxName = ArcaneController:CanCastArcane(equipSlot)
 	if not castable or not vfxName then
 		return
 	end
 
 	-- Auto Aim OFF: a tap casts straight ahead, no snap.
-	local magicIndexData = MagicData[vfxName]
-	if self._autoAimEnabled and magicIndexData and magicIndexData.canAim then
+	local arcaneIndexData = ArcaneData[vfxName]
+	if self._autoAimEnabled and arcaneIndexData and arcaneIndexData.canAim then
 		local targetPosition = self:GetNearestEnemyPosition(AUTO_AIM_ACQUIRE_RANGE_STUDS)
 		if targetPosition then
 			self:_snapFacing(targetPosition)
 		end
 	end
 
-	self.OnMagicActivate:Fire(equipSlot, false)
+	self.OnArcaneActivate:Fire(equipSlot, false)
 end
 
 function AimController.SetTargetFilter(_self: typeof(AimController), instance: Instance)
@@ -729,21 +729,21 @@ function AimController.Start(self: typeof(AimController))
 		self:_applyAutoAimProfile(profile)
 	end)
 
-	self.OnMagicActivate:Connect(function(equipSlot: number, skillshotEnabled: boolean)
+	self.OnArcaneActivate:Connect(function(equipSlot: number, skillshotEnabled: boolean)
 		if PlayerStateController:GeneralActionEnabled() == false then
 			return
 		end
 
-		MagicController:ToggleMobileIndicator(skillshotEnabled, equipSlot)
+		ArcaneController:ToggleMobileIndicator(skillshotEnabled, equipSlot)
 
 		if skillshotEnabled then
 			return
 		end
 
-		-- The heading lock rides CastMagic now (BeginCastLock), for every
+		-- The heading lock rides CastArcane now (BeginCastLock), for every
 		-- platform and for the spell's real duration. This branch used to
 		-- stamp its own 0.25s SkillshotDelay here.
-		MagicController:CastMagic(equipSlot)
+		ArcaneController:CastArcane(equipSlot)
 	end)
 end
 

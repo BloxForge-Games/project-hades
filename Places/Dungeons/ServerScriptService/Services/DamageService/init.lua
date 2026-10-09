@@ -41,7 +41,7 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local LifeService = require(ServerScriptService.Services.LifeService)
 local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
 local AuraService = require(ServerScriptService.Services.AuraService)
-local MagicService = require(ServerScriptService.Services.MagicService)
+local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -605,7 +605,7 @@ function DamageService._postDamage(
 	end
 end
 
--- Lightning Orb (Storm Rare): ANY damage — weapon or magic, per TARGET (an
+-- Lightning Orb (Storm Rare): ANY damage — weapon or arcane, per TARGET (an
 -- AoE hitting three mobs rolls three times), relic procs included — has a
 -- chance to grant Stormcharged. TWO TIERS: the callback's base normally,
 -- and this when the hit CRIT. "increased to", so they replace each other
@@ -680,12 +680,12 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 	forEachEnemyInRadius(strikePosition, LIGHTNING_STRIKE_RADIUS, function(model, targetHumanoid)
 		-- Full pipeline, relic-sourced: amp chain and crit roll apply, but
 		-- relic-sourced damage can never trigger ANOTHER strike, and the
-		-- appliers roll per target like any relic magic.
+		-- appliers roll per target like any relic arcane.
 		-- isMagic = false: the strike rides the untyped relic lane; a
-		-- magic flag would wrongly pick up Painted's magic vulnerability.
+		-- arcane flag would wrongly pick up Painted's arcane vulnerability.
 		self:TakeDamage(player, targetHumanoid, strikeDamage, false, false, nil, true)
 		if getStatusConditionService() then
-			getStatusConditionService():ApplyMagicOnHitStatuses(player, model)
+			getStatusConditionService():ApplyArcaneOnHitStatuses(player, model)
 		end
 	end)
 end
@@ -704,19 +704,19 @@ function DamageService._tryShurikenManaRefund(self: typeof(DamageService), playe
 	end
 	self._shurikenLastRefund[player.UserId] = now
 
-	local magicData = MagicService:GetPlayerMagicData(player)
-	if not magicData or not magicData.maxMana or magicData.mana >= magicData.maxMana then
+	local arcaneData = ArcaneService:GetPlayerArcaneData(player)
+	if not arcaneData or not arcaneData.maxMana or arcaneData.mana >= arcaneData.maxMana then
 		return
 	end
 
-	local restored = math.min(magicData.mana + magicData.maxMana * SHURIKEN_MANA_FRACTION, magicData.maxMana)
-	MagicService:SetPlayerMagicData(player, restored, magicData.maxMana)
+	local restored = math.min(arcaneData.mana + arcaneData.maxMana * SHURIKEN_MANA_FRACTION, arcaneData.maxMana)
+	ArcaneService:SetPlayerArcaneData(player, restored, arcaneData.maxMana)
 end
 
 -- The player's crit CHANCE (0-100) and crit MULTIPLIER for one hit.
 -- Composition:
 --   chance = 5 + Shuriken (+5) + Ban Hammer (+25) + Stormcharged (+15)
---            + Sparkle Time (+50, magic while Stormcharged)
+--            + Sparkle Time (+50, arcane while Stormcharged)
 --            + Ninja Whip (+10 vs Shocked targets)
 --   multiplier = 1.5 + Stormcharged (+0.15)
 --                + Dragon's Flame Sword (+0.35 vs Burning)
@@ -772,7 +772,7 @@ function DamageService.GetCritParameters(
 		end
 	end
 
-	-- Sparkle Time Hoverboard on MAGIC hits while Stormcharged. Read from
+	-- Sparkle Time Hoverboard on ARCANE hits while Stormcharged. Read from
 	-- the relic callback (percentage points) -- the old local constant
 	-- silently stayed at 25 when the relic was buffed to 50, which is
 	-- exactly the drift a single source prevents.
@@ -831,7 +831,7 @@ end
 -- The additive TARGET-CONDITIONAL relic bonuses for one hit, as a summed
 -- FRACTION (joins the same additive pool as the damage modules).
 -- `skipTyped` = the untyped relic lane: rows whose card names Weapon
--- or Magic damage are excluded (magic-gated rows are already out via
+-- or Magic damage are excluded (arcane-gated rows are already out via
 -- isMagic = false; weapon-gated rows need the explicit skip).
 function DamageService._sumTargetConditionalBonuses(
 	_self: typeof(DamageService),
@@ -894,20 +894,21 @@ function DamageService._sumTargetConditionalBonuses(
 			else (DamageService.RelicEffect(snapshot, RelicNames["Mechatronic Spider"]) or 1) - 1
 	end
 
-	-- Frost payoffs. Frozen Flail is MAGIC-only per its card.
+	-- Frost payoffs. Frozen Flail is ARCANE-only per its card.
 	if isChilled and isMagic and DamageService.RelicCount(snapshot, RelicNames["Frozen Flail"]) > 0 then
 		bonus += (DamageService.RelicEffect(snapshot, RelicNames["Frozen Flail"]) or 1) - 1
 	end
 
 	-- Ice Dragon Slayer: gated on MANA, not on the target. The Chilled
 	-- value REPLACES the base.
-	if DamageService.RelicCount(snapshot, RelicNames["Ice Dragon Slayer"]) > 0 and MagicService then
-		local magicData = MagicService:GetPlayerMagicData(player)
+	if DamageService.RelicCount(snapshot, RelicNames["Ice Dragon Slayer"]) > 0 and ArcaneService then
+		local arcaneData = ArcaneService:GetPlayerArcaneData(player)
 		if
-			magicData
-			and magicData.maxMana
-			and magicData.maxMana > 0
-			and magicData.mana / magicData.maxMana > relicData(RelicNames["Ice Dragon Slayer"], "manaFraction", 0.5)
+			arcaneData
+			and arcaneData.maxMana
+			and arcaneData.maxMana > 0
+			and arcaneData.mana / arcaneData.maxMana
+				> relicData(RelicNames["Ice Dragon Slayer"], "manaFraction", 0.5)
 		then
 			bonus += if isChilled
 				then relicData(RelicNames["Ice Dragon Slayer"], "chilledBonus", 0.25)
@@ -985,7 +986,7 @@ function DamageService._targetVulnerabilityMultiplier(
 
 	local multiplier = 1 + vulnerability
 
-	-- Painted: +20% MAGIC damage, from the APPLIER only (Magenta Paintball
+	-- Painted: +20% ARCANE damage, from the APPLIER only (Magenta Paintball
 	-- Gun's "from you").
 	if isMagic and targetModel:GetAttribute(STATUS_ATTRIBUTE_PREFIX .. StatusConditions.Paint) == true then
 		local paintConfig = StatusConditionData[StatusConditions.Paint]
@@ -1079,14 +1080,14 @@ function DamageService.TakeDamage(
 
 	isMelee = isMelee or false
 
-	-- Exactly "a gun shot": not magic, not melee, not a relic burst, not a
+	-- Exactly "a gun shot": not arcane, not melee, not a relic burst, not a
 	-- status tick (those returned above), and not a spell already converted
 	-- the OTHER way by Sword of the Epicredness. Read once, BEFORE the
 	-- Orinthian conversion flips isMagic, because a converted shot is still
 	-- a bullet for everything below that cares about bullets.
 	local isGunShot = not isMagic and not isMelee and not isRelicSourced and not isConvertedSpell
 
-	-- Orinthian Blaster 3777: ranged weapon hits are CONVERTED to Magic
+	-- Orinthian Blaster 3777: ranged weapon hits are CONVERTED to Arcane
 	-- Damage. `isConvertedRanged` keeps the shot's RANGED identity alive
 	-- for the ranged-conditional procs.
 	local isConvertedRanged = false
@@ -1124,7 +1125,7 @@ function DamageService.TakeDamage(
 		+ (if untypedOnly then 0 else self._onDamageModules["MysticalSigil"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["LaserScythes"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["AuraDamage"](player, snapshot, damage, isMagic))
-		-- Sword of Eternal Abyss: flat +50%, weapon and magic alike. Inline
+		-- Sword of Eternal Abyss: flat +50%, weapon and arcane alike. Inline
 		-- rather than a module because it is one unconditional multiplier
 		-- with no gating of its own.
 		+ (if DamageService.RelicCount(snapshot, RelicNames["Sword of Eternal Abyss"]) > 0
@@ -1167,7 +1168,7 @@ function DamageService.TakeDamage(
 		totalDamage *= self:_targetVulnerabilityMultiplier(player, targetModel, isMagic)
 	end
 
-	-- Double-Bladed Scythe (Cursed): magic halved, weapon +50%,
+	-- Double-Bladed Scythe (Cursed): arcane halved, weapon +50%,
 	-- multiplicative on the amplified total (a Cursed override, not part of
 	-- the additive pool). A TYPED relic, so it obeys the untyped lane like
 	-- the modules above — relic bursts arrive as isMagic=false and were
@@ -1181,7 +1182,7 @@ function DamageService.TakeDamage(
 	end
 
 	-- Greater Shrine "Power": one multiplier over the whole number, on
-	-- EVERY lane -- weapon, magic and relic bursts alike (it sits after
+	-- EVERY lane -- weapon, arcane and relic bursts alike (it sits after
 	-- the untyped-lane branches above on purpose). Run-scoped, stacks.
 	totalDamage *= 1 + PlayerStatsService:GetGreaterShrineEffect(player, "Damage")
 
@@ -1197,11 +1198,11 @@ function DamageService.TakeDamage(
 	-- Damage-type resistances (ZombieData flags): x0.5 vs the resisted
 	-- type, grey number, matching resist sound on the client. RELIC-SOURCED
 	-- damage bypasses both: a relic's listed number is what it deals —
-	-- previously TNT / tremor / Ghost Dragon (neither melee nor magic) were
+	-- previously TNT / tremor / Ghost Dragon (neither melee nor arcane) were
 	-- silently halved by projectile-resistant mobs via the not-melee-not-
-	-- magic bucket below. Projectile resistance is against BULLETS: a spell
+	-- arcane bucket below. Projectile resistance is against BULLETS: a spell
 	-- Sword of the Epicredness turned into weapon damage is not one, and it
-	-- landed in the not-melee-not-magic bucket the same way until it was
+	-- landed in the not-melee-not-arcane bucket the same way until it was
 	-- excluded here.
 	local isMagicResistedHit = isMagicResistant and isMagic and not isRelicSourced
 	local isResistedHit = (
@@ -1212,7 +1213,7 @@ function DamageService.TakeDamage(
 		and not isConvertedSpell
 	) or isMagicResistedHit
 
-	-- Number colour by damage kind: resisted grey > magic purple > weapon
+	-- Number colour by damage kind: resisted grey > arcane purple > weapon
 	-- orange (melee and ranged both — anything that isn't relic-sourced)
 	-- > relic white. Crit gold overrides all of these on the client.
 	local hitColor: Color3? = if isResistedHit
@@ -1227,7 +1228,7 @@ function DamageService.TakeDamage(
 
 	-- A gun shot draws its own BulletImpact where the bullet landed, so the
 	-- generic HitFX sparks are dropped for it: two bursts on one hit read
-	-- as a double impact. Melee and magic keep the sparks.
+	-- as a double impact. Melee and arcane keep the sparks.
 	--
 	-- Done with a trailing `sparks = false` on the normal ShowIndicator,
 	-- NOT via ShowIndicatorNoHitVFX: that one never fires the VFX signal

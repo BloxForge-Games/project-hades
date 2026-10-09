@@ -349,7 +349,7 @@ function LifeController._getPlayerControls(self: typeof(LifeController))
 end
 
 -- Revokes movement input via PlayerModule:GetControls():Disable(). Other
--- ability gates (dodge, magic, weapon fire) are handled by
+-- ability gates (dodge, arcane, weapon fire) are handled by
 -- PlayerStateController checking Attributes.Death — both are set by the
 -- server-replicated attribute, so this controller doesn't need to touch them.
 -- Idempotent.

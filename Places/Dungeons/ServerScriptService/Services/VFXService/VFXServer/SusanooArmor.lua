@@ -3,9 +3,9 @@ local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local VFXService = require(ServerScriptService.Services.VFXService)
 local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -18,7 +18,7 @@ return function(player: Player)
 	local hrp = character:WaitForChild("HumanoidRootPart") :: BasePart
 
 	-- Clone the rig
-	local susanooRig = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].Armor:Clone()
+	local susanooRig = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].Armor:Clone()
 
 	-- Ensure PrimaryPart is set correctly in Studio
 	local primary = susanooRig.PrimaryPart
@@ -60,7 +60,7 @@ return function(player: Player)
 	alignOrientation.Parent = primary
 
 	-- Parent to a clean folder
-	susanooRig.Parent = workspace.IgnoreInstances.MagicSpells
+	susanooRig.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Important: assign physics ownership on the SERVER
 	susanooRig.PrimaryPart:SetNetworkOwner(player)
@@ -68,7 +68,7 @@ return function(player: Player)
 	-- Load & play animation
 	local animator = susanooRig:WaitForChild("AnimationController"):WaitForChild("Animator")
 
-	task.delay(MagicData[MagicNames["Susanoo Armor"]].duration, function()
+	task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
 		susanooRig.SusanooPart.SurfaceGui.Enabled = false
 	end)
 
@@ -76,9 +76,9 @@ return function(player: Player)
 		targetAttachment.Position = Vector3.new(0, 5, 0)
 
 		task.delay(0.05, function()
-			local castVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].CastPart:Clone()
+			local castVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].CastPart:Clone()
 			castVFX.CFrame = hrp.CFrame
-			castVFX.Parent = workspace.IgnoreInstances.MagicSpells
+			castVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 			for _, particle in pairs(castVFX:GetDescendants()) do
 				if particle:IsA("ParticleEmitter") then
@@ -116,14 +116,14 @@ return function(player: Player)
 			return
 		end
 
-		local attackVFXPart = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].AttackPart:Clone()
-		local range = MagicData[MagicNames["Susanoo Armor"]].range
+		local attackVFXPart = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].AttackPart:Clone()
+		local range = ArcaneData[ArcaneNames["Susanoo Armor"]].range
 		local hitboxCFrame = CFrame.new(
 			susanooRig.PrimaryPart.CFrame.Position + root.CFrame.LookVector * range + Vector3.new(0, -7.5, 0)
 		) * CFrame.Angles(0, root.CFrame:ToEulerAnglesYXZ(), 0)
 
 		attackVFXPart.CFrame = hitboxCFrame
-		attackVFXPart.Parent = workspace.IgnoreInstances.MagicSpells
+		attackVFXPart.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		for _, particle in pairs(attackVFXPart:GetDescendants()) do
 			if particle:IsA("ParticleEmitter") then
@@ -142,19 +142,19 @@ return function(player: Player)
 		emitVFXPart("GroundDust", hitboxCFrame, nil, { GroundSnapDistance = 10 })
 
 		VFXService:CreateHitbox(
-			MagicNames["Susanoo Armor"],
+			ArcaneNames["Susanoo Armor"],
 			player,
 			hitboxCFrame,
 			TagList.Zombie,
 			IgnoreListService:GetWeaponIgnoreList(),
 			function(model: Model)
-				onHitboxDamage(model, hitboxCFrame, player, MagicData[MagicNames["Susanoo Armor"]], true, false)
+				onHitboxDamage(model, hitboxCFrame, player, ArcaneData[ArcaneNames["Susanoo Armor"]], true, false)
 			end,
-			MagicData[MagicNames["Susanoo Armor"]].hitboxSize.X
+			ArcaneData[ArcaneNames["Susanoo Armor"]].hitboxSize.X
 		)
 	end)
 
-	task.delay(MagicData[MagicNames["Susanoo Armor"]].lifetime, function()
+	task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime, function()
 		animationConnection:Disconnect()
 		attackAnimation:Stop(0.25)
 
@@ -164,9 +164,9 @@ return function(player: Player)
 
 		VFXService:_onAuraAttackStop(player)
 
-		local castVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Susanoo Armor"]].CastPart:Clone()
+		local castVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].CastPart:Clone()
 		castVFX.CFrame = hrp.CFrame
-		castVFX.Parent = workspace.IgnoreInstances.MagicSpells
+		castVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		for _, particle in pairs(castVFX:GetDescendants()) do
 			if particle:IsA("ParticleEmitter") then

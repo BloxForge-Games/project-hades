@@ -226,7 +226,7 @@ end
 local function playSlamVFX(gate: BasePart, originalCFrame: CFrame)
 	local dodgeVFX = ReplicatedStorage.GameAssets.VFX.DungeonDoor.Door:Clone()
 	dodgeVFX:PivotTo(CFrame.new(originalCFrame.Position - Vector3.new(0, (gate.Size.Y / 2), 0)))
-	dodgeVFX.Parent = workspace.IgnoreInstances.MagicSpells
+	dodgeVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	for _, particle in dodgeVFX.Part.Attachment:GetChildren() do
 		if particle:IsA("ParticleEmitter") then

@@ -13,14 +13,14 @@
 	  Frostburst    +50% Magic Damage while up (AuraData).
 	  Blizzard      +15% MORE Magic Damage while Frostburst (relic callback).
 	  Wand
-	  Icy Arctic    +30% damage on MAGIC hits while Frostburst is up (relic
+	  Icy Arctic    +30% damage on ARCANE hits while Frostburst is up (relic
 	  Fowl          callback; its mana-cost half lives in the cost chains).
 	  Staff of      +25% MORE Magic Damage while Frostburst (relic callback)
 	  Azure Ever    — the element-rework replacement for its Frost Crater.
 	  Ice
 	  Stonebound    +damage payload from the marker attributes (base 25% +
-	                the owner's Leland and Spartan riders), weapon AND magic.
-	  Golden        +35% while any Barrier bucket is live, weapon AND magic.
+	                the owner's Leland and Spartan riders), weapon AND arcane.
+	  Golden        +35% while any Barrier bucket is live, weapon AND arcane.
 	  Steampunk     A plain multiplier since the 2026-08 pass — it used to
 	  Gloves        be a level + max-health FLAT term.
 

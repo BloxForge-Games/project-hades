@@ -61,7 +61,7 @@ function DropIndicatorController.Start(self: typeof(DropIndicatorController))
 
 		-- -- Part prop changes
 		-- dropIndicator.Position = character.HumanoidRootPart.Position
-		-- dropIndicator.Parent = workspace.IgnoreInstances.MagicSpells
+		-- dropIndicator.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		-- TweenService:Create(indicator, DEFAULT_TWEEN_INFO_PROPS, {
 		-- 	Size = UDim2.fromScale(5, 1.25),

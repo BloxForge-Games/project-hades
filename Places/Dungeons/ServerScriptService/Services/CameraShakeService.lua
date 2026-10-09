@@ -21,7 +21,7 @@
 	                                     in range or not, no distance
 	                                     falloff -- so any given impact
 	                                     always feels identical. Fired by
-	                                     onHitboxDamage (magic AoE) and
+	                                     onHitboxDamage (arcane AoE) and
 	                                     VFXService.
 
 	A Blitz module with no dependencies.
@@ -69,7 +69,7 @@ function CameraShakeService.Start(self: typeof(CameraShakeService))
 	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
 	self.OnGetBoundsInShakeRadius:Connect(function(_sourceModel: Model?, cframe: CFrame, range: number, preset: string?)
-		-- Emitters may pass their own preset (magic explosions send
+		-- Emitters may pass their own preset (arcane explosions send
 		-- Medium); anything that doesn't falls back to Small.
 		local resolvedPreset = preset or CameraShakePresets.Small
 

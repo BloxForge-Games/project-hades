@@ -1,7 +1,7 @@
 --!strict
 --[[
      Author(s): 
-     Module: MagicService.lua
+     Module: ArcaneService.lua
      Description:
 ]]
 
@@ -19,18 +19,18 @@ local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 
-local MagicService = {
-	Name = "MagicService",
+local ArcaneService = {
+	Name = "ArcaneService",
 	Dependencies = { PlayerEventService } :: { any },
 
-	_playerMagicRegistry = {},
-	_playerMagicCooldownRegistry = {},
+	_playerArcaneRegistry = {},
+	_playerArcaneCooldownRegistry = {},
 }
 
 -- Mana / max mana per player, replicated (was a replicated property).
-MagicService._magicDataProperty = RemoteProperty.Server({
-	changed = PlayerNetwork.MagicDataChanged,
-	get = PlayerNetwork.GetMagicData,
+ArcaneService._arcaneDataProperty = RemoteProperty.Server({
+	changed = PlayerNetwork.ArcaneDataChanged,
+	get = PlayerNetwork.GetArcaneData,
 }, nil)
 
 --[ Imports ]--
@@ -61,10 +61,10 @@ local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 -- to reason about. Fired from Start; loop runs for the lifetime
 -- of the server (no shutdown hook needed since it's a daemon thread).
 --
--- Guards against players whose magic data hasn't been initialized
--- yet (joined mid-tick) by reading GetPlayerMagicData and bailing on
+-- Guards against players whose arcane data hasn't been initialized
+-- yet (joined mid-tick) by reading GetPlayerArcaneData and bailing on
 -- nil. Players whose mana is already at max no-op early so we don't
--- burn cycles firing identical SetPlayerMagicData writes.
+-- burn cycles firing identical SetPlayerArcaneData writes.
 -- True while a living zombie is within combatProximity.RADIUS of the
 -- player — the SAME check that drives the client's InCombat
 -- attribute and the relic dim, so regen and that visual cue switch
@@ -79,7 +79,7 @@ local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 -- non-empty), which regenerated anywhere inside an uncleared room —
 -- including well away from the fight, where the relics had already
 -- un-dimmed.
-function MagicService._isPlayerInCombat(_self: typeof(MagicService), player: Player): boolean
+function ArcaneService._isPlayerInCombat(_self: typeof(ArcaneService), player: Player): boolean
 	local character = player.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if not hrp then
@@ -88,12 +88,12 @@ function MagicService._isPlayerInCombat(_self: typeof(MagicService), player: Pla
 	return combatProximity.isNearLivingZombie(hrp.Position)
 end
 
-function MagicService._runPassiveManaRegenLoop(self: typeof(MagicService))
+function ArcaneService._runPassiveManaRegenLoop(self: typeof(ArcaneService))
 	task.spawn(function()
 		while true do
 			task.wait(PASSIVE_MANA_REGEN_INTERVAL)
 			for _, player in Players:GetPlayers() do
-				local data = self:GetPlayerMagicData(player)
+				local data = self:GetPlayerArcaneData(player)
 				if data == nil then
 					continue
 				end
@@ -109,7 +109,7 @@ function MagicService._runPassiveManaRegenLoop(self: typeof(MagicService))
 				end
 				local regenAmount = data.maxMana * PASSIVE_MANA_REGEN_RATE
 				local newMana = math.min(data.mana + regenAmount, data.maxMana)
-				self:SetPlayerMagicData(player, newMana, data.maxMana)
+				self:SetPlayerArcaneData(player, newMana, data.maxMana)
 			end
 		end
 	end)
@@ -118,62 +118,62 @@ end
 -- Baseline maximum mana before relic bonuses. PlayerStatsService's
 -- RecomputeMana adds the flat relic total on top of this — keep it as
 -- the single source so the two can't drift.
-MagicService.BASE_MAX_MANA = 100
+ArcaneService.BASE_MAX_MANA = 100
 
 --[ Public Functions ]--
 
-function MagicService.SetPlayerMagicLastUsed(
-	self: typeof(MagicService),
+function ArcaneService.SetPlayerArcaneLastUsed(
+	self: typeof(ArcaneService),
 	player: Player,
 	vfxName: string,
 	lastUsed: number
 )
-	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
-		self._playerMagicCooldownRegistry[player][vfxName] = {
+	if self._playerArcaneCooldownRegistry[player][vfxName] == nil then
+		self._playerArcaneCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
 			cooldown = 0,
 		}
 	end
 
-	self._playerMagicCooldownRegistry[player][vfxName].lastUsed = lastUsed
+	self._playerArcaneCooldownRegistry[player][vfxName].lastUsed = lastUsed
 end
 
-function MagicService.SetPlayerMagicCooldown(
-	self: typeof(MagicService),
+function ArcaneService.SetPlayerArcaneCooldown(
+	self: typeof(ArcaneService),
 	player: Player,
 	vfxName: string,
 	cooldown: number
 )
-	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
-		self._playerMagicCooldownRegistry[player][vfxName] = {
+	if self._playerArcaneCooldownRegistry[player][vfxName] == nil then
+		self._playerArcaneCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
 			cooldown = 0,
 		}
 	end
 
-	self._playerMagicCooldownRegistry[player][vfxName].cooldown = cooldown
+	self._playerArcaneCooldownRegistry[player][vfxName].cooldown = cooldown
 end
 
-function MagicService.GetPlayerMagicLastUsed(self: typeof(MagicService), player: Player, vfxName: string)
-	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
-		self._playerMagicCooldownRegistry[player][vfxName] = {
+function ArcaneService.GetPlayerArcaneLastUsed(self: typeof(ArcaneService), player: Player, vfxName: string)
+	if self._playerArcaneCooldownRegistry[player][vfxName] == nil then
+		self._playerArcaneCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
 			cooldown = 0,
 		}
 	end
 
-	return self._playerMagicCooldownRegistry[player][vfxName].lastUsed
+	return self._playerArcaneCooldownRegistry[player][vfxName].lastUsed
 end
 
-function MagicService.GetPlayerMagicCooldown(self: typeof(MagicService), player: Player, vfxName: string)
-	if self._playerMagicCooldownRegistry[player][vfxName] == nil then
-		self._playerMagicCooldownRegistry[player][vfxName] = {
+function ArcaneService.GetPlayerArcaneCooldown(self: typeof(ArcaneService), player: Player, vfxName: string)
+	if self._playerArcaneCooldownRegistry[player][vfxName] == nil then
+		self._playerArcaneCooldownRegistry[player][vfxName] = {
 			lastUsed = 0,
 			cooldown = 0,
 		}
 	end
 
-	return self._playerMagicCooldownRegistry[player][vfxName].cooldown
+	return self._playerArcaneCooldownRegistry[player][vfxName].cooldown
 end
 
 -- Overcharged is NO LONGER granted here. It used to fire whenever mana hit
@@ -183,16 +183,16 @@ end
 -- Korblox Mage Staff on cast, Lightblox Jar on mana-orb pickup — so
 -- Overcharged is something you build toward rather than something a full
 -- mana bar hands you for free.
-function MagicService.SetPlayerMagicData(self: typeof(MagicService), player: Player, mana: number, maxMana: number)
-	self._magicDataProperty:SetFor(player, { mana = mana, maxMana = maxMana })
+function ArcaneService.SetPlayerArcaneData(self: typeof(ArcaneService), player: Player, mana: number, maxMana: number)
+	self._arcaneDataProperty:SetFor(player, { mana = mana, maxMana = maxMana })
 	self:_stampManaAttributes(player)
 end
 
 -- Mirror the current mana onto the character as replicated attributes so
 -- every client can draw it (ManaBillboardGui). See Attributes.Mana.
-function MagicService._stampManaAttributes(self: typeof(MagicService), player: Player)
+function ArcaneService._stampManaAttributes(self: typeof(ArcaneService), player: Player)
 	local character = player.Character
-	local data = self._magicDataProperty:GetFor(player)
+	local data = self._arcaneDataProperty:GetFor(player)
 	if not character or not data then
 		return
 	end
@@ -203,9 +203,9 @@ end
 -- Returns nil before OnPlayerAdded has seeded the player's data. The
 -- declared return type stays non-optional because several callers index
 -- the result directly; nil-check where a mid-join race is possible.
--- nil until the player's magic data has been seeded (join-frame callers).
-function MagicService.GetPlayerMagicData(self: typeof(MagicService), player: Player): { [any]: any }?
-	local data = self._magicDataProperty:GetFor(player)
+-- nil until the player's arcane data has been seeded (join-frame callers).
+function ArcaneService.GetPlayerArcaneData(self: typeof(ArcaneService), player: Player): { [any]: any }?
+	local data = self._arcaneDataProperty:GetFor(player)
 	if data == nil then
 		return nil
 	end
@@ -215,11 +215,11 @@ end
 
 --[ Initializers ]--
 
-function MagicService.Start(self: typeof(MagicService))
+function ArcaneService.Start(self: typeof(ArcaneService))
 	PlayerEventService.OnPlayerAdded:Connect(function(player: Player)
-		self:SetPlayerMagicData(player, self.BASE_MAX_MANA, self.BASE_MAX_MANA)
+		self:SetPlayerArcaneData(player, self.BASE_MAX_MANA, self.BASE_MAX_MANA)
 
-		self._playerMagicCooldownRegistry[player] = {}
+		self._playerArcaneCooldownRegistry[player] = {}
 	end)
 
 	-- A fresh character has no attributes: re-stamp the current mana onto it
@@ -229,8 +229,8 @@ function MagicService.Start(self: typeof(MagicService))
 	end)
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
-		self._playerMagicRegistry[player] = nil
-		self._playerMagicCooldownRegistry[player] = nil
+		self._playerArcaneRegistry[player] = nil
+		self._playerArcaneCooldownRegistry[player] = nil
 	end)
 
 	-- Passive 1%/sec regen for every player. Runs as a daemon thread for
@@ -239,4 +239,4 @@ function MagicService.Start(self: typeof(MagicService))
 	self:_runPassiveManaRegenLoop()
 end
 
-return MagicService
+return ArcaneService

@@ -14,7 +14,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 type RelicSnapshot = DamageService.RelicSnapshot
 
 return function(_player: Player, snapshot: RelicSnapshot, damage: number, _isMagic: boolean)
-	-- No damage-type gate — the bonus applies to weapon AND magic. The
+	-- No damage-type gate — the bonus applies to weapon AND arcane. The
 	-- magnitude scales linearly with the caster's CURRENT HP (up to +20%
 	-- at full); the curve lives in the RelicData callback, read fresh on
 	-- every hit (the snapshot lists this relic as `live`, so RelicEffect

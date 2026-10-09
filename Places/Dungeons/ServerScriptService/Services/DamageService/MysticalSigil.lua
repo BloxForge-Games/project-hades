@@ -1,8 +1,8 @@
 --!strict
--- Mystical Staff of Cyan (Legendary): two magic-damage halves per the
+-- Mystical Staff of Cyan (Legendary): two arcane-damage halves per the
 -- relic description:
---   * OWNER passive: +40% Magic Damage on every magic hit.
---   * Sigil zone: +25% Magic Damage while standing in ANY live Magic
+--   * OWNER passive: +40% Magic Damage on every arcane hit.
+--   * Sigil zone: +25% Magic Damage while standing in ANY live Arcane
 --     Sigil circle -- ownership-blind ("anyone standing in the circle"),
 --     so unlike the passive there is NO registry gate on it.
 --

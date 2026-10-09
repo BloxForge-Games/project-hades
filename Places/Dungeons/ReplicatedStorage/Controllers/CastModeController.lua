@@ -2,7 +2,7 @@
 --[[
 	Module: Client/Controllers/CastModeController.lua
 	Description:
-	Owns the QUICK CAST / NORMAL CAST toggle for magic on keyboard + mouse
+	Owns the QUICK CAST / NORMAL CAST toggle for arcane on keyboard + mouse
 	(League-style), and the topbar button that flips it.
 
 	  Quick Cast  (default)  Press the spell key -> fires instantly toward
@@ -19,13 +19,13 @@
 	                         spent. Pressing the SAME spell key again, or
 	                         ANY OTHER spell key / toolbar slot, also
 	                         cancels (it does not switch -- press the new
-	                         spell again to aim it). Clicking a magic slot
+	                         spell again to aim it). Clicking a arcane slot
 	                         on the toolbar arms it the same way; the next
 	                         left-click on the WORLD fires it (a click on UI
 	                         is gameProcessed and ignored).
 
 	Blocked spells never enter aim mode: the press runs the exact same
-	gates a Quick Cast would (MagicController:CanCastMagic -- mana,
+	gates a Quick Cast would (ArcaneController:CanCastArcane -- mana,
 	cooldown, action state) and gives the same feedback up front, so the
 	player never aims something that then refuses to fire.
 
@@ -53,7 +53,7 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Imports ]--
 
-local MagicController = require(ReplicatedStorage.Controllers.MagicController)
+local ArcaneController = require(ReplicatedStorage.Controllers.ArcaneController)
 local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateController)
 local InputPlatformController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.InputPlatformController)
 local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DataController)
@@ -69,7 +69,7 @@ local DEFAULT_QUICK_CAST = true
 
 local CastModeController = {
 	Name = "CastModeController",
-	Dependencies = { MagicController, PlayerStateController, InputPlatformController, DataController } :: { any },
+	Dependencies = { ArcaneController, PlayerStateController, InputPlatformController, DataController } :: { any },
 }
 
 CastModeController.Signals = {
@@ -126,7 +126,7 @@ end
 -- can never strand aim mode (it warns and the aim proceeds without it).
 function CastModeController._setIndicator(_self: typeof(CastModeController), slot: number, visible: boolean)
 	local ok, err = pcall(function()
-		MagicController:ToggleMobileIndicator(visible, slot)
+		ArcaneController:ToggleMobileIndicator(visible, slot)
 	end)
 	if not ok then
 		warn("[CastModeController] indicator toggle failed for slot " .. tostring(slot) .. ": " .. tostring(err))
@@ -146,7 +146,7 @@ function CastModeController.BeginAim(self: typeof(CastModeController), slot: num
 	end
 
 	-- Same gates + same feedback as a Quick Cast attempt.
-	if not MagicController:CanCastMagic(slot) then
+	if not ArcaneController:CanCastArcane(slot) then
 		return
 	end
 
@@ -182,12 +182,12 @@ function CastModeController.CancelAim(self: typeof(CastModeController))
 	self:_closeAim()
 end
 
--- Fires the aimed spell. CastMagic re-runs the gates itself, so a spell
+-- Fires the aimed spell. CastArcane re-runs the gates itself, so a spell
 -- that became uncastable during the aim is still refused there.
 function CastModeController.FireAim(self: typeof(CastModeController))
 	local slot = self:_closeAim()
 	if slot ~= nil then
-		MagicController:CastMagic(slot)
+		ArcaneController:CastArcane(slot)
 	end
 end
 
@@ -197,7 +197,7 @@ end
 function CastModeController.OnSpellKey(self: typeof(CastModeController), slot: number, inputState: Enum.UserInputState)
 	if not self:_normalCastActive() then
 		if inputState == Enum.UserInputState.Begin then
-			MagicController:CastMagic(slot)
+			ArcaneController:CastArcane(slot)
 		end
 		return
 	end
@@ -218,7 +218,7 @@ function CastModeController.OnToolbarSlotClicked(self: typeof(CastModeController
 	if self:_normalCastActive() then
 		self:BeginAim(slot)
 	else
-		MagicController:CastMagic(slot)
+		ArcaneController:CastArcane(slot)
 	end
 end
 
