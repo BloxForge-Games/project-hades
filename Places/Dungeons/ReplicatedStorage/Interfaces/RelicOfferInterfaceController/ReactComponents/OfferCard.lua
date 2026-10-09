@@ -17,15 +17,18 @@
 	  handle.tweenScale(s, info)
 	  handle.setOffset(udim2)   the card's displacement from its slot
 	  handle.tweenOffset(udim2, info)   (the deal-in, the sink, the rise).
-	  handle.setHover(on)       the selected look: lift + SelectionUIStroke.
+	  handle.setHover(on)       the selected look: lift + SelectionUIStroke,
+	                            and slides the keyword tooltips out past
+	                            the card's right edge.
 	  handle.setDim(on)         a black veil over the card (the unfocused
 	                            look while another card is hovered).
-	  handle.brightenStroke()   the chosen card's stroke goes white.
+	  handle.brightenStroke()   the chosen card's stroke goes fully opaque.
 	  handle.sweep()            a light streak crosses the card once.
 	  handle.flash()            the pick: the card flashes white for a beat.
-	  handle.shockwave()        the pick: a ring in the tier colour expands
+	  handle.shockwave()        the pick: a ring in the element colour expands
 	                            from the card's edge and fades.
 	  handle.wobble()           the refused shake.
+	  handle.setDim(on) also fades this card's embers (see below).
 	  handle.slotCenter()       the slot's centre on screen, for the deal.
 	  handle.rarity             ItemRarity value.
 
@@ -54,6 +57,8 @@ local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.Rarit
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
+local getRelicKeywords = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicKeywords)
+local KeywordData = require(ReplicatedStorage.Submodules.Core.Shared.Data.KeywordData)
 
 --[ Tuning ]--
 
@@ -67,7 +72,7 @@ local CARD_IMAGES: { [string]: string } = {
 	[ElementTrees.Storm] = "rbxassetid://99232530276305",
 	[ElementTrees.Frost] = "rbxassetid://77047957089894",
 	[ElementTrees.Venom] = "rbxassetid://88646270168092",
-	[ElementTrees.Earth] = "rbxassetid://79296494000202",
+	[ElementTrees.Earth] = "rbxassetid://104765754040829",
 	[ElementTrees.Neutral] = "rbxassetid://130599641461508",
 }
 local DEFAULT_CARD_IMAGE = CARD_IMAGES[ElementTrees.Neutral]
@@ -76,7 +81,7 @@ local DEFAULT_CARD_IMAGE = CARD_IMAGES[ElementTrees.Neutral]
 local CARD_TINTS: { [string]: Color3 } = {
 	[ElementTrees.Blaze] = Color3.fromRGB(255, 102, 0),
 	[ElementTrees.Frost] = Color3.fromRGB(126, 253, 255),
-	[ElementTrees.Storm] = Color3.fromRGB(193, 94, 255),
+	[ElementTrees.Storm] = Color3.fromRGB(255, 85, 255),
 	[ElementTrees.Venom] = Color3.fromRGB(13, 212, 93),
 	[ElementTrees.Earth] = Color3.fromRGB(255, 183, 0),
 	[ElementTrees.Neutral] = Color3.fromRGB(207, 207, 207),
@@ -137,9 +142,15 @@ local PILL_WIDTH_BASE = 0.1
 local PILL_WIDTH_PER_CHARACTER = 0.039
 
 -- The selected look: SelectionUIStroke on the art (ScaledSize) while the
--- cursor is on the card; white on the card that was chosen.
-local SELECTION_STROKE_COLOR = Color3.fromRGB(194, 232, 255)
-local CHOSEN_STROKE_COLOR = Color3.fromRGB(255, 255, 255)
+-- cursor is on the card, in the relic's ELEMENT tint (cardTint, the same
+-- tint the card art and the embers wear), so hovering reads as "this
+-- element" rather than one shared highlight for every card. The chosen
+-- card holds that same tint -- the pick is marked by the shockwave ring
+-- and the stroke staying lit, never by a colour change.
+-- Lit strokes stop HALF transparent rather than solid: at full opacity a
+-- saturated element tint flares on the card edge. Hover, the chosen card
+-- and the shockwave ring all start here, so the three read as one effect.
+local LIT_STROKE_TRANSPARENCY = 0.5
 local SELECTION_STROKE_THICKNESS = 0.01
 -- The art sits this much inside the CanvasGroup so the Border stroke
 -- has room to draw without the group's bounds clipping it.
@@ -173,7 +184,10 @@ local DIM_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirectio
 local STROKE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 -- The unfocused veil: a black frame over the card, this opaque. The
 -- card itself stays fully drawn underneath; only the veil moves.
-local DIM_TRANSPARENCY = 0.45
+-- Deeper than it needs to be for focus alone: the hovered card's keyword
+-- tooltips extend over its neighbour, and the veil is what keeps that
+-- card's art and embers from competing with the tooltip text.
+local DIM_TRANSPARENCY = 0.3
 
 -- The light sweep: a soft white streak crossing the card. Once as the
 -- card lands (the Container), then on the card's own timer, every
@@ -215,34 +229,56 @@ local BOB_PHASE_PER_CARD = 0.6
 -- rotation renders the subtree with sub-pixel placement instead.
 local SUBPIXEL_ROTATION = 0.01
 
--- The orbit: glowing squares in the rarity colour circling just outside the
--- card's edge, behind it, spinning and pulsing. More for higher rarity.
--- They live in their own CanvasGroup (larger than the card, so it can hold
--- them) that fades with the card.
-local ORBIT_COUNTS: { [string]: number } = {
-	[ItemRarity.Rare] = 4,
-	[ItemRarity.Epic] = 6,
-	[ItemRarity.Legendary] = 8,
-	[ItemRarity.Cursed] = 8,
-}
-local ORBIT_DEFAULT_COUNT = 4
--- The group's size relative to the card slot; the card fills the centre.
-local ORBIT_GROUP_SCALE = 1.3
--- Path: the card's outline pushed out by this much (fraction of the card
--- width), with rounded corners of this radius (same unit).
-local ORBIT_MARGIN = 0.035
-local ORBIT_CORNER_RADIUS = 0.1
--- Seconds for one square to travel all the way round.
-local ORBIT_LAP_SECONDS = 10
--- Square size (fraction of the card width), and its pulse.
-local ORBIT_SQUARE_SIZE = 0.028
-local ORBIT_PULSE_AMOUNT = 0.3
-local ORBIT_PULSE_SPEED = 2.2
-local ORBIT_SPIN_DEGREES_PER_SECOND = 90
-local ORBIT_TRANSPARENCY_MIN = 0.1
-local ORBIT_TRANSPARENCY_MAX = 0.45
-local ORBIT_GLOW_BLUR = UDim.new(0, 8)
-local ORBIT_GLOW_TRANSPARENCY = 0.35
+-- The embers: small sparks in the relic's ELEMENT colour (cardTint, the
+-- same tint the card art wears) drifting UP around the card,
+-- swaying as they rise and shimmering on their own phase, like the lazy
+-- top of a fire. Most sit BEHIND the card; a few pass in FRONT of it,
+-- smaller and fainter, which is what sells the card as being inside the
+-- effect rather than pasted on top of it.
+--
+-- Every card's embers are posed by ONE shared Heartbeat (see the driver
+-- below), the same way DropFloatController poses every floating pickup --
+-- three cards must not mean three connections.
+local EMBER_BACK_COUNT = 8
+local EMBER_FRONT_COUNT = 4
+-- The field the embers travel, relative to the card. Wider and taller than
+-- the card so they drift past its edges instead of stopping at them.
+local EMBER_FIELD_WIDTH = 1.32
+local EMBER_FIELD_HEIGHT = 1.28
+-- Seconds for one ember to cross the field bottom to top. Randomised per
+-- ember inside this range -- slow, so the effect reads as drift, not rain.
+local EMBER_RISE_SECONDS_MIN = 6
+local EMBER_RISE_SECONDS_MAX = 9.5
+-- The sway as it rises: amplitude in field-widths, and how fast it weaves.
+local EMBER_SWAY_MIN = 0.02
+local EMBER_SWAY_MAX = 0.055
+local EMBER_SWAY_SPEED_MIN = 0.25
+local EMBER_SWAY_SPEED_MAX = 0.7
+-- Ember size as a fraction of the field. Scale on BOTH axes against a
+-- taller-than-wide field gives a slightly vertical spark, which is the
+-- shape a rising ember should have -- so no aspect constraint per ember.
+local EMBER_SIZE_MIN = 0.013
+local EMBER_SIZE_MAX = 0.025
+-- Front embers are smaller and fainter than the ones behind: that size and
+-- opacity gap is the whole depth cue.
+local EMBER_FRONT_SIZE_SCALE = 0.75
+local EMBER_FRONT_OPACITY_SCALE = 0.75
+-- Peak opacity, and the shimmer that rides on top of it. The shimmer
+-- never swings to zero -- it dips to the FLOOR and back, so an ember
+-- pulses rather than blinking out, and the field keeps its brightness
+-- instead of averaging half of it away.
+local EMBER_OPACITY_MIN = 0.55
+local EMBER_OPACITY_MAX = 0.8
+local EMBER_SHIMMER_FLOOR = 0.55
+local EMBER_SHIMMER_SPEED_MIN = 1.4
+local EMBER_SHIMMER_SPEED_MAX = 3.2
+-- Fractions of the rise spent fading in at the bottom and out at the top,
+-- so embers never pop into or out of existence.
+local EMBER_FADE_IN = 0.18
+local EMBER_FADE_OUT = 0.3
+-- While ANOTHER card is hovered, this card's embers fade to here. The
+-- hovered card's embers are left alone.
+local EMBER_DIM_TRANSPARENCY = 0.5
 
 -- Text caps so a 4K desktop does not blow the copy up with the card.
 local TITLE_MAX_TEXT_SIZE = 22
@@ -253,6 +289,104 @@ local DESCRIPTION_MAX_TEXT_SIZE = 15
 -- console keep the scaled text above.
 local PHONE_TITLE_TEXT_SIZE = 11
 local PHONE_DESCRIPTION_TEXT_SIZE = 8
+
+-- The KEYWORD TOOLTIPS: one plate per hoverable keyword in the card's
+-- description (getRelicKeywords), stacked in a UIListLayout column that
+-- slides out past the card's right edge on hover.
+--
+-- Always to the RIGHT, on every card, because a tooltip that switches
+-- sides is a tooltip the player has to look for. On cards 1 and 2 the
+-- column lands over the neighbouring card, which is why the hovered
+-- card raises its SLOT's ZIndex (the row draws slots in order, so a
+-- tooltip buried in slot 1 would otherwise be painted over by slot 2)
+-- and why the other cards take a deeper veil while a card is hovered
+-- (DIM_TRANSPARENCY in Container).
+--
+-- Sizes are fractions of the CARD, so the column scales with the card
+-- on every viewport rather than needing its own platform cases. No
+-- AutomaticSize anywhere: the plate heights are fixed and the text is
+-- TextScaled inside them, exactly like the card's own title and
+-- description, which keeps the column's height deterministic.
+local TOOLTIP_WIDTH = 0.82
+local TOOLTIP_GAP = 0.04
+local TOOLTIP_ROW_HEIGHT = 0.17
+local TOOLTIP_ROW_GAP = 0.028
+-- A dark plate per row, not bare text: the column sits over card art and
+-- ember particles, and unplated text is unreadable against the brighter
+-- element tints (Frost's 126,253,255, Earth's 255,183,0).
+local TOOLTIP_PLATE_COLOR = Color3.fromRGB(10, 10, 14)
+local TOOLTIP_PLATE_TRANSPARENCY = 0.18
+local TOOLTIP_PLATE_PADDING = 0.055
+local TOOLTIP_TEXT_STROKE_TRANSPARENCY = 0.4
+local TOOLTIP_MAX_TEXT_SIZE = 13
+local PHONE_TOOLTIP_TEXT_SIZE = 8
+-- Each plate starts tucked back toward the card and slides out to 0, so
+-- the column reads as coming OUT of the card rather than appearing beside
+-- it. Fraction of the plate's own width.
+local TOOLTIP_SLIDE_FROM = -0.22
+-- Plates arrive one after another rather than together.
+local TOOLTIP_STAGGER = 0.06
+local TOOLTIP_IN_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local TOOLTIP_OUT_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- Above the front embers (ZIndex 7) within the card, and the slot ZIndex
+-- the hovered card claims so its column clears the next card entirely.
+local TOOLTIP_ZINDEX = 8
+local HOVERED_SLOT_ZINDEX = 2
+
+-- The keyword name is drawn in the same blue the card writes it in, so a
+-- player maps the plate to the word that opened it.
+local KEYWORD_TITLE_COLOR = string.format(
+	"rgb(%d,%d,%d)",
+	math.round(KeywordData.Color.R * 255),
+	math.round(KeywordData.Color.G * 255),
+	math.round(KeywordData.Color.B * 255)
+)
+
+-- ONE Heartbeat for every card's embers on this client. Cards register
+-- their field here on mount and withdraw on unmount; the connection opens
+-- with the first card and closes with the last, so an unmounted hand costs
+-- nothing. Poses are written from each ember's OWN parameters against a
+-- shared clock -- never accumulated frame over frame, so a dropped frame
+-- can never drift the field out of its band.
+local emberFields: { [any]: any } = {}
+local emberConnection: RBXScriptConnection? = nil
+local emberClock = 0
+
+local function stepEmbers(deltaTime: number)
+	emberClock += deltaTime
+	for _, field in emberFields do
+		for _, ember in field do
+			-- 1 at the bottom of the field, 0 at the top.
+			local progress = (emberClock / ember.riseSeconds + ember.offset) % 1
+			local height = 1 - progress
+			local drift = math.sin(emberClock * ember.swaySpeed + ember.phase) * ember.sway
+			ember.frame.Position = UDim2.fromScale(ember.x + drift, height)
+
+			-- Fade in off the bottom, out into the top.
+			local entering = math.min(progress / EMBER_FADE_IN, 1)
+			local leaving = math.min((1 - progress) / EMBER_FADE_OUT, 1)
+			local wave = 0.5 + 0.5 * math.sin(emberClock * ember.shimmerSpeed + ember.phase)
+			local shimmer = EMBER_SHIMMER_FLOOR + (1 - EMBER_SHIMMER_FLOOR) * wave
+			local opacity = ember.opacity * entering * leaving * shimmer
+			ember.frame.BackgroundTransparency = 1 - opacity
+		end
+	end
+end
+
+local function registerEmberField(key: any, embers: any)
+	emberFields[key] = embers
+	if not emberConnection then
+		emberConnection = RunService.Heartbeat:Connect(stepEmbers)
+	end
+end
+
+local function unregisterEmberField(key: any)
+	emberFields[key] = nil
+	if next(emberFields) == nil and emberConnection then
+		emberConnection:Disconnect()
+		emberConnection = nil
+	end
+end
 
 local localPlayer = Players.LocalPlayer
 
@@ -279,6 +413,7 @@ local function OfferCard(props: any)
 		else (relicInfo and CARD_TINTS[relicInfo.tree] or DEFAULT_CARD_TINT)
 
 	local slotRef = React.useRef(nil)
+	local tooltipRef = React.useRef(nil)
 	local groupRef = React.useRef(nil)
 	local bobRef = React.useRef(nil)
 	local offsetRef = React.useRef(nil)
@@ -290,10 +425,15 @@ local function OfferCard(props: any)
 	local flashRef = React.useRef(nil)
 	local ringRef = React.useRef(nil)
 	local tileRef = React.useRef(nil)
-	local orbitRef = React.useRef(nil)
 	local hoveredRef = React.useRef(false)
+	local embersBackRef = React.useRef(nil)
+	local embersFrontRef = React.useRef(nil)
 
 	local description = getRelicDescription(localPlayer, relicName) or ""
+	-- The card's hoverable keywords, read off the DESCRIPTION so the
+	-- runtime-callback relics (Super Stomp Boots and friends) are covered
+	-- too. Max 2 on any card today, but nothing here assumes a count.
+	local keywords = getRelicKeywords(description)
 	local twoLineTitle = #relicName > TITLE_ONE_LINE_MAX_LENGTH
 	local pillWidth = PILL_WIDTHS[rarity] or (PILL_WIDTH_BASE + PILL_WIDTH_PER_CHARACTER * #rarity)
 
@@ -309,19 +449,37 @@ local function OfferCard(props: any)
 		local alpha = Instance.new("NumberValue")
 		alpha.Value = 1
 
+		-- The embers answer to TWO independent fades: the card's own alpha
+		-- (the deal in, the sink, the rise) and the hover dim (another card
+		-- is focused). Whichever is hiding them more wins, so neither can
+		-- undo the other -- a card sinking while a sibling is hovered stays
+		-- gone rather than popping back to half.
+		local embersDim = Instance.new("NumberValue")
+		embersDim.Value = 0
+
+		local function applyEmberAlpha()
+			local hidden = math.max(alpha.Value, embersDim.Value)
+			local back = embersBackRef.current
+			if back then
+				back.GroupTransparency = hidden
+			end
+			local front = embersFrontRef.current
+			if front then
+				front.GroupTransparency = hidden
+			end
+		end
+
 		local function applyAlpha(a: number)
 			group.GroupTransparency = a
-			local orbit = orbitRef.current
-			if orbit then
-				orbit.GroupTransparency = a
-			end
 			local shadow = shadowRef.current
 			if shadow then
 				shadow.Transparency = CARD_SHADOW_TRANSPARENCY + (1 - CARD_SHADOW_TRANSPARENCY) * a
 			end
+			applyEmberAlpha()
 		end
 		applyAlpha(1)
 		local alphaConnection = alpha.Changed:Connect(applyAlpha)
+		local embersDimConnection = embersDim.Changed:Connect(applyEmberAlpha)
 
 		local function setScale(scale: number)
 			group.Size = UDim2.fromScale(scale, scale)
@@ -343,21 +501,110 @@ local function OfferCard(props: any)
 			return tween
 		end
 
+		-- The keyword column. The plates are built by the renderer; this
+		-- only poses them, so a card with no hoverable keywords has no
+		-- Tooltip frame and every call here no-ops.
+		--
+		-- Each plate slides out and fades in on its own delay. The
+		-- generation counter is what makes a fast hover-on-hover-off safe:
+		-- a staggered step from an earlier pass finds its generation stale
+		-- and does nothing, so an outgoing column can never be re-faded in
+		-- by a delay left over from the incoming one.
+		local tooltipGeneration = 0
+		local function setTooltip(on: boolean)
+			local tooltip = tooltipRef.current
+			if not tooltip then
+				return
+			end
+
+			tooltipGeneration += 1
+			local generation = tooltipGeneration
+			local info = if on then TOOLTIP_IN_TWEEN else TOOLTIP_OUT_TWEEN
+
+			if on then
+				tooltip.Visible = true
+			end
+
+			-- The UIListLayout is a child too, and a UILayout has no
+			-- LayoutOrder -- sorting the raw GetChildren would throw on it.
+			local rows: { GuiObject } = {}
+			for _, child in tooltip:GetChildren() do
+				if child:IsA("GuiObject") then
+					table.insert(rows, child)
+				end
+			end
+			-- GetChildren is unordered; LayoutOrder is the authored order.
+			table.sort(rows, function(a: GuiObject, b: GuiObject)
+				return a.LayoutOrder < b.LayoutOrder
+			end)
+
+			local lastTween: Tween? = nil
+			local step = 0
+			for _, row in rows do
+				local plate = row:FindFirstChild("Plate")
+				local label = plate and plate:FindFirstChild("Label")
+				if not plate or not label then
+					continue
+				end
+
+				local function pose()
+					if not alive or generation ~= tooltipGeneration then
+						return
+					end
+					TweenService:Create(plate, info, {
+						Position = UDim2.fromScale(if on then 0 else TOOLTIP_SLIDE_FROM, 0),
+						BackgroundTransparency = if on then TOOLTIP_PLATE_TRANSPARENCY else 1,
+					}):Play()
+					lastTween = TweenService:Create(label, info, {
+						TextTransparency = if on then 0 else 1,
+						TextStrokeTransparency = if on then TOOLTIP_TEXT_STROKE_TRANSPARENCY else 1,
+					})
+					lastTween:Play()
+				end
+
+				-- Only the arrival staggers. Leaving all at once stops the
+				-- column lingering after the cursor has gone.
+				if on and step > 0 then
+					task.delay(step * TOOLTIP_STAGGER, pose)
+				else
+					pose()
+				end
+				step += 1
+			end
+
+			-- Hidden only once the last plate has actually faded, so the
+			-- column is never cut off mid-tween.
+			if not on and lastTween then
+				lastTween.Completed:Once(function()
+					if generation == tooltipGeneration then
+						tooltip.Visible = false
+					end
+				end)
+			end
+		end
+
 		local function setHover(on: boolean)
 			if hoveredRef.current == on then
 				return
 			end
 			hoveredRef.current = on
+			setTooltip(on)
 			local lift = liftRef.current
 			local stroke = strokeRef.current
+			-- Claim the row's top slot while hovered so this card's tooltip
+			-- column draws over the neighbouring card instead of under it.
+			local slot = slotRef.current
+			if slot then
+				slot.ZIndex = if on then HOVERED_SLOT_ZINDEX else 1
+			end
 			if lift then
 				TweenService:Create(lift, HOVER_TWEEN, { Position = UDim2.fromScale(0, if on then HOVER_LIFT else 0) })
 					:Play()
 			end
 			if stroke then
 				TweenService:Create(stroke, STROKE_TWEEN, {
-					Transparency = if on then 0 else 1,
-					Color = SELECTION_STROKE_COLOR,
+					Transparency = if on then LIT_STROKE_TRANSPARENCY else 1,
+					Color = cardTint,
 				}):Play()
 			end
 		end
@@ -368,12 +615,20 @@ local function OfferCard(props: any)
 				TweenService:Create(dim, DIM_TWEEN, { BackgroundTransparency = if on then DIM_TRANSPARENCY else 1 })
 					:Play()
 			end
+			-- The embers dim with the card. The HOVERED card never gets
+			-- setDim(true), so its embers stay at full.
+			TweenService:Create(embersDim, DIM_TWEEN, {
+				Value = if on then EMBER_DIM_TRANSPARENCY else 0,
+			}):Play()
 		end
 
 		local function brightenStroke()
 			local stroke = strokeRef.current
 			if stroke then
-				TweenService:Create(stroke, STROKE_TWEEN, { Transparency = 0, Color = CHOSEN_STROKE_COLOR }):Play()
+				TweenService:Create(stroke, STROKE_TWEEN, {
+					Transparency = LIT_STROKE_TRANSPARENCY,
+					Color = cardTint,
+				}):Play()
 			end
 		end
 
@@ -423,7 +678,7 @@ local function OfferCard(props: any)
 			end
 			ring.Size = UDim2.fromScale(1, 1)
 			ring.Visible = true
-			stroke.Transparency = 0
+			stroke.Transparency = LIT_STROKE_TRANSPARENCY
 			stroke.Thickness = RING_START_THICKNESS
 			TweenService:Create(ring, RING_TWEEN, { Size = UDim2.fromScale(RING_END_SCALE, RING_END_SCALE) }):Play()
 			-- Hidden once the fade has taken it fully transparent.
@@ -453,6 +708,57 @@ local function OfferCard(props: any)
 			end
 			return slot.AbsolutePosition + slot.AbsoluteSize * 0.5
 		end
+
+		-- The ember field. Built once: every ember gets its own lane, rise
+		-- time, sway and shimmer from a per-card seeded Random, so the three
+		-- cards in a hand never drift in lockstep but a given card looks the
+		-- same every time it is dealt.
+		local embers = {}
+		local emberRandom = Random.new(#relicName * 7919 + index * 104729)
+
+		local function buildEmbers(layer: Instance?, count: number, isFront: boolean)
+			if not layer then
+				return
+			end
+			for _ = 1, count do
+				local size = emberRandom:NextNumber(EMBER_SIZE_MIN, EMBER_SIZE_MAX)
+					* (if isFront then EMBER_FRONT_SIZE_SCALE else 1)
+
+				local frame = Instance.new("Frame")
+				frame.Name = "Ember"
+				frame.AnchorPoint = Vector2.new(0.5, 0.5)
+				frame.BackgroundColor3 = cardTint
+				frame.BorderSizePixel = 0
+				frame.Size = UDim2.fromScale(size, size)
+				frame.BackgroundTransparency = 1
+
+				local corner = Instance.new("UICorner")
+				corner.CornerRadius = UDim.new(1, 0)
+				corner.Parent = frame
+
+				frame.Parent = layer
+
+				table.insert(embers, {
+					frame = frame,
+					x = emberRandom:NextNumber(0.08, 0.92),
+					sway = emberRandom:NextNumber(EMBER_SWAY_MIN, EMBER_SWAY_MAX),
+					swaySpeed = emberRandom:NextNumber(EMBER_SWAY_SPEED_MIN, EMBER_SWAY_SPEED_MAX),
+					riseSeconds = emberRandom:NextNumber(EMBER_RISE_SECONDS_MIN, EMBER_RISE_SECONDS_MAX),
+					shimmerSpeed = emberRandom:NextNumber(EMBER_SHIMMER_SPEED_MIN, EMBER_SHIMMER_SPEED_MAX),
+					phase = emberRandom:NextNumber(0, math.pi * 2),
+					-- Staggered start, so the field is already populated on
+					-- the first frame instead of filling from the bottom.
+					offset = emberRandom:NextNumber(0, 1),
+					opacity = emberRandom:NextNumber(EMBER_OPACITY_MIN, EMBER_OPACITY_MAX)
+						* (if isFront then EMBER_FRONT_OPACITY_SCALE else 1),
+				})
+			end
+		end
+
+		buildEmbers(embersBackRef.current, EMBER_BACK_COUNT, false)
+		buildEmbers(embersFrontRef.current, EMBER_FRONT_COUNT, true)
+		applyEmberAlpha()
+		registerEmberField(embers, embers)
 
 		-- The idle bob: one looping there-and-back tween, forever. The
 		-- per-slot phase is a delayed START, not the tween's DelayTime:
@@ -529,6 +835,12 @@ local function OfferCard(props: any)
 		return function()
 			alive = false
 			props.onRegister(relicName, nil)
+			unregisterEmberField(embers)
+			embersDimConnection:Disconnect()
+			embersDim:Destroy()
+			for _, ember in embers do
+				ember.frame:Destroy()
+			end
 			if bobTween then
 				bobTween:Cancel()
 			end
@@ -540,123 +852,97 @@ local function OfferCard(props: any)
 		end
 	end, {})
 
-	-- The orbit: squares travel a rounded rectangle just outside the card,
-	-- evenly spaced, each spinning and pulsing on its own phase. Positions
-	-- are computed in pixels from the group's live size, so the speed is
-	-- even along the straights and the corners on any card size.
-	React.useEffect(function()
-		local orbit = orbitRef.current
-		if not orbit then
-			return nil
-		end
-		local count = ORBIT_COUNTS[rarity] or ORBIT_DEFAULT_COUNT
-		local squares = {}
-		for i = 1, count do
-			local square = Instance.new("Frame")
-			square.Name = "OrbitSquare"
-			square.AnchorPoint = Vector2.new(0.5, 0.5)
-			square.BackgroundColor3 = colors.pill
-			square.BorderSizePixel = 0
-			square.Rotation = (i - 1) * 37
-			local glow = Instance.new("UIShadow")
-			glow.Color = colors.pill
-			glow.BlurRadius = ORBIT_GLOW_BLUR
-			glow.Transparency = ORBIT_GLOW_TRANSPARENCY
-			glow.Parent = square
-			square.Parent = orbit
-			squares[i] = square
+	-- The keyword column, built only when the card HAS hoverable keywords
+	-- (a card with none gets no Tooltip frame at all). setTooltip finds the plates by name rather than through refs,
+	-- so the shape below is the contract: Row* -> Plate -> Label.
+	local tooltip = nil
+	if #keywords > 0 then
+		-- Fixed plate heights make the column's height deterministic,
+		-- which is what lets it centre on the card: the rows and the
+		-- layout padding are expressed as fractions of that total.
+		local columnHeight = #keywords * TOOLTIP_ROW_HEIGHT + (#keywords - 1) * TOOLTIP_ROW_GAP
+
+		local rows: { [string]: any } = {
+			UIListLayout = React.createElement("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(TOOLTIP_ROW_GAP / columnHeight, 0),
+			}),
+		}
+
+		for keywordIndex, entry in keywords do
+			rows["Row" .. keywordIndex] = React.createElement("Frame", {
+				-- The row is the LIST's child, so its position belongs to
+				-- the layout. The plate inside it is what slides, which is
+				-- how each plate gets its own arrival without fighting the
+				-- UIListLayout for Position.
+				LayoutOrder = keywordIndex,
+				Size = UDim2.fromScale(1, TOOLTIP_ROW_HEIGHT / columnHeight),
+				BackgroundTransparency = 1,
+			}, {
+				Plate = React.createElement("Frame", {
+					Name = "Plate",
+					Position = UDim2.fromScale(TOOLTIP_SLIDE_FROM, 0),
+					Size = UDim2.fromScale(1, 1),
+					BackgroundColor3 = TOOLTIP_PLATE_COLOR,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+				}, {
+					UICorner = React.createElement("UICorner", {
+						CornerRadius = UDim.new(0.18, 0),
+					}),
+
+					UIPadding = React.createElement("UIPadding", {
+						PaddingTop = UDim.new(TOOLTIP_PLATE_PADDING, 0),
+						PaddingBottom = UDim.new(TOOLTIP_PLATE_PADDING, 0),
+						PaddingLeft = UDim.new(TOOLTIP_PLATE_PADDING, 0),
+						PaddingRight = UDim.new(TOOLTIP_PLATE_PADDING, 0),
+					}),
+
+					Label = React.createElement("TextLabel", {
+						Name = "Label",
+						Size = UDim2.fromScale(1, 1),
+						BackgroundTransparency = 1,
+						-- The keyword in the blue the card wrote it in, so
+						-- the player maps the plate to the word.
+						Text = string.format(
+							'<b><font color="%s">%s:</font></b> %s',
+							KEYWORD_TITLE_COLOR,
+							entry.keyword,
+							entry.definition
+						),
+						RichText = true,
+						TextColor3 = TEXT_COLOR,
+						TextStrokeColor3 = TEXT_STROKE_COLOR,
+						TextTransparency = 1,
+						TextStrokeTransparency = 1,
+						FontFace = FONT_BOLD,
+						TextScaled = true,
+						TextWrapped = true,
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}, {
+						UITextSizeConstraint = React.createElement("UITextSizeConstraint", {
+							MaxTextSize = if isPhone then PHONE_TOOLTIP_TEXT_SIZE else TOOLTIP_MAX_TEXT_SIZE,
+							MinTextSize = if isPhone then PHONE_TOOLTIP_TEXT_SIZE else 1,
+						}),
+					}),
+				}),
+			})
 		end
 
-		-- A rounded rectangle centred on (cx, cy) with half-extents (hw, hh)
-		-- and corner radius r, as segments clockwise from the top edge's
-		-- left end. Built once per frame, walked once per square.
-		local function buildPath(cx: number, cy: number, hw: number, hh: number, r: number): { any }
-			local straightX = 2 * (hw - r)
-			local straightY = 2 * (hh - r)
-			local arc = math.pi * r / 2
-			local segments: { any } = {
-				{
-					kind = "line",
-					length = straightX,
-					from = Vector2.new(cx - hw + r, cy - hh),
-					dir = Vector2.new(1, 0),
-				},
-				{ kind = "arc", length = arc, center = Vector2.new(cx + hw - r, cy - hh + r), start = -math.pi / 2 },
-				{
-					kind = "line",
-					length = straightY,
-					from = Vector2.new(cx + hw, cy - hh + r),
-					dir = Vector2.new(0, 1),
-				},
-				{ kind = "arc", length = arc, center = Vector2.new(cx + hw - r, cy + hh - r), start = 0 },
-				{
-					kind = "line",
-					length = straightX,
-					from = Vector2.new(cx + hw - r, cy + hh),
-					dir = Vector2.new(-1, 0),
-				},
-				{ kind = "arc", length = arc, center = Vector2.new(cx - hw + r, cy + hh - r), start = math.pi / 2 },
-				{
-					kind = "line",
-					length = straightY,
-					from = Vector2.new(cx - hw, cy + hh - r),
-					dir = Vector2.new(0, -1),
-				},
-				{ kind = "arc", length = arc, center = Vector2.new(cx - hw + r, cy - hh + r), start = math.pi },
-			}
-			return segments
-		end
-
-		-- The point `s` pixels along `segments` (radius r for the arcs).
-		local function pointOnPath(segments: { any }, s: number, r: number): Vector2
-			for segmentIndex, segment in segments do
-				if s <= segment.length or segmentIndex == #segments then
-					if segment.kind == "line" then
-						return segment.from + segment.dir * s
-					end
-					local angle = segment.start + (if r > 0 then s / r else 0)
-					return segment.center + Vector2.new(math.cos(angle), math.sin(angle)) * r
-				end
-				s -= segment.length
-			end
-			return Vector2.zero
-		end
-
-		local clock = 0
-		local connection = RunService.RenderStepped:Connect(function(deltaTime: number)
-			clock += deltaTime
-			local size = orbit.AbsoluteSize
-			if size.X <= 0 or size.Y <= 0 then
-				return
-			end
-			local cardWidth = size.X / ORBIT_GROUP_SCALE
-			local cardHeight = size.Y / ORBIT_GROUP_SCALE
-			local margin = cardWidth * ORBIT_MARGIN
-			local hw = cardWidth / 2 + margin
-			local hh = cardHeight / 2 + margin
-			local r = math.min(cardWidth * ORBIT_CORNER_RADIUS + margin, hw, hh)
-			local perimeter = 4 * (hw - r) + 4 * (hh - r) + 2 * math.pi * r
-			local baseSize = cardWidth * ORBIT_SQUARE_SIZE
-			local path = buildPath(size.X / 2, size.Y / 2, hw, hh, r)
-			for i, square in squares do
-				local progress = (clock / ORBIT_LAP_SECONDS + (i - 1) / count) % 1
-				local point = pointOnPath(path, progress * perimeter, r)
-				square.Position = UDim2.fromOffset(point.X, point.Y)
-				local wave = math.sin(clock * ORBIT_PULSE_SPEED + i * 1.7)
-				local side = baseSize * (1 + ORBIT_PULSE_AMOUNT * wave)
-				square.Size = UDim2.fromOffset(side, side)
-				square.BackgroundTransparency = ORBIT_TRANSPARENCY_MIN
-					+ (ORBIT_TRANSPARENCY_MAX - ORBIT_TRANSPARENCY_MIN) * (0.5 - 0.5 * wave)
-				square.Rotation += ORBIT_SPIN_DEGREES_PER_SECOND * deltaTime
-			end
-		end)
-		return function()
-			connection:Disconnect()
-			for _, square in squares do
-				square:Destroy()
-			end
-		end
-	end, {})
+		tooltip = React.createElement("Frame", {
+			ref = tooltipRef,
+			-- Hung off the card's right edge and centred on it. Hidden
+			-- until setTooltip raises it, so a never-hovered card costs
+			-- nothing to draw.
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.fromScale(1 + TOOLTIP_GAP, 0.5),
+			Size = UDim2.fromScale(TOOLTIP_WIDTH, columnHeight),
+			BackgroundTransparency = 1,
+			Visible = false,
+			ZIndex = TOOLTIP_ZINDEX,
+		}, rows)
+	end
 
 	return React.createElement("Frame", {
 		-- The SLOT: laid out by the row; its width follows its height.
@@ -688,17 +974,36 @@ local function OfferCard(props: any)
 					Size = UDim2.fromScale(1, 1),
 					BackgroundTransparency = 1,
 				}, {
-					-- The orbiting squares, behind the card (see the orbit
-					-- effect). Larger than the card so the squares fit.
-					Orbit = React.createElement("CanvasGroup", {
-						ref = orbitRef,
+					-- The embers BEHIND the card (see the ember constants).
+					-- Its own CanvasGroup so the card alpha and the hover dim
+					-- composite in one property instead of per ember.
+					EmbersBack = React.createElement("CanvasGroup", {
+						ref = embersBackRef,
 						AnchorPoint = Vector2.new(0.5, 0.5),
 						Position = UDim2.fromScale(0.5, 0.5),
-						Size = UDim2.fromScale(ORBIT_GROUP_SCALE, ORBIT_GROUP_SCALE),
+						Size = UDim2.fromScale(EMBER_FIELD_WIDTH, EMBER_FIELD_HEIGHT),
 						BackgroundTransparency = 1,
 						GroupTransparency = 1,
 						ZIndex = 0,
 					}),
+
+					-- The few that pass IN FRONT of the card. Above the card
+					-- and its ring, so they read as nearest to the camera.
+					EmbersFront = React.createElement("CanvasGroup", {
+						ref = embersFrontRef,
+						AnchorPoint = Vector2.new(0.5, 0.5),
+						Position = UDim2.fromScale(0.5, 0.5),
+						Size = UDim2.fromScale(EMBER_FIELD_WIDTH, EMBER_FIELD_HEIGHT),
+						BackgroundTransparency = 1,
+						GroupTransparency = 1,
+						ZIndex = 7,
+					}),
+
+					-- The keyword tooltips (see the tooltip constants). Under
+					-- Lift so the column rides the hover lift with the card,
+					-- and OUTSIDE the card's CanvasGroup, whose bounds would
+					-- clip anything hanging past the card's edge.
+					Tooltip = tooltip,
 
 					-- The pick's shockwave ring (see shockwave()). Outside the
 					-- card's CanvasGroup, whose bounds would clip it.
@@ -716,7 +1021,7 @@ local function OfferCard(props: any)
 						}),
 						UIStroke = React.createElement("UIStroke", {
 							ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-							Color = colors.shadow,
+							Color = cardTint,
 							Thickness = RING_START_THICKNESS,
 							Transparency = 1,
 						}),
@@ -766,7 +1071,7 @@ local function OfferCard(props: any)
 							SelectionUIStroke = React.createElement("UIStroke", {
 								ref = strokeRef,
 								ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-								Color = SELECTION_STROKE_COLOR,
+								Color = cardTint,
 								StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
 								Thickness = SELECTION_STROKE_THICKNESS,
 								Transparency = 1,

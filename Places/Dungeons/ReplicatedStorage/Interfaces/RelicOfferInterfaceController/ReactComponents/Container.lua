@@ -43,6 +43,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 local Debris = game:GetService("Debris")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
@@ -83,9 +84,14 @@ local COUNTDOWN_TICK_VOLUME = 0.6
 -- follows from the card's aspect ratio (OfferCard).
 -- Phones use the desktop height (their fixed card text is tuned for it);
 -- touch tablets get the larger cards.
+-- TOUCH, by the project's own definition (ScreenSizeController): a
+-- touchscreen with no mouse. Phones AND tablets, since the two-tap below
+-- is about the absence of a cursor, not about screen size.
+local IS_TOUCH = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+
 local CARD_HEIGHT_DESKTOP = 0.46
 local CARD_HEIGHT_TABLET = 0.6
-local CARD_GAP = 0.018
+local CARD_GAP = 0.028
 local ROW_Y = 0.541
 
 -- The title and countdown: where they rest, and how they arrive and leave.
@@ -510,11 +516,14 @@ local function Container(props: any)
 		end)
 	end
 
-	-- Hover: the card under the cursor lifts and gains its stroke; every
-	-- other card goes under its black veil so the hovered one is the
-	-- focus (a veil, not a fade: the card stays fully drawn). Leaving
-	-- lifts every veil.
-	local function onHover(relicName: string, on: boolean)
+	-- SELECTION. The selected card lifts, gains its stroke and slides its
+	-- keyword tooltips out; every other card goes under its black veil so
+	-- the selected one is the focus (a veil, not a fade: the card stays
+	-- fully drawn). Deselecting lifts every veil.
+	--
+	-- Separate from onHover below because touch and cursor reach it
+	-- differently: a cursor hovers, a finger taps.
+	local function setSelection(relicName: string, on: boolean)
 		if not isInteractable() then
 			return
 		end
@@ -538,8 +547,50 @@ local function Container(props: any)
 		end)
 	end
 
+	-- The CURSOR path, straight off the card's MouseEnter / MouseLeave.
+	--
+	-- Dropped entirely on touch. A touchscreen still fires MouseEnter and
+	-- MouseLeave around a tap, which would select the card under the
+	-- finger and then drop it again on release -- collapsing the two-tap
+	-- in onActivated back into a one-tap pick, and making it impossible
+	-- to read a keyword without choosing the relic. On touch the only
+	-- thing that selects is a tap.
+	local function onHover(relicName: string, on: boolean)
+		if IS_TOUCH then
+			return
+		end
+		setSelection(relicName, on)
+	end
+
+	-- Clears the selection: the card drops its lift, stroke and tooltips
+	-- and every veil lifts. Touch only in practice -- on desktop the
+	-- cursor leaving the card does this through onHover.
+	local function clearSelection()
+		local focused = hoveredRef.current
+		if focused then
+			setSelection(focused, false)
+		end
+	end
+
 	local function onActivated(relicName: string)
 		if not isInteractable() or pressedRef.current then
+			return
+		end
+		-- TOUCH TWO-TAP. There is no hover on a touchscreen, so the first
+		-- tap SELECTS (lifting the card and sliding its keyword tooltips
+		-- out) and only a second tap on the same card commits the pick.
+		-- Without this a player cannot read a keyword without choosing
+		-- the relic that mentions it.
+		--
+		-- Selecting a different card has to retire the old selection by
+		-- hand: setSelection(_, true) only raises the new card, and with no
+		-- cursor there is no MouseLeave to lower the old one.
+		if IS_TOUCH and hoveredRef.current ~= relicName then
+			local previous = hoveredRef.current
+			if previous then
+				setSelection(previous, false)
+			end
+			setSelection(relicName, true)
 			return
 		end
 		local current = offerRef.current
@@ -730,6 +781,22 @@ local function Container(props: any)
 				Active = true,
 				ZIndex = 0,
 			}),
+
+			-- TOUCH ONLY: a tap anywhere off the hand clears the selection
+			-- (see the two-tap in onActivated). Above the backdrop and
+			-- BELOW the cards (ZIndex 2), so a tap on a card still reaches
+			-- the card. Absent entirely on desktop, where the cursor
+			-- leaving a card already clears it.
+			DeselectCatcher = if IS_TOUCH
+				then React.createElement("ImageButton", {
+					Size = UDim2.fromScale(1, 1),
+					BackgroundTransparency = 1,
+					ImageTransparency = 1,
+					AutoButtonColor = false,
+					ZIndex = 1,
+					[React.Event.Activated] = clearSelection,
+				})
+				else nil,
 
 			Title = React.createElement("TextLabel", {
 				ref = titleRef,
