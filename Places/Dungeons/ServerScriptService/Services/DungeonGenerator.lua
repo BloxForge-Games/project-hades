@@ -356,7 +356,7 @@ function DungeonGenerator._snapPrefab(
 	-- placed, those deferred Starts run at the prefab's TEMPLATE
 	-- CFrame, not the dungeon-grid position — so e.g. Trap captures
 	-- its zone bounds in the void where the prefab was originally
-	-- stored, and never fires when a player or zombie actually
+	-- stored, and never fires when a player or mob actually
 	-- walks on the trap in its real dungeon location.
 	--
 	-- Pivoting an unparented Model is well-defined (CFrames are
@@ -935,7 +935,7 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		end
 
 		-- Inner chunks' ExitGates serve as touch-triggers: when a player touches
-		-- one, the gate is destroyed, zombies spawn in the next chunk, and every
+		-- one, the gate is destroyed, mobs spawn in the next chunk, and every
 		-- player's cursor advances. Last-chunk ExitGates are left alone for the
 		-- external encounter system to lock/unlock manually.
 		if not room.isLastChunk then
@@ -960,7 +960,7 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	end
 
 	-- Start room's ExitGate is also a touch trigger: walking out of Start
-	-- spawns the first room's zombies and advances every player to room 1.
+	-- spawns the first room's mobs and advances every player to room 1.
 	GateService:SetupGateTrigger(startModel, 1)
 
 	-- Which events this floor seated, in sequence order: the fastest way to
@@ -999,8 +999,8 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	-- Counts SEGMENTS, not chunks: chunksPerRoom explodes one Combat entry in
 	-- the difficulty sequence into 2-3 physical rooms, and every chunk of a
 	-- segment shares its segmentId — so they all get the same ordinal and
-	-- therefore the same zombie queue. A 3-chunk segment is three fights of
-	-- equal size, not a ramp within itself. ZombieSpawnService's queue
+	-- therefore the same mob queue. A 3-chunk segment is three fights of
+	-- equal size, not a ramp within itself. MobSpawnService's queue
 	-- formula scales off this, so deeper SEGMENTS field bigger queues.
 	--
 	-- Relies on a segment's chunks being contiguous in roomsList, which the

@@ -53,7 +53,7 @@ local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 
@@ -412,13 +412,13 @@ function DamageService.PlayerTakeDamage(
 
 	local rootPart = getRoot(character)
 	if rootPart then
-		local zombieHit: Sound = (rootPart:FindFirstChild("ZombieHit") :: Sound?)
+		local mobHit: Sound = (rootPart:FindFirstChild("ZombieHit") :: Sound?)
 			or ReplicatedStorage.GameAssets.Sounds.ZombieHit:Clone()
-		if zombieHit.Parent ~= rootPart then
-			zombieHit.Parent = rootPart
+		if mobHit.Parent ~= rootPart then
+			mobHit.Parent = rootPart
 		end
-		zombieHit.TimePosition = 0.2
-		zombieHit:Play()
+		mobHit.TimePosition = 0.2
+		mobHit:Play()
 
 		local hitVFX: Instance = rootPart:FindFirstChild("HitFXNew")
 			or ReplicatedStorage.GameAssets.VFX.SwordSlash.HitFXNew:Clone()
@@ -1192,10 +1192,10 @@ function DamageService.TakeDamage(
 	end
 
 	local mobName = targetModel.Name
-	local isProjectileResistant = ZombieData[mobName] and ZombieData[mobName].isProjectileResistant or false
-	local isMagicResistant = ZombieData[mobName] and ZombieData[mobName].isMagicResistant or false
+	local isProjectileResistant = MobData[mobName] and MobData[mobName].isProjectileResistant or false
+	local isMagicResistant = MobData[mobName] and MobData[mobName].isMagicResistant or false
 
-	-- Damage-type resistances (ZombieData flags): x0.5 vs the resisted
+	-- Damage-type resistances (MobData flags): x0.5 vs the resisted
 	-- type, grey number, matching resist sound on the client. RELIC-SOURCED
 	-- damage bypasses both: a relic's listed number is what it deals —
 	-- previously TNT / tremor / Ghost Dragon (neither melee nor arcane) were

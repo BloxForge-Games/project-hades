@@ -15,12 +15,12 @@
 	    (or omit phaseCount entirely; this is the default).
 	A boss with no `phases` table (or 0 active) just behaves as a Miniboss.
 
-	Each phase entry lives in ZombieData[name].phases[i]:
+	Each phase entry lives in MobData[name].phases[i]:
 	    {
 	        healthThreshold = 0.66,   -- optional; defaults to PHASE_THRESHOLDS[i]
 	        cutsceneDuration = 3,     -- optional; EncounterService default if nil
 	        onPhaseStart = function(mob: Model) ... end,  -- VFX / anim / HP
-	        genericAttacks = { <ZombieData generic attack>, ... },  -- added to pool
+	        genericAttacks = { <MobData generic attack>, ... },  -- added to pool
 	        uniqueAttacks  = { { attackRange, run }, ... },         -- added to pool
 	    }
 

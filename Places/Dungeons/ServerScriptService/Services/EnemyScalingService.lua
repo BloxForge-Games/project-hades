@@ -2,7 +2,7 @@
 --[[
 	Module: Services/EnemyScalingService.lua
 	Description:
-	LIVE mob HP scaling. ZombieData holds each mob's BASE health; this
+	LIVE mob HP scaling. MobData holds each mob's BASE health; this
 	service owns the player multiplier and applies it twice over:
 
 	  * ApplyToMob, at spawn (MobBase:_applyHumanoidProperties): stamps
@@ -17,7 +17,7 @@
 	The multiplier is (1 + active players) x the run's difficulty health
 	(DifficultyData), so solo Normal is 2x base, duo 3x, ...: the curve the
 	base numbers were tuned against; the same curve applies to
-	zombies, minibosses and bosses alike. "Active" is LifeService's count:
+	mobs, minibosses and bosses alike. "Active" is LifeService's count:
 	alive or DOWNED (a downed player may yet buy a revive); fully dead
 	players no longer count, which is why a party of two fighting a boss
 	sees it shrink the moment one of them is truly gone.
@@ -41,9 +41,9 @@ local EnemyScalingService = {
 
 -- The live mob container. Nil before the map has built it; a rescale then
 -- has nothing to walk.
-local function getZombiesFolder(): Instance?
+local function getMobsFolder(): Instance?
 	local ignore = workspace:FindFirstChild("IgnoreInstances")
-	return ignore and ignore:FindFirstChild("Zombies")
+	return ignore and ignore:FindFirstChild("Mobs")
 end
 
 --[ Public API ]--
@@ -61,7 +61,7 @@ function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingServi
 	return (1 + LifeService:GetActivePlayerCount(excluding)) * difficultyHealthMultiplier()
 end
 
--- Spawn-time scaling. `baseHealth` is the ZombieData number (already
+-- Spawn-time scaling. `baseHealth` is the MobData number (already
 -- resolved if it was a function). Stamps the two attributes RescaleAll
 -- keys off and fills the mob to its scaled maximum.
 function EnemyScalingService.ApplyToMob(
@@ -89,9 +89,9 @@ function EnemyScalingService.RescaleAll(self: typeof(EnemyScalingService), exclu
 	local multiplier = self:GetHealthMultiplier(excluding)
 
 	local rescaled = 0
-	local zombies = getZombiesFolder()
-	if zombies then
-		for _, model in zombies:GetChildren() do
+	local mobs = getMobsFolder()
+	if mobs then
+		for _, model in mobs:GetChildren() do
 			if not model:IsA("Model") then
 				continue
 			end

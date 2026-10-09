@@ -19,7 +19,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 
 --[ Tuning ]--
 
@@ -469,7 +469,7 @@ local function Container(props: any)
 			Position = UDim2.fromScale(0.5, 0.051),
 			Size = UDim2.fromScale(0.905, 0.328),
 			BackgroundTransparency = 1,
-			Text = displayData and ZombieData[displayData.name].subtitle or "",
+			Text = displayData and MobData[displayData.name].subtitle or "",
 			RichText = true,
 			TextColor3 = Color3.fromRGB(222, 222, 222),
 			TextScaled = true,

@@ -178,7 +178,7 @@ VFXService.OnBuildingBroken = Signal.new()
 local function shouldResetHitRegistry(vfxName: string): boolean
 	return vfxName == ArcaneNames["Pumpkin Explosion"]
 		or vfxName == ArcaneNames["Big Pumpkin Explosion"]
-		-- Was missing: without the reset a zombie grazed by one Fuse Bomb was
+		-- Was missing: without the reset a mob grazed by one Fuse Bomb was
 		-- immune to every later one for the session.
 		or vfxName == ArcaneNames["Fuse Bomb Explosion"]
 		or vfxName == ArcaneNames["Fireworks Explosion"]

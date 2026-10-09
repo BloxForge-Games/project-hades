@@ -3,7 +3,7 @@
      Author(s):
      Module: InCombatController.lua
      Description: Toggles the local character's InCombat attribute based on whether
-                  any living zombie under workspace.IgnoreInstances.Zombies is within
+                  any living mob under workspace.IgnoreInstances.Mobs is within
                   COMBAT_DISTANCE_THRESHOLD of the player.
 ]]
 
@@ -40,9 +40,9 @@ local STARTUP_DELAY = 10
 
 -- Delegates to the SHARED proximity check so the server's mana-regen gate
 -- (ArcaneService._isPlayerInCombat) and this visual state can never drift
--- apart on radius or on what counts as a live zombie.
-function InCombatController._isNearLivingZombie(_self: typeof(InCombatController), playerPosition: Vector3): boolean
-	return combatProximity.isNearLivingZombie(playerPosition)
+-- apart on radius or on what counts as a live mob.
+function InCombatController._isNearLivingMob(_self: typeof(InCombatController), playerPosition: Vector3): boolean
+	return combatProximity.isNearLivingMob(playerPosition)
 end
 
 --[ Public Functions ]--
@@ -62,7 +62,7 @@ function InCombatController.Start(self: typeof(InCombatController))
 				continue
 			end
 
-			local inCombat = self:_isNearLivingZombie(hrp.Position)
+			local inCombat = self:_isNearLivingMob(hrp.Position)
 			if inCombat ~= currentState then
 				currentState = inCombat
 				character:SetAttribute(Attributes.InCombat, inCombat)

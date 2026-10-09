@@ -44,7 +44,7 @@ ArcaneService._arcaneDataProperty = RemoteProperty.Server({
 --
 -- COMBAT-ONLY (design-locked): mana is a combat resource, so it only
 -- flows while there is a fight to spend it on. "In combat" is
--- PROXIMITY to living zombies — the same rule that dims the
+-- PROXIMITY to living mobs — the same rule that dims the
 -- player's ground relics — so the bar starts moving exactly when
 -- the game already tells them they are in a fight. Away from enemies
 -- the bar holds still and mana orbs (and Korblox Mage Staff hits)
@@ -65,7 +65,7 @@ local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 -- yet (joined mid-tick) by reading GetPlayerArcaneData and bailing on
 -- nil. Players whose mana is already at max no-op early so we don't
 -- burn cycles firing identical SetPlayerArcaneData writes.
--- True while a living zombie is within combatProximity.RADIUS of the
+-- True while a living mob is within combatProximity.RADIUS of the
 -- player — the SAME check that drives the client's InCombat
 -- attribute and the relic dim, so regen and that visual cue switch
 -- together.
@@ -85,7 +85,7 @@ function ArcaneService._isPlayerInCombat(_self: typeof(ArcaneService), player: P
 	if not hrp then
 		return false
 	end
-	return combatProximity.isNearLivingZombie(hrp.Position)
+	return combatProximity.isNearLivingMob(hrp.Position)
 end
 
 function ArcaneService._runPassiveManaRegenLoop(self: typeof(ArcaneService))

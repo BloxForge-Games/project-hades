@@ -3,7 +3,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -21,7 +21,7 @@ local SPAWN_DELAY = 0.5
 
 -- Combat-room queue tuning. Each combat CHUNK, at ACTIVATION time (first
 -- player crossing in), snapshots the player count and builds:
---   * a total QUEUE of zombies it will spawn over its lifetime:
+--   * a total QUEUE of mobs it will spawn over its lifetime:
 --         QUEUE_SEGMENT_ONE + ((combatSegmentIndex - 1) × QUEUE_PER_SEGMENT)
 --                           + (players × QUEUE_PER_PLAYER)
 --     where combatSegmentIndex is the room's dungeon-wide COMBAT SEGMENT
@@ -32,7 +32,7 @@ local SPAWN_DELAY = 0.5
 --     The ordinal counts SEGMENTS, not chunks. DungeonData's
 --     chunksPerRoom explodes each Combat segment into 2-3 physical rooms,
 --     and every chunk of one segment fields the SAME queue — a 3-chunk
---     segment 1 is three separate 8-zombie fights, not 8 then 9 then 10.
+--     segment 1 is three separate 8-mob fights, not 8 then 9 then 10.
 --     Solo, that ladders 8/9/10/.../15 across Normal's eight combat
 --     segments.
 --   * a CONCURRENT cap of how many can be alive in the chunk at once:
@@ -41,11 +41,11 @@ local SPAWN_DELAY = 0.5
 --     players) — the anti-swarm clamp.
 -- Both are FROZEN at activation: a player dying or leaving mid-room
 -- never shrinks the room's budget. A per-room thread tops the room back
--- up to the concurrent cap from the queue as zombies die, until the
+-- up to the concurrent cap from the queue as mobs die, until the
 -- queue is dry. The segment's exit gate only opens when every combat
--- room's queue is exhausted AND every spawned zombie is dead
--- (DungeonService:_areSegmentZombiesCleared).
--- DEFAULTS. Every dungeon overrides these through DungeonData[id].zombieQueue
+-- room's queue is exhausted AND every spawned mob is dead
+-- (DungeonService:_areSegmentMobsCleared).
+-- DEFAULTS. Every dungeon overrides these through DungeonData[id].mobQueue
 -- (segmentOne / perSegment / perPlayer, optional concurrent*), read at chunk
 -- activation via _queueTuning -- so deeper dungeons of a run field bigger
 -- queues through their data, not a carried ordinal. Rooms with no active
@@ -69,13 +69,13 @@ local QUEUE_START_DELAY = 1 -- matches the old pre-spawn beat after gate crossin
 -- chunk itself), every top-up spawn is placed round-robin: the owning chunk
 -- FIRST, then one in each PREVIOUS chunk of the same segment that players
 -- are physically standing in. Kite back into chunk 1 and chunk 3's queue
--- starts landing zombies in chunk 1 too; kite into 1 and 2 and all three
+-- starts landing mobs in chunk 1 too; kite into 1 and 2 and all three
 -- get spawns. The owning chunk keeps its slot even when nobody is in it, so
 -- falling back never fully quiets the room you're meant to clear.
 --
 -- NOTHING about the queue changes: budget, concurrent cap, roster and
--- segment-clear all still belong to the owning chunk -- a zombie chunk 3's
--- queue drops into chunk 1 is still chunk 3's zombie. Only WHERE it appears
+-- segment-clear all still belong to the owning chunk -- a mob chunk 3's
+-- queue drops into chunk 1 is still chunk 3's mob. Only WHERE it appears
 -- moves. Presence is a real physical check (HRP over one of the chunk's
 -- Floor parts) -- DungeonService's room cursor is party-wide, not per player.
 local FLOOR_NAME = "Floor"
@@ -85,62 +85,62 @@ local PRESENCE_MAX_DEPTH_BELOW_FLOOR = 3
 local SPAWN_POINTS_FOLDER_NAME = "SpawnPoints"
 local ROOM_SPAWN_HEIGHT_OFFSET = 2
 local ROOM_ATTRIBUTE = "RoomId"
-local MAX_ACTIVE_ZOMBIES = 75
-local MAX_MINIBOSS_WAVE_ZOMBIES = 8
+local MAX_ACTIVE_MOBS = 75
+local MAX_MINIBOSS_WAVE_MOBS = 8
 
 local MINIBOSS_SPAWN_POINT_NAME = "MinibossSpawnPoint"
 local MINIBOSS_WAVE_INTERVAL = 45
 -- How often a PAUSED (phase cutscene) or CAPPED wave spawner re-checks
 -- whether it may spawn again. It used to spin every frame: both `continue`
 -- branches skipped the trailing interval wait, so a paused or capped room
--- scanned the whole Zombies folder and warned once per Heartbeat.
+-- scanned the whole Mobs folder and warned once per Heartbeat.
 local MINIBOSS_WAVE_POLL_SECONDS = 1
 
-local ZombieSpawnService = {
-	Name = "ZombieSpawnService",
+local MobSpawnService = {
+	Name = "MobSpawnService",
 
-	_zombiePlan = LootPlan.new("single"), -- rebuilt per dungeon (BuildZombiePlanForDungeon)
-	_zombiePlanDungeonId = nil :: string?,
-	_zombiesByRoom = {}, -- [roomId]: { Model, ... } — populated by the room queue
-	_roomQueues = {}, -- [roomId]: { remaining: number, concurrentCap: number } — see SpawnZombiesInRoom
+	_mobPlan = LootPlan.new("single"), -- rebuilt per dungeon (BuildMobPlanForDungeon)
+	_mobPlanDungeonId = nil :: string?,
+	_mobsByRoom = {}, -- [roomId]: { Model, ... } — populated by the room queue
+	_roomQueues = {}, -- [roomId]: { remaining: number, concurrentCap: number } — see SpawnMobsInRoom
 	_activeMinibossWaves = {}, -- [roomId]: thread — running wave spawner per miniboss room
 	_minibossWavesPaused = {}, -- [roomId]: true — wave spawner frozen (boss phase cutscene),
 }
 
-ZombieSpawnService.OnZombieSpawn = Signal.new()
-ZombieSpawnService.OnZombieDespawn = Signal.new()
+MobSpawnService.OnMobSpawn = Signal.new()
+MobSpawnService.OnMobDespawn = Signal.new()
 
-function ZombieSpawnService.IncrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
-	self.OnZombieSpawn:Fire(zombie)
+function MobSpawnService.IncrementMobCount(self: typeof(MobSpawnService), mob: Model)
+	self.OnMobSpawn:Fire(mob)
 end
 
-function ZombieSpawnService.DecrementZombieCount(self: typeof(ZombieSpawnService), zombie: Model)
+function MobSpawnService.DecrementMobCount(self: typeof(MobSpawnService), mob: Model)
 	-- Update all registries BEFORE firing the signal so every listener observes
 	-- a fully-consistent post-death state (e.g. DungeonService's segment-clear
-	-- check would otherwise see the dying zombie still in _zombiesByRoom and
+	-- check would otherwise see the dying mob still in _mobsByRoom and
 	-- never trigger the gate-open).
-	local roomId = zombie:GetAttribute(ROOM_ATTRIBUTE)
+	local roomId = mob:GetAttribute(ROOM_ATTRIBUTE)
 	if roomId then
-		local roomList = self._zombiesByRoom[roomId]
+		local roomList = self._mobsByRoom[roomId]
 		if roomList then
-			local roomIdx = table.find(roomList, zombie)
+			local roomIdx = table.find(roomList, mob)
 			if roomIdx then
 				table.remove(roomList, roomIdx)
 			end
 		end
 	end
 
-	self.OnZombieDespawn:Fire(zombie)
+	self.OnMobDespawn:Fire(mob)
 end
 
---[ Per-dungeon zombie pool ]--
+--[ Per-dungeon mob pool ]--
 
--- ReplicatedStorage.GameAssets.Zombies.<assetFolder> -- each dungeon has its
--- own folder of mob templates, named by its DungeonData assetFolder. Falls back to the flat Zombies folder (with
+-- ReplicatedStorage.GameAssets.Mobs.<assetFolder> -- each dungeon has its
+-- own folder of mob templates, named by its DungeonData assetFolder. Falls back to the flat Mobs folder (with
 -- a warn) so a missing folder degrades to "same mobs everywhere" instead
 -- of a dead dungeon.
-function ZombieSpawnService._zombieFolder(_self: typeof(ZombieSpawnService), dungeonId: string?): Instance
-	local root = ReplicatedStorage.GameAssets.Zombies
+function MobSpawnService._mobFolder(_self: typeof(MobSpawnService), dungeonId: string?): Instance
+	local root = ReplicatedStorage.GameAssets.Mobs
 	if dungeonId then
 		local config = DungeonData[dungeonId]
 		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
@@ -148,38 +148,36 @@ function ZombieSpawnService._zombieFolder(_self: typeof(ZombieSpawnService), dun
 		if folder then
 			return folder
 		end
-		warn(
-			("[ZombieSpawnService] No zombie folder GameAssets.Zombies.%s -- using the flat folder"):format(folderName)
-		)
+		warn(("[MobSpawnService] No mob folder GameAssets.Mobs.%s -- using the flat folder"):format(folderName))
 	end
 	return root
 end
 
-function ZombieSpawnService._activeDungeonId(_self: typeof(ZombieSpawnService)): string?
+function MobSpawnService._activeDungeonId(_self: typeof(MobSpawnService)): string?
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	local dungeon = dungeonService and dungeonService:GetActiveDungeon()
 	return dungeon and dungeon.id or nil
 end
 
--- Template for `zombieName` in the ACTIVE dungeon's pool (nil + warn if
+-- Template for `mobName` in the ACTIVE dungeon's pool (nil + warn if
 -- absent -- a name that isn't in this dungeon's folder is a data error, not
 -- a reason to spawn a mob from another dungeon).
-function ZombieSpawnService._zombieTemplate(self: typeof(ZombieSpawnService), zombieName: string): Model?
-	local folder = self:_zombieFolder(self:_activeDungeonId())
-	local template = folder:FindFirstChild(zombieName) :: Model?
+function MobSpawnService._mobTemplate(self: typeof(MobSpawnService), mobName: string): Model?
+	local folder = self:_mobFolder(self:_activeDungeonId())
+	local template = folder:FindFirstChild(mobName) :: Model?
 	if not template then
-		warn(("[ZombieSpawnService] No zombie template '%s' under %s"):format(zombieName, folder:GetFullName()))
+		warn(("[MobSpawnService] No mob template '%s' under %s"):format(mobName, folder:GetFullName()))
 		return nil
 	end
 	return template
 end
 
--- Queue tuning for the active dungeon (DungeonData[id].zombieQueue), with
+-- Queue tuning for the active dungeon (DungeonData[id].mobQueue), with
 -- the module defaults filling any gap.
-function ZombieSpawnService._queueTuning(self: typeof(ZombieSpawnService))
+function MobSpawnService._queueTuning(self: typeof(MobSpawnService))
 	local dungeonId = self:_activeDungeonId()
 	local config = dungeonId and DungeonData[dungeonId]
-	local tuning = config and config.zombieQueue or {}
+	local tuning = config and config.mobQueue or {}
 	return {
 		segmentOne = tuning.segmentOne or QUEUE_SEGMENT_ONE,
 		perSegment = tuning.perSegment or QUEUE_PER_SEGMENT,
@@ -190,61 +188,61 @@ function ZombieSpawnService._queueTuning(self: typeof(ZombieSpawnService))
 	}
 end
 
--- Rebuilds the random-spawn plan from DungeonData[dungeonId].zombiePool: the
--- explicit list of ZombieNames that spawn in this dungeon, each weighted by
--- ZombieData[name].spawnWeight (0 / no data = skipped + warned). Every name
--- must ALSO have a template in the dungeon's GameAssets.Zombies folder --
+-- Rebuilds the random-spawn plan from DungeonData[dungeonId].mobPool: the
+-- explicit list of MobNames that spawn in this dungeon, each weighted by
+-- MobData[name].spawnWeight (0 / no data = skipped + warned). Every name
+-- must ALSO have a template in the dungeon's GameAssets.Mobs folder --
 -- checked here so a typo warns at generation, not on the first spawn.
 -- Called by DungeonService on every generation.
-function ZombieSpawnService.BuildZombiePlanForDungeon(self: typeof(ZombieSpawnService), dungeonId: string)
+function MobSpawnService.BuildMobPlanForDungeon(self: typeof(MobSpawnService), dungeonId: string)
 	local plan = LootPlan.new("single")
 	local added = 0
 	local config = DungeonData[dungeonId]
-	local pool = config and config.zombiePool or {}
-	local folder = self:_zombieFolder(dungeonId)
-	for _, zombieName in pool do
-		local data = ZombieData[zombieName]
+	local pool = config and config.mobPool or {}
+	local folder = self:_mobFolder(dungeonId)
+	for _, mobName in pool do
+		local data = MobData[mobName]
 		local weight = data and data.spawnWeight or 0
 		if weight <= 0 then
 			warn(
-				("[ZombieSpawnService] %s.zombiePool: '%s' has no ZombieData spawnWeight > 0 -- skipped"):format(
+				("[MobSpawnService] %s.mobPool: '%s' has no MobData spawnWeight > 0 -- skipped"):format(
 					dungeonId,
-					tostring(zombieName)
+					tostring(mobName)
 				)
 			)
 			continue
 		end
-		if not folder:FindFirstChild(zombieName) then
+		if not folder:FindFirstChild(mobName) then
 			warn(
-				("[ZombieSpawnService] %s.zombiePool: no template '%s' under %s -- skipped"):format(
+				("[MobSpawnService] %s.mobPool: no template '%s' under %s -- skipped"):format(
 					dungeonId,
-					tostring(zombieName),
+					tostring(mobName),
 					folder:GetFullName()
 				)
 			)
 			continue
 		end
-		plan:AddLoot(zombieName, weight)
+		plan:AddLoot(mobName, weight)
 		added += 1
 	end
 	if added == 0 then
 		warn(
-			("[ZombieSpawnService] Zombie pool for %s is EMPTY -- nothing will spawn from its combat queues"):format(
+			("[MobSpawnService] Mob pool for %s is EMPTY -- nothing will spawn from its combat queues"):format(
 				dungeonId
 			)
 		)
 	end
-	self._zombiePlan = plan
-	self._zombiePlanDungeonId = dungeonId
+	self._mobPlan = plan
+	self._mobPlanDungeonId = dungeonId
 end
 
--- Full reset between dungeons of a run: every live zombie is destroyed and
+-- Full reset between dungeons of a run: every live mob is destroyed and
 -- every per-room record dropped. REQUIRED before generating the next
 -- dungeon -- room ids restart at 1 in every generation, so a stale
 -- _roomQueues[1] from dungeon 1 would make dungeon 2's room 1 read as
 -- "already activated" and never spawn. Queue threads still running notice
 -- their room model is gone and drain themselves.
-function ZombieSpawnService.ResetForNewDungeon(self: typeof(ZombieSpawnService))
+function MobSpawnService.ResetForNewDungeon(self: typeof(MobSpawnService))
 	for _, waveThread in pairs(table.clone(self._activeMinibossWaves)) do
 		if typeof(waveThread) == "thread" then
 			pcall(task.cancel, waveThread)
@@ -256,16 +254,16 @@ function ZombieSpawnService.ResetForNewDungeon(self: typeof(ZombieSpawnService))
 		queue.remaining = 0
 	end
 	table.clear(self._roomQueues)
-	table.clear(self._zombiesByRoom)
+	table.clear(self._mobsByRoom)
 
-	for _, zombie in workspace.IgnoreInstances.Zombies:GetChildren() do
-		zombie:Destroy()
+	for _, mob in workspace.IgnoreInstances.Mobs:GetChildren() do
+		mob:Destroy()
 	end
 end
 
 -- Collect every Attachment under the room's "SpawnPoints" folder. Each
--- attachment is a deterministic spawn location for one zombie.
-function ZombieSpawnService._getRoomSpawnPoints(_self: typeof(ZombieSpawnService), roomModel: Model): { Attachment }
+-- attachment is a deterministic spawn location for one mob.
+function MobSpawnService._getRoomSpawnPoints(_self: typeof(MobSpawnService), roomModel: Model): { Attachment }
 	local folder = roomModel:FindFirstChild(SPAWN_POINTS_FOLDER_NAME)
 	if not folder then
 		return {}
@@ -312,7 +310,7 @@ end
 -- segmentId), each with its spawn points + floors cached, ordered by
 -- chunkIndex. Empty for a first chunk, for rooms with no segment stamp
 -- (hand-placed test rooms), or when no dungeon is active.
-function ZombieSpawnService._getPreviousChunks(self: typeof(ZombieSpawnService), room): { any }
+function MobSpawnService._getPreviousChunks(self: typeof(MobSpawnService), room): { any }
 	local previous = {}
 	if room.segmentId == nil or room.chunkIndex == nil then
 		return previous
@@ -347,7 +345,7 @@ function ZombieSpawnService._getPreviousChunks(self: typeof(ZombieSpawnService),
 end
 
 -- Previous chunks that at least one ALIVE player is physically standing in.
-function ZombieSpawnService._getOccupiedChunks(_self: typeof(ZombieSpawnService), previousChunks: { any }): { any }
+function MobSpawnService._getOccupiedChunks(_self: typeof(MobSpawnService), previousChunks: { any }): { any }
 	local occupied = {}
 	if #previousChunks == 0 then
 		return occupied
@@ -376,22 +374,22 @@ function ZombieSpawnService._getOccupiedChunks(_self: typeof(ZombieSpawnService)
 	return occupied
 end
 
--- Spawns one queued zombie at a random SpawnPoints attachment (pure
+-- Spawns one queued mob at a random SpawnPoints attachment (pure
 -- random reuse — attachments host any number of spawns over the room's
 -- lifetime). Tagged with the room's id and registered under
--- _zombiesByRoom[room.id] so :GetZombiesInRoom returns them in O(1).
-function ZombieSpawnService._spawnQueuedZombie(self: typeof(ZombieSpawnService), room, spawnPoints: { Attachment })
+-- _mobsByRoom[room.id] so :GetMobsInRoom returns them in O(1).
+function MobSpawnService._spawnQueuedMob(self: typeof(MobSpawnService), room, spawnPoints: { Attachment })
 	local attachment = spawnPoints[math.random(#spawnPoints)]
 
-	local zombieName = self._zombiePlan:GetRandomLoot(1)
-	local template = zombieName and self:_zombieTemplate(zombieName)
+	local mobName = self._mobPlan:GetRandomLoot(1)
+	local template = mobName and self:_mobTemplate(mobName)
 	if not template then
 		return
 	end
-	local zombie = template:Clone()
-	zombie:SetAttribute(ROOM_ATTRIBUTE, room.id)
+	local mob = template:Clone()
+	mob:SetAttribute(ROOM_ATTRIBUTE, room.id)
 
-	local hrp = zombie:FindFirstChild("HumanoidRootPart")
+	local hrp = mob:FindFirstChild("HumanoidRootPart")
 	if hrp then
 		hrp.CFrame = CFrame.new(attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0))
 	end
@@ -403,12 +401,12 @@ function ZombieSpawnService._spawnQueuedZombie(self: typeof(ZombieSpawnService),
 		end
 	end)
 
-	zombie.Parent = workspace.IgnoreInstances.Zombies
+	mob.Parent = workspace.IgnoreInstances.Mobs
 
-	table.insert(self._zombiesByRoom[room.id], zombie)
+	table.insert(self._mobsByRoom[room.id], mob)
 end
 
--- Activates a combat room's zombie QUEUE. Snapshots the player count
+-- Activates a combat room's mob QUEUE. Snapshots the player count
 -- (frozen — see the constants block), then runs a per-room thread that
 -- keeps the room topped up to its concurrent cap from the queue until
 -- the queue is dry:
@@ -417,11 +415,11 @@ end
 -- Idempotent: re-activating an already-activated room is a no-op, so a
 -- double gate-crossing can't double a room's budget. The thread outlives
 -- players leaving the room by design — an abandoned queue keeps spawning
--- and its zombies hunt the party (skipping ahead is punished; the
+-- and its mobs hunt the party (skipping ahead is punished; the
 -- segment gate stays locked either way).
-function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService), room)
+function MobSpawnService.SpawnMobsInRoom(self: typeof(MobSpawnService), room)
 	if not room or not room.model then
-		warn("[ZombieSpawnService] SpawnZombiesInRoom called with nil room or no model")
+		warn("[MobSpawnService] SpawnMobsInRoom called with nil room or no model")
 		return
 	end
 
@@ -432,7 +430,7 @@ function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService),
 	local spawnPoints = self:_getRoomSpawnPoints(room.model)
 	if #spawnPoints == 0 then
 		warn(
-			("[ZombieSpawnService] Room %s has no Attachments under '%s' folder"):format(
+			("[MobSpawnService] Room %s has no Attachments under '%s' folder"):format(
 				room.model.Name,
 				SPAWN_POINTS_FOLDER_NAME
 			)
@@ -457,7 +455,7 @@ function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService),
 		),
 	}
 	self._roomQueues[room.id] = queue
-	self._zombiesByRoom[room.id] = self._zombiesByRoom[room.id] or {}
+	self._mobsByRoom[room.id] = self._mobsByRoom[room.id] or {}
 
 	-- Anti-kite placement state (see the FLOOR_NAME constants block).
 	-- previousChunks is fixed for the room's lifetime; which of them are
@@ -478,21 +476,18 @@ function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService),
 				break
 			end
 
-			local alive = #(self._zombiesByRoom[room.id] or {})
+			local alive = #(self._mobsByRoom[room.id] or {})
 
-			-- Global hard cap: never push the server past MAX_ACTIVE_ZOMBIES
-			-- live + still-initializing. Counts the Zombies folder directly so
-			-- it stays accurate during the window before IncrementZombieCount.
-			if
-				alive < queue.concurrentCap
-				and #workspace.IgnoreInstances.Zombies:GetChildren() < MAX_ACTIVE_ZOMBIES
-			then
+			-- Global hard cap: never push the server past MAX_ACTIVE_MOBS
+			-- live + still-initializing. Counts the Mobs folder directly so
+			-- it stays accurate during the window before IncrementMobCount.
+			if alive < queue.concurrentCap and #workspace.IgnoreInstances.Mobs:GetChildren() < MAX_ACTIVE_MOBS then
 				queue.remaining -= 1
 
 				-- FIRST WAVE: the initial fill up to the concurrent cap lands
 				-- entirely in THIS chunk. After that, top-ups go round-robin:
 				-- this chunk first, then each previous chunk players are
-				-- kiting in. The zombie is still THIS room's (queue, cap,
+				-- kiting in. The mob is still THIS room's (queue, cap,
 				-- roster) wherever it lands.
 				local placementPoints = spawnPoints
 				if firstWaveDone then
@@ -507,7 +502,7 @@ function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService),
 					roundRobinIndex += 1
 				end
 
-				self:_spawnQueuedZombie(room, placementPoints)
+				self:_spawnQueuedMob(room, placementPoints)
 
 				-- The wave is 'down' the moment the chunk first reaches its cap
 				-- (or the queue runs dry before it can).
@@ -523,30 +518,30 @@ function ZombieSpawnService.SpawnZombiesInRoom(self: typeof(ZombieSpawnService),
 	end)
 end
 
--- CHALLENGE queue (CoffinEventService): `waves` zombies per SpawnPoint in
+-- CHALLENGE queue (CoffinEventService): `waves` mobs per SpawnPoint in
 -- `room`, poured in under `concurrentCap` from the dungeon's own pool,
 -- every spawn at a random attachment. Registers in _roomQueues /
--- _zombiesByRoom exactly like a combat queue, so IsRoomQueueExhausted,
--- GetZombiesInRoom and DespawnZombiesInRoom all work on it. Unlike
--- SpawnZombiesInRoom it is NOT latched — an event room never runs the
+-- _mobsByRoom exactly like a combat queue, so IsRoomQueueExhausted,
+-- GetMobsInRoom and DespawnMobsInRoom all work on it. Unlike
+-- SpawnMobsInRoom it is NOT latched — an event room never runs the
 -- combat queue, and a re-run just replaces the queue — and it does no
 -- anti-kite placement: the room is sealed, everyone is inside. Returns
 -- the total it will spawn, or nil when the room has no SpawnPoints.
-function ZombieSpawnService.StartChallengeQueue(
-	self: typeof(ZombieSpawnService),
+function MobSpawnService.StartChallengeQueue(
+	self: typeof(MobSpawnService),
 	room,
 	waves: number,
 	concurrentCap: number
 ): number?
 	if not room or not room.model then
-		warn("[ZombieSpawnService] StartChallengeQueue called with nil room or no model")
+		warn("[MobSpawnService] StartChallengeQueue called with nil room or no model")
 		return nil
 	end
 
 	local spawnPoints = self:_getRoomSpawnPoints(room.model)
 	if #spawnPoints == 0 then
 		warn(
-			("[ZombieSpawnService] Room %s has no Attachments under '%s' folder"):format(
+			("[MobSpawnService] Room %s has no Attachments under '%s' folder"):format(
 				room.model.Name,
 				SPAWN_POINTS_FOLDER_NAME
 			)
@@ -560,7 +555,7 @@ function ZombieSpawnService.StartChallengeQueue(
 		concurrentCap = math.max(math.floor(concurrentCap), 1),
 	}
 	self._roomQueues[room.id] = queue
-	self._zombiesByRoom[room.id] = self._zombiesByRoom[room.id] or {}
+	self._mobsByRoom[room.id] = self._mobsByRoom[room.id] or {}
 
 	task.spawn(function()
 		while queue.remaining > 0 do
@@ -569,13 +564,10 @@ function ZombieSpawnService.StartChallengeQueue(
 				break
 			end
 
-			local alive = #(self._zombiesByRoom[room.id] or {})
-			if
-				alive < queue.concurrentCap
-				and #workspace.IgnoreInstances.Zombies:GetChildren() < MAX_ACTIVE_ZOMBIES
-			then
+			local alive = #(self._mobsByRoom[room.id] or {})
+			if alive < queue.concurrentCap and #workspace.IgnoreInstances.Mobs:GetChildren() < MAX_ACTIVE_MOBS then
 				queue.remaining -= 1
-				self:_spawnQueuedZombie(room, spawnPoints)
+				self:_spawnQueuedMob(room, spawnPoints)
 				task.wait(SPAWN_DELAY)
 			else
 				task.wait(QUEUE_POLL_SECONDS)
@@ -587,10 +579,10 @@ function ZombieSpawnService.StartChallengeQueue(
 end
 
 -- True when the room's queue has spawned everything it ever will. A room
--- is fully CLEARED when this is true AND :GetZombiesInRoom is empty —
--- DungeonService:_areSegmentZombiesCleared checks both, so the exit gate
--- can never open while a queue still holds unspawned zombies.
-function ZombieSpawnService.IsRoomQueueExhausted(self: typeof(ZombieSpawnService), room): boolean
+-- is fully CLEARED when this is true AND :GetMobsInRoom is empty —
+-- DungeonService:_areSegmentMobsCleared checks both, so the exit gate
+-- can never open while a queue still holds unspawned mobs.
+function MobSpawnService.IsRoomQueueExhausted(self: typeof(MobSpawnService), room): boolean
 	if not room then
 		return false
 	end
@@ -598,9 +590,9 @@ function ZombieSpawnService.IsRoomQueueExhausted(self: typeof(ZombieSpawnService
 	return queue ~= nil and queue.remaining <= 0
 end
 
--- Remaining unspawned zombies in the room's queue (0 if exhausted or
--- never activated). Exposed for future UI ("X zombies remaining").
-function ZombieSpawnService.GetRoomQueueRemaining(self: typeof(ZombieSpawnService), room): number
+-- Remaining unspawned mobs in the room's queue (0 if exhausted or
+-- never activated). Exposed for future UI ("X mobs remaining").
+function MobSpawnService.GetRoomQueueRemaining(self: typeof(MobSpawnService), room): number
 	if not room then
 		return 0
 	end
@@ -608,19 +600,19 @@ function ZombieSpawnService.GetRoomQueueRemaining(self: typeof(ZombieSpawnServic
 	return queue and queue.remaining or 0
 end
 
--- Returns the list of zombies currently alive in the given room. Updates
--- automatically as zombies die (cleaned up on OnZombieDespawn).
-function ZombieSpawnService.GetZombiesInRoom(self: typeof(ZombieSpawnService), room): { Model }
+-- Returns the list of mobs currently alive in the given room. Updates
+-- automatically as mobs die (cleaned up on OnMobDespawn).
+function MobSpawnService.GetMobsInRoom(self: typeof(MobSpawnService), room): { Model }
 	if not room then
 		return {}
 	end
-	return self._zombiesByRoom[room.id] or {}
+	return self._mobsByRoom[room.id] or {}
 end
 
--- Returns true if SpawnZombiesInRoom has activated this room's queue at
--- least once (regardless of how many zombies are currently alive). Used
+-- Returns true if SpawnMobsInRoom has activated this room's queue at
+-- least once (regardless of how many mobs are currently alive). Used
 -- by segment clear-checks to tell "never spawned" apart from "all dead".
-function ZombieSpawnService.WasRoomSpawned(self: typeof(ZombieSpawnService), room): boolean
+function MobSpawnService.WasRoomSpawned(self: typeof(MobSpawnService), room): boolean
 	if not room then
 		return false
 	end
@@ -630,7 +622,7 @@ end
 --[ Miniboss fight ]--
 
 -- Finds the MinibossSpawnPoint attachment in the room's SpawnPoints folder.
-function ZombieSpawnService._getMinibossSpawnPoint(_self: typeof(ZombieSpawnService), roomModel: Model): Attachment?
+function MobSpawnService._getMinibossSpawnPoint(_self: typeof(MobSpawnService), roomModel: Model): Attachment?
 	local folder = roomModel:FindFirstChild(SPAWN_POINTS_FOLDER_NAME)
 	if not folder then
 		return nil
@@ -644,10 +636,7 @@ end
 
 -- Returns every Attachment under SpawnPoints EXCEPT MinibossSpawnPoint. Used
 -- for the regular wave spawning during a miniboss fight.
-function ZombieSpawnService._getRoomRegularSpawnPoints(
-	_self: typeof(ZombieSpawnService),
-	roomModel: Model
-): { Attachment }
+function MobSpawnService._getRoomRegularSpawnPoints(_self: typeof(MobSpawnService), roomModel: Model): { Attachment }
 	local folder = roomModel:FindFirstChild(SPAWN_POINTS_FOLDER_NAME)
 	if not folder then
 		return {}
@@ -661,17 +650,17 @@ function ZombieSpawnService._getRoomRegularSpawnPoints(
 	return points
 end
 
--- Spawns the named zombie at the room's MinibossSpawnPoint, tags it with
--- IsMiniboss for downstream detection, and registers it in _zombiesByRoom.
+-- Spawns the named mob at the room's MinibossSpawnPoint, tags it with
+-- IsMiniboss for downstream detection, and registers it in _mobsByRoom.
 -- Returns the miniboss model, or nil if the room is missing the attachment.
-function ZombieSpawnService.SpawnMinibossInRoom(
-	self: typeof(ZombieSpawnService),
+function MobSpawnService.SpawnMinibossInRoom(
+	self: typeof(MobSpawnService),
 	room,
 	minibossName: string,
 	isBoss: boolean?
 ): Model?
 	if not room or not room.model then
-		warn("[ZombieSpawnService] SpawnMinibossInRoom: nil room or no model")
+		warn("[MobSpawnService] SpawnMinibossInRoom: nil room or no model")
 		return nil
 	end
 
@@ -679,7 +668,7 @@ function ZombieSpawnService.SpawnMinibossInRoom(
 
 	if not attachment then
 		warn(
-			("[ZombieSpawnService] Room %s has no '%s' Attachment under '%s'"):format(
+			("[MobSpawnService] Room %s has no '%s' Attachment under '%s'"):format(
 				room.model.Name,
 				MINIBOSS_SPAWN_POINT_NAME,
 				SPAWN_POINTS_FOLDER_NAME
@@ -688,14 +677,14 @@ function ZombieSpawnService.SpawnMinibossInRoom(
 		return nil
 	end
 
-	local template = self:_zombieTemplate(minibossName)
+	local template = self:_mobTemplate(minibossName)
 	if not template then
 		return nil
 	end
 
 	local miniboss = template:Clone()
 	miniboss:SetAttribute(ROOM_ATTRIBUTE, room.id)
-	-- Stamp the encounter role BEFORE parenting so the Zombie Component's
+	-- Stamp the encounter role BEFORE parenting so the Mob Component's
 	-- Construct (fires on parent + tag) dispatches the right mob class. Boss
 	-- and Miniboss are kept mutually exclusive — the Component checks IsBoss
 	-- first, but exclusivity keeps downstream IsMiniboss readers unambiguous.
@@ -710,26 +699,26 @@ function ZombieSpawnService.SpawnMinibossInRoom(
 		hrp.CFrame = CFrame.new(attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0))
 	end
 
-	self._zombiesByRoom[room.id] = self._zombiesByRoom[room.id] or {}
-	table.insert(self._zombiesByRoom[room.id], miniboss)
+	self._mobsByRoom[room.id] = self._mobsByRoom[room.id] or {}
+	table.insert(self._mobsByRoom[room.id], miniboss)
 
-	miniboss.Parent = workspace.IgnoreInstances.Zombies
+	miniboss.Parent = workspace.IgnoreInstances.Mobs
 
 	return miniboss
 end
 
 -- Live wave adds in the room: the room's own list minus its boss /
--- miniboss. DecrementZombieCount prunes the list on death, so this is what
--- the MAX_MINIBOSS_WAVE_ZOMBIES cap compares against — never the whole
--- Zombies folder, where another room's mobs would starve this room's waves.
-function ZombieSpawnService._countRoomWaveZombies(self: typeof(ZombieSpawnService), room): number
-	local roomList = self._zombiesByRoom[room.id]
+-- miniboss. DecrementMobCount prunes the list on death, so this is what
+-- the MAX_MINIBOSS_WAVE_MOBS cap compares against — never the whole
+-- Mobs folder, where another room's mobs would starve this room's waves.
+function MobSpawnService._countRoomWaveMobs(self: typeof(MobSpawnService), room): number
+	local roomList = self._mobsByRoom[room.id]
 	if not roomList then
 		return 0
 	end
 	local count = 0
-	for _, zombie in roomList do
-		if zombie:GetAttribute(Attributes.IsBoss) ~= true and zombie:GetAttribute(Attributes.IsMiniBoss) ~= true then
+	for _, mob in roomList do
+		if mob:GetAttribute(Attributes.IsBoss) ~= true and mob:GetAttribute(Attributes.IsMiniBoss) ~= true then
 			count += 1
 		end
 	end
@@ -737,10 +726,10 @@ function ZombieSpawnService._countRoomWaveZombies(self: typeof(ZombieSpawnServic
 end
 
 -- Begins a periodic wave spawner for the miniboss room. Every
--- MINIBOSS_WAVE_INTERVAL seconds, spawns one zombie at each regular
+-- MINIBOSS_WAVE_INTERVAL seconds, spawns one mob at each regular
 -- SpawnPoint attachment (skipping MinibossSpawnPoint). Stops when
 -- StopMinibossWaves is called or the room model is destroyed.
-function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService), room)
+function MobSpawnService.StartMinibossWaves(self: typeof(MobSpawnService), room)
 	if not room or not room.model then
 		return
 	end
@@ -750,7 +739,7 @@ function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService),
 
 	-- The wave loop appends to the room list; make sure it exists even when
 	-- the miniboss itself was placed some other way.
-	self._zombiesByRoom[room.id] = self._zombiesByRoom[room.id] or {}
+	self._mobsByRoom[room.id] = self._mobsByRoom[room.id] or {}
 
 	self._activeMinibossWaves[room.id] = task.spawn(function()
 		-- One warn per cap episode, not one per poll.
@@ -766,12 +755,12 @@ function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService),
 				continue
 			end
 
-			if self:_countRoomWaveZombies(room) >= MAX_MINIBOSS_WAVE_ZOMBIES then
+			if self:_countRoomWaveMobs(room) >= MAX_MINIBOSS_WAVE_MOBS then
 				if not warnedCap then
 					warnedCap = true
 					warn(
-						("[ZombieSpawnService] Hit %d-zombie cap for miniboss waves; holding waves for room %s"):format(
-							MAX_MINIBOSS_WAVE_ZOMBIES,
+						("[MobSpawnService] Hit %d-mob cap for miniboss waves; holding waves for room %s"):format(
+							MAX_MINIBOSS_WAVE_MOBS,
 							room.model.Name
 						)
 					)
@@ -784,24 +773,24 @@ function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService),
 			local points = self:_getRoomRegularSpawnPoints(room.model)
 
 			for _, attachment in points do
-				if #workspace.IgnoreInstances.Zombies:GetChildren() >= MAX_ACTIVE_ZOMBIES then
+				if #workspace.IgnoreInstances.Mobs:GetChildren() >= MAX_ACTIVE_MOBS then
 					break
 				end
 				-- Phase change started mid-wave → exit the spawn loop early so
-				-- no more zombies appear during the cutscene.
+				-- no more mobs appear during the cutscene.
 				if self._minibossWavesPaused[room.id] then
 					break
 				end
 
-				local zombieName = self._zombiePlan:GetRandomLoot(1)
-				local waveTemplate = zombieName and self:_zombieTemplate(zombieName)
+				local mobName = self._mobPlan:GetRandomLoot(1)
+				local waveTemplate = mobName and self:_mobTemplate(mobName)
 				if not waveTemplate then
 					continue
 				end
-				local zombie = waveTemplate:Clone()
-				zombie:SetAttribute(ROOM_ATTRIBUTE, room.id)
+				local mob = waveTemplate:Clone()
+				mob:SetAttribute(ROOM_ATTRIBUTE, room.id)
 
-				local hrp = zombie:FindFirstChild("HumanoidRootPart")
+				local hrp = mob:FindFirstChild("HumanoidRootPart")
 				if hrp then
 					hrp.CFrame = CFrame.new(attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0))
 				end
@@ -815,8 +804,8 @@ function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService),
 					end
 				end)
 
-				zombie.Parent = workspace.IgnoreInstances.Zombies
-				table.insert(self._zombiesByRoom[room.id], zombie)
+				mob.Parent = workspace.IgnoreInstances.Mobs
+				table.insert(self._mobsByRoom[room.id], mob)
 				task.wait(SPAWN_DELAY)
 			end
 
@@ -825,7 +814,7 @@ function ZombieSpawnService.StartMinibossWaves(self: typeof(ZombieSpawnService),
 	end)
 end
 
-function ZombieSpawnService.StopMinibossWaves(self: typeof(ZombieSpawnService), room)
+function MobSpawnService.StopMinibossWaves(self: typeof(MobSpawnService), room)
 	if not room then
 		return
 	end
@@ -841,57 +830,57 @@ end
 -- Used to halt add spawns during a boss phase-change cutscene: the spawner
 -- exits any in-progress wave early and skips new waves while paused, then
 -- resumes cleanly afterward.
-function ZombieSpawnService.PauseMinibossWaves(self: typeof(ZombieSpawnService), room)
+function MobSpawnService.PauseMinibossWaves(self: typeof(MobSpawnService), room)
 	if room then
 		self._minibossWavesPaused[room.id] = true
 	end
 end
 
-function ZombieSpawnService.ResumeMinibossWaves(self: typeof(ZombieSpawnService), room)
+function MobSpawnService.ResumeMinibossWaves(self: typeof(MobSpawnService), room)
 	if room then
 		self._minibossWavesPaused[room.id] = nil
 	end
 end
 
--- Kills every tracked zombie in the room (sets Humanoid.Health = 0 so the
+-- Kills every tracked mob in the room (sets Humanoid.Health = 0 so the
 -- normal death pipeline fires — drops, despawn registry, etc.). Used to
 -- clean up wave minions when the miniboss is defeated, and to clear adds on a
 -- boss phase change. Pass `exceptModel` to spare one mob (the boss itself
 -- during a phase cutscene).
-function ZombieSpawnService.DespawnZombiesInRoom(self: typeof(ZombieSpawnService), room, exceptModel: Model?)
+function MobSpawnService.DespawnMobsInRoom(self: typeof(MobSpawnService), room, exceptModel: Model?)
 	if not room then
 		return
 	end
 
 	-- Drain the room's queue so its spawner thread exits — an encounter
 	-- reset that clears a room must not leave a spawner trickling new
-	-- zombies into the emptied room.
+	-- mobs into the emptied room.
 	local queue = self._roomQueues[room.id]
 	if queue then
 		queue.remaining = 0
 	end
 
-	local list = self._zombiesByRoom[room.id]
+	local list = self._mobsByRoom[room.id]
 	if not list then
 		return
 	end
 	-- Snapshot since the despawn signal mutates the underlying table.
 	local snapshot = table.clone(list)
-	for _, zombie in snapshot do
-		if zombie == exceptModel then
+	for _, mob in snapshot do
+		if mob == exceptModel then
 			continue
 		end
-		local humanoid = zombie:FindFirstChildOfClass("Humanoid")
+		local humanoid = mob:FindFirstChildOfClass("Humanoid")
 		if humanoid and humanoid.Health > 0 then
 			humanoid.Health = 0
 		end
 	end
 end
 
-function ZombieSpawnService.Init(_self: typeof(ZombieSpawnService))
-	-- The spawn plan is built PER DUNGEON from that dungeon's zombie folder
-	-- (BuildZombiePlanForDungeon, called by DungeonService on generation).
+function MobSpawnService.Init(_self: typeof(MobSpawnService))
+	-- The spawn plan is built PER DUNGEON from that dungeon's mob folder
+	-- (BuildMobPlanForDungeon, called by DungeonService on generation).
 	-- Nothing static here.
 end
 
-return ZombieSpawnService
+return MobSpawnService

@@ -9,7 +9,7 @@
 	    EXP grant, gear-drop trigger, despawn)
 	  * Attribute reactions (Jailed, Slowed, etc.)
 
-	Per-mob configuration lives in Shared/Data/ZombieData.lua. See that
+	Per-mob configuration lives in Shared/Data/MobData.lua. See that
 	file's header for the post-refactor shape.
 
 	==========================================================
@@ -51,8 +51,8 @@
 	    is the hot loop. Could lower to 0.15-0.2s with no gameplay
 	    impact if perf gets tight.
 	  * `cachedAlivePlayerEntries` shared across mobs amortizes player
-	    eligibility filtering to O(zombies + players) instead of
-	    O(zombies × players). Keep.
+	    eligibility filtering to O(mobs + players) instead of
+	    O(mobs × players). Keep.
 	  * `_ensureLOSRaycastParams` shared across all mobs avoids
 	    re-allocating RaycastParams per-tick. Keep.
 	  * Pathfinding recompute is throttled per-mob via _lastPathComputeAt,
@@ -74,8 +74,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
-local ZombieService = require(ServerScriptService.Services.ZombieService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
+local MobService = require(ServerScriptService.Services.MobService)
 local RagdollService = require(ServerScriptService.Services.RagdollService)
 local DropService = require(ServerScriptService.Services.DropService)
 local RelicService = require(ServerScriptService.Services.RelicService)
@@ -93,7 +93,7 @@ local DungeonService = require(ServerScriptService.Services.DungeonService)
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
@@ -243,11 +243,11 @@ local FUSE_BOMBS: BombSpec = {
 -- CLOUD_STATUS_CHANCE to Poison everything inside (the sheet's "+30%
 -- Status Chance"). LIMIT bounds live clouds PER PLAYER, same shape as
 -- the pumpkin cap.
-local ZOMBIE_BOMB_CLOUD_DURATION = 5
-local ZOMBIE_BOMB_CLOUD_TICK_SECONDS = 1
-local ZOMBIE_BOMB_CLOUD_RADIUS = 7
-local ZOMBIE_BOMB_CLOUD_LIMIT = 3
-local ZOMBIE_BOMB_CLOUD_FADE_SECONDS = 1.5
+local MOB_BOMB_CLOUD_DURATION = 5
+local MOB_BOMB_CLOUD_TICK_SECONDS = 1
+local MOB_BOMB_CLOUD_RADIUS = 7
+local MOB_BOMB_CLOUD_LIMIT = 3
+local MOB_BOMB_CLOUD_FADE_SECONDS = 1.5
 local ROAM_DURATION_MIN = 2
 local ROAM_DURATION_MAX = 4
 local ROAM_RADIUS_MIN = 20
@@ -305,8 +305,8 @@ local function _ensureLOSRaycastParams(): RaycastParams
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = {
-		workspace.IgnoreInstances.Zombies,
-		workspace.IgnoreInstances.DeadZombies,
+		workspace.IgnoreInstances.Mobs,
+		workspace.IgnoreInstances.DeadMobs,
 		workspace.PlayerBaseplates,
 		workspace.Terrain,
 		workspace.IgnoreInstances.Boundaries,
@@ -369,15 +369,15 @@ type AttackPoolEntry = {
 	kind: string,
 	attackRange: number,
 	recoveryDuration: number?,
-	-- The ZombieData generic attack; absent on a unique entry.
+	-- The MobData generic attack; absent on a unique entry.
 	entry: any,
 	genericIndex: number?,
 	-- run(mob, target) -> active duration (seconds); see _buildAttackPool.
 	run: ((mob: Model, target: Model) -> number?)?,
 }
 
--- One ZombieData entry: the table ZombieData[name] resolves to.
-type ZombieEntry = typeof(ZombieData[""])
+-- One MobData entry: the table MobData[name] resolves to.
+type MobEntry = typeof(MobData[""])
 
 local MobBase = {}
 MobBase.__index = MobBase
@@ -392,7 +392,7 @@ type Fields = {
 	_humanoid: Humanoid,
 	_animator: Animator,
 	_janitor: typeof(Janitor.new()),
-	_data: ZombieEntry,
+	_data: MobEntry,
 
 	-- Cached config (flat for speed)
 	_health: number | () -> number,
@@ -461,7 +461,7 @@ function MobBase.new(model: Model): MobBase
 	self._animator = self._humanoid:FindFirstChildOfClass("Animator") :: Animator
 	self._janitor = Janitor.new()
 
-	local data = ZombieData[model.Name]
+	local data = MobData[model.Name]
 	assert(data, "[MobBase] No data entry for mob: " .. model.Name)
 	self._data = data
 
@@ -565,7 +565,7 @@ function MobBase._buildAttackPool(_self: MobBase, data)
 
 	for _, attack in ipairs(data.uniqueAttacks or {}) do
 		-- uniqueAttacks contract: { attackRange = N, recoveryDuration = N?, run = fn }.
-		-- run(zombieModel, target) returns the ACTIVE attack duration (seconds);
+		-- run(mobModel, target) returns the ACTIVE attack duration (seconds);
 		-- MobBase waits that, THEN recoveryDuration, before leaving Attacking — the
 		-- same two-stage clock a generic attack runs on.
 		table.insert(pool, {
@@ -654,7 +654,7 @@ end
 --[ Setup helpers ]--
 
 function MobBase._resetAttributes(self: MobBase)
-	self._model:SetAttribute(Attributes.ZombieIsAttacking, false)
+	self._model:SetAttribute(Attributes.MobIsAttacking, false)
 	self._model:SetAttribute(Attributes.SuperArmor, false)
 	self._model:SetAttribute(Attributes.SlainBy, "")
 	self._model:SetAttribute(Attributes.Jailed, false)
@@ -664,7 +664,7 @@ function MobBase._resetAttributes(self: MobBase)
 end
 
 function MobBase._applyHumanoidProperties(self: MobBase)
-	-- ZombieData carries the BASE health (a function-valued entry is still
+	-- MobData carries the BASE health (a function-valued entry is still
 	-- honoured and resolved here). The live player multiplier, the two
 	-- scaling attributes and the MaxHealth / Health write all belong to
 	-- EnemyScalingService, which also rescales this mob later when the
@@ -688,11 +688,11 @@ end
 -- health in the encounter HUD instead (EncounterService.Client.EncounterData
 -- -> EncounterBarInterfaceController), so an overhead bar would be a second,
 -- smaller copy of the same number. The role attributes are stamped before the
--- model is parented (ZombieSpawnService:SpawnMinibossInRoom), so they are
+-- model is parented (MobSpawnService:SpawnMinibossInRoom), so they are
 -- readable here at construction. _healthInterface stays nil for them; every
 -- use site nil-guards.
 --
--- The bar's FILL is animated by every CLIENT: ZombieController watches this
+-- The bar's FILL is animated by every CLIENT: MobController watches this
 -- mob's Humanoid.HealthChanged and tweens RedBar locally. The server only
 -- clones the billboard, enables it on first damage and disables it on
 -- death -- one replicated write each -- instead of streaming a tweened
@@ -791,7 +791,7 @@ function MobBase._setupListeners(self: MobBase)
 	end))
 
 	self._janitor:Add(self._humanoid.Running:Connect(function(speed)
-		local isAttacking = self._model:GetAttribute(Attributes.ZombieIsAttacking) == true
+		local isAttacking = self._model:GetAttribute(Attributes.MobIsAttacking) == true
 
 		if isAttacking then
 			return
@@ -864,7 +864,7 @@ local function forEachSpawnFadePart(model: Model, callback: (BasePart) -> ())
 	end
 end
 
--- The body blooms in on every CLIENT (Combat.MobFade -> ZombieController).
+-- The body blooms in on every CLIENT (Combat.MobFade -> MobController).
 -- The server writes each part's Transparency exactly twice: 1 here, so
 -- the model never shows a frame before its hitbox and humanoid exist,
 -- and 0 once the clients' fade has run, so a late joiner (or a part
@@ -895,7 +895,7 @@ function MobBase._fadeInOnSpawn(self: MobBase)
 			Duration = MobFadeData.SpawnFadeSeconds,
 		})
 
-		ZombieSpawnService:IncrementZombieCount(self._model)
+		MobSpawnService:IncrementMobCount(self._model)
 
 		-- Land the value the clients' tween ends on. A mob that died in the
 		-- meantime lands too: its corpse is meant to be opaque, and the
@@ -1200,7 +1200,7 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 
 	task.spawn(function()
 		self._model:SetAttribute("AttackInterrupted", false)
-		self._model:SetAttribute(Attributes.ZombieIsAttacking, true)
+		self._model:SetAttribute(Attributes.MobIsAttacking, true)
 		self._model:SetAttribute(Attributes.SuperArmor, true)
 		self._humanoid:MoveTo(self._rootPart.Position) -- cancel in-flight MoveTo
 		self:_setBaseWalkSpeed(0)
@@ -1246,7 +1246,7 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 		-- gap (and death skips _afterAttack entirely, where 0 is fine).
 		self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 		self._model:SetAttribute(Attributes.SuperArmor, false)
-		self._model:SetAttribute(Attributes.ZombieIsAttacking, false)
+		self._model:SetAttribute(Attributes.MobIsAttacking, false)
 
 		if self._humanoid.Health > 0 then
 			self:_afterAttack()
@@ -1271,7 +1271,7 @@ function MobBase._runGenericAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	if kind == "ranged" then
 		self:_runRangedSwing(entry)
 	else
-		ZombieService:ExecuteMobAttack(self._model, entry)
+		MobService:ExecuteMobAttack(self._model, entry)
 	end
 end
 
@@ -1313,12 +1313,12 @@ function MobBase._runRangedSwing(self: MobBase, entry)
 		return
 	end
 
-	ZombieService:FireMobRangedAttack(self._model, targetPlayer, entry)
+	MobService:FireMobRangedAttack(self._model, targetPlayer, entry)
 end
 
 -- Unique attack pipeline: hand off to the callback, block for the ACTIVE
 -- duration it returns. The callback owns its whole active timeline (windup,
--- VFX, hit-frames — typically via ZombieService:SpawnHitbox); _runAttack then
+-- VFX, hit-frames — typically via MobService:SpawnHitbox); _runAttack then
 -- applies chosenAttack.recoveryDuration after this returns.
 function MobBase._runUniqueAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	local target = self._currentTarget
@@ -1343,7 +1343,7 @@ function MobBase._interruptAttack(self: MobBase)
 	self._attackGeneration += 1
 	self._model:SetAttribute("AttackInterrupted", true)
 	self._model:SetAttribute("MobHighlightAttackActive", false)
-	self._model:SetAttribute(Attributes.ZombieIsAttacking, false)
+	self._model:SetAttribute(Attributes.MobIsAttacking, false)
 	self._model:SetAttribute(Attributes.SuperArmor, false)
 	self._humanoid.AutoRotate = true
 	for _, track in self._animator:GetPlayingAnimationTracks() do
@@ -1428,7 +1428,7 @@ end
 
 function MobBase.OnDeath(self: MobBase)
 	self._state = STATE_DEAD
-	ZombieSpawnService:DecrementZombieCount(self._model)
+	MobSpawnService:DecrementMobCount(self._model)
 	self._janitor:Cleanup()
 
 	self:_interruptAttack()
@@ -1554,7 +1554,7 @@ function MobBase._runZombieBombCloud(self: MobBase, killer: Player)
 
 	local limitKey = RelicNames["Zombie Bomb"] .. "_" .. killer.UserId
 	local liveClouds = RelicService:GetRelicLimitRegistry(limitKey) or 0
-	if liveClouds >= ZOMBIE_BOMB_CLOUD_LIMIT then
+	if liveClouds >= MOB_BOMB_CLOUD_LIMIT then
 		return
 	end
 	RelicService:SetRelicLimitRegistry(limitKey, liveClouds + 1)
@@ -1581,11 +1581,11 @@ function MobBase._runZombieBombCloud(self: MobBase, killer: Player)
 	local tickDamage = math.round(damagePerLevel * getPlayerLevel(killer))
 	task.spawn(function()
 		local elapsed = 0
-		while elapsed < ZOMBIE_BOMB_CLOUD_DURATION do
-			task.wait(ZOMBIE_BOMB_CLOUD_TICK_SECONDS)
-			elapsed += ZOMBIE_BOMB_CLOUD_TICK_SECONDS
+		while elapsed < MOB_BOMB_CLOUD_DURATION do
+			task.wait(MOB_BOMB_CLOUD_TICK_SECONDS)
+			elapsed += MOB_BOMB_CLOUD_TICK_SECONDS
 
-			forEachEnemyInRadius(cloudPosition, ZOMBIE_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
+			forEachEnemyInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
 				-- Relic damage, NEUTRAL type (isMagic = false): no arcane
 				-- amplifiers, no arcane resist, white number — the same bucket
 				-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
@@ -1611,7 +1611,7 @@ function MobBase._runZombieBombCloud(self: MobBase, killer: Player)
 					emitter.Enabled = false
 				end
 			end
-			task.delay(ZOMBIE_BOMB_CLOUD_FADE_SECONDS, function()
+			task.delay(MOB_BOMB_CLOUD_FADE_SECONDS, function()
 				cloud:Destroy()
 			end)
 		end
@@ -1729,11 +1729,11 @@ end
 -- outro cinematic). Their coin + gear rewards come from the reward chest
 -- (see _deferEncounterRewards).
 --
--- Deliberately the spawn-side IsBoss / IsMiniboss flags ZombieSpawnService
+-- Deliberately the spawn-side IsBoss / IsMiniboss flags MobSpawnService
 -- stamps, NOT Shared/Functions/Mob/isEncounterEnemy (the EnemyType tier
--- from ZombieData): the outro, the long despawn and the reward chest
+-- from MobData): the outro, the long despawn and the reward chest
 -- belong to the ROLE this mob was spawned in, and the same model can serve
--- either role across difficulties (Components/Zombie).
+-- either role across difficulties (Components/Mob).
 function MobBase._isEncounterMob(self: MobBase): boolean
 	return self._model:GetAttribute(Attributes.IsMiniBoss) == true
 		or self._model:GetAttribute(Attributes.IsBoss) == true
@@ -1769,7 +1769,7 @@ end
 -- EXCEPT in a Miniboss / Boss room: those pay in relics and gear, not
 -- coins. The gate is the ROOM, not the mob, so the adds a miniboss
 -- wave spawns are covered too — every mob carries the RoomId its
--- spawner stamped (ZombieSpawnService).
+-- spawner stamped (MobSpawnService).
 function MobBase._dropCoins(self: MobBase, _killer)
 	local roomId = self._model:GetAttribute("RoomId")
 	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
@@ -1808,11 +1808,11 @@ end
 function MobBase._onDeathAnimation(_self: MobBase) end
 
 function MobBase._relocateToDeadFolder(self: MobBase)
-	self._model.Parent = workspace.IgnoreInstances.DeadZombies
+	self._model.Parent = workspace.IgnoreInstances.DeadMobs
 
-	local zombieHitbox = self._model:FindFirstChild("ZombieHitbox")
-	if zombieHitbox then
-		zombieHitbox:Destroy()
+	local mobHitbox = self._model:FindFirstChild("MobHitbox")
+	if mobHitbox then
+		mobHitbox:Destroy()
 	end
 
 	-- Destroy combat hitboxes; the dead body shouldn't deal or receive damage.
@@ -1857,7 +1857,7 @@ function MobBase._scheduleDespawn(self: MobBase)
 		end
 
 		-- Emitters stop here (one replicated bool each); the dissolve itself
-		-- runs on every client off ONE cue (Combat.MobFade -> ZombieController)
+		-- runs on every client off ONE cue (Combat.MobFade -> MobController)
 		-- instead of a server tween per part. The server only waits it out.
 		for _, descendant in self._model:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") then

@@ -7,7 +7,7 @@
 	visual module keyed by projectileName.
 
 	Module contract:
-	  function(zombieModel: Model, originCFrame: CFrame,
+	  function(mobModel: Model, originCFrame: CFrame,
 	           targetPosition: Vector3, castUuid: string, attackConfig: { [any]: any })
 	    The module owns the FULL client-side projectile lifecycle:
 	      * Clones GameAssets.VFX.<projectileName>.Projectile
@@ -17,11 +17,11 @@
 	        dodge counterplay)
 	      * Overlap-checks against the local player + walls each tick
 	      * On impact (LOCAL player only): calls
-	        ZombieService:OnMobProjectileHitRequested(castUuid, hit.CFrame)
+	        MobService:OnMobProjectileHitRequested(castUuid, hit.CFrame)
 	      * Spawns GameAssets.VFX.<projectileName>.ExplosionFX at impact,
 	        destroys the projectile.
 
-	attackConfig shape (passed through from ZombieService):
+	attackConfig shape (passed through from MobService):
 	  { speed: number, lifetime: number, hitRadius: number }
 
 	Adding a new ranged-mob projectile = new ModuleScript in this folder
@@ -32,7 +32,7 @@
 
 local MobProjectiles = {}
 
--- registry[projectileName] = function(zombieModel, originCFrame, targetPosition, castUuid, attackConfig)
+-- registry[projectileName] = function(mobModel, originCFrame, targetPosition, castUuid, attackConfig)
 local registry: { [string]: any } = {}
 
 -- Auto-register every child ModuleScript by its Name. Called once
@@ -45,11 +45,11 @@ end
 
 -- Dispatch entry. Looks up the registered module by projectileName
 -- and forwards the payload. Warns + no-ops if the name isn't
--- registered (e.g., ZombieData references a projectile whose module
+-- registered (e.g., MobData references a projectile whose module
 -- hasn't been authored yet).
 function MobProjectiles.Run(
 	projectileName: string,
-	zombieModel: Model,
+	mobModel: Model,
 	originCFrame: CFrame,
 	targetPosition: Vector3,
 	castUuid: string,
@@ -60,7 +60,7 @@ function MobProjectiles.Run(
 		warn(("[MobProjectiles] No module for projectile '%s'"):format(tostring(projectileName)))
 		return
 	end
-	module(zombieModel, originCFrame, targetPosition, castUuid, attackConfig)
+	module(mobModel, originCFrame, targetPosition, castUuid, attackConfig)
 end
 
 return MobProjectiles

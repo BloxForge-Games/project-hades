@@ -102,8 +102,8 @@ local PULSE_OVERSHOOT_PX = 7.5
 local PULSE_IN_TWEEN_INFO = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local PULSE_SETTLE_TWEEN_INFO = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 -- Fallback highlight name (used only when the damaged model isn't in
--- the zombie registry — non-zombie targets that somehow trigger
--- DamageVFXRequested). Zombies go through the unified MobHighlight
+-- the mob registry — non-mob targets that somehow trigger
+-- DamageVFXRequested). Mobs go through the unified MobHighlight
 -- via CharacterHighlightController:RequestDamageFlash and never hit
 -- this branch.
 local HIGHLIGHT_NAME = HighlightIndicators.DamageIndicator
@@ -200,12 +200,12 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		end
 		local color3 = payload.Color
 		local sparks = payload.Sparks
-		-- Zombies AND the local character resolve through the single-
+		-- Mobs AND the local character resolve through the single-
 		-- highlight controller; only untracked models (breakables, NPCs)
 		-- take the standalone flash.
 		if
 			CharacterHighlightController
-			and (CharacterHighlightController._zombieRegistry[character] or character == Players.LocalPlayer.Character)
+			and (CharacterHighlightController._mobRegistry[character] or character == Players.LocalPlayer.Character)
 		then
 			CharacterHighlightController:RequestDamageFlash(character)
 		else

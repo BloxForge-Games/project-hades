@@ -18,7 +18,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Exports & Types & Defaults ]--
 
 local DungeonService = require(ServerScriptService.Services.DungeonService)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local IsometricCameraService = require(ServerScriptService.Submodules.Core.Source.Services.IsometricCameraService)
 local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
@@ -65,7 +65,7 @@ local EncounterService = {
 	Name = "EncounterService",
 	Dependencies = {
 		DungeonService,
-		ZombieSpawnService,
+		MobSpawnService,
 		IsometricCameraService,
 		EncounterChestService,
 		InvulnerabilityService,
@@ -144,7 +144,7 @@ local ENCOUNTER_OUTRO_HOLD_DURATION = 3 -- seconds the camera holds on the defea
 
 -- Boss phase-change cinematic. CUTSCENE_DURATION is the hold-on-boss beat —
 -- the configurable "length of each cutscene" the boss applies its phase change
--- under. A per-phase `cutsceneDuration` in ZombieData overrides it. The camera
+-- under. A per-phase `cutsceneDuration` in MobData overrides it. The camera
 -- pan in/out reuses the intro/outro tween duration.
 local ENCOUNTER_PHASE_CUTSCENE_DURATION = 3
 local ENCOUNTER_PHASE_CAMERA_TWEEN_DURATION = ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION
@@ -715,7 +715,7 @@ function EncounterService._startFight(
 	room: Room,
 	gateCFrame: CFrame
 )
-	if not room or not room.model or not ZombieSpawnService then
+	if not room or not room.model or not MobSpawnService then
 		return
 	end
 
@@ -821,7 +821,7 @@ function EncounterService._startFight(
 
 		task.wait(1)
 
-		local mob = ZombieSpawnService:SpawnMinibossInRoom(room, mobName, kind == ROOM_TYPES.Boss)
+		local mob = MobSpawnService:SpawnMinibossInRoom(room, mobName, kind == ROOM_TYPES.Boss)
 		self:_addCutsceneMob(mob)
 		if not mob then
 			warn(("[EncounterService] Failed to spawn %s '%s' in room %s"):format(kind, mobName, room.model.Name))
@@ -954,7 +954,7 @@ function EncounterService._startFight(
 
 		-- Defensive: skip starting waves if the mob died during the cinematic.
 		if humanoid.Health > 0 then
-			ZombieSpawnService:StartMinibossWaves(room)
+			MobSpawnService:StartMinibossWaves(room)
 		end
 	end)
 end
@@ -968,7 +968,7 @@ end
 -- despawn, gate open) proceeds in parallel — those happen "off-camera" while
 -- the player watches the boss, and are there when the camera returns. `mob` is
 -- captured by the caller BEFORE _activeEncounter is cleared; it may already be
--- in the dead-zombie folder but its HumanoidRootPart still exists, which is all
+-- in the dead-mob folder but its HumanoidRootPart still exists, which is all
 -- the camera needs as an origin part. When the cinematic finishes it releases
 -- the held rewards (coins + gear + vending machine) via _dropEncounterRewards.
 function EncounterService._playOutroCinematic(
@@ -1143,7 +1143,7 @@ function EncounterService._isLastRoomInSequence(_self: typeof(EncounterService),
 end
 
 function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: EncounterKind, room: Room)
-	if not room or not ZombieSpawnService then
+	if not room or not MobSpawnService then
 		return
 	end
 
@@ -1152,8 +1152,8 @@ function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: E
 	-- + vending machine) when it finishes, via _dropEncounterRewards.
 	self:_playOutroCinematic(kind, room, mob)
 
-	ZombieSpawnService:StopMinibossWaves(room)
-	ZombieSpawnService:DespawnZombiesInRoom(room)
+	MobSpawnService:StopMinibossWaves(room)
+	MobSpawnService:DespawnMobsInRoom(room)
 
 	self._dataProperty:Set(nil)
 
@@ -1242,9 +1242,9 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	-- Clean slate: instakill every OTHER live mob in the room, and freeze the
 	-- wave spawner so no new adds appear (or finish appearing) during the
 	-- cutscene. Resumed at the end.
-	if room and ZombieSpawnService then
-		ZombieSpawnService:PauseMinibossWaves(room)
-		ZombieSpawnService:DespawnZombiesInRoom(room, mob)
+	if room and MobSpawnService then
+		MobSpawnService:PauseMinibossWaves(room)
+		MobSpawnService:DespawnMobsInRoom(room, mob)
 	end
 
 	-- Pan the camera onto the boss.
@@ -1290,8 +1290,8 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	DungeonNetwork.EncounterPhaseEnd.FireAll()
 
 	-- Resume the wave spawner for the (harder) new phase.
-	if room and ZombieSpawnService then
-		ZombieSpawnService:ResumeMinibossWaves(room)
+	if room and MobSpawnService then
+		MobSpawnService:ResumeMinibossWaves(room)
 	end
 end
 

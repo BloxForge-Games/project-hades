@@ -35,10 +35,10 @@
 	    and any open coffin conversation is closed.
 
 	--- QUEUE ---
-	One wave = one zombie per SpawnPoint attachment in the room; the wave
+	One wave = one mob per SpawnPoint attachment in the room; the wave
 	count rolls in DungeonData.coffinEvent.waves. Poured in continuously
 	under the combat concurrency rule (CONCURRENT_* below) by
-	ZombieSpawnService:StartChallengeQueue, from the dungeon's own pool.
+	MobSpawnService:StartChallengeQueue, from the dungeon's own pool.
 ]]
 
 --[ Roblox Services ]--
@@ -54,7 +54,7 @@ local DungeonService = require(ServerScriptService.Services.DungeonService)
 local EventService = require(ServerScriptService.Services.EventService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local MusicService = require(ServerScriptService.Submodules.Core.Source.Services.MusicService)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
@@ -68,7 +68,7 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 -- Fallbacks when a difficulty has no coffinEvent block.
 local DEFAULT_CHALLENGE_SECONDS = 60
 local DEFAULT_WAVES = { 5, 6 }
--- The combat concurrency rule (mirrors ZombieSpawnService's defaults).
+-- The combat concurrency rule (mirrors MobSpawnService's defaults).
 local CONCURRENT_BASE = 4
 local CONCURRENT_PER_PLAYER = 2
 local CONCURRENT_MAX = 12
@@ -149,7 +149,7 @@ local CoffinEventService = {
 		EventService,
 		EncounterService,
 		MusicService,
-		ZombieSpawnService,
+		MobSpawnService,
 		EncounterChestService,
 		UserNotificationService,
 	} :: { any },
@@ -230,7 +230,7 @@ end
 
 -- An emitter that belongs to a TORCH: it sits beside a Light, or anywhere
 -- under a folder named Torches. Spawn-point particles (emitted per spawn
--- by ZombieSpawnService) and the gate's DungeonDone burst (emitted on a
+-- by MobSpawnService) and the gate's DungeonDone burst (emitted on a
 -- win) are neither, and must not be switched on here.
 local function isTorchEffect(instance: Instance): boolean
 	local parent = instance.Parent
@@ -444,8 +444,8 @@ function CoffinEventService._publishLobby(_self: typeof(CoffinEventService), sta
 		return
 	end
 	local total = state.total or 0
-	local queued = ZombieSpawnService:GetRoomQueueRemaining(state.room)
-	local alive = #ZombieSpawnService:GetZombiesInRoom(state.room)
+	local queued = MobSpawnService:GetRoomQueueRemaining(state.room)
+	local alive = #MobSpawnService:GetMobsInRoom(state.room)
 	local slain = math.max(0, total - queued - alive)
 	local anchor = state.coffin.PrimaryPart
 	EncounterService:PublishLobbyData({
@@ -470,7 +470,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 	local playerCount = math.max(#Players:GetPlayers(), 1)
 	local concurrentCap = math.min(CONCURRENT_BASE + playerCount * CONCURRENT_PER_PLAYER, CONCURRENT_MAX)
 
-	local total = ZombieSpawnService:StartChallengeQueue(state.room, waves, concurrentCap)
+	local total = MobSpawnService:StartChallengeQueue(state.room, waves, concurrentCap)
 	if not total or total <= 0 then
 		warn("[CoffinEventService] Challenge could not start (no spawn points) — treating as won")
 		state.status = STATUS.Running
@@ -502,7 +502,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 	self:_publishLobby(state, seconds)
 	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name), NOTIFY_TITLE_COLOR)
 	Log.debug(
-		("[CoffinEventService] Challenge started by %s: %d zombies, cap %d, %ds"):format(
+		("[CoffinEventService] Challenge started by %s: %d mobs, cap %d, %ds"):format(
 			player.Name,
 			total,
 			concurrentCap,
@@ -521,10 +521,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 				self:_finish(state, false)
 				return
 			end
-			if
-				ZombieSpawnService:IsRoomQueueExhausted(state.room)
-				and #ZombieSpawnService:GetZombiesInRoom(state.room) == 0
-			then
+			if MobSpawnService:IsRoomQueueExhausted(state.room) and #MobSpawnService:GetMobsInRoom(state.room) == 0 then
 				self:_finish(state, true)
 				return
 			end
@@ -590,7 +587,7 @@ function CoffinEventService._finish(self: typeof(CoffinEventService), state: Cof
 		end)
 	else
 		notifyAll("Event Failed", "Defeat. The reward is lost.", NOTIFY_FAIL_COLOR)
-		ZombieSpawnService:DespawnZombiesInRoom(state.room)
+		MobSpawnService:DespawnMobsInRoom(state.room)
 		DungeonService:ReleaseEventHold(state.room.id)
 	end
 end
@@ -651,7 +648,7 @@ end
 -- loop closed over its own `state`, so dropping the table it was
 -- indexed under left it spinning on a state that still read Running —
 -- and on the next floor the old room's queue reads exhausted and its
--- zombie list empty, which is exactly the WIN condition. A floor-one
+-- mob list empty, which is exactly the WIN condition. A floor-one
 -- coffin event would announce "Event Successful" minutes into floor
 -- two and hang a reward clock on a room that no longer exists.
 --

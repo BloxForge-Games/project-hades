@@ -29,7 +29,7 @@
 
 ## 1. Game Overview
 
-Project Hades is a co-op isometric roguelike on Roblox. Players clear rooms of zombies and supernatural enemies using a combination of weapons, arcane spells, and passive relics that stack into powerful synergistic builds — inspired directly by Hades's boon system. Each run rewards players with relics from defeated rooms; no two runs feel identical.
+Project Hades is a co-op isometric roguelike on Roblox. Players clear rooms of mobs and supernatural enemies using a combination of weapons, arcane spells, and passive relics that stack into powerful synergistic builds — inspired directly by Hades's boon system. Each run rewards players with relics from defeated rooms; no two runs feel identical.
 
 The game blends:
 - **Roguelike itemization** (stackable relics with set bonuses)
@@ -67,9 +67,9 @@ Spawn → Clear Room → Collect Drops (coins/mana) → Relic Machine Appears
 
 ### 3.1 In-Room Loop
 1. Players enter a room; the `RoomService` registers their `ActiveRoom` attribute and fires entry bonuses (Pot of Gold coin grant, Teddy Bloxpin heal).
-2. Zombies spawn continuously up to a per-player cap (`MAX_ZOMBIE_COUNT_PER_PLAYER = 6`). Spawn locations are chosen within 60 studs of a random player.
+2. Mobs spawn continuously up to a per-player cap (`MAX_MOB_COUNT_PER_PLAYER = 6`). Spawn locations are chosen within 60 studs of a random player.
 3. Players fight using weapons and arcane.
-4. When all zombies are eliminated, a relic machine drops at each player's position.
+4. When all mobs are eliminated, a relic machine drops at each player's position.
 5. Players spend coins to buy relics, then move to the next room.
 
 ### 3.2 Dungeon Events (Between Rooms)
@@ -120,7 +120,7 @@ Starting coins: 100. Starting gems: 25.
 - Directional: 8-way relative to the camera.
 - Distance: 15 studs over 0.25 seconds.
 - Grants **invulnerability frames** during the roll (AfterImage visual).
-- **Perfect Dodge:** If a zombie attack lands during the dodge window, the `Experimental Jetpack` relic effect triggers (launch into the air), and "Perfect Dodge!" text displays to the player.
+- **Perfect Dodge:** If a mob attack lands during the dodge window, the `Experimental Jetpack` relic effect triggers (launch into the air), and "Perfect Dodge!" text displays to the player.
 
 ### 4.5 Status Conditions
 
@@ -228,7 +228,7 @@ Relics are the roguelike's core identity — passive items that stack and combin
 
 ### 7.1 Acquisition
 
-- Dropped by **Relic Machines** (vending machines) that appear at each player's position after clearing all zombies in a room.
+- Dropped by **Relic Machines** (vending machines) that appear at each player's position after clearing all mobs in a room.
 - Offered by the **Merchant Shop** dungeon event (5 relics per player).
 - Purchased with **Coins**.
 
@@ -315,9 +315,9 @@ Miniboss and Boss types are defined in the enum system but not yet implemented a
 
 ### 8.4 Spawn Rules
 
-- Spawn cap: `6 zombies per player` simultaneously.
+- Spawn cap: `6 mobs per player` simultaneously.
 - Spawn location: within 60 studs of a randomly selected player.
-- When all zombies are dead: relic machines drop for each player.
+- When all mobs are dead: relic machines drop for each player.
 
 ---
 
@@ -328,7 +328,7 @@ Miniboss and Boss types are defined in the enum system but not yet implemented a
 | Type | Description |
 |------|-------------|
 | None | Transitional / lobby space |
-| Standard | Regular zombie-clearing room |
+| Standard | Regular mob-clearing room |
 | Miniboss | Features a Miniboss enemy (planned) |
 | Boss | End-of-dungeon boss encounter (planned) |
 
@@ -349,13 +349,13 @@ workspace/
     Buildables/       -- Legacy folder, still listed in raycast ignore lists
     RelicMachines/    -- Post-room relic vendors
     Events/           -- Dungeon event zones
-    SpawnLocations/   -- Zombie spawn points
+    SpawnLocations/   -- Mob spawn points
   Boundaries/         -- Map edge colliders
   Walls/              -- Transparent-on-approach walls
   Terrain/            -- Roblox terrain
   ArcaneSpells/        -- Active spell instances
   IgnoreInstances/
-    Zombies/          -- Live zombie models
+    Mobs/          -- Live mob models
 ```
 
 ### 9.4 Camera

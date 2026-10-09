@@ -19,7 +19,7 @@ local warmSwordSlashTextures = require(ReplicatedStorage.Submodules.Core.Shared.
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 -- Sub-registry: per-projectile modules for MOB ranged attacks. Keyed
--- by projectileName (matches ZombieData[name].genericAttacks[i].projectileName).
+-- by projectileName (matches MobData[name].genericAttacks[i].projectileName).
 -- Required as a child folder so adding a new ranged-mob projectile is
 -- just dropping a ModuleScript in MobProjectiles/ — no edits here.
 local MobProjectiles = require(script:WaitForChild("MobProjectiles"))
@@ -147,19 +147,19 @@ function VFXController.PlayVFX(self: typeof(VFXController), vfxName: string)
 	Arcane.CastRequested.Fire({ ArcaneName = vfxName, CFrame = cframe })
 end
 
--- Mob ranged-attack projectile dispatch. Called by ZombieController
--- when ZombieService.OnReplicateMobRangedAttack fires. Delegates to
+-- Mob ranged-attack projectile dispatch. Called by MobController
+-- when MobService.OnReplicateMobRangedAttack fires. Delegates to
 -- the per-projectile module under MobProjectiles/ keyed by name.
 function VFXController.RunMobProjectile(
 	_self: typeof(VFXController),
 	projectileName: string,
-	zombieModel: Model,
+	mobModel: Model,
 	originCFrame: CFrame,
 	targetPosition: Vector3,
 	castUuid: string,
 	attackConfig: { speed: number, lifetime: number, hitRadius: number }
 )
-	MobProjectiles.Run(projectileName, zombieModel, originCFrame, targetPosition, castUuid, attackConfig)
+	MobProjectiles.Run(projectileName, mobModel, originCFrame, targetPosition, castUuid, attackConfig)
 end
 
 --[ Initializers ]--

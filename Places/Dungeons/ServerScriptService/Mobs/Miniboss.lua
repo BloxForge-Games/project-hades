@@ -15,7 +15,7 @@
 	     the spot. The death knockback + killer-directed impulse are
 	     suppressed so the upright body doesn't slide.
 
-	Per-attack behavior still lives entirely in ZombieData[name].genericAttacks
+	Per-attack behavior still lives entirely in MobData[name].genericAttacks
 	/ uniqueAttacks — this class only changes lifecycle cadence + death style.
 
 	Bosses extend THIS class (see Boss.lua) and add HP-threshold phase changes.
@@ -33,7 +33,7 @@ Miniboss.__index = Miniboss
 
 -- Breather between attacks (seconds) before re-entering Chase. Replaces
 -- MobBase's 2-4s Roaming cooldown so the miniboss attacks more often. The
--- per-attack recoveryDuration in ZombieData still runs BEFORE this.
+-- per-attack recoveryDuration in MobData still runs BEFORE this.
 local ATTACK_COOLDOWN = 0.75
 
 function Miniboss.new(model: Model)
@@ -74,7 +74,7 @@ function Miniboss:_onDeathAnimation()
 	end
 
 	-- The dissolve runs on every client off one cue (Combat.MobFade ->
-	-- ZombieController) rather than a server tween per part; the server
+	-- MobController) rather than a server tween per part; the server
 	-- only waits it out, then destroys the body.
 	CombatNetwork.MobFade.FireAll({
 		Mob = self._model,

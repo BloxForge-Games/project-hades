@@ -21,10 +21,10 @@
 	       - Local player hit OR projectile lifetime expired OR wall hit
 	         → impact this frame.
 	  5. On impact (LOCAL player only): call
-	     ZombieService:OnMobProjectileHitRequested(castUuid, projectile.CFrame)
+	     MobService:OnMobProjectileHitRequested(castUuid, projectile.CFrame)
 	  6. Spawn .ExplosionFX at impact, Debris-clean both.
 
-	Why the LOCAL player gates the impact callback: ZombieService's
+	Why the LOCAL player gates the impact callback: MobService's
 	registry is keyed by castUuid + targetPlayer. Only the targeted
 	player's client should report — every client renders the projectile
 	(replicated visual), but only the target triggers damage.
@@ -66,7 +66,7 @@ local TICK_INTERVAL = 0.01
 local MUZZLE_CLEARANCE_DISTANCE = 5
 
 return function(
-	_zombieModel: Model,
+	_mobModel: Model,
 	originCFrame: CFrame,
 	targetPosition: Vector3,
 	castUuid: string,
@@ -288,7 +288,7 @@ return function(
 					-- TextIndicator broadcast) ONCE per cast. The
 					-- server validates castUuid + target + IsDodging
 					-- server-side before doing anything — see
-					-- ZombieService.Client:OnMobProjectilePerfectDodgedRequested.
+					-- MobService.Client:OnMobProjectilePerfectDodgedRequested.
 					-- Server does NOT clear the cast registry, so the
 					-- projectile keeps flying past us and a later overlap
 					-- (after our i-frames end) can still apply damage if

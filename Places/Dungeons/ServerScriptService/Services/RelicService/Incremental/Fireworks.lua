@@ -66,7 +66,7 @@ function Fireworks.InvokeFireworks(self: Fireworks)
 		self._enemyList = {}
 		self._uniqueTargets = {}
 
-		for _, enemy in ipairs(workspace.IgnoreInstances.Zombies:GetChildren()) do
+		for _, enemy in ipairs(workspace.IgnoreInstances.Mobs:GetChildren()) do
 			if enemy:IsA("Model") then
 				local enemyHRP = enemy:FindFirstChild("HumanoidRootPart") :: BasePart?
 				local humanoid = enemy:FindFirstChildOfClass("Humanoid")

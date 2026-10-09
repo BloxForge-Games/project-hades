@@ -82,7 +82,7 @@ local function getOutlineSize(): number
 	return if UserInputService.TouchEnabled then OUTLINE_SIZE_MOBILE else OUTLINE_SIZE_DESKTOP
 end
 local SHIMMER_TIME = 5
-local TOP_RARITY = ItemRarity.Mythic
+local TOP_RARITY = ItemRarity.Legendary
 
 -- Empty-slot palette, matching the authored Empty frame: flat grey
 -- body with a static grey outline gradient (no rarity animation).

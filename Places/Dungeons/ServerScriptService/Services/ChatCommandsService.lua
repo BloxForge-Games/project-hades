@@ -148,7 +148,7 @@ local DROP_TARGETS: { [string]: DropTarget } = {
 		end,
 	},
 	-- Encounter reward chests, minus the encounter. The mob-name string
-	-- feeds the coin row (ZombieData); Dungeon1's pair is used as the
+	-- feeds the coin row (MobData); Dungeon1's pair is used as the
 	-- debug stand-in since there is no corpse to read — gear still
 	-- rolls off the ACTIVE dungeon's own dungeonDrops table either way.
 	MinibossChest = {

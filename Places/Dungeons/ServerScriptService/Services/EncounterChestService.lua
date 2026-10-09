@@ -18,7 +18,7 @@
 	          DungeonData.dungeonDrops (its `pool` plus the `perEnemyType`
 	          row for Miniboss / Boss). Rolled PER PLAYER, exactly as the
 	          corpse drop did.
-	  * COINS ZombieData[<the dead mob>]'s minDropRate / maxDropRate (how
+	  * COINS MobData[<the dead mob>]'s minDropRate / maxDropRate (how
 	          many pickups) and minCoins / maxCoins (value per pickup) —
 	          the same four fields every other mob's coin scatter uses, read
 	          off the encounter mob's own row so a Shadow boss pays what its
@@ -47,7 +47,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 
 --[ Constants ]--
 
@@ -113,7 +113,7 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local BATCH_TIMEOUT_SECONDS = 90
 
 -- One chest batch (see BATCH_TIMEOUT_SECONDS). `coins` is an optional
--- ZombieData-shaped coin row every chest in the batch pays instead of the
+-- MobData-shaped coin row every chest in the batch pays instead of the
 -- dead mob's own.
 type ChestBatch = {
 	pending: number,
@@ -149,7 +149,7 @@ local function completeBatch(batch: ChestBatch)
 	end
 end
 
--- The chest's own coin scatter, read off the DEAD MOB's ZombieData row so a
+-- The chest's own coin scatter, read off the DEAD MOB's MobData row so a
 -- tier's boss pays what its row says. Same four fields the corpse drop used.
 -- The vending machine template's PrimaryPart, source of the grafted FX.
 local function machineTemplatePrimary(): BasePart?
@@ -293,7 +293,7 @@ local function placeChestAtRest(player: Player, chest: Model): boolean
 end
 
 local function coinConfigFor(mobName: string?)
-	local data = mobName and ZombieData[mobName]
+	local data = mobName and MobData[mobName]
 	if not data or not data.minDropRate then
 		return nil
 	end
@@ -367,7 +367,7 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 
 	-- COINS: the batch's own row when it has one (the Event Chest pays
 	-- out of DungeonData.coffinEvent.coins — there is no corpse), else
-	-- the dead mob's ZombieData row (count range x value range).
+	-- the dead mob's MobData row (count range x value range).
 	local coins = (batch and batch.coins) or coinConfigFor(mobName)
 	if DropService and coins then
 		DropService.OnDropRequested:Fire(
@@ -398,11 +398,11 @@ end
 --[ Public ]--
 
 -- Drops one chest per living player for a finished encounter. `mob` is the
--- corpse: its NAME is the ZombieData key the coin scatter reads, so the
+-- corpse: its NAME is the MobData key the coin scatter reads, so the
 -- chest pays what that specific mob's row says.
--- `mob` may also be a plain ZombieData KEY (a string) — the /drop debug
+-- `mob` may also be a plain MobData KEY (a string) — the /drop debug
 -- command has no corpse to hand over, only a name for the coin row.
--- `coinsOverride` (optional): a coin row shaped like a ZombieData mob's
+-- `coinsOverride` (optional): a coin row shaped like a MobData mob's
 -- ({ minDropRate, maxDropRate, minCoins, maxCoins }) that every chest in
 -- this batch pays instead of `mob`'s row — the Event Chest, which has no
 -- mob behind it.

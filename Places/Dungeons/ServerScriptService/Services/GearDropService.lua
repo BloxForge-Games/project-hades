@@ -57,7 +57,7 @@ local LANDING_ATTEMPTS = 6 -- scatter re-rolls before falling back to straight b
 -- Constant regardless of mob size — the previous version added a
 -- fixed Y offset to the mob's HRP, which floated drops way up for
 -- tall mobs (minibosses, bosses sit higher off the ground than
--- normal zombies). _pickLandingPosition raycasts down to the dungeon
+-- normal mobs). _pickLandingPosition raycasts down to the dungeon
 -- floor and stacks LANDING_Y_ABOVE_GROUND on top of the floor hit Y.
 local LANDING_Y_ABOVE_GROUND = 2
 
@@ -127,7 +127,6 @@ local RARITY_TO_PARTICLE: { [string]: string } = {
 	[ItemRarity.Rare] = "RareRelicParticles",
 	[ItemRarity.Epic] = "EpicRelicParticles",
 	[ItemRarity.Legendary] = "LegendaryRelicParticles",
-	[ItemRarity.Mythic] = "LegendaryRelicParticles",
 	[ItemRarity.Shiny] = "LegendaryRelicParticles",
 }
 
@@ -319,7 +318,7 @@ end
 -- ends up exactly LANDING_Y_ABOVE_GROUND above the actual floor. This
 -- replaces the old "origin.Y + fixed offset" approach, which floated
 -- drops way up for tall mobs (the mob's HRP sits ~3 studs above ground
--- for a normal zombie but much higher for minibosses / bosses).
+-- for a normal mob but much higher for minibosses / bosses).
 --
 -- If the raycast misses (room geometry edge case, drop happened outside
 -- of a tagged room, IgnoreInstances.Map.DungeonRooms not present yet)

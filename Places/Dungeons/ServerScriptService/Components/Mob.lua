@@ -1,7 +1,7 @@
 --!strict
 --[[
      Author(s):
-     Module: Zombie.lua (Component)
+     Module: Mob.lua (Component)
      Description: Thin Component that wakes up any model tagged TagList.Zombie.
                   All behavior lives in Server/Mobs/<Name>.lua classes — this
                   file only routes models to the right class based on their
@@ -22,34 +22,34 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local ZombieNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ZombieNames)
+local MobNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MobNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
-local Zombie = require(script.Parent.Parent.Mobs.Zombie)
+local Mob = require(script.Parent.Parent.Mobs.Mob)
 local Miniboss = require(script.Parent.Parent.Mobs.Miniboss)
 local Boss = require(script.Parent.Parent.Mobs.Boss)
 
 -- Registry: maps model.Name -> Mob class. Add new mob classes here.
--- Models whose Name isn't in this table fall back to the default Zombie class.
+-- Models whose Name isn't in this table fall back to the default Mob class.
 --
 -- NOTE: miniboss / boss dispatch does NOT key off Name — the same model can
 -- serve both roles across difficulties (see DungeonData). It keys off the
--- IsBoss / IsMiniboss attribute the spawn stamps (ZombieSpawnService), which
+-- IsBoss / IsMiniboss attribute the spawn stamps (MobSpawnService), which
 -- is set BEFORE parenting so it's present here in Construct.
 local MOB_CLASSES: { [string]: any } = {
-	[ZombieNames.Walker] = Zombie,
-	[ZombieNames.Robombie] = Zombie,
-	[ZombieNames.PotHead] = Zombie,
-	[ZombieNames["The Undead Brute"]] = Zombie,
+	[MobNames.Walker] = Mob,
+	[MobNames.Robombie] = Mob,
+	[MobNames.PotHead] = Mob,
+	[MobNames["The Undead Brute"]] = Mob,
 }
 
-local DEFAULT_MOB_CLASS = Zombie
+local DEFAULT_MOB_CLASS = Mob
 
-local ZombieComponent = Component.new({
+local MobComponent = Component.new({
 	Tag = TagList.Zombie,
 })
 
-function ZombieComponent:Construct()
+function MobComponent:Construct()
 	local model = self.Instance
 	local Class
 	if model:GetAttribute(Attributes.IsBoss) then
@@ -62,14 +62,14 @@ function ZombieComponent:Construct()
 	self._mob = Class.new(model)
 end
 
-function ZombieComponent:Start()
+function MobComponent:Start()
 	self._mob:Start()
 end
 
-function ZombieComponent:Stop()
+function MobComponent:Stop()
 	if self._mob then
 		self._mob:Stop()
 	end
 end
 
-return ZombieComponent
+return MobComponent

@@ -1,12 +1,12 @@
 --!strict
 --[[
-	Module: ZombieService.lua
+	Module: MobService.lua
 	Description:
 	Server-side mob attack execution + client replication. Called by
 	MobBase's attack pipeline (once per swing); owns:
 
 	  * Hitbox Model cloning + placement (from GameAssets.Hitboxes by
-	    name, CFramed via the per-attack `hitboxCFrame(zombie)` function)
+	    name, CFramed via the per-attack `hitboxCFrame(mob)` function)
 	  * Overlap-based hit detection during `hitFrameDuration`
 	  * Per-attack damage + ragdoll application
 	  * Lunge tween replication (per-attack `lungeDistance` opt-in)
@@ -16,14 +16,14 @@
 	config) — which BOTH the declarative generic-melee adapter
 	(ExecuteMobAttack) and imperative uniqueAttacks `run` callbacks call. So a
 	bespoke boss move reuses the same telegraph + damage + interrupt handling
-	as a basic zombie swing instead of hand-rolling its own overlap loop.
+	as a basic mob swing instead of hand-rolling its own overlap loop.
 
 	==========================================================
 	Per-attack config shape (passed in from MobBase)
 	==========================================================
 
 	The `attack` table corresponds to one entry from
-	ZombieData[name].genericAttacks. Fields used here:
+	MobData[name].genericAttacks. Fields used here:
 	  animation        : Animation (loaded + played by MobBase, not used here)
 	  hitboxName       : string — looks up GameAssets.Hitboxes.<name>
 	  attackRange      : number (MobBase-side; not used here)
@@ -33,15 +33,15 @@
 	  windUpDuration   : number (MobBase-side; not used here)
 	  hitFrameDuration : number — overlap-check window
 	  recoveryDuration : number (MobBase-side; not used here)
-	  hitboxCFrame     : function(zombieModel) -> CFrame
-	  onTelegraph      : function(zombieModel, cframe)? — optional; fired at
+	  hitboxCFrame     : function(mobModel) -> CFrame
+	  onTelegraph      : function(mobModel, cframe)? — optional; fired at
 	                     windup start for signature VFX / camera shake
 
 	==========================================================
 	Client replication signals
 	==========================================================
 
-	  OnReplicateZombieAttack(model, startCFrame, goalCFrame, timestamp)
+	  OnReplicateMobAttack(model, startCFrame, goalCFrame, timestamp)
 	    Fires only if attack.lungeDistance > 0. Client tweens the mob's
 	    HRP from startCFrame → goalCFrame for the cosmetic "step into
 	    swing" effect.
@@ -69,8 +69,8 @@ local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
-local ZombieService = {
-	Name = "ZombieService",
+local MobService = {
+	Name = "MobService",
 	Dependencies = { RelicService, TextIndicatorService, DamageService } :: { any },
 
 	-- Players credited a perfect dodge for the roll they are IN. One
@@ -127,7 +127,7 @@ overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances }
 --[ Pending ranged-cast registry ]--
 
 -- See PROJECTILE_REGISTRY_EXPIRE_GRACE comment above for shape.
-ZombieService._pendingRangedCasts = {}
+MobService._pendingRangedCasts = {}
 
 --[ Hitbox helpers ]--
 
@@ -139,7 +139,7 @@ ZombieService._pendingRangedCasts = {}
 -- swing, ranged cast, projectile impact): the relic fan-out (which also
 -- plays the burst), and the "Perfect Dodge!" floater on `anchor` (the hit
 -- point, or the head). A second intercept inside the same roll is ignored.
-function ZombieService._creditPerfectDodge(self: typeof(ZombieService), player: Player, anchor: BasePart?)
+function MobService._creditPerfectDodge(self: typeof(MobService), player: Player, anchor: BasePart?)
 	if self._perfectDodgeCredited[player] then
 		return
 	end
@@ -173,7 +173,7 @@ end
 
 -- Players whose character can still be hit right now. The hit-frame loop
 -- stops querying once every one of them is in its hit registry.
-function ZombieService._countHittablePlayers(_self: typeof(ZombieService)): number
+function MobService._countHittablePlayers(_self: typeof(MobService)): number
 	local count = 0
 	for _, player in Players:GetPlayers() do
 		local character = player.Character
@@ -185,15 +185,15 @@ function ZombieService._countHittablePlayers(_self: typeof(ZombieService)): numb
 	return count
 end
 
-function ZombieService._resolveHitboxTemplate(_self: typeof(ZombieService), hitboxName: string): Model?
+function MobService._resolveHitboxTemplate(_self: typeof(MobService), hitboxName: string): Model?
 	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
 	if not hitboxesFolder then
-		warn("[ZombieService] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
+		warn("[MobService] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
 		return nil
 	end
 	local template = hitboxesFolder:FindFirstChild(hitboxName)
 	if not template or not template:IsA("Model") then
-		warn(("[ZombieService] Hitbox template '%s' not found or not a Model"):format(hitboxName))
+		warn(("[MobService] Hitbox template '%s' not found or not a Model"):format(hitboxName))
 		return nil
 	end
 	return template
@@ -207,14 +207,14 @@ end
 --
 -- One damage application per (player, attack) — players who walk
 -- through multiple zones within one swing aren't multi-hit.
-function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel: Model, attack, hitboxModel: Model)
+function MobService._runHitDetection(self: typeof(MobService), mobModel: Model, attack, hitboxModel: Model)
 	local hitRegistry: { [Player]: boolean } = {}
 	local hitCount = 0
 	local frameIndex = 0
 	local startTime = os.clock()
-	-- Cache the zombie's humanoid so the per-tick alive-check below
+	-- Cache the mob's humanoid so the per-tick alive-check below
 	-- doesn't pay a FindFirstChildOfClass lookup every Heartbeat.
-	local zombieHumanoid = zombieModel:FindFirstChildOfClass("Humanoid")
+	local mobHumanoid = mobModel:FindFirstChildOfClass("Humanoid")
 	local hitParts = {}
 	for _, descendant in hitboxModel:GetDescendants() do
 		if descendant:IsA("BasePart") then
@@ -223,18 +223,18 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 	end
 
 	while os.clock() - startTime < attack.hitFrameDuration do
-		if not zombieModel.Parent then
+		if not mobModel.Parent then
 			return
 		end
 		if not hitboxModel.Parent then
 			return
 		end
-		-- Bail if the zombie died mid-hitframe. Without this the loop
+		-- Bail if the mob died mid-hitframe. Without this the loop
 		-- keeps applying damage for the full hitFrameDuration even
 		-- after a kill — MobBase's _relocateToDeadFolder reparents to
-		-- DeadZombies but doesn't destroy the model, so the
-		-- zombieModel.Parent check above still passes.
-		if zombieHumanoid and zombieHumanoid.Health <= 0 then
+		-- DeadMobs but doesn't destroy the model, so the
+		-- mobModel.Parent check above still passes.
+		if mobHumanoid and mobHumanoid.Health <= 0 then
 			return
 		end
 		-- Jail interrupt: Portable Justice fired mid-hitframe. The
@@ -244,12 +244,12 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 		-- but no further damage applies. Without this gate, a melee
 		-- mob jailed during its hitFrameDuration still landed the hit
 		-- because the loop only checked death + hitbox existence.
-		if zombieModel:GetAttribute(Attributes.Jailed) == true then
+		if mobModel:GetAttribute(Attributes.Jailed) == true then
 			return
 		end
 		-- Interrupt: a phase change / death cancelled this attack mid-hitframe
 		-- (MobBase:_interruptAttack stamps the flag). Stop applying damage.
-		if zombieModel:GetAttribute("AttackInterrupted") == true then
+		if mobModel:GetAttribute("AttackInterrupted") == true then
 			return
 		end
 
@@ -295,7 +295,7 @@ function ZombieService._runHitDetection(self: typeof(ZombieService), zombieModel
 					-- One credit per roll, relics + floater (_creditPerfectDodge).
 					self:_creditPerfectDodge(player, perfectDodgedPart)
 				else
-					DamageService:PlayerTakeDamage(player, zombieModel, attack.damage, attack.canRagdoll)
+					DamageService:PlayerTakeDamage(player, mobModel, attack.damage, attack.canRagdoll)
 				end
 			end
 		end
@@ -315,11 +315,7 @@ end
 -- Computes the lunge goal CFrame for an attack with lungeDistance > 0.
 -- Raycasts forward — if a wall is in the way, the goal is clipped to
 -- just before the wall so the mob doesn't tween THROUGH geometry.
-function ZombieService._computeLungeGoalCFrame(
-	_self: typeof(ZombieService),
-	root: BasePart,
-	lungeDistance: number
-): CFrame
+function MobService._computeLungeGoalCFrame(_self: typeof(MobService), root: BasePart, lungeDistance: number): CFrame
 	local goalCFrame = root.CFrame + root.CFrame.LookVector * lungeDistance
 
 	local rayOrigin = root.Position - Vector3.new(0, root.Size.Y, 0)
@@ -347,7 +343,7 @@ end
 -- hitbox. BOTH the declarative generic-melee adapter (ExecuteMobAttack, below)
 -- and imperative uniqueAttacks `run` callbacks call this — so a bespoke boss
 -- move reuses the same telegraph + damage + interrupt/dodge handling as a basic
--- zombie swing instead of hand-rolling its own overlap loop.
+-- mob swing instead of hand-rolling its own overlap loop.
 --
 -- Owns the full hit-frame timeline (blocks for windUpDuration + hitFrameDuration):
 --   1. Telegraph: client visual flash + optional onTelegraph hook (windup start).
@@ -368,11 +364,11 @@ end
 --   lungeDistance    : number?               — default 0 (no lunge)
 --   onTelegraph      : (mob, cframe) -> ()?   — optional; fired server-side at windup start for
 --                                               signature VFX / camera shake (owns its replication)
-function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Model, config)
-	if not zombieModel or not zombieModel.Parent then
+function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, config)
+	if not mobModel or not mobModel.Parent then
 		return
 	end
-	if not getRoot(zombieModel) then
+	if not getRoot(mobModel) then
 		return
 	end
 
@@ -380,10 +376,10 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	-- visual AND the server hitbox so the two render at exactly the same place.
 	local cframe = config.cframe
 	if type(cframe) == "function" then
-		cframe = cframe(zombieModel)
+		cframe = cframe(mobModel)
 	end
 	if typeof(cframe) ~= "CFrame" then
-		warn("[ZombieService] SpawnHitbox: config.cframe missing or not a CFrame")
+		warn("[MobService] SpawnHitbox: config.cframe missing or not a CFrame")
 		return
 	end
 
@@ -399,7 +395,7 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	-- the damage window closes. Firing at windup START (not hit-frame start) is
 	-- what gives the player time to react.
 	Combat.MobAttack.FireAll({
-		Mob = zombieModel,
+		Mob = mobModel,
 		HitboxName = config.hitboxName,
 		CFrame = cframe,
 		WindUpDuration = windUpDuration,
@@ -408,7 +404,7 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	if config.onTelegraph then
 		-- Spawned so a yielding / erroring hook can't stall or break the
 		-- hit-frame timeline. The hook owns its own client replication.
-		task.spawn(config.onTelegraph, zombieModel, cframe)
+		task.spawn(config.onTelegraph, mobModel, cframe)
 	end
 
 	-- ============================================================
@@ -417,7 +413,7 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	if windUpDuration > 0 then
 		task.wait(windUpDuration)
 	end
-	if not zombieModel.Parent then
+	if not mobModel.Parent then
 		return
 	end
 
@@ -426,7 +422,7 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	-- attack HERE — before the lunge + hitbox fire. That stops the mob lunging
 	-- (moving) or spawning a damage hitbox into a cutscene. The visual telegraph
 	-- already fired at windup-start; it self-fades client-side.
-	if zombieModel:GetAttribute("AttackInterrupted") == true then
+	if mobModel:GetAttribute("AttackInterrupted") == true then
 		return
 	end
 
@@ -434,13 +430,13 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	-- Phase 3: lunge (opt-in) — fires at hit-frame start
 	-- ============================================================
 	if config.lungeDistance and config.lungeDistance > 0 then
-		local root = getRoot(zombieModel)
+		local root = getRoot(mobModel)
 		if not root then
 			return
 		end
 		local goalCFrame = self:_computeLungeGoalCFrame(root, config.lungeDistance)
 		Combat.MobLunge.FireAll({
-			Mob = zombieModel,
+			Mob = mobModel,
 			StartCFrame = root.CFrame,
 			GoalCFrame = goalCFrame,
 			ServerTime = workspace:GetServerTimeNow(),
@@ -450,8 +446,8 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 		-- server-authoritative position lags and the next AI tick's distance
 		-- check sees stale data.
 		task.delay(hitFrameDuration * 0.5, function()
-			if zombieModel.Parent and not zombieModel:GetAttribute("AttackInterrupted") then
-				zombieModel:PivotTo(goalCFrame)
+			if mobModel.Parent and not mobModel:GetAttribute("AttackInterrupted") then
+				mobModel:PivotTo(goalCFrame)
 			end
 		end)
 	end
@@ -469,7 +465,7 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 	hitboxModel.Parent = HITBOX_PARENT
 
 	-- _runHitDetection only reads hitFrameDuration / damage / canRagdoll.
-	self:_runHitDetection(zombieModel, {
+	self:_runHitDetection(mobModel, {
 		hitFrameDuration = hitFrameDuration,
 		damage = config.damage,
 		canRagdoll = config.canRagdoll,
@@ -481,11 +477,11 @@ function ZombieService.SpawnHitbox(self: typeof(ZombieService), zombieModel: Mod
 end
 
 -- Called by MobBase at WIND-UP START for kind="melee" generic attacks. Thin
--- adapter mapping one ZombieData genericAttacks entry onto SpawnHitbox (the
+-- adapter mapping one MobData genericAttacks entry onto SpawnHitbox (the
 -- shared primitive that owns the visual + damage timeline). Blocks for
 -- (windUpDuration + hitFrameDuration); MobBase owns recoveryDuration after.
-function ZombieService.ExecuteMobAttack(self: typeof(ZombieService), zombieModel: Model, attack)
-	self:SpawnHitbox(zombieModel, {
+function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, attack)
+	self:SpawnHitbox(mobModel, {
 		hitboxName = attack.hitboxName,
 		cframe = attack.hitboxCFrame,
 		damage = attack.damage,
@@ -511,20 +507,15 @@ end
 --      clean up the registry entry if no impact callback ever fires.
 --
 -- Returns the castUuid (mostly for testing / diagnostics).
-function ZombieService.FireMobRangedAttack(
-	self: typeof(ZombieService),
-	zombieModel: Model,
-	target: Player,
-	attack
-): string?
-	if not zombieModel.Parent or not target or not target.Parent then
+function MobService.FireMobRangedAttack(self: typeof(MobService), mobModel: Model, target: Player, attack): string?
+	if not mobModel.Parent or not target or not target.Parent then
 		return nil
 	end
 	local targetHRP = getRoot.fromPlayer(target)
 	if not targetHRP then
 		return nil
 	end
-	local mobRoot = getRoot(zombieModel)
+	local mobRoot = getRoot(mobModel)
 	if not mobRoot then
 		return nil
 	end
@@ -533,7 +524,7 @@ function ZombieService.FireMobRangedAttack(
 	local expireToken = {}
 
 	self._pendingRangedCasts[castUuid] = {
-		mob = zombieModel,
+		mob = mobModel,
 		target = target,
 		damage = attack.damage,
 		canRagdoll = attack.canRagdoll,
@@ -554,7 +545,7 @@ function ZombieService.FireMobRangedAttack(
 	end)
 
 	-- Resolve muzzle origin (mob-relative CFrame from per-attack function).
-	local originCFrame = attack.muzzleOffset and attack.muzzleOffset(zombieModel) or mobRoot.CFrame
+	local originCFrame = attack.muzzleOffset and attack.muzzleOffset(mobModel) or mobRoot.CFrame
 
 	-- Aim point: straight ahead along the MOB's facing at cast time —
 	-- NOT the target's position. The mob rotated to face the target
@@ -569,7 +560,7 @@ function ZombieService.FireMobRangedAttack(
 	local targetPosition = originCFrame.Position + flatFacing * travelDistance
 
 	Combat.MobRangedAttack.FireAll({
-		Mob = zombieModel,
+		Mob = mobModel,
 		ProjectileName = attack.projectileName,
 		OriginCFrame = originCFrame,
 		TargetPosition = targetPosition,
@@ -606,7 +597,7 @@ end
 -- still triggers damage.
 --
 -- Side effects fired here mirror the melee perfect-dodge path
--- (ZombieService._runHitDetection lines ~213-215):
+-- (MobService._runHitDetection lines ~213-215):
 --   * Experimental Jetpack relic procs via RelicService.
 --   * Server-side TextIndicator broadcast (so other players see the
 --     "Perfect Dodge!" floater, not just the local client).
@@ -617,7 +608,7 @@ end
 -- check closes the obvious exploit of spamming this signal to proc
 -- Jetpack without a dodge.
 -- Combat.MobProjectilePerfectDodged handler (was a client-callable method).
-function ZombieService._onMobProjectilePerfectDodged(self: typeof(ZombieService), player: Player, castUuid: string)
+function MobService._onMobProjectilePerfectDodged(self: typeof(MobService), player: Player, castUuid: string)
 	local registry = self._pendingRangedCasts
 	local entry = registry[castUuid]
 	if not entry then
@@ -649,12 +640,7 @@ function ZombieService._onMobProjectilePerfectDodged(self: typeof(ZombieService)
 end
 
 -- Combat.MobProjectileHit handler (was a client-callable method).
-function ZombieService._onMobProjectileHit(
-	self: typeof(ZombieService),
-	player: Player,
-	castUuid: string,
-	hitCFrame: CFrame
-)
+function MobService._onMobProjectileHit(self: typeof(MobService), player: Player, castUuid: string, hitCFrame: CFrame)
 	local registry = self._pendingRangedCasts
 	local entry = registry[castUuid]
 	if not entry then
@@ -669,7 +655,7 @@ function ZombieService._onMobProjectileHit(
 	-- Defensive: mob may have been killed/despawned before the impact
 	-- callback arrived. Damage application would still work via
 	-- DamageService but it's cleaner to skip rather than show a dead
-	-- zombie as the damage source.
+	-- mob as the damage source.
 	if not entry.mob or not entry.mob.Parent then
 		registry[castUuid] = nil
 		return
@@ -756,7 +742,7 @@ end
 
 --[ Lifecycle ]--
 
-function ZombieService.Start(self: typeof(ZombieService))
+function MobService.Start(self: typeof(MobService))
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self._perfectDodgeCredited[player] = nil
 	end)
@@ -769,4 +755,4 @@ function ZombieService.Start(self: typeof(ZombieService))
 	end)
 end
 
-return ZombieService
+return MobService

@@ -6,7 +6,7 @@
 	for every weapon hit (skipped on arcane hits). Rolls per-mob jail
 	chance and, on success, locks the mob's Jailed attribute on for
 	JAIL_DURATION. MobBase's _resyncWalkSpeed listener freezes
-	movement; the attack-pipeline gates added in MobBase / ZombieService
+	movement; the attack-pipeline gates added in MobBase / MobService
 	stop any in-flight attack from connecting while Jailed.
 
 	Chance:
@@ -98,7 +98,7 @@ return function(_player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, is
 	-- start the CCDebounce cooldown before the same mob can be jailed
 	-- again. MobBase listens on Jailed's AttributeChangedSignal and
 	-- zeroes WalkSpeed; the attack-pipeline gates (MobBase:_runAttack,
-	-- ZombieService._runHitDetection, MobBase:_runRangedSwing) read
+	-- MobService._runHitDetection, MobBase:_runRangedSwing) read
 	-- the attribute mid-attack to cancel any in-flight swing.
 	mobModel:SetAttribute(Attributes.Jailed, true)
 	mobModel:SetAttribute(Attributes.CCDebounce, true)

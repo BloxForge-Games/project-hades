@@ -21,7 +21,7 @@ local IsometricCameraController =
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local AmbientGradientInterfaceController = require(ReplicatedStorage.Interfaces.AmbientGradientInterfaceController)
-local ZombieController = require(ReplicatedStorage.Controllers.ZombieController)
+local MobController = require(ReplicatedStorage.Controllers.MobController)
 
 local CutsceneController = {
 	Name = "CutsceneController",
@@ -29,7 +29,7 @@ local CutsceneController = {
 		CinematicInterfaceController,
 		IsometricCameraController,
 		AmbientGradientInterfaceController,
-		ZombieController,
+		MobController,
 	} :: { any },
 	-- Arcane-cutscene exposure drop: nesting depth and the value to restore.
 	_arcaneExposureDepth = 0 :: number,
@@ -233,7 +233,7 @@ end
 -- it is deliberately NOT CutscenePlaying, which every other cinematic
 -- takes and which dresses the screen differently. Over the same window
 -- every mob is held semi-transparent on this client
--- (ZombieController.SetCutsceneDim), bracketed here rather than keyed off
+-- (MobController.SetCutsceneDim), bracketed here rather than keyed off
 -- the attribute so the dim is reference-counted across an overlap.
 -- Arcane cutscenes darken the frame a touch: Lighting.ExposureCompensation
 -- drops by this much for the cutscene's length (client-local, so only the
@@ -290,12 +290,12 @@ function CutsceneController.PlayArcaneCutscene(self: typeof(CutsceneController),
 	end
 
 	character:SetAttribute(Attributes.ArcaneCutscenePlaying, true)
-	ZombieController:SetCutsceneDim(true)
+	MobController:SetCutsceneDim(true)
 	self:_setArcaneExposure(true)
 	if typeof(config.path) == "string" then
 		-- PlayCutscene yields for the whole camera path.
 		self:PlayCutscene(config.path)
-		ZombieController:SetCutsceneDim(false)
+		MobController:SetCutsceneDim(false)
 		self:_setArcaneExposure(false)
 		character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 		return
@@ -321,7 +321,7 @@ function CutsceneController.PlayArcaneCutscene(self: typeof(CutsceneController),
 		character:SetAttribute(Attributes.CutscenePlaying, false)
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
-	ZombieController:SetCutsceneDim(false)
+	MobController:SetCutsceneDim(false)
 	self:_setArcaneExposure(false)
 	character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 end

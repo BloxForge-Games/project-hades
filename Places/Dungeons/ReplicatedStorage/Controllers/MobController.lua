@@ -1,11 +1,11 @@
 --!strict
 --[[
-	Module: ZombieController.lua
+	Module: MobController.lua
 	Description:
 	Client-side visual response to server-driven mob attacks. Two
 	signals it reacts to:
 
-	  OnReplicateMobAttack(zombieModel, hitboxName, hitboxCFrame, windUpDuration, hitFrameDuration)
+	  OnReplicateMobAttack(mobModel, hitboxName, hitboxCFrame, windUpDuration, hitFrameDuration)
 	    Server fires at WIND-UP START (not hit-frame start) so the
 	    player sees the danger zone telegraph in time to react. Client:
 	      1. Clones the same Hitbox Model the server used (from
@@ -20,7 +20,7 @@
 	         Color stays white from the flash. Visual: white fades to invisible.
 	    Net visual sequence: red ramp-in → white flash → fade out.
 
-	  OnReplicateZombieAttack(zombieModel, startCFrame, goalCFrame, _ts)
+	  OnReplicateMobAttack(mobModel, startCFrame, goalCFrame, _ts)
 	    Server fires only when the attack has lungeDistance > 0. Client
 	    tweens the mob's HRP to the goal CFrame for the cosmetic
 	    "step into swing" effect. Tween duration is a fixed client-side
@@ -37,14 +37,14 @@
 	client that joins mid-fade catches up from replication.
 
 	And the overhead HEALTH BAR: every mob under
-	workspace.IgnoreInstances.Zombies has its Humanoid.HealthChanged
+	workspace.IgnoreInstances.Mobs has its Humanoid.HealthChanged
 	watched here and its RedBar tweened locally (the billboard itself is
 	server-cloned; only its animation is client-driven). The bar is
 	snapped to the live ratio when the mob is first seen, so a late joiner
 	never sees a full bar over a wounded mob.
 
 	It also owns the ARCANE-CUTSCENE DIM (SetCutsceneDim): for the length
-	of a arcane cutscene every mob under workspace.IgnoreInstances.Zombies
+	of a arcane cutscene every mob under workspace.IgnoreInstances.Mobs
 	-- regular, miniboss, boss, and any that spawn meanwhile -- is held
 	semi-transparent on this client only, and put back exactly where it
 	was when the cutscene ends. CutsceneController.PlayArcaneCutscene is
@@ -77,15 +77,15 @@ local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.t
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
-local ZombieController = {
-	Name = "ZombieController",
+local MobController = {
+	Name = "MobController",
 	Dependencies = { VFXController } :: { any },
 }
 
 --[ Constants ]--
 
 -- Death-mid-flash cleanup: how long the fade-to-invisible takes when
--- the zombie dies during its swing. Slightly longer than the normal
+-- the mob dies during its swing. Slightly longer than the normal
 -- flash fade so the player can register the cancellation.
 local HITBOX_DEATH_FADE_DURATION = 0.5
 
@@ -97,7 +97,7 @@ local LUNGE_TWEEN_DURATION = 0.4
 local FLASH_WHITE = Color3.new(1, 1, 1)
 
 -- Max Y jitter applied to each cloned hitbox to prevent z-fighting when
--- multiple mobs swing simultaneously (15+ zombies on the same floor
+-- multiple mobs swing simultaneously (15+ mobs on the same floor
 -- produce overlapping hitboxes at the same Y → flicker as the depth
 -- test ties). 0.05 studs is well below visible threshold but breaks
 -- the tie so each clone wins/loses depth consistently per-frame.
@@ -105,12 +105,12 @@ local HITBOX_Y_JITTER_MAX = 0.05
 
 -- Folder under workspace.IgnoreInstances where the client-side visual
 -- hitbox clones live. Same folder the prior implementation used so
--- LifeController's clearZombieHitboxes sweep still picks them up.
+-- LifeController's clearMobHitboxes sweep still picks them up.
 local HITBOX_PARENT = workspace.IgnoreInstances.ArcaneSpells
 
--- Where live mobs are parented (a corpse moves to DeadZombies on death,
+-- Where live mobs are parented (a corpse moves to DeadMobs on death,
 -- keeping its connections until it is destroyed).
-local ZOMBIES_FOLDER = workspace.IgnoreInstances.Zombies
+local MOBS_FOLDER = workspace.IgnoreInstances.Mobs
 
 -- The overhead health bar: GameAssets.BillboardGuis.HealthInterface, cloned
 -- under the mob's Head by MobBase._buildHealthUI (regular mobs only;
@@ -154,7 +154,7 @@ end
 
 -- How many SetCutsceneDim(true) calls are outstanding. Overlapping
 -- cutscenes dim once (0 -> 1) and restore once (1 -> 0).
-ZombieController._cutsceneDimDepth = 0
+MobController._cutsceneDimDepth = 0
 
 -- What each tracked part looked like before the dim -- the value it goes
 -- back to. STRONG keys, deliberately: a server-replicated mob part that
@@ -162,13 +162,13 @@ ZombieController._cutsceneDimDepth = 0
 -- reference, so a weak-keyed table would silently drop entries (and
 -- their restore) mid-cutscene. Cleared on restore, so nothing is
 -- retained past the window.
-ZombieController._cutsceneDimOriginals = {} :: { [Fadeable]: number }
+MobController._cutsceneDimOriginals = {} :: { [Fadeable]: number }
 
 -- One Transparency-changed connection per tracked part, plus the
 -- DescendantAdded watch on the mob folder that catches parts arriving
 -- mid-cutscene (a mob spawning, a late-replicating accessory).
-ZombieController._cutsceneDimConnections = {} :: { RBXScriptConnection }
-ZombieController._cutsceneDimArrival = nil :: RBXScriptConnection?
+MobController._cutsceneDimConnections = {} :: { RBXScriptConnection }
+MobController._cutsceneDimArrival = nil :: RBXScriptConnection?
 
 --[ Local-player death gate ]--
 
@@ -214,8 +214,8 @@ local activeFlashes: { [any]: boolean } = {}
 
 -- Cancels the in-flight flash and fades every part on the hitbox to
 -- transparency 1. Idempotent. Called either from the death listener
--- (zombie killed mid-attack) or from the initial check below if the
--- zombie was already dead when the attack event arrived.
+-- (mob killed mid-attack) or from the initial check below if the
+-- mob was already dead when the attack event arrived.
 local function fadeOutHitbox(state: FlashState)
 	if state.aborted then
 		return
@@ -356,7 +356,7 @@ end
 -- Fades out every in-flight hitbox telegraph immediately. Called when a boss
 -- phase change / outro cutscene starts so no danger-zone flash lingers on the
 -- frozen mob during the cinematic (the server already cancelled the
--- corresponding damage hitbox + lunge — see ZombieService AttackInterrupted).
+-- corresponding damage hitbox + lunge — see MobService AttackInterrupted).
 local function abortAllHitboxFlashes()
 	local snapshot = {}
 	for state in activeFlashes do
@@ -372,7 +372,7 @@ end
 -- telegraph→fade chain over (windUpDuration + hitFrameDuration).
 -- Aborts cleanly if the local player dies during the flash window.
 local function spawnHitboxFlash(
-	zombieModel: Model,
+	mobModel: Model,
 	hitboxName: string,
 	hitboxCFrame: CFrame,
 	windUpDuration: number,
@@ -387,12 +387,12 @@ local function spawnHitboxFlash(
 
 	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
 	if not hitboxesFolder then
-		warn("[ZombieController] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
+		warn("[MobController] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
 		return
 	end
 	local template = hitboxesFolder:FindFirstChild(hitboxName)
 	if not template or not template:IsA("Model") then
-		warn(("[ZombieController] Hitbox template '%s' missing or not a Model"):format(hitboxName))
+		warn(("[MobController] Hitbox template '%s' missing or not a Model"):format(hitboxName))
 		return
 	end
 
@@ -422,8 +422,8 @@ local function spawnHitboxFlash(
 	}
 	activeFlashes[state] = true
 
-	-- Hook the zombie's death so a kill mid-flash fades the visual.
-	local humanoid = zombieModel:FindFirstChildOfClass("Humanoid")
+	-- Hook the mob's death so a kill mid-flash fades the visual.
+	local humanoid = mobModel:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		if humanoid.Health <= 0 then
 			-- Already dead when the attack event arrived — skip the
@@ -434,7 +434,7 @@ local function spawnHitboxFlash(
 		-- HealthChanged instead of Died:Once. Died has subtle timing
 		-- quirks (doesn't fire reliably if the Humanoid is reparented
 		-- or destroyed on the same frame Health hits 0 — MobBase's
-		-- _relocateToDeadFolder reparents to DeadZombies in the same
+		-- _relocateToDeadFolder reparents to DeadMobs in the same
 		-- death tick, which can race the Died event). HealthChanged
 		-- fires on every health write, so we just check `<= 0` inside
 		-- and abort the flash. Connection (not :Once) so we keep the
@@ -497,9 +497,9 @@ end
 
 -- Per mob: the HealthChanged watch that drives its bar. Keyed by model so
 -- a model seen twice (folder churn) is wired once; dropped on destroy.
-ZombieController._healthWatches = {} :: { [Model]: RBXScriptConnection }
+MobController._healthWatches = {} :: { [Model]: RBXScriptConnection }
 
-function ZombieController._watchMobHealth(self: typeof(ZombieController), mob: Instance)
+function MobController._watchMobHealth(self: typeof(MobController), mob: Instance)
 	if not mob:IsA("Model") or self._healthWatches[mob] then
 		return
 	end
@@ -559,7 +559,7 @@ end
 -- by its value and ignored, so the re-dim inside the handler cannot loop.
 -- There is exactly ONE fade owner on this client -- runMobFade -- and it
 -- never reads the dim, so the two cannot deadlock.
-function ZombieController._trackCutsceneDim(self: typeof(ZombieController), instance: Instance)
+function MobController._trackCutsceneDim(self: typeof(MobController), instance: Instance)
 	if not isFadeable(instance) then
 		return
 	end
@@ -590,15 +590,15 @@ end
 
 -- Dims every part of every live mob now, then every part that arrives
 -- under the mob folder for as long as the dim lasts. The folder, not the
--- Zombie tag, because it is exactly the set of LIVE mobs (a corpse leaves
--- it for DeadZombies on death, keeping its tag) and is the same source
+-- Mob tag, because it is exactly the set of LIVE mobs (a corpse leaves
+-- it for DeadMobs on death, keeping its tag) and is the same source
 -- CharacterHighlightController reads.
-function ZombieController._startCutsceneDim(self: typeof(ZombieController))
-	local zombiesFolder = workspace.IgnoreInstances.Zombies
-	for _, descendant in zombiesFolder:GetDescendants() do
+function MobController._startCutsceneDim(self: typeof(MobController))
+	local mobsFolder = workspace.IgnoreInstances.Mobs
+	for _, descendant in mobsFolder:GetDescendants() do
 		self:_trackCutsceneDim(descendant)
 	end
-	self._cutsceneDimArrival = zombiesFolder.DescendantAdded:Connect(function(descendant: Instance)
+	self._cutsceneDimArrival = mobsFolder.DescendantAdded:Connect(function(descendant: Instance)
 		self:_trackCutsceneDim(descendant)
 	end)
 end
@@ -608,7 +608,7 @@ end
 -- out, a part whose replicated value moved past the dim -- already shows
 -- the truth and is left alone. A part destroyed or unparented
 -- mid-cutscene has nothing to come back to.
-function ZombieController._stopCutsceneDim(self: typeof(ZombieController))
+function MobController._stopCutsceneDim(self: typeof(MobController))
 	if self._cutsceneDimArrival then
 		self._cutsceneDimArrival:Disconnect()
 		self._cutsceneDimArrival = nil
@@ -635,7 +635,7 @@ end
 -- controller's runMobFade, which the dim's tracker is written for (see
 -- _trackCutsceneDim); CharacterHighlightController drives the mob
 -- Highlight, never part Transparency.
-function ZombieController.SetCutsceneDim(self: typeof(ZombieController), active: boolean)
+function MobController.SetCutsceneDim(self: typeof(MobController), active: boolean)
 	if active then
 		self._cutsceneDimDepth += 1
 		if self._cutsceneDimDepth == 1 then
@@ -655,7 +655,7 @@ end
 
 --[ Initializers ]--
 
-function ZombieController.Start(self: typeof(ZombieController))
+function MobController.Start(self: typeof(MobController))
 	-- Stamps the death-cinematic suppression window (see
 	-- isLocalDeathCinematicPlaying above). Re-wired per character so a
 	-- respawn's fresh instance gets its own listener.
@@ -691,7 +691,7 @@ function ZombieController.Start(self: typeof(ZombieController))
 	-- Abort any lingering hitbox telegraphs when a boss phase change / outro
 	-- cutscene begins — the frozen (or dead) mob shouldn't show a danger zone
 	-- mid-scene. The server already cancelled the matching damage hitbox +
-	-- lunge (ZombieService AttackInterrupted); this clears the client visual.
+	-- lunge (MobService AttackInterrupted); this clears the client visual.
 	DungeonNetwork.EncounterPhaseStart.On(abortAllHitboxFlashes)
 	DungeonNetwork.EncounterOutroStart.On(abortAllHitboxFlashes)
 
@@ -699,18 +699,18 @@ function ZombieController.Start(self: typeof(ZombieController))
 	-- lungeDistance > 0. Server already PivotTo'd authoritatively;
 	-- this just smooths the visual jump on the client.
 	Combat.MobLunge.On(function(payload)
-		local zombieModel = payload.Mob
+		local mobModel = payload.Mob
 		local goalCFrame = payload.GoalCFrame
-		if not zombieModel then
+		if not mobModel then
 			return
 		end
 		if isLocalDeathCinematicPlaying() then
 			return
 		end
 
-		local root = getRoot(zombieModel)
+		local root = getRoot(mobModel)
 		if not root then
-			warn("[ZombieController] Replicated zombie model is missing HumanoidRootPart.")
+			warn("[MobController] Replicated mob model is missing HumanoidRootPart.")
 			return
 		end
 
@@ -730,22 +730,22 @@ function ZombieController.Start(self: typeof(ZombieController))
 
 	-- Health bars: every live mob now, and every one that arrives. The
 	-- Humanoid wait yields, so each registration runs in its own thread.
-	for _, mob in ZOMBIES_FOLDER:GetChildren() do
+	for _, mob in MOBS_FOLDER:GetChildren() do
 		task.spawn(self._watchMobHealth, self, mob)
 	end
-	ZOMBIES_FOLDER.ChildAdded:Connect(function(mob: Instance)
+	MOBS_FOLDER.ChildAdded:Connect(function(mob: Instance)
 		task.spawn(self._watchMobHealth, self, mob)
 	end)
 
 	-- Ranged projectile cast. Delegates to VFXController's
 	-- MobProjectiles dispatcher — each projectile type has its own
 	-- per-projectile module (WizardFireball.lua etc.) that owns the
-	-- full client-side trajectory + impact callback. ZombieController
+	-- full client-side trajectory + impact callback. MobController
 	-- stays a thin plumbing layer; the actual VFX logic lives co-
 	-- located with the player arcane spell modules under VFXController/.
 	Combat.MobRangedAttack.On(function(payload)
-		local zombieModel = payload.Mob
-		if not zombieModel then
+		local mobModel = payload.Mob
+		if not mobModel then
 			return
 		end
 		local projectileName = payload.ProjectileName
@@ -761,15 +761,8 @@ function ZombieController.Start(self: typeof(ZombieController))
 		if isLocalDeathCinematicPlaying() then
 			return
 		end
-		VFXController:RunMobProjectile(
-			projectileName,
-			zombieModel,
-			originCFrame,
-			targetPosition,
-			castUuid,
-			attackConfig
-		)
+		VFXController:RunMobProjectile(projectileName, mobModel, originCFrame, targetPosition, castUuid, attackConfig)
 	end)
 end
 
-return ZombieController
+return MobController

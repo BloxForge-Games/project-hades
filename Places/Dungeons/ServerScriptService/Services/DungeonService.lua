@@ -105,8 +105,8 @@ DungeonService.Signals = {
 	OnDungeonGenerated = Signal.new(), -- (dungeon)
 	OnDungeonCompleted = Signal.new(), -- (dungeon) — fired when the Boss segment is opened
 	OnSegmentCleared = Signal.new(), -- (dungeon, lastChunk) — fired when a non-Boss segment is opened
-	OnCombatWaveStarted = Signal.new(), -- (room) — fired when a combat room's zombies spawn via the previous-room gate trigger
-	-- (i.e., the player walked into combat and zombies began spawning).
+	OnCombatWaveStarted = Signal.new(), -- (room) — fired when a combat room's mobs spawn via the previous-room gate trigger
+	-- (i.e., the player walked into combat and mobs began spawning).
 	-- MusicService listens to this to swing the mainTheme volume back
 	-- up after the downtime fade from OnSegmentCleared.
 	OnRoomEntered = Signal.new(), -- (player, room)

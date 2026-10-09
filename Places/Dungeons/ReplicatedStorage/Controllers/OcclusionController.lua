@@ -8,7 +8,7 @@
 	WallsTransparencyController every frame (cloning its ignore list each
 	time), BuildingTransparencyController at 0.15 s, and
 	CharacterHighlightController at 40 Hz with one
-	Camera:GetPartsObscuringTarget PER ZOMBIE -- 30-50 mobs came to well
+	Camera:GetPartsObscuringTarget PER MOB -- 30-50 mobs came to well
 	over a thousand queries a second. They read from here now.
 
 	Per pass, at OCCLUSION_HZ:
@@ -65,8 +65,8 @@ local IGNORED_FOLDER_PATHS = {
 	{ "IgnoreInstances", "MapMarkers" },
 	{ "IgnoreInstances", "ArcaneSpells" },
 	{ "IgnoreInstances", "Drops" },
-	{ "IgnoreInstances", "Zombies" },
-	{ "IgnoreInstances", "DeadZombies" },
+	{ "IgnoreInstances", "Mobs" },
+	{ "IgnoreInstances", "DeadMobs" },
 	{ "PlayerBaseplates" },
 }
 

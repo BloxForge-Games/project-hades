@@ -2,7 +2,7 @@
 --[[
      Author(s): ryanisawesome25
      Module: Trap.luau
-     Description: Spike trap that damages ANY humanoid entity (zombies and
+     Description: Spike trap that damages ANY humanoid entity (mobs and
                   players) walking over it. Uses ZonePlus for zone
                   detection. Plays a spike extension animation on trigger,
                   then enters a cooldown.
@@ -11,7 +11,7 @@
                   no owner at all (the chunk system's dungeon-room traps —
                   pre-tagged 'Trap' inside Combat chunks, auto-instantiated
                   when the chunk parents into workspace). Owner is used
-                  only for kill attribution against zombies; it does NOT
+                  only for kill attribution against mobs; it does NOT
                   exempt the owner from self-damage. Traps are pure
                   hazards.
 ]]
@@ -48,7 +48,7 @@ local TRAP_COOLDOWN = 5
 local DETECTION_HEIGHT = 10
 local TRAP_DELAY = 0.1
 -- Every trap hit costs 20% of the VICTIM's own maximum health, so five
--- steps kill anything that can step on one — a player, a zombie, or a
+-- steps kill anything that can step on one — a player, a mob, or a
 -- boss with fifty times their health. A flat number could not do that:
 -- it was either irrelevant to a boss or lethal to a player.
 --
@@ -61,7 +61,7 @@ local TRAP_MAX_HEALTH_FRACTION = 0.20
 
 --[ Public Functions ]--
 
--- Triggered when ANY tracked entity (zombie or player character)
+-- Triggered when ANY tracked entity (mob or player character)
 -- enters the trap zone. Iterates everything currently inside and
 -- damages each humanoid once, then enters the cooldown — so a row
 -- of mobs walking onto the same trap during a single tick all take
@@ -115,7 +115,7 @@ function Trap:_onEntityEntered()
 				-- fresh character carries nil until its first dodge — and
 				-- `nil == false` is false, which made traps silently skip a
 				-- player for their whole first life. Missing must mean "not
-				-- dodging", the way ZombieService already reads it.
+				-- dodging", the way MobService already reads it.
 				if model:GetAttribute(Attributes.IsDodging) ~= true then
 					-- `true`: fixed damage, so no relic or set bonus can turn
 					-- five steps into ten.
@@ -204,17 +204,17 @@ function Trap:Start()
 		boundSize + Vector3.new(0, DETECTION_HEIGHT, 0)
 	)
 
-	-- ── Zombie tracking (existing) ─────────────────────────────
-	for _, zombie in ipairs(CollectionService:GetTagged(TagList.Zombie)) do
-		self._zone:trackItem(zombie)
+	-- ── Mob tracking (existing) ─────────────────────────────
+	for _, mob in ipairs(CollectionService:GetTagged(TagList.Zombie)) do
+		self._zone:trackItem(mob)
 	end
 
-	self._janitor:Add(CollectionService:GetInstanceAddedSignal(TagList.Zombie):Connect(function(zombie)
-		self._zone:trackItem(zombie)
+	self._janitor:Add(CollectionService:GetInstanceAddedSignal(TagList.Zombie):Connect(function(mob)
+		self._zone:trackItem(mob)
 	end))
 
-	self._janitor:Add(CollectionService:GetInstanceRemovedSignal(TagList.Zombie):Connect(function(zombie)
-		self._zone:untrackItem(zombie)
+	self._janitor:Add(CollectionService:GetInstanceRemovedSignal(TagList.Zombie):Connect(function(mob)
+		self._zone:untrackItem(mob)
 	end))
 
 	-- ── Player character tracking (new) ────────────────────────

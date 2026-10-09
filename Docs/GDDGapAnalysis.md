@@ -60,9 +60,9 @@ priority list in section 4.
 
 | # | Decision |
 |---|---|
-| D1 | **Rename the whole `Zombie*` family** to the GDD enemy model, not display-only. Keep **The Undead King** as the dungeon-1 boss for now. The dungeon-2 and dungeon-3 enemy sets are pure legacy — **prune them**. |
+| D1 | **Rename DONE 2026-10-09** — `Zombie*` → `Mob*` (MobNames, MobData, MobService, MobSpawnService, MobController, Mobs/Mob.lua; 60 files). Rig-internal names (animations, hitboxes, sounds, the `Zombie` tag) and the relics Zombie Bomb / Zombie Axe deliberately kept. **Prune of the Water + Shadow sets pending approval**; Emberforge/Frostveil/Stormcrest will point at the Undead set until their GDD rosters exist. The Undead King stays as dungeon-1 boss. |
 | D2 | **Keep the firearms.** They are in-fiction as BOTW-style ancient technology. The 30-ranged-weapon plan proceeds on that basis. |
-| D3 | **No `Mythic`** for now; may return later. Remove it from `ItemRarity` and `RarityMultipliers` so Legendary is the ceiling the GDD states. |
+| D3 | **DONE 2026-10-09.** `Mythic` removed from `ItemRarity`, `RarityMultipliers`, `RarityColors` and both inventory frames' `TOP_RARITY`. Legendary (1.8×) is now the ceiling. |
 | D4 | **Add the upgrade caps** exactly as the GDD lists them (+4 / +6 / +8 / +10 / +15). The +5%-per-level curve was not retuned — revisit when the caps land. |
 | D5 | **Still open.** Stormcrest *Mountains* (code) vs Stormcrest *Temple* (GDD) was not decided. |
 | D6 | GDD is corrected to **Emberforge Mines** and **Frostveil Castle**. The code was already right. |

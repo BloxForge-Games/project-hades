@@ -15,7 +15,7 @@ IgnoreListController.WeaponIgnoreList = {} :: { Instance }
 IgnoreListController.BuildingTransparencyIgnoreList = {} :: { Instance }
 IgnoreListController.ArcaneSpellIgnoreList = {} :: { Instance }
 IgnoreListController.ProximityRayIgnoreList = {} :: { Instance }
-IgnoreListController.ZombieArcaneSpellIgnoreList = {} :: { Instance }
+IgnoreListController.MobArcaneSpellIgnoreList = {} :: { Instance }
 
 function IgnoreListController.GetWeaponIgnoreList(self: typeof(IgnoreListController)): { Instance }
 	return table.clone(self.WeaponIgnoreList)
@@ -33,8 +33,8 @@ function IgnoreListController.GetProximityRayIgnoreList(self: typeof(IgnoreListC
 	return table.clone(self.ProximityRayIgnoreList)
 end
 
-function IgnoreListController.GetZombieArcaneSpellIgnoreList(self: typeof(IgnoreListController)): { Instance }
-	return table.clone(self.ZombieArcaneSpellIgnoreList)
+function IgnoreListController.GetMobArcaneSpellIgnoreList(self: typeof(IgnoreListController)): { Instance }
+	return table.clone(self.MobArcaneSpellIgnoreList)
 end
 
 function IgnoreListController.Start(self: typeof(IgnoreListController))
@@ -65,10 +65,10 @@ function IgnoreListController.Start(self: typeof(IgnoreListController))
 	end)
 
 	RemoteProperty.Client({
-		changed = DungeonNetwork.ZombieArcaneSpellIgnoreListChanged,
-		get = DungeonNetwork.GetZombieArcaneSpellIgnoreList,
+		changed = DungeonNetwork.MobArcaneSpellIgnoreListChanged,
+		get = DungeonNetwork.GetMobArcaneSpellIgnoreList,
 	}):Observe(function(ignoreList: { Instance? })
-		self.ZombieArcaneSpellIgnoreList = ignoreList :: { Instance }
+		self.MobArcaneSpellIgnoreList = ignoreList :: { Instance }
 	end)
 end
 

@@ -41,11 +41,11 @@ local PC_CURSOR_LINGER_SECONDS = 0.75
 -- Mobile auto-aim (the StartAutoAttack session + TapArcane below).
 --
 -- Weapon thumbstick model: PRESS starts an auto-attack session — the
--- character snaps to the nearest living zombie within ACQUIRE range and
+-- character snaps to the nearest living mob within ACQUIRE range and
 -- attacks continuously (gun keeps firing, melee keeps swinging) while the
 -- finger stays down, tracking the target as it moves. DRAGGING the stick
 -- past its threshold kills the session and hands aim to the stick (manual).
--- RELEASE stops the attack. With no zombie in range the session still
+-- RELEASE stops the attack. With no mob in range the session still
 -- attacks, unrotated, in the current facing — and picks up a target the
 -- moment one enters range.
 --
@@ -456,7 +456,7 @@ end
 
 --[ Mobile auto-aim ]--
 
--- Root part of the nearest living zombie within `rangeStuds` of the local
+-- Root part of the nearest living mob within `rangeStuds` of the local
 -- character, or nil. Pure distance — no line-of-sight filtering, by design:
 -- rooms are open arenas and a raycast miss would read as a dead button.
 function AimController._findNearestEnemy(_self: typeof(AimController), rangeStuds: number): BasePart?
@@ -465,28 +465,28 @@ function AimController._findNearestEnemy(_self: typeof(AimController), rangeStud
 		return nil
 	end
 
-	local zombiesFolder = workspace.IgnoreInstances:FindFirstChild("Zombies")
-	if not zombiesFolder then
+	local mobsFolder = workspace.IgnoreInstances:FindFirstChild("Mobs")
+	if not mobsFolder then
 		return nil
 	end
 
 	local nearestRoot: BasePart? = nil
 	local nearestDistance = rangeStuds
 
-	for _, zombie in zombiesFolder:GetChildren() do
-		if not zombie:IsA("Model") then
+	for _, mob in mobsFolder:GetChildren() do
+		if not mob:IsA("Model") then
 			continue
 		end
-		local zombieHumanoid = zombie:FindFirstChildOfClass("Humanoid")
-		local zombieRoot = getRoot(zombie) or zombie.PrimaryPart
-		if not zombieHumanoid or zombieHumanoid.Health <= 0 or not zombieRoot then
+		local mobHumanoid = mob:FindFirstChildOfClass("Humanoid")
+		local mobRoot = getRoot(mob) or mob.PrimaryPart
+		if not mobHumanoid or mobHumanoid.Health <= 0 or not mobRoot then
 			continue
 		end
 
-		local distance = (zombieRoot.Position - hrp.Position).Magnitude
+		local distance = (mobRoot.Position - hrp.Position).Magnitude
 		if distance <= nearestDistance then
 			nearestDistance = distance
-			nearestRoot = zombieRoot
+			nearestRoot = mobRoot
 		end
 	end
 
@@ -529,9 +529,9 @@ function AimController._isAutoAttackTargetValid(self: typeof(AimController)): bo
 		return false
 	end
 
-	local zombieModel = targetRoot:FindFirstAncestorOfClass("Model")
-	local zombieHumanoid = zombieModel and zombieModel:FindFirstChildOfClass("Humanoid")
-	if not zombieHumanoid or zombieHumanoid.Health <= 0 then
+	local mobModel = targetRoot:FindFirstAncestorOfClass("Model")
+	local mobHumanoid = mobModel and mobModel:FindFirstChildOfClass("Humanoid")
+	if not mobHumanoid or mobHumanoid.Health <= 0 then
 		return false
 	end
 
@@ -654,7 +654,7 @@ function AimController.HoldFacing(self: typeof(AimController), seconds: number?)
 end
 
 -- TAP on a arcane thumbstick: for a canAim spell (ArcaneData), face the
--- nearest zombie in range, then cast through the existing
+-- nearest mob in range, then cast through the existing
 -- OnArcaneActivate(slot, false) path — which owns the indicator cleanup, the
 -- cast lock, and CastArcane's own mana/cooldown gates. Spells
 -- with canAim = false (auras, self-centered bursts) cast with no rotation.

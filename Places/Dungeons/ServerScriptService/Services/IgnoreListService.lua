@@ -61,14 +61,14 @@ IgnoreListService._proximityRayIgnoreList = RemoteProperty.Server({
 	changed = DungeonNetwork.ProximityRayIgnoreListChanged,
 	get = DungeonNetwork.GetProximityRayIgnoreList,
 }, {})
-IgnoreListService._zombieArcaneSpellIgnoreList = RemoteProperty.Server(
+IgnoreListService._mobArcaneSpellIgnoreList = RemoteProperty.Server(
 	{
-		changed = DungeonNetwork.ZombieArcaneSpellIgnoreListChanged,
-		get = DungeonNetwork.GetZombieArcaneSpellIgnoreList,
+		changed = DungeonNetwork.MobArcaneSpellIgnoreListChanged,
+		get = DungeonNetwork.GetMobArcaneSpellIgnoreList,
 	},
 	existing(
-		workspace.IgnoreInstances:FindFirstChild("Zombies"),
-		workspace.IgnoreInstances:FindFirstChild("DeadZombies"),
+		workspace.IgnoreInstances:FindFirstChild("Mobs"),
+		workspace.IgnoreInstances:FindFirstChild("DeadMobs"),
 		workspace.IgnoreInstances:FindFirstChild("Terrain"),
 		workspace.IgnoreInstances:FindFirstChild("MapMarkers"),
 		workspace.IgnoreInstances:FindFirstChild("Boundaries"),
@@ -99,8 +99,8 @@ function IgnoreListService.SetProximityRayIgnoreList(self: typeof(IgnoreListServ
 	self._proximityRayIgnoreList:Set(newIgnoreList)
 end
 
-function IgnoreListService.SetZombieArcaneSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
-	self._zombieArcaneSpellIgnoreList:Set(newIgnoreList)
+function IgnoreListService.SetMobArcaneSpellIgnoreList(self: typeof(IgnoreListService), newIgnoreList: { Instance })
+	self._mobArcaneSpellIgnoreList:Set(newIgnoreList)
 end
 
 -- READ-ONLY: this is the live replicated array, not a copy. Every caller
@@ -123,8 +123,8 @@ function IgnoreListService.GetProximityRayIgnoreList(self: typeof(IgnoreListServ
 	return table.clone(self._proximityRayIgnoreList:Get()) :: { Instance }
 end
 
-function IgnoreListService.GetZombieArcaneSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
-	return table.clone(self._zombieArcaneSpellIgnoreList:Get()) :: { Instance }
+function IgnoreListService.GetMobArcaneSpellIgnoreList(self: typeof(IgnoreListService)): { Instance }
+	return table.clone(self._mobArcaneSpellIgnoreList:Get()) :: { Instance }
 end
 
 -- Registers the two collision groups and makes them mutually
@@ -139,31 +139,31 @@ function IgnoreListService._registerCollisionGroups(_self: typeof(IgnoreListServ
 	PhysicsService:CollisionGroupSetCollidable(CollisionGroups.MobRaycastHitbox, CollisionGroups.WeaponQuery, false)
 end
 
--- Per-zombie hookup that moves the mob's RaycastHitbox into the
+-- Per-mob hookup that moves the mob's RaycastHitbox into the
 -- MobRaycastHitbox collision group the moment it's available on the
 -- model. The part needs no de-registration: the group travels with it,
 -- and death destroys it.
 --
--- Why this is keyed on Zombies.ChildAdded + WaitForChild rather than
--- ZombieSpawnService.OnZombieSpawn:
---   The OnZombieSpawn signal fires from MobBase only AFTER the fade-in
+-- Why this is keyed on Mobs.ChildAdded + WaitForChild rather than
+-- MobSpawnService.OnMobSpawn:
+--   The OnMobSpawn signal fires from MobBase only AFTER the fade-in
 --   delay (~0.25s + the spawn animation). During that window the
---   zombie's RaycastHitbox already exists in workspace, and a weapon
+--   mob's RaycastHitbox already exists in workspace, and a weapon
 --   query in that window would hit the (invisible, aim-assist-only)
---   RaycastHitbox instead of the actual zombie geometry.
+--   RaycastHitbox instead of the actual mob geometry.
 --
 --   ChildAdded fires the instant the model is parented, and
 --   WaitForChild blocks until the part appears, so the hookup races
 --   the first swing reliably.
-function IgnoreListService._registerZombieRaycastHitbox(_self: typeof(IgnoreListService), zombie: Instance)
-	if not zombie:IsA("Model") then
+function IgnoreListService._registerMobRaycastHitbox(_self: typeof(IgnoreListService), mob: Instance)
+	if not mob:IsA("Model") then
 		return
 	end
-	-- WaitForChild blocks on the per-zombie task; doesn't stall the
-	-- ChildAdded handler for other zombies. 5s is a generous safety —
+	-- WaitForChild blocks on the per-mob task; doesn't stall the
+	-- ChildAdded handler for other mobs. 5s is a generous safety —
 	-- if a model spawn never lands a RaycastHitbox in that window
 	-- something else is broken.
-	local hitbox = zombie:WaitForChild("RaycastHitbox", 5)
+	local hitbox = mob:WaitForChild("RaycastHitbox", 5)
 	if not hitbox or not hitbox:IsA("BasePart") then
 		return
 	end
@@ -195,17 +195,17 @@ function IgnoreListService._initWeaponIgnoreList(self: typeof(IgnoreListService)
 
 	-- Mob RaycastHitbox parts: collision group per mob, for every mob
 	-- already present and every one parented from now on. Using
-	-- Zombies.ChildAdded (instead of ZombieSpawnService.OnZombieSpawn)
+	-- Mobs.ChildAdded (instead of MobSpawnService.OnMobSpawn)
 	-- closes the spawn-window race described in
-	-- _registerZombieRaycastHitbox above.
-	for _, zombie in workspace.IgnoreInstances.Zombies:GetChildren() do
+	-- _registerMobRaycastHitbox above.
+	for _, mob in workspace.IgnoreInstances.Mobs:GetChildren() do
 		task.spawn(function()
-			self:_registerZombieRaycastHitbox(zombie)
+			self:_registerMobRaycastHitbox(mob)
 		end)
 	end
-	workspace.IgnoreInstances.Zombies.ChildAdded:Connect(function(zombie)
+	workspace.IgnoreInstances.Mobs.ChildAdded:Connect(function(mob)
 		task.spawn(function()
-			self:_registerZombieRaycastHitbox(zombie)
+			self:_registerMobRaycastHitbox(mob)
 		end)
 	end)
 end
@@ -213,7 +213,7 @@ end
 function IgnoreListService._initBuildingTransparencyIgnoreList(self: typeof(IgnoreListService))
 	local buildingTransparencyIgnoreList = self:GetBuildingTransparencyIgnoreList()
 
-	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.Zombies)
+	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.Mobs)
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.ArcaneSpells)
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances.Terrain)
 	table.insert(buildingTransparencyIgnoreList, workspace.IgnoreInstances:FindFirstChild("EscortObjects") or nil)
@@ -237,7 +237,7 @@ function IgnoreListService._initProximityRayIgnoreList(self: typeof(IgnoreListSe
 
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.ArcaneSpells)
-	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.DeadZombies)
+	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.DeadMobs)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances:FindFirstChild("EscortObjects") or nil)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Chests)
 	table.insert(proximityRayIgnoreList, workspace.IgnoreInstances.Map.ArcaneSpells)
@@ -280,7 +280,7 @@ function IgnoreListService.Start(self: typeof(IgnoreListService))
 
 	-- Initialize players into ignore list. NEVER yield between Get
 	-- and Set on these lists — `CharacterAdded:Wait()` is a yield,
-	-- and while it's parked other tasks (e.g. the deferred zombie
+	-- and while it's parked other tasks (e.g. the deferred mob
 	-- RaycastHitbox registrations spawned by _InitWeaponIgnoreList)
 	-- run and write the list. If we Get pre-yield and Set post-yield
 	-- we clobber their additions with our stale snapshot. Resolving

@@ -26,7 +26,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local DungeonGenerator = require(ServerScriptService.Services.DungeonGenerator)
 local GateService = require(ServerScriptService.Services.GateService)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
@@ -53,7 +53,7 @@ local RunFlowService = {
 		DungeonService,
 		DungeonGenerator,
 		GateService,
-		ZombieSpawnService,
+		MobSpawnService,
 		EncounterService,
 		CameraShakeService,
 	} :: { any },
@@ -111,7 +111,7 @@ RunFlowService._transitionFrozen = {} :: { [Player]: true }
 
 --[ Public Functions ]--
 
--- Generates one floor and wires it into the run: the zombie plan, the
+-- Generates one floor and wires it into the run: the mob plan, the
 -- placement (DungeonGenerator), the Boss room's exit portal, the active-
 -- dungeon flip, cursor / gate / encounter resets, the first next-gate marker,
 -- a bounded wait for characterless players, then OnDungeonGenerated and
@@ -123,9 +123,9 @@ function RunFlowService.GenerateDungeon(
 	seed: number?,
 	originCFrame: CFrame?
 ): Dungeon
-	-- The zombie pool is per dungeon (its GameAssets.Zombies folder).
-	if ZombieSpawnService then
-		ZombieSpawnService:BuildZombiePlanForDungeon(dungeonId)
+	-- The mob pool is per dungeon (its GameAssets.Mobs folder).
+	if MobSpawnService then
+		MobSpawnService:BuildMobPlanForDungeon(dungeonId)
 	end
 
 	-- First floor of the run: the guaranteed shop may only land AFTER the
@@ -207,7 +207,7 @@ end
 
 -- Destroys everything the current dungeon put in the world so the next one
 -- can generate into a clean map. Order matters: encounters / lobbies first
--- (their pads + HUD), zombies + queues (room-id-keyed state MUST go before
+-- (their pads + HUD), mobs + queues (room-id-keyed state MUST go before
 -- new rooms take those ids), machines, markers, then the room models --
 -- Walls live in a shared, cached folder, so its CHILDREN are cleared and
 -- the folder itself kept.
@@ -222,8 +222,8 @@ function RunFlowService._teardownDungeon(self: typeof(RunFlowService)): Dungeon?
 
 	self:_destroyExitPortal()
 	DungeonService:DestroyNextGateMarker()
-	if ZombieSpawnService then
-		ZombieSpawnService:ResetForNewDungeon()
+	if MobSpawnService then
+		MobSpawnService:ResetForNewDungeon()
 	end
 
 	local map = workspace.IgnoreInstances:FindFirstChild("Map")

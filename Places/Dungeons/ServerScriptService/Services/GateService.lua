@@ -32,7 +32,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Exports & Types & Defaults ]--
 
 local DungeonService = require(ServerScriptService.Services.DungeonService)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local FogOfWarService = require(ServerScriptService.Services.FogOfWarService)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
@@ -71,7 +71,7 @@ local GateService = {
 	Name = "GateService",
 	Dependencies = {
 		DungeonService,
-		ZombieSpawnService,
+		MobSpawnService,
 		EncounterService,
 		FogOfWarService,
 		UserNotificationService,
@@ -290,8 +290,8 @@ function GateService.SetupGateTrigger(
 		-- Those approaches go through OpenSegmentGate → EncounterService:StartEncounter
 		-- when the previous combat segment is cleared, and the approach gate
 		-- stays solid (never touch-triggered) so players can't bypass the lobby.
-		if nextRoom and ZombieSpawnService and nextRoom.roomType == RoomTypes.Combat then
-			ZombieSpawnService:SpawnZombiesInRoom(nextRoom)
+		if nextRoom and MobSpawnService and nextRoom.roomType == RoomTypes.Combat then
+			MobSpawnService:SpawnMobsInRoom(nextRoom)
 			-- Fire the wave-started signal so MusicService can swing
 			-- mainTheme back to FULL after the OnSegmentCleared
 			-- downtime fade. Fires for the FIRST combat room too —
@@ -388,8 +388,8 @@ function GateService._onGateFirstCrossing(self: typeof(GateService), nextRoomId:
 	local dungeon = DungeonService:GetActiveDungeon()
 	local nextRoom = dungeon and dungeon.rooms[nextRoomId]
 
-	if nextRoom and ZombieSpawnService and nextRoom.roomType == RoomTypes.Combat then
-		ZombieSpawnService:SpawnZombiesInRoom(nextRoom)
+	if nextRoom and MobSpawnService and nextRoom.roomType == RoomTypes.Combat then
+		MobSpawnService:SpawnMobsInRoom(nextRoom)
 		DungeonService.Signals.OnCombatWaveStarted:Fire(nextRoom)
 	elseif nextRoom and nextRoom.roomType == RoomTypes.Event then
 		-- First body through the door starts the event room's own exit
@@ -878,24 +878,24 @@ function GateService._startEventGateHold(self: typeof(GateService), eventRoom: R
 	end
 end
 
-function GateService._areSegmentZombiesCleared(_self: typeof(GateService), segmentId: number): boolean
+function GateService._areSegmentMobsCleared(_self: typeof(GateService), segmentId: number): boolean
 	local dungeon = DungeonService:GetActiveDungeon()
-	if not dungeon or not ZombieSpawnService then
+	if not dungeon or not MobSpawnService then
 		return false
 	end
 	for _, room in dungeon.rooms do
 		if room.segmentId == segmentId then
-			if not ZombieSpawnService:WasRoomSpawned(room) then
+			if not MobSpawnService:WasRoomSpawned(room) then
 				return false
 			end
-			-- Queue must be fully SPAWNED OUT, not just "no zombies alive
-			-- right now" — killing the first 5 of a 10-zombie queue leaves
+			-- Queue must be fully SPAWNED OUT, not just "no mobs alive
+			-- right now" — killing the first 5 of a 10-mob queue leaves
 			-- an empty room for a beat while the spawner tops back up, and
 			-- that beat must not open the gate.
-			if not ZombieSpawnService:IsRoomQueueExhausted(room) then
+			if not MobSpawnService:IsRoomQueueExhausted(room) then
 				return false
 			end
-			if #ZombieSpawnService:GetZombiesInRoom(room) > 0 then
+			if #MobSpawnService:GetMobsInRoom(room) > 0 then
 				return false
 			end
 		end
@@ -1134,12 +1134,12 @@ function GateService.Start(self: typeof(GateService))
 		self:_disableRoomTraps(room :: Room?)
 	end)
 
-	ZombieSpawnService.OnZombieDespawn:Connect(function(zombie: Model)
+	MobSpawnService.OnMobDespawn:Connect(function(mob: Model)
 		local dungeon = DungeonService:GetActiveDungeon()
 		if not dungeon then
 			return
 		end
-		local roomId = zombie:GetAttribute(ROOM_ATTRIBUTE)
+		local roomId = mob:GetAttribute(ROOM_ATTRIBUTE)
 		if type(roomId) ~= "number" then
 			return
 		end
@@ -1152,9 +1152,9 @@ function GateService.Start(self: typeof(GateService))
 		end
 		-- Check every chunk in the segment. The check requires each chunk to
 		-- have been spawned in AND fully cleared — otherwise players who run
-		-- past zombies into a later chunk and kill there first would trip the
-		-- gate-open even though earlier chunks still have living zombies.
-		if self:_areSegmentZombiesCleared(room.segmentId) then
+		-- past mobs into a later chunk and kill there first would trip the
+		-- gate-open even though earlier chunks still have living mobs.
+		if self:_areSegmentMobsCleared(room.segmentId) then
 			self:OpenSegmentGate(room.segmentId)
 		end
 	end)
