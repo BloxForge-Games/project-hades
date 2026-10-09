@@ -77,7 +77,7 @@ local RunEscrowService = {
 RunEscrowService._escrowProperty = RemoteProperty.Server({
 	changed = PlayerNetwork.EscrowDataChanged,
 	get = PlayerNetwork.GetEscrowData,
-}, { items = {}, coins = 0 })
+}, { items = {}, coins = 0, forgeCrystal = 0 })
 
 --[ Constants ]--
 
@@ -103,6 +103,7 @@ RunEscrowService._escrow = {} :: {
 	[number]: {
 		items: { EscrowItem },
 		coins: number,
+		forgeCrystal: number,
 	},
 }
 
@@ -115,7 +116,7 @@ local RUN_COINS_ATTRIBUTE = "RunCoins"
 function RunEscrowService._getOrCreate(self: typeof(RunEscrowService), player: Player)
 	local entry = self._escrow[player.UserId]
 	if not entry then
-		entry = { items = {}, coins = 0 }
+		entry = { items = {}, coins = 0, forgeCrystal = 0 }
 		self._escrow[player.UserId] = entry
 	end
 	return entry
@@ -126,6 +127,7 @@ function RunEscrowService._replicate(self: typeof(RunEscrowService), player: Pla
 	self._escrowProperty:SetFor(player, {
 		items = entry.items,
 		coins = entry.coins,
+		forgeCrystal = entry.forgeCrystal,
 	})
 
 	-- Same coin count, mirrored onto an ATTRIBUTE. The Comm property above is
@@ -153,7 +155,7 @@ end
 -- identity change and stops; the coin wipe then republishes through
 -- _commitCoins like any other coin change.
 function RunEscrowService._clearEscrow(self: typeof(RunEscrowService), player: Player)
-	self._escrow[player.UserId] = { items = {}, coins = 0 }
+	self._escrow[player.UserId] = { items = {}, coins = 0, forgeCrystal = 0 }
 	self:_commitCoins(player, 0)
 end
 
@@ -205,6 +207,19 @@ end
 -- Dragon Lantern's drawback: strips `fraction` of the player's UNBANKED
 -- run coins (rounded down). Banked profile coins are never touched --
 -- the tax rides the same risk model as the rest of the escrow.
+-- Forge Crystal rides the escrow under the same rules as coins: banked to
+-- the profile on clear, gone on death. No tax, no multipliers.
+function RunEscrowService.AddForgeCrystal(self: typeof(RunEscrowService), player: Player, amount: number)
+	local entry = self:_getOrCreate(player)
+	entry.forgeCrystal = (entry.forgeCrystal or 0) + math.max(0, math.floor(amount))
+	self:_replicate(player)
+end
+
+function RunEscrowService.GetForgeCrystal(self: typeof(RunEscrowService), player: Player): number
+	local entry = self._escrow[player.UserId]
+	return if entry then (entry.forgeCrystal or 0) else 0
+end
+
 function RunEscrowService.TaxCoins(self: typeof(RunEscrowService), player: Player, fraction: number)
 	local entry = self._escrow[player.UserId]
 	if not entry or entry.coins <= 0 then
@@ -240,7 +255,7 @@ end
 -- (loadout refresh, hotbar UI) see the whole bank as a single update.
 function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player)
 	local entry = self._escrow[player.UserId]
-	if not entry or (#entry.items == 0 and entry.coins == 0) then
+	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeCrystal or 0) == 0) then
 		return
 	end
 
@@ -284,7 +299,21 @@ function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player
 		)
 	end
 
-	Log.debug(("[RunEscrowService] Banked %d items + %d coins for %s"):format(#entry.items, entry.coins, player.Name))
+	if (entry.forgeCrystal or 0) > 0 then
+		CurrencyService:SetCurrencyValue(
+			player,
+			CurrencyTypes.ForgeCrystal,
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.ForgeCrystal) + entry.forgeCrystal
+		)
+	end
+	Log.debug(
+		("[RunEscrowService] Banked %d items + %d coins + %d forge crystal for %s"):format(
+			#entry.items,
+			entry.coins,
+			entry.forgeCrystal or 0,
+			player.Name
+		)
+	)
 
 	self:_clearEscrow(player)
 end
@@ -310,7 +339,7 @@ function RunEscrowService.ClaimRewards(self: typeof(RunEscrowService), player: P
 	end
 
 	local entry = self._escrow[player.UserId]
-	if not entry or (#entry.items == 0 and entry.coins == 0) then
+	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeCrystal or 0) == 0) then
 		return false
 	end
 
@@ -324,7 +353,7 @@ end
 -- nothing to show for the run so far.
 function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player, reason: string?)
 	local entry = self._escrow[player.UserId]
-	if not entry or (#entry.items == 0 and entry.coins == 0) then
+	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeCrystal or 0) == 0) then
 		return
 	end
 

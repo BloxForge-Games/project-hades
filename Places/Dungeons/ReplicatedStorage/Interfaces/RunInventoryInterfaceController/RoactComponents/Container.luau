@@ -495,14 +495,14 @@ local function Container(props: any)
 		local upgrades = selectedItem.upgrades or 0
 		local upgradeSuffix = if upgrades > 0 then string.format(" (+%d)", upgrades) else ""
 		detailNameText = tostring(selectedItem.name) .. upgradeSuffix
-		-- The cap rides on the rarity line: rarity is what SETS it, so the
-		-- two read together ("Epic ... +3 / +10").
+		-- The upgrade level rides on the rarity line, clamped to the
+		-- rarity's cap like the stat is. The cap itself is deliberately
+		-- not shown here (design call) -- the Blacksmith is where it matters.
 		detailLevelRarityText = string.format(
-			"Level %d  •  %s  •  +%d / +%d",
+			"Level %d  •  %s  •  +%d",
 			selectedItem.level or 1,
 			tostring(selectedItem.rarity or ItemRarity.Common),
-			UpgradeCapData.Clamp(upgrades, selectedItem.rarity),
-			UpgradeCapData.For(selectedItem.rarity)
+			UpgradeCapData.Clamp(upgrades, selectedItem.rarity)
 		)
 		detailDescription = getItemDescription(selectedItem.name)
 

@@ -362,6 +362,11 @@ function DropService.Start(self: typeof(DropService))
 			self.OnCoinCollected:Fire(player.Name, value)
 			--DataService:SetNumericalProfileData(player, ProfileTemplateIndex.Coins, value)
 			-- self.OnCoinCollected:Fire(player, value)
+		elseif dropType == DropTypes.ForgeCrystal then
+			-- Escrowed like coins: banked to the profile on clear
+			-- (RunEscrowService.BankAll), lost on death. No multipliers --
+			-- it is the Blacksmith's gating resource, not an economy stat.
+			RunEscrowService:AddForgeCrystal(player, value)
 		elseif dropType == DropTypes.Mana then
 			playOrbPickupVFX(player, dropType)
 

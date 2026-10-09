@@ -391,6 +391,24 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		)
 	end
 
+	-- FORGE CRYSTAL: the dead mob's row again. Guaranteed for every
+	-- encounter tier (MobData sets the miniboss / boss chance to 1), one
+	-- crystal per pickup, private to the chest's owner like the coins.
+	local crystal = coins and coins.forgeCrystal
+	if DropService and crystal and crystal.chance > 0 and math.random() <= crystal.chance then
+		DropService.OnDropRequested:Fire(
+			origin,
+			DropTypes.ForgeCrystal,
+			crystal.min,
+			crystal.max,
+			1,
+			1,
+			false,
+			player.UserId,
+			true
+		)
+	end
+
 	-- The opened chest stays in the world as scenery, collidable — the
 	-- room cleanup that clears the machines clears it too.
 end

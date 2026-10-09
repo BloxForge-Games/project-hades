@@ -58,6 +58,10 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local LifeService = require(ServerScriptService.Services.LifeService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local CurrencyService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
+local BlacksmithService = require(ServerScriptService.Submodules.Core.Source.Services.BlacksmithService)
+local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
@@ -120,6 +124,7 @@ local ChatCommandsService = {
 		LifeService,
 		DataService,
 		CoffinEventService,
+		BlacksmithService,
 	} :: { any },
 }
 
@@ -205,6 +210,63 @@ end
 
 --[ Commands ]--
 
+-- The uuid of whatever is equipped in a Blacksmith slot name, or nil.
+local SLOT_WEAPON = { melee = 1, ranged = 2 }
+local SLOT_ARMOR = {
+	helmet = InventoryType.Helmet,
+	chestplate = InventoryType.Chestplate,
+	greaves = InventoryType.Greaves,
+}
+local function findEquippedUuid(player: Player, slotName: string?): string?
+	local profile = DataService and DataService:GetProfileData(player)
+	local inventory = profile and profile.Inventory
+	if not inventory or not slotName then
+		return nil
+	end
+	local weaponSlot = SLOT_WEAPON[slotName]
+	if weaponSlot then
+		for _, entry in inventory[InventoryType.Weapon] or {} do
+			if entry.equipSlot == weaponSlot then
+				return entry.uuid
+			end
+		end
+		return nil
+	end
+	local armorSlot = SLOT_ARMOR[slotName]
+	if armorSlot then
+		local gear = inventory[InventoryType.Gear]
+		for _, entry in (gear and gear[armorSlot]) or {} do
+			if entry.equipped then
+				return entry.uuid
+			end
+		end
+	end
+	return nil
+end
+
+-- The first UNEQUIPPED weapon or armor piece whose name matches, or nil.
+local function findUnequippedUuidByName(player: Player, wanted: string): string?
+	local profile = DataService and DataService:GetProfileData(player)
+	local inventory = profile and profile.Inventory
+	if not inventory then
+		return nil
+	end
+	for _, entry in inventory[InventoryType.Weapon] or {} do
+		if string.lower(tostring(entry.name)) == wanted and entry.equipSlot ~= 1 and entry.equipSlot ~= 2 then
+			return entry.uuid
+		end
+	end
+	local gear = inventory[InventoryType.Gear] or {}
+	for _, slot in { InventoryType.Helmet, InventoryType.Chestplate, InventoryType.Greaves } do
+		for _, entry in gear[slot] or {} do
+			if string.lower(tostring(entry.name)) == wanted and not entry.equipped then
+				return entry.uuid
+			end
+		end
+	end
+	return nil
+end
+
 type Command = {
 	usage: string,
 	description: string,
@@ -244,26 +306,119 @@ COMMANDS = {
 	},
 
 	give = {
-		usage = "/give gold <amount>",
-		description = "Gives YOU <amount> run gold (the coins the Merchant Shop spends).",
+		usage = "/give <gold|bankgold|crystal> <amount>",
+		description = "gold: run coins (escrow). bankgold / crystal: straight into YOUR profile, for the Blacksmith.",
 		handler = function(player: Player, args: { string }): string?
 			local what = args[1] and string.lower(args[1])
-			if what ~= "gold" then
-				return ("Usage: %s"):format(COMMANDS.give.usage)
-			end
 			local amount = math.floor(tonumber(args[2]) or 0)
 			if amount <= 0 then
 				return ("Usage: %s -- amount must be a positive number"):format(COMMANDS.give.usage)
 			end
 			amount = math.min(amount, MAX_GIVE_GOLD)
-			if not RunEscrowService then
-				return "RunEscrowService is unavailable."
+			if what == "gold" then
+				if not RunEscrowService then
+					return "RunEscrowService is unavailable."
+				end
+				-- Run coins (the escrow), not banked profile coins: this is
+				-- what the shop and the Relic Slot stand spend, and it rides
+				-- the same risk as the rest of the run.
+				RunEscrowService:AddCoins(player, amount)
+				return ("Gave you %d run gold (now %d)."):format(amount, RunEscrowService:GetCoins(player))
+			elseif what == "bankgold" or what == "crystal" then
+				-- PROFILE currency, which is what the Blacksmith spends.
+				if not CurrencyService then
+					return "CurrencyService is unavailable."
+				end
+				local currency = if what == "crystal" then CurrencyTypes.ForgeCrystal else CurrencyTypes.Gold
+				CurrencyService:SetCurrencyValue(
+					player,
+					currency,
+					CurrencyService:GetCurrencyValue(player, currency) + amount
+				)
+				return ("Gave you %d %s (profile now %d)."):format(
+					amount,
+					currency,
+					CurrencyService:GetCurrencyValue(player, currency)
+				)
 			end
-			-- Run coins (the escrow), not banked profile coins: this is
-			-- what the shop and the Relic Slot stand spend, and it rides
-			-- the same risk as the rest of the run.
-			RunEscrowService:AddCoins(player, amount)
-			return ("Gave you %d gold (now %d)."):format(amount, RunEscrowService:GetCoins(player))
+			return ("Usage: %s"):format(COMMANDS.give.usage)
+		end,
+	},
+	inv = {
+		usage = "/inv",
+		description = "Lists YOUR profile weapons and armor: name, +level, rarity, and whether it is equipped.",
+		handler = function(player: Player, _args: { string }): string?
+			local profile = DataService and DataService:GetProfileData(player)
+			local inventory = profile and profile.Inventory
+			if not inventory then
+				return "Your profile isn't loaded yet."
+			end
+			local entries = {}
+			for _, entry in inventory[InventoryType.Weapon] or {} do
+				local worn = entry.equipSlot == 1 or entry.equipSlot == 2
+				table.insert(
+					entries,
+					("%s +%d %s%s"):format(
+						tostring(entry.name),
+						entry.upgrades or 0,
+						tostring(entry.rarity),
+						if worn then " [equipped]" else ""
+					)
+				)
+			end
+			local gear = inventory[InventoryType.Gear] or {}
+			for _, slot in { InventoryType.Helmet, InventoryType.Chestplate, InventoryType.Greaves } do
+				for _, entry in gear[slot] or {} do
+					table.insert(
+						entries,
+						("%s +%d %s%s"):format(
+							tostring(entry.name),
+							entry.upgrades or 0,
+							tostring(entry.rarity),
+							if entry.equipped then " [equipped]" else ""
+						)
+					)
+				end
+			end
+			return ("Gold %d, Forge Crystal %d\n%s"):format(
+				CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold),
+				CurrencyService:GetCurrencyValue(player, CurrencyTypes.ForgeCrystal),
+				table.concat(entries, "\n")
+			)
+		end,
+	},
+	upgrade = {
+		usage = "/upgrade <melee|ranged|helmet|chestplate|greaves>",
+		description = "Blacksmith: upgrades the item EQUIPPED in that slot one level, spending profile Gold + Forge Crystal.",
+		handler = function(player: Player, args: { string }): string?
+			local uuid = findEquippedUuid(player, args[1] and string.lower(args[1]))
+			if not uuid then
+				return ("Usage: %s -- nothing equipped there"):format(COMMANDS.upgrade.usage)
+			end
+			if not BlacksmithService then
+				return "BlacksmithService is unavailable."
+			end
+			local _, message = BlacksmithService:UpgradeItem(player, uuid)
+			return message
+		end,
+	},
+	sell = {
+		usage = "/sell <item name>",
+		description = "Merchant: sells the first UNEQUIPPED weapon or armor piece with that name for Gold.",
+		handler = function(player: Player, args: { string }): string?
+			local wanted = string.lower(table.concat(args, " "))
+			if wanted == "" then
+				return ("Usage: %s"):format(COMMANDS.sell.usage)
+			end
+			local uuid = findUnequippedUuidByName(player, wanted)
+			if not uuid then
+				return ("No unequipped item named '%s' -- see /inv"):format(wanted)
+			end
+			if not BlacksmithService then
+				return "BlacksmithService is unavailable."
+			end
+			local _, message = BlacksmithService:SellItem(player, uuid)
+			return message
 		end,
 	},
 

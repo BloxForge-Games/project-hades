@@ -404,6 +404,7 @@ type Fields = {
 	_agentRadius: number?,
 	_minDropRate: number,
 	_maxDropRate: number,
+	_forgeCrystal: { chance: number, min: number, max: number }?,
 	_minCoins: number,
 	_maxCoins: number,
 	_idleAnimation: Animation,
@@ -484,6 +485,7 @@ function MobBase.new(model: Model): MobBase
 	self._maxDropRate = data.maxDropRate
 	self._minCoins = data.minCoins
 	self._maxCoins = data.maxCoins
+	self._forgeCrystal = data.forgeCrystal
 	self._idleAnimation = data.idle
 	self._runAnimation = data.run
 	self._damagedAnimation = data.damaged
@@ -1456,6 +1458,7 @@ function MobBase.OnDeath(self: MobBase)
 			else
 				self:_dropGear()
 				self:_dropCoins(killer)
+				self:_dropForgeCrystal()
 			end
 		end
 	end
@@ -1747,6 +1750,7 @@ function MobBase._deferEncounterRewards(self: MobBase, killer)
 		-- Defensive: no EncounterService → drop immediately.
 		self:_dropGear()
 		self:_dropCoins(killer)
+		self:_dropForgeCrystal()
 		return
 	end
 	-- NOTHING drops at the corpse any more. An encounter's gear and coins
@@ -1787,6 +1791,27 @@ function MobBase._dropCoins(self: MobBase, _killer)
 		self._maxCoins,
 		false
 	)
+end
+
+-- Forge Crystal off the corpse, at this mob's own rate (MobData
+-- `forgeCrystal`). Same room guard as coins: encounter mobs pay through
+-- their chest (EncounterChestService), so a boss corpse drops nothing here.
+function MobBase._dropForgeCrystal(self: MobBase)
+	local rate = self._forgeCrystal
+	if not rate or rate.chance <= 0 then
+		return
+	end
+	local roomId = self._model:GetAttribute("RoomId")
+	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+	local room = if dungeon and type(roomId) == "number" then dungeon.roomsById[roomId] else nil
+	if room and (room.roomType == RoomTypes.Miniboss or room.roomType == RoomTypes.Boss) then
+		return
+	end
+	if math.random() > rate.chance then
+		return
+	end
+
+	DropService.OnDropRequested:Fire(self._rootPart, DropTypes.ForgeCrystal, rate.min, rate.max, 1, 1, false)
 end
 
 function MobBase._playDeathSound(self: MobBase)

@@ -44,6 +44,7 @@ local COMPASS_DROP_TYPES = {
 	[DropTypes.Health] = true,
 	[DropTypes.Mana] = true,
 	[DropTypes.SuperMana] = true,
+	[DropTypes.ForgeCrystal] = true,
 }
 
 --[ Types ]--
