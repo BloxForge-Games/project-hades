@@ -119,8 +119,8 @@ local GREATER_BLESSING_HIGHLIGHT_B = 69
 -- BonusHealthPercent, every HP scaler sees it, and it stacks with a
 -- fountain found in a later dungeon. Server-lifetime = run-lifetime, so
 -- the bonus naturally lasts the whole run.
-local FOUNTAIN_HEAL_FRACTION = 0.50
-local FOUNTAIN_ATTUNE_HP_FRACTION = 0.15
+local FOUNTAIN_HEAL_FRACTION = 0.40
+local FOUNTAIN_ATTUNE_HP_FRACTION = 0.20
 
 -- Forge. How many offers the anvil fans out for one sacrificed relic.
 -- Three, not one: a single random swap was a lateral trade with no
@@ -131,19 +131,29 @@ local FORGE_OFFER_COUNT = 3
 
 -- Merchant.
 local MERCHANT_STOCK_SIZE = 5
--- Sell values are FLAT per rarity; buy prices roll uniformly in-range,
--- once per pedestal per player, so two players see different tags.
-local SELL_PRICES = {
-	[ItemRarity.Rare] = 200,
-	[ItemRarity.Epic] = 400,
-	[ItemRarity.Legendary] = 800,
-	-- No Cursed row: the shop refuses them (see _onSellRelic).
+-- RELIC PRICES ARE FIXED, IN GEMS (design call, 2026-10). Gems are the
+-- run currency: mobs drop them at the same rate on every tier, so a
+-- price means the same thing wherever the shop appears -- a longer floor
+-- simply affords more. Tuned so an Easy run (~290 Gems) buys about two
+-- Rares; Nightmare (~915) three to four. Each pedestal rolls its tag
+-- within -PRICE_MARKUP_MAX..+PRICE_MARKUP_MAX of the base, once per
+-- player, so a stall can be a bargain or a rip-off (design call, 2026-10).
+local BUY_PRICES = {
+	[ItemRarity.Rare] = 100,
+	[ItemRarity.Epic] = 150,
+	[ItemRarity.Legendary] = 200,
+	-- No Cursed row: the shop never stocks or buys them.
 }
-local BUY_PRICE_RANGES = {
-	[ItemRarity.Rare] = { 300, 400 },
-	[ItemRarity.Epic] = { 600, 800 },
-	[ItemRarity.Legendary] = { 1200, 1600 },
-}
+-- The random swing on a stocked relic's tag: -this..+this, uniform.
+local PRICE_MARKUP_MAX = 0.1
+-- Selling a relic back pays this share of its BASE buy price (no swing)
+-- -- always below the cheapest tag, so buy-then-sell can never profit.
+local SELL_BACK_FRACTION = 0.5
+
+-- A relic's buy price, in Gems, before the pedestal's markup.
+local function relicBuyPrice(rarity: string): number?
+	return BUY_PRICES[rarity]
+end
 
 -- How far from the event model a client request is still honoured. Loose
 -- on purpose — the dialogue leash already keeps players close; this only
@@ -1214,7 +1224,7 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 	-- rarity, then takes the next unowned relic of it".
 	local byRarity: { [string]: { string } } = {}
 	for relicName, data in RelicData do
-		if BUY_PRICE_RANGES[data.rarity] and RelicService:GetSpecificRelicRegistry(player, relicName) == 0 then
+		if BUY_PRICES[data.rarity] and RelicService:GetSpecificRelicRegistry(player, relicName) == 0 then
 			local bucket = byRarity[data.rarity]
 			if not bucket then
 				bucket = {}
@@ -1237,10 +1247,9 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 		if not relicName then
 			return false
 		end
-		local range = BUY_PRICE_RANGES[rarity]
 		table.insert(stock, {
 			relicName = relicName,
-			price = math.random(range[1], range[2]),
+			price = math.round((relicBuyPrice(rarity) or 0) * (1 + (math.random() * 2 - 1) * PRICE_MARKUP_MAX)),
 			sold = false,
 		})
 		return true
@@ -1419,11 +1428,11 @@ function EventService._onBuyMerchantRelic(
 		return "full"
 	end
 
-	if not RunEscrowService:SpendCoins(player, slot.price) then
-		-- Server-side feedback so the "Not enough gold" pop can't be
+	if not RunEscrowService:SpendGems(player, slot.price) then
+		-- Server-side feedback so the "Not enough Gems" pop can't be
 		-- suppressed or spoofed client-side.
 		if TextIndicatorService and hrp then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough gold", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough Gems", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"
@@ -1484,9 +1493,9 @@ function EventService._onBuyRelicSlot(_self: typeof(EventService), player: Playe
 	if soldOut then
 		return "sold"
 	end
-	if not RunEscrowService:SpendCoins(player, price) then
+	if not RunEscrowService:SpendGems(player, price) then
 		if TextIndicatorService then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough gold", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough Gems", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"
@@ -1559,13 +1568,14 @@ function EventService._onSellRelic(self: typeof(EventService), player: Player, r
 		return 0
 	end
 
-	local price = SELL_PRICES[RelicData[relicName].rarity]
-	if not price then
+	local buyPrice = relicBuyPrice(RelicData[relicName].rarity)
+	if not buyPrice then
 		return 0
 	end
+	local price = math.round(buyPrice * SELL_BACK_FRACTION)
 
 	RelicService:RemoveRelicsRegistry(player, relicName, 1)
-	RunEscrowService:AddCoins(player, price)
+	RunEscrowService:AddGems(player, price)
 
 	-- Full sale presentation: green receipt over the head, the Buy
 	-- chime, and the everyone-visible removed-relic shockwave.

@@ -75,7 +75,11 @@ local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 -- DungeonService is reached at call time (this service is a consumer).
 local function difficultyDamageMultiplier(): number
 	local dungeonService = Blitz.OptionalService("DungeonService")
-	return if dungeonService then dungeonService:GetDifficultyScale().enemyDamage else 1
+	if not dungeonService then
+		return 1
+	end
+	-- The tier's multiplier x the floor's (+10% per floor past the first).
+	return dungeonService:GetDifficultyScale().enemyDamage * dungeonService:GetFloorMultiplier()
 end
 
 -- The attacker's owned relics for ONE hit, from RelicService (re-exported
@@ -163,7 +167,7 @@ local FLAMING_ORB_AURA_MARKERS = {
 
 -- Dragon Lantern (Cursed): every hit that reaches HEALTH strips 10% of
 -- the owner's unbanked run coins.
-local DRAGON_LANTERN_COIN_TAX = 0.10
+local DRAGON_LANTERN_TAX = 0.10
 
 -- Storm tree crit riders (percentage points on the 0-100 roll / fractions
 -- on the multiplier). Chances/fractions that live in relic callbacks are
@@ -441,9 +445,9 @@ function DamageService.PlayerTakeDamage(
 		return
 	end
 
-	-- Dragon Lantern's coin tax — health damage only.
+	-- Dragon Lantern's Gems + Coins tax — health damage only.
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon Lantern"]) > 0 then
-		RunEscrowService:TaxCoins(player, DRAGON_LANTERN_COIN_TAX)
+		RunEscrowService:TaxCurrencies(player, DRAGON_LANTERN_TAX)
 	end
 
 	local ragdollTrigger = character:FindFirstChild("RagdollTrigger")

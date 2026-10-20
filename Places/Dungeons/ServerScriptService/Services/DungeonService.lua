@@ -45,6 +45,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Planner = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.Planner)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 
 -- A placed room (see _makeRoom). Everything stamped on it later --
 -- branch, combatSegmentIndex, exitPortal, buildings -- is optional here.
@@ -82,6 +83,10 @@ export type Run = {
 	ascension: number,
 	exited: { [Player]: true },
 	originCFrame: CFrame?,
+	-- Set once the FINAL floor's boss rewards have dropped: the run is
+	-- won, and from here a death banks the escrow instead of losing it
+	-- (no extraction mechanic -- the portal is just the way home).
+	cleared: boolean?,
 }
 
 local DungeonService = {
@@ -226,7 +231,10 @@ end
 -- Safe to call from anywhere — idempotent and self-creating. Public: the
 -- encounter flow hides it for a lobby / intro and re-places it afterwards.
 function DungeonService.UpdateNextGateMarker(self: typeof(DungeonService))
-	local gate = self:_getNextGate()
+	-- A won run has no "next gate": the final boss is down and the way
+	-- out is the portal, so the marker never comes back (design call,
+	-- 2026-10), whatever re-places it later (chests opening the gate).
+	local gate = if self:IsRunCleared() then nil else self:_getNextGate()
 	if not gate then
 		self:DestroyNextGateMarker()
 		return
@@ -324,6 +332,25 @@ function DungeonService.GetDifficultyScale(self: typeof(DungeonService)): Diffic
 	return DifficultyData.Resolve(run.difficulty, run.ascension)
 end
 
+-- The run's reward multiplier for `field` ("gold" or "ore"; the tiers no
+-- longer carry either, so this is the dungeon's rewardScale alone): the
+-- difficulty's ladder (DifficultyData) times the active dungeon's
+-- rewardScale (DungeonData, later dungeons pay more). THE one number both
+-- the pickups (DropService) and every in-run price (EventService: relic
+-- stock, slot rungs, sell-backs) scale by, so a relic always costs the
+-- same FRACTION of a run's income whatever tier or dungeon it is bought
+-- in. 1 with no run.
+function DungeonService.GetRewardScale(self: typeof(DungeonService), field: string): number
+	local run = self._run
+	if not run then
+		return 1
+	end
+	local scale = DifficultyData.Resolve(run.difficulty, run.ascension)
+	local dungeon = self._activeDungeon
+	local config = dungeon and DungeonData[dungeon.id]
+	return ((scale and scale[field]) or 1) * ((config and config.rewardScale) or 1)
+end
+
 function DungeonService.GetRunDungeonIndex(self: typeof(DungeonService)): number
 	return self._run and self._run.index or 1
 end
@@ -331,6 +358,63 @@ end
 function DungeonService.IsFinalDungeon(self: typeof(DungeonService)): boolean
 	local run = self._run
 	return run ~= nil and run.index >= #run.sequence
+end
+
+-- The FLOOR of the current dungeon the run is on (1-based): how many
+-- consecutive entries of the same dungeon id the sequence has up to and
+-- including the current one. 1 outside a run. Valid DURING a generation
+-- too -- AdvanceRun bumps the index before it generates.
+function DungeonService.GetFloor(self: typeof(DungeonService)): number
+	local run = self._run
+	if not run then
+		return 1
+	end
+	local id = run.sequence[run.index]
+	local floor = 0
+	for index = run.index, 1, -1 do
+		if run.sequence[index] ~= id then
+			break
+		end
+		floor += 1
+	end
+	return math.max(floor, 1)
+end
+
+-- How many floors the current dungeon has in this run.
+function DungeonService.GetFloorCount(self: typeof(DungeonService)): number
+	local run = self._run
+	if not run then
+		return 1
+	end
+	local id = run.sequence[run.index]
+	local count = 0
+	for _, entry in run.sequence do
+		if entry == id then
+			count += 1
+		end
+	end
+	return math.max(count, 1)
+end
+
+-- The per-floor enemy stat multiplier (DifficultyData.FloorMultiplier).
+function DungeonService.GetFloorMultiplier(self: typeof(DungeonService)): number
+	return DifficultyData.FloorMultiplier(self:GetFloor())
+end
+
+function DungeonService.IsRunCleared(self: typeof(DungeonService)): boolean
+	local run = self._run
+	return run ~= nil and run.cleared == true
+end
+
+-- Marks the run WON: the final floor's boss is dead. Set at the kill
+-- (EncounterService), before the outro, so the gate marker is gone the
+-- moment the boss drops; RunFlowService re-asserts it when the rewards
+-- land. From here a death banks the escrow instead of losing it.
+function DungeonService.MarkRunCleared(self: typeof(DungeonService))
+	local run = self._run
+	if run then
+		run.cleared = true
+	end
 end
 
 function DungeonService.IsPlayerExited(self: typeof(DungeonService), player: Player): boolean

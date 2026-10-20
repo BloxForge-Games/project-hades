@@ -18,11 +18,11 @@
 	          DungeonData.dungeonDrops (its `pool` plus the `perEnemyType`
 	          row for Miniboss / Boss). Rolled PER PLAYER, exactly as the
 	          corpse drop did.
-	  * COINS MobData[<the dead mob>]'s minDropRate / maxDropRate (how
-	          many pickups) and minCoins / maxCoins (value per pickup) —
-	          the same four fields every other mob's coin scatter uses, read
-	          off the encounter mob's own row so a Shadow boss pays what its
-	          row says.
+	  * COINS + FORGE ORE  the tier's chestCoins / chestOre totals
+	          (DifficultyData, per EnemyType), split into the encounter
+	          mob's MobData `chestPickups` counts. These are the run's ONLY
+	          source of permanent currency (design call, 2026-10); grunts
+	          drop Gems, the run currency, and the Event Chest pays Gems.
 
 	PER PLAYER, OWNER-LOCKED: a chest carries its owner's UserId and only
 	that player can open it, so nobody can take a teammate's reward. This
@@ -47,6 +47,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 
 --[ Constants ]--
@@ -112,14 +113,14 @@ local OWNER_ATTRIBUTE = "OwnerId"
 -- timeout is a backstop rather than the normal path.
 local BATCH_TIMEOUT_SECONDS = 90
 
--- One chest batch (see BATCH_TIMEOUT_SECONDS). `coins` is an optional
--- MobData-shaped coin row every chest in the batch pays instead of the
--- dead mob's own.
+-- One chest batch (see BATCH_TIMEOUT_SECONDS). `gems` is an optional
+-- MobData `gems`-shaped row the Event Chest pays (the run currency);
+-- encounter chests pay the tier's Coins + Ore instead (DifficultyData).
 type ChestBatch = {
 	pending: number,
 	done: boolean,
 	onAllOpened: (() -> ())?,
-	coins: { [string]: number }?,
+	gems: { [string]: number }?,
 	-- [userId] = true for every player who got a chest / who opened it.
 	owners: { [number]: boolean },
 	opened: { [number]: boolean },
@@ -292,12 +293,25 @@ local function placeChestAtRest(player: Player, chest: Model): boolean
 	return true
 end
 
-local function coinConfigFor(mobName: string?)
+-- How many pickups a chest splits its payout into (MobData `chestPickups`
+-- on the encounter mob), { min, max } per currency. A sane default for a
+-- chest with no row behind it.
+local DEFAULT_PICKUPS = { coins = { 5, 7 }, ore = { 3, 4 } }
+local function pickupCountsFor(mobName: string?): { coins: { number }, ore: { number } }
 	local data = mobName and MobData[mobName]
-	if not data or not data.minDropRate then
-		return nil
+	return (data and data.chestPickups) or DEFAULT_PICKUPS
+end
+
+-- Fires `total` of `dropType` as `count` pickups from `origin`, private to
+-- `player`, chest-style (a blip per pickup). Rounds the per-pickup value
+-- up so the chest never pays less than its row.
+local function dropSplit(origin: BasePart, dropType: string, total: number, countRange: { number }, player: Player)
+	if not DropService or total <= 0 then
+		return
 	end
-	return data
+	local count = math.random(countRange[1], countRange[2])
+	local value = math.max(1, math.ceil(total / count))
+	DropService.OnDropRequested:Fire(origin, dropType, count, count, value, value, false, player.UserId, true)
 end
 
 -- Resolves ONE chest against its batch: opened, destroyed, or its owner
@@ -340,7 +354,7 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 	end
 
 	-- Read BEFORE resolving: resolving drops the chest from the batch map,
-	-- and the batch may carry a coin row of its own (the Event Chest).
+	-- and the batch may carry a Gems row of its own (the Event Chest).
 	local batch = self._batchByChest[chest]
 	if batch and batch.opened then
 		batch.opened[player.UserId] = true
@@ -365,48 +379,44 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		GearDropService:DropGear(player, origin.Position, enemyType, true)
 	end
 
-	-- COINS: the batch's own row when it has one (the Event Chest pays
-	-- out of DungeonData.coffinEvent.coins — there is no corpse), else
-	-- the dead mob's MobData row (count range x value range).
-	local coins = (batch and batch.coins) or coinConfigFor(mobName)
-	if DropService and coins then
-		DropService.OnDropRequested:Fire(
-			origin,
-			DropTypes.Coins,
-			coins.minDropRate,
-			coins.maxDropRate,
-			coins.minCoins,
-			coins.maxCoins,
-			-- SCATTER RADIUS, not a loot flag: the client Drop component
-			-- reads this as IsBoss and throws the coins over ±20 studs
-			-- instead of ±8. A boss CORPSE wants that wide spray; chest
-			-- coins pour out of one spot the player is already standing at,
-			-- so both tiers use the tight miniboss radius.
-			false,
-			-- PRIVATE to the chest's owner. Chests are per-player, so shared
-			-- coins meant everybody banked everybody else's chest.
-			player.UserId,
-			-- Chest loot: one blip per coin as it pops out.
-			true
-		)
-	end
-
-	-- FORGE CRYSTAL: the dead mob's row again. Guaranteed for every
-	-- encounter tier (MobData sets the miniboss / boss chance to 1), one
-	-- crystal per pickup, private to the chest's owner like the coins.
-	local crystal = coins and coins.forgeCrystal
-	if DropService and crystal and crystal.chance > 0 and math.random() <= crystal.chance then
-		DropService.OnDropRequested:Fire(
-			origin,
-			DropTypes.ForgeCrystal,
-			crystal.min,
-			crystal.max,
-			1,
-			1,
-			false,
-			player.UserId,
-			true
-		)
+	-- CURRENCY (design call, 2026-10). An ENCOUNTER chest pays its share
+	-- of the tier's permanent take -- Coins and Forge Ore, run totals from
+	-- DifficultyData `chestCoins` / `chestOre` split by floor and by
+	-- miniboss / boss (ChestPayout), then into MobData `chestPickups`
+	-- pickups. The EVENT chest (Laughing Coffin) pays Gems from the
+	-- batch's own row instead. Everything is PRIVATE to the chest's owner:
+	-- chests are per player, so shared pickups meant everybody banked
+	-- everybody else's chest. DropService applies the dungeon's
+	-- rewardScale at collect time.
+	if enemyType == EnemyTypes.Event then
+		local gems = batch and batch.gems
+		if DropService and gems then
+			DropService.OnDropRequested:Fire(
+				origin,
+				DropTypes.Gems,
+				gems.minDropRate,
+				gems.maxDropRate,
+				gems.minGems,
+				gems.maxGems,
+				false,
+				player.UserId,
+				true
+			)
+		end
+	elseif enemyType then
+		-- The tier's run total, split across floors (back-loaded) and
+		-- between the floor's miniboss and boss (DifficultyData.ChestPayout).
+		local tier = DungeonService:GetDifficultyScale()
+		local floor = DungeonService:GetFloor()
+		local pickups = pickupCountsFor(mobName)
+		local coins = DifficultyData.ChestPayout(tier, floor, enemyType, "chestCoins")
+		if coins then
+			dropSplit(origin, DropTypes.Coins, coins, pickups.coins, player)
+		end
+		local ore = DifficultyData.ChestPayout(tier, floor, enemyType, "chestOre")
+		if ore then
+			dropSplit(origin, DropTypes.ForgeOre, ore, pickups.ore, player)
+		end
 	end
 
 	-- The opened chest stays in the world as scenery, collidable — the
@@ -429,7 +439,7 @@ function EncounterChestService.DropChestsForEncounter(
 	enemyType: string,
 	mob: (Model | string)?,
 	onAllOpened: (() -> ())?,
-	coinsOverride: { [string]: number }?
+	gemsOverride: { [string]: number }?
 )
 	-- The batch exists BEFORE the first bail-out: every early return has
 	-- to complete it, or a missing prefab would leave the gate shut and
@@ -438,7 +448,7 @@ function EncounterChestService.DropChestsForEncounter(
 		pending = 0,
 		done = false,
 		onAllOpened = onAllOpened,
-		coins = coinsOverride,
+		gems = gemsOverride,
 		-- [userId] = true for every player who got a chest / who opened it.
 		-- The encounter gate's countdown reads these (HasPlayerOpenedChest).
 		owners = {},

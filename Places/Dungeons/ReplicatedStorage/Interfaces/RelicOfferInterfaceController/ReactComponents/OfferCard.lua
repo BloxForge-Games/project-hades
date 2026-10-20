@@ -23,9 +23,13 @@
 	  handle.setDim(on)         a black veil over the card (the unfocused
 	                            look while another card is hovered).
 	  handle.brightenStroke()   the chosen card's stroke goes fully opaque.
+	  handle.revealDescription() the description text fades in, a beat after
+	                            the deal (it is dealt transparent).
+	  handle.hideTooltip()      the keyword column slides away without
+	                            touching the hover look (the chosen card's rise).
 	  handle.sweep()            a light streak crosses the card once.
 	  handle.flash()            the pick: the card flashes white for a beat.
-	  handle.shockwave()        the pick: a ring in the element colour expands
+	  handle.shockwave()        the pick: a ring in the rarity colour expands
 	                            from the card's edge and fades.
 	  handle.wobble()           the refused shake.
 	  handle.setDim(on) also fades this card's embers (see below).
@@ -63,7 +67,8 @@ local KeywordData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Keywor
 --[ Tuning ]--
 
 -- The card frame art, stretched to the card: one image per element tree
--- (RelicData `tree`), tinted by the same tree (CARD_TINTS).
+-- (RelicData `tree`) -- the MOTIF is the element's; the TINT is the
+-- rarity's (RarityColors:GetCard(rarity).tint), so colour reads as tier.
 -- Each tree's art covers its status and aura (Blaze + Enflamed, Storm +
 -- Stormcharged, Frost + Frostburst, Venom + Blighted, Earth + Stonebound
 -- and shields). Neutral, which holds every Cursed relic, is the fallback.
@@ -76,18 +81,6 @@ local CARD_IMAGES: { [string]: string } = {
 	[ElementTrees.Neutral] = "rbxassetid://130599641461508",
 }
 local DEFAULT_CARD_IMAGE = CARD_IMAGES[ElementTrees.Neutral]
--- The card art's ImageColor3, by element tree. A Cursed relic (every one
--- sits in Neutral) takes CURSED_CARD_TINT instead.
-local CARD_TINTS: { [string]: Color3 } = {
-	[ElementTrees.Blaze] = Color3.fromRGB(255, 102, 0),
-	[ElementTrees.Frost] = Color3.fromRGB(126, 253, 255),
-	[ElementTrees.Storm] = Color3.fromRGB(255, 85, 255),
-	[ElementTrees.Venom] = Color3.fromRGB(13, 212, 93),
-	[ElementTrees.Earth] = Color3.fromRGB(255, 183, 0),
-	[ElementTrees.Neutral] = Color3.fromRGB(207, 207, 207),
-}
-local DEFAULT_CARD_TINT = CARD_TINTS[ElementTrees.Neutral]
-local CURSED_CARD_TINT = Color3.fromRGB(255, 0, 0)
 -- Every relic's icon until the per-relic art lands (RelicData.icon wins
 -- when a relic has one).
 local DEFAULT_ICON = "rbxassetid://91274990645548"
@@ -142,13 +135,13 @@ local PILL_WIDTH_BASE = 0.1
 local PILL_WIDTH_PER_CHARACTER = 0.039
 
 -- The selected look: SelectionUIStroke on the art (ScaledSize) while the
--- cursor is on the card, in the relic's ELEMENT tint (cardTint, the same
+-- cursor is on the card, in the relic's RARITY tint (cardTint, the same
 -- tint the card art and the embers wear), so hovering reads as "this
--- element" rather than one shared highlight for every card. The chosen
+-- tier" rather than one shared highlight for every card. The chosen
 -- card holds that same tint -- the pick is marked by the shockwave ring
 -- and the stroke staying lit, never by a colour change.
 -- Lit strokes stop HALF transparent rather than solid: at full opacity a
--- saturated element tint flares on the card edge. Hover, the chosen card
+-- saturated tint flares on the card edge. Hover, the chosen card
 -- and the shockwave ring all start here, so the three read as one effect.
 local LIT_STROKE_TRANSPARENCY = 0.5
 local SELECTION_STROKE_THICKNESS = 0.01
@@ -217,6 +210,13 @@ local RING_START_THICKNESS = 3
 local RING_TWEEN = TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local RING_FADE_TWEEN = TweenInfo.new(0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
+-- The description is dealt TRANSPARENT and fades in on its own, this long
+-- after the card's deal starts, so the art lands first and the text reads
+-- second (design call, 2026-10).
+local DESCRIPTION_REVEAL_DELAY = 0.275
+local DESCRIPTION_REVEAL_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+local DESCRIPTION_STROKE_TRANSPARENCY = 0.5
+
 -- Idle bob: a Sine there-and-back over this amplitude (fraction of the
 -- card height) and period, each slot a beat behind the last.
 -- Back easing: each leg overshoots its end a touch and settles, so the
@@ -229,7 +229,7 @@ local BOB_PHASE_PER_CARD = 0.6
 -- rotation renders the subtree with sub-pixel placement instead.
 local SUBPIXEL_ROTATION = 0.01
 
--- The embers: small sparks in the relic's ELEMENT colour (cardTint, the
+-- The embers: small sparks in the relic's RARITY colour (cardTint, the
 -- same tint the card art wears) drifting UP around the card,
 -- swaying as they rise and shimmering on their own phase, like the lazy
 -- top of a fire. Most sit BEHIND the card; a few pass in FRONT of it,
@@ -281,14 +281,14 @@ local EMBER_FADE_OUT = 0.3
 local EMBER_DIM_TRANSPARENCY = 0.5
 
 -- Text caps so a 4K desktop does not blow the copy up with the card.
-local TITLE_MAX_TEXT_SIZE = 22
-local RARITY_MAX_TEXT_SIZE = 20
-local DESCRIPTION_MAX_TEXT_SIZE = 15
+local TITLE_MAX_TEXT_SIZE = 21
+local RARITY_MAX_TEXT_SIZE = 19
+local DESCRIPTION_MAX_TEXT_SIZE = 14
 -- Phones only (ScreenSizes.Mobile: touch, no mouse, a short viewport) pin
 -- the title and description to one fixed size each. Tablets, PC and
 -- console keep the scaled text above.
-local PHONE_TITLE_TEXT_SIZE = 11
-local PHONE_DESCRIPTION_TEXT_SIZE = 8
+local PHONE_TITLE_TEXT_SIZE = 10
+local PHONE_DESCRIPTION_TEXT_SIZE = 7
 
 -- The KEYWORD TOOLTIPS: one plate per hoverable keyword in the card's
 -- description (getRelicKeywords), stacked in a UIListLayout column that
@@ -313,13 +313,13 @@ local TOOLTIP_ROW_HEIGHT = 0.17
 local TOOLTIP_ROW_GAP = 0.028
 -- A dark plate per row, not bare text: the column sits over card art and
 -- ember particles, and unplated text is unreadable against the brighter
--- element tints (Frost's 126,253,255, Earth's 255,183,0).
+-- card tints (Legendary's 255,173,41 especially).
 local TOOLTIP_PLATE_COLOR = Color3.fromRGB(10, 10, 14)
 local TOOLTIP_PLATE_TRANSPARENCY = 0.18
 local TOOLTIP_PLATE_PADDING = 0.055
 local TOOLTIP_TEXT_STROKE_TRANSPARENCY = 0.4
 local TOOLTIP_MAX_TEXT_SIZE = 13
-local PHONE_TOOLTIP_TEXT_SIZE = 8
+local PHONE_TOOLTIP_TEXT_SIZE = 7
 -- Each plate starts tucked back toward the card and slides out to 0, so
 -- the column reads as coming OUT of the card rather than appearing beside
 -- it. Fraction of the plate's own width.
@@ -408,12 +408,13 @@ local function OfferCard(props: any)
 	local colors = RarityColors:GetCard(rarity)
 	local iconImage = relicInfo and relicInfo.icon or DEFAULT_ICON
 	local cardImage = relicInfo and CARD_IMAGES[relicInfo.tree] or DEFAULT_CARD_IMAGE
-	local cardTint = if rarity == ItemRarity.Cursed
-		then CURSED_CARD_TINT
-		else (relicInfo and CARD_TINTS[relicInfo.tree] or DEFAULT_CARD_TINT)
+	-- One colour for the whole card -- frame tint, strokes, ring, embers --
+	-- and it is the TIER's (Cursed is authored pure red in the palette).
+	local cardTint = colors.tint
 
 	local slotRef = React.useRef(nil)
 	local tooltipRef = React.useRef(nil)
+	local descriptionRef = React.useRef(nil)
 	local groupRef = React.useRef(nil)
 	local bobRef = React.useRef(nil)
 	local offsetRef = React.useRef(nil)
@@ -632,6 +633,32 @@ local function OfferCard(props: any)
 			end
 		end
 
+		-- The description fades in a beat after the deal; it is rendered
+		-- transparent, so a card that is never dealt never shows it.
+		local function revealDescription()
+			local label = descriptionRef.current
+			if not label then
+				return
+			end
+			label.TextTransparency = 1
+			label.TextStrokeTransparency = 1
+			task.delay(DESCRIPTION_REVEAL_DELAY, function()
+				if not alive or descriptionRef.current ~= label then
+					return
+				end
+				TweenService:Create(label, DESCRIPTION_REVEAL_TWEEN, {
+					TextTransparency = 0,
+					TextStrokeTransparency = DESCRIPTION_STROKE_TRANSPARENCY,
+				}):Play()
+			end)
+		end
+
+		-- The keyword column alone: the chosen card keeps its lit stroke
+		-- and lift while its tooltips leave with it.
+		local function hideTooltip()
+			setTooltip(false)
+		end
+
 		-- The light sweep: the streak's gradient slides across once.
 		local function sweep()
 			local sweepFrame = sweepRef.current
@@ -824,6 +851,8 @@ local function OfferCard(props: any)
 			setHover = setHover,
 			setDim = setDim,
 			brightenStroke = brightenStroke,
+			revealDescription = revealDescription,
+			hideTooltip = hideTooltip,
 			sweep = sweep,
 			flash = flash,
 			shockwave = shockwave,
@@ -1190,6 +1219,7 @@ local function OfferCard(props: any)
 							}),
 
 							Description = React.createElement("TextLabel", {
+								ref = descriptionRef,
 								AnchorPoint = Vector2.new(0.5, 0),
 								Position = UDim2.fromScale(0.5, 0.735),
 								Size = UDim2.fromScale(0.741272, 0.220031),
@@ -1198,7 +1228,9 @@ local function OfferCard(props: any)
 								RichText = true,
 								TextColor3 = TEXT_COLOR,
 								TextStrokeColor3 = TEXT_STROKE_COLOR,
-								TextStrokeTransparency = 0.5,
+								-- Dealt transparent; revealDescription fades it in.
+								TextTransparency = 1,
+								TextStrokeTransparency = 1,
 								FontFace = FONT_BOLD,
 								TextScaled = true,
 								TextWrapped = true,

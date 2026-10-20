@@ -2,8 +2,8 @@
 --[[
 	Module: AuraServer/Stonebound.lua
 	Description:
-	Stonebound (Earth): +10% Damage and +10% Damage Reduction for its
-	holder, enlargeable by the OWNER's relics (payload arrives computed
+	Stonebound (Earth): more Damage and Damage Reduction for its holder
+	(AuraData owns both -- 0.15 / 0.15 after the 2026-10 shift), enlargeable by the OWNER's relics (payload arrives computed
 	from AuraService). ONE instance per target across owners — the
 	replace-if-stronger decision already happened in SetAura before this
 	module runs.

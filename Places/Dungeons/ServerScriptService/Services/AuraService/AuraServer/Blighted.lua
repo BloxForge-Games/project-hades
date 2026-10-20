@@ -2,8 +2,8 @@
 --[[
 	Module: AuraServer/Blighted.lua
 	Description:
-	Blighted (Venom): +15% Status Chance while up (AuraData owns the
-	magnitude; StatusConditionService reads the marker).
+	Blighted (Venom): bonus damage per distinct Status on the target while
+	up (AuraData owns the rate; DamageService reads the marker).
 
 	CUSTOM rig, per the authored asset (GameAssets.Auras.Blighted holds
 	five particles):

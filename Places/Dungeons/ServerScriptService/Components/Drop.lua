@@ -16,6 +16,22 @@ local LifeService = require(ServerScriptService.Services.LifeService)
 local DESTROY_DELAY = 25
 local MANA_DESTROY_DELAY = 10
 
+-- The one emitter DropData `particleScale` resizes (Base.Attachment.Shine);
+-- the drop sparkle and the Collected burst keep their authored size.
+local SHINE_EMITTER_NAME = "Shine"
+
+-- Multiplies every keypoint of a NumberSequence (and its envelope).
+local function scaleSequence(sequence: NumberSequence, factor: number): NumberSequence
+	local keypoints = {}
+	for _, keypoint in sequence.Keypoints do
+		table.insert(
+			keypoints,
+			NumberSequenceKeypoint.new(keypoint.Time, keypoint.Value * factor, keypoint.Envelope * factor)
+		)
+	end
+	return NumberSequence.new(keypoints)
+end
+
 local collectedRouter = InstanceRouter.Server(DungeonNetwork.CoinDropCollected)
 
 local Drop = Component.new({
@@ -34,12 +50,18 @@ function Drop:Start()
 	self.Instance.PrimaryPart.BillboardGui.Image.ImageColor3 = DropData[self._dropType].color
 	self.Instance.PrimaryPart.BillboardGui.Size = DropData[self._dropType].size
 
+	-- DropData `particleScale` (1 / absent = authored) resizes the Shine
+	-- emitter only.
+	local particleScale = DropData[self._dropType].particleScale or 1
 	for _, descendant in self.Instance:GetDescendants() do
 		if not descendant:IsA("ParticleEmitter") then
 			continue
 		end
 
 		descendant.Color = ColorSequence.new(DropData[self._dropType].color)
+		if particleScale ~= 1 and descendant.Name == SHINE_EMITTER_NAME then
+			descendant.Size = scaleSequence(descendant.Size, particleScale)
+		end
 	end
 
 	-- Update drop image if updated

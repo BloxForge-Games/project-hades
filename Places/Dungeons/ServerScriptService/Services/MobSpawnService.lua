@@ -22,23 +22,23 @@ local SPAWN_DELAY = 0.5
 -- Combat-room queue tuning. Each combat CHUNK, at ACTIVATION time (first
 -- player crossing in), snapshots the player count and builds:
 --   * a total QUEUE of mobs it will spawn over its lifetime:
---         QUEUE_SEGMENT_ONE + ((combatSegmentIndex - 1) × QUEUE_PER_SEGMENT)
---                           + (players × QUEUE_PER_PLAYER)
---     where combatSegmentIndex is the room's dungeon-wide COMBAT SEGMENT
+--         QUEUE_PER_ROOM[combatSegmentIndex] + ((players - 1) × QUEUE_PER_PLAYER)
+--     where combatSegmentIndex is the room's FLOOR-wide COMBAT SEGMENT
 --     ordinal, stamped at generation by DungeonGenerator. Miniboss/Boss and
---     Treasure/Shrine segments do NOT consume an ordinal, so the ramp
---     stays continuous across the miniboss.
+--     Treasure/Shrine segments do NOT consume an ordinal, so the ladder
+--     runs straight across the miniboss; past the ladder's end the last
+--     entry repeats. Every floor is a fresh generation, so the ladder
+--     RESETS per floor (design call, 2026-10).
 --
 --     The ordinal counts SEGMENTS, not chunks. DungeonData's
 --     chunksPerRoom explodes each Combat segment into 2-3 physical rooms,
---     and every chunk of one segment fields the SAME queue — a 3-chunk
---     segment 1 is three separate 8-mob fights, not 8 then 9 then 10.
---     Solo, that ladders 8/9/10/.../15 across Normal's eight combat
---     segments.
+--     and every chunk of one segment fields the SAME queue — solo, the
+--     authored floor is 5, 7 | miniboss | 9, 12 per chunk, 2 chunks before
+--     the miniboss and 3 after: 87 mobs a floor.
 --   * a CONCURRENT cap of how many can be alive in the chunk at once:
 --         CONCURRENT_BASE + (players × CONCURRENT_PER_PLAYER)
---     clamped at CONCURRENT_MAX (4 base, +2/player → 6 solo, 12 at 4
---     players) — the anti-swarm clamp.
+--     clamped at CONCURRENT_MAX (5 base, +1/player → 6 solo, 9 at 4
+--     players; design call 2026-10) — the anti-swarm clamp.
 -- Both are FROZEN at activation: a player dying or leaving mid-room
 -- never shrinks the room's budget. A per-room thread tops the room back
 -- up to the concurrent cap from the queue as mobs die, until the
@@ -46,15 +46,13 @@ local SPAWN_DELAY = 0.5
 -- room's queue is exhausted AND every spawned mob is dead
 -- (DungeonService:_areSegmentMobsCleared).
 -- DEFAULTS. Every dungeon overrides these through DungeonData[id].mobQueue
--- (segmentOne / perSegment / perPlayer, optional concurrent*), read at chunk
--- activation via _queueTuning -- so deeper dungeons of a run field bigger
--- queues through their data, not a carried ordinal. Rooms with no active
--- dungeon (hand-placed test rooms) fall back to these.
-local QUEUE_SEGMENT_ONE = 5 -- first combat segment, BEFORE the player term
-local QUEUE_PER_SEGMENT = 4
+-- (perRoom / perPlayer, optional concurrent*), read at chunk activation
+-- via _queueTuning. Rooms with no active dungeon (hand-placed test rooms)
+-- fall back to these.
+local QUEUE_PER_ROOM = { 5, 7, 9, 11 }
 local QUEUE_PER_PLAYER = 2
-local CONCURRENT_BASE = 4
-local CONCURRENT_PER_PLAYER = 2
+local CONCURRENT_BASE = 5
+local CONCURRENT_PER_PLAYER = 1
 local CONCURRENT_MAX = 12
 local QUEUE_POLL_SECONDS = 0.5
 local QUEUE_START_DELAY = 1 -- matches the old pre-spawn beat after gate crossing
@@ -135,10 +133,12 @@ end
 
 --[ Per-dungeon mob pool ]--
 
--- ReplicatedStorage.GameAssets.Mobs.<assetFolder> -- each dungeon has its
--- own folder of mob templates, named by its DungeonData assetFolder. Falls back to the flat Mobs folder (with
--- a warn) so a missing folder degrades to "same mobs everywhere" instead
--- of a dead dungeon.
+-- ReplicatedStorage.GameAssets.Mobs.<assetFolder>.Dungeon<floor> -- each
+-- dungeon has its own folder of mob templates, named by its DungeonData
+-- assetFolder, with one subfolder per floor (the floor's recolours). A
+-- missing floor folder falls back to the biome folder, a missing biome
+-- folder to the flat Mobs folder (with a warn), so a gap degrades to
+-- "same mobs everywhere" instead of a dead dungeon.
 function MobSpawnService._mobFolder(_self: typeof(MobSpawnService), dungeonId: string?): Instance
 	local root = ReplicatedStorage.GameAssets.Mobs
 	if dungeonId then
@@ -146,7 +146,10 @@ function MobSpawnService._mobFolder(_self: typeof(MobSpawnService), dungeonId: s
 		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
 		local folder = root:FindFirstChild(folderName)
 		if folder then
-			return folder
+			local dungeonService = Blitz.OptionalService("DungeonService")
+			local floor = if dungeonService then dungeonService:GetFloor() else 1
+			local floorFolder = folder:FindFirstChild(("Dungeon%d"):format(floor))
+			return floorFolder or folder
 		end
 		warn(("[MobSpawnService] No mob folder GameAssets.Mobs.%s -- using the flat folder"):format(folderName))
 	end
@@ -179,8 +182,7 @@ function MobSpawnService._queueTuning(self: typeof(MobSpawnService))
 	local config = dungeonId and DungeonData[dungeonId]
 	local tuning = config and config.mobQueue or {}
 	return {
-		segmentOne = tuning.segmentOne or QUEUE_SEGMENT_ONE,
-		perSegment = tuning.perSegment or QUEUE_PER_SEGMENT,
+		perRoom = tuning.perRoom or QUEUE_PER_ROOM,
 		perPlayer = tuning.perPlayer or QUEUE_PER_PLAYER,
 		concurrentBase = tuning.concurrentBase or CONCURRENT_BASE,
 		concurrentPerPlayer = tuning.concurrentPerPlayer or CONCURRENT_PER_PLAYER,
@@ -445,10 +447,12 @@ function MobSpawnService.SpawnMobsInRoom(self: typeof(MobSpawnService), room)
 	-- (hand-spawned test rooms).
 	local combatSegmentIndex = room.combatSegmentIndex or 1
 	local tuning = self:_queueTuning()
+	-- The authored per-room ladder (DungeonData mobQueue.perRoom), the last
+	-- rung repeating past its end; the party term is for every player
+	-- PAST the first, so solo fields exactly the authored number.
+	local ladder = tuning.perRoom
 	local queue = {
-		remaining = tuning.segmentOne
-			+ ((combatSegmentIndex - 1) * tuning.perSegment)
-			+ (playerCount * tuning.perPlayer),
+		remaining = ladder[math.min(combatSegmentIndex, #ladder)] + ((playerCount - 1) * tuning.perPlayer),
 		concurrentCap = math.min(
 			tuning.concurrentBase + (playerCount * tuning.concurrentPerPlayer),
 			tuning.concurrentMax

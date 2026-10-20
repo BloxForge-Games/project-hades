@@ -217,7 +217,7 @@ first dependency.
 Minimum viable: Keystone Portal (queue), Blacksmith, Merchant, Arcane Trainer.
 Defer Guildhall, Travelling Salesman, Realm Gate.
 
-**P0.2 — Blacksmith upgrade flow.** `ForgeCrystal` is a currency with a profile
+**P0.2 — Blacksmith upgrade flow. DONE 2026-10-10** — `BlacksmithService` (upgrade with server-rolled success + pity, sell with refund), `BlacksmithData` (cost / chance / sell curves), Forge Crystal as a world drop through the run escrow, and `BlacksmithInterfaceController` (tabs, quote, hammer sweep) behind the TopBar Forge icon. The Hub NPC (P0.1) is a front door onto this. Original note: `ForgeCrystal` is a currency with a profile
 field and a `Forge` dialogue entry, and `computeMainStat` already consumes
 `upgrades` — but nothing spends the currency or increments the field. This is
 the shortest path from "loot drops" to "loot matters", and it needs D4's caps

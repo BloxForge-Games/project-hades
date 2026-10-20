@@ -419,6 +419,8 @@ local function Container(props: any)
 					local move = handle.tweenOffset(UDim2.new(), DEAL_MOVE_TWEEN)
 					handle.tweenScale(1, DEAL_MOVE_TWEEN)
 					tween(handle.alpha, DEAL_FADE_TWEEN, { Value = 0 })
+					-- The text follows the art in, a beat later (OfferCard).
+					handle.revealDescription()
 					move.Completed:Once(function()
 						if offerRef.current == thisOffer then
 							handle.sweep()
@@ -476,6 +478,8 @@ local function Container(props: any)
 			end
 			local rise = handle.tweenOffset(UDim2.fromScale(0, RISE), RISE_TWEEN)
 			tween(handle.alpha, RISE_FADE_TWEEN, { Value = 1 })
+			-- The keyword column leaves with the card instead of lingering.
+			handle.hideTooltip()
 			rise.Completed:Wait()
 			finish(thisOffer)
 		end)

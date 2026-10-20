@@ -1158,6 +1158,12 @@ function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: E
 	self._dataProperty:Set(nil)
 
 	if DungeonService then
+		-- The final floor's boss: the run is WON here, so the next-gate
+		-- marker below is destroyed rather than re-placed on the ExitGate
+		-- (the players have completed the dungeon; the portal is the way out).
+		if kind == ROOM_TYPES.Boss and DungeonService:IsFinalDungeon() then
+			DungeonService:MarkRunCleared()
+		end
 		DungeonService:EmitDungeonDoneEffect(room.model)
 		DungeonService:UpdateNextGateMarker()
 
@@ -1303,16 +1309,23 @@ end
 -- client-side from `label`).
 function EncounterService._lobbyLabel(_self: typeof(EncounterService), kind: string): string
 	if kind == NEXT_DUNGEON_KIND then
+		-- Floors of one dungeon (the normal run): "Descend to Floor N".
+		-- A chain of different dungeons would read "Next Dungeon".
+		local run = DungeonService:GetRun()
+		local nextId = run and run.sequence[run.index + 1]
+		if run and nextId == run.sequence[run.index] then
+			return ("Descend to Floor %d"):format(DungeonService:GetFloor() + 1)
+		end
 		return "Next Dungeon"
 	end
 	return kind .. " Room"
 end
 
--- Run-loop VOTE after a non-final boss: the encounter-lobby pad + timers,
--- placed in front of the boss room's exit gate. Standing on it = voting to
--- descend; expiry (30s, or 3s once everyone remaining is on) ->
--- DungeonService:AdvanceRun. Players who take the ExitPortal are excluded
--- from the required count.
+-- The DESCEND pad after a non-final floor's boss: the encounter-lobby pad
+-- + timers, placed in front of the boss room's exit gate. Standing on it =
+-- ready to descend; expiry (30s, or 3s once everyone remaining is on) ->
+-- DungeonService:AdvanceRun, which tears the floor down and generates the
+-- next one. There is no portal mid-run (no extraction).
 function EncounterService.StartNextDungeonVote(self: typeof(EncounterService), room: Room, gateCFrame: CFrame)
 	self:_startLobby(NEXT_DUNGEON_KIND, room, gateCFrame)
 end

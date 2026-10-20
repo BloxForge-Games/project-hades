@@ -64,6 +64,9 @@ local RunFlowService = {
 local EXIT_GATE_NAME = "ExitGate"
 
 local AUTO_GENERATE_DELAY = 5
+-- The ExitPortal prompt's ActionText (its ObjectText stays as authored,
+-- "Mysterious Portal").
+local EXIT_PORTAL_ACTION_TEXT = "Teleport to Lobby"
 
 -- The run's difficulty when nothing asks otherwise (Studio, a direct join
 -- without teleport data). A request is still clamped to the leader's unlocks.
@@ -128,22 +131,32 @@ function RunFlowService.GenerateDungeon(
 		MobSpawnService:BuildMobPlanForDungeon(dungeonId)
 	end
 
-	-- First floor of the run: the guaranteed shop may only land AFTER the
-	-- Miniboss — players start coin-less, so an early shop sells to nobody.
-	-- Later floors (and no-run Studio generates read index 1 too, matching
-	-- the real game-start experience) roll it anywhere.
+	-- The floor's prefab set is GameAssets.DungeonRooms.<assetFolder>
+	-- .Dungeon<floor> (DungeonGenerator reads DungeonService:GetFloor()).
 	local dungeon = DungeonGenerator:Generate({
 		dungeonId = dungeonId,
 		difficulty = difficulty,
 		seed = seed,
 		originCFrame = originCFrame,
-		forceShopAfterMiniboss = DungeonService:GetRunDungeonIndex() <= 1,
 	})
-	-- Boss rooms: sink the authored ExitPortal out of sight until the boss
-	-- falls (see _prepareExitPortal / _raiseExitPortal).
+	-- Boss rooms: keep the authored ExitPortal buried until the boss falls
+	-- (see _prepareExitPortal / _raiseExitPortal).
+	-- The portal home exists on the FINAL floor only (design call, 2026-10:
+	-- no extraction). Earlier floors' Boss prefabs still carry the authored
+	-- model, so it is removed outright there and the Descend pad is the
+	-- only way on. No run (a bare Studio generate) counts as final.
+	local run = DungeonService:GetRun()
+	local finalFloor = run == nil or DungeonService:IsFinalDungeon()
 	for _, room in dungeon.rooms do
 		if room.roomType == RoomTypes.Boss then
-			self:_prepareExitPortal(room)
+			if finalFloor then
+				self:_prepareExitPortal(room)
+			else
+				local portal = room.model and room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
+				if portal then
+					portal:Destroy()
+				end
+			end
 		end
 	end
 
@@ -181,9 +194,11 @@ function RunFlowService.GenerateDungeon(
 end
 
 -- Starts a fresh RUN over `sequence` (dungeon ids, in order) at
--- `difficulty` / `ascension` for every dungeon in it. A normal run is one
--- dungeon; a longer sequence is the Keystone Trial's chain. Called by the
--- auto-start below.
+-- `difficulty` / `ascension` for every dungeon in it. A normal run is ONE
+-- dungeon repeated once per FLOOR (DifficultyData `floors`: Easy 1,
+-- Normal 2, Hard / Nightmare 3) -- consecutive equal ids are that
+-- dungeon's floors (DungeonService.GetFloor); a chain of different
+-- dungeons would be the Keystone Trial. Called by the auto-start below.
 function RunFlowService.StartRun(
 	self: typeof(RunFlowService),
 	sequence: { string },
@@ -431,6 +446,9 @@ function RunFlowService._raiseExitPortal(self: typeof(RunFlowService), room: Roo
 	local prompt = portal:FindFirstChildWhichIsA("ProximityPrompt", true)
 	if prompt then
 		prompt.Enabled = false
+		-- The prompt's verb: the walk-out is a teleport home, not an
+		-- "interact" (the authored prefab says the latter).
+		prompt.ActionText = EXIT_PORTAL_ACTION_TEXT
 		prompt.Triggered:Connect(function(player: Player)
 			self:_extractPlayer(player)
 		end)
@@ -490,8 +508,9 @@ function RunFlowService._extractPlayer(_self: typeof(RunFlowService), player: Pl
 	end
 end
 
--- Boss rewards have dropped (EncounterService outro done). Final dungeon:
--- fire the hook, spawn nothing. Otherwise: portal + vote pad after a beat.
+-- Boss rewards have dropped (EncounterService outro done). Final floor:
+-- the run is cleared, the hook fires and the portal home rises after a
+-- beat. Otherwise: the Descend pad after a beat.
 function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room: Room?)
 	local run = DungeonService:GetRun()
 	local dungeon = DungeonService:GetActiveDungeon()
@@ -501,6 +520,11 @@ function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room
 
 	local isFinal = DungeonService:IsFinalDungeon()
 	if isFinal then
+		-- The run is WON here (design call, 2026-10: no extraction). From
+		-- this point a death banks the escrow instead of discarding it
+		-- (RunEscrowService); the portal that follows is just the way home.
+		DungeonService:MarkRunCleared()
+		DungeonService:DestroyNextGateMarker()
 		DungeonService.Signals.OnFinalDungeonCompleted:Fire(dungeon, run)
 	end
 
@@ -508,10 +532,11 @@ function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room
 		if DungeonService:GetActiveDungeon() ~= dungeon then
 			return
 		end
-		self:_raiseExitPortal(room)
-
-		-- The vote to move on only exists mid-chain.
-		if not isFinal and EncounterService then
+		if isFinal then
+			self:_raiseExitPortal(room)
+		elseif EncounterService then
+			-- Not the last floor: NO portal (there is no leaving a run
+			-- early), only the Descend pad in front of the exit gate.
 			local gate = room.model:FindFirstChild(EXIT_GATE_NAME)
 			local gateCFrame = (gate and gate:IsA("BasePart") and gate.CFrame) or room.model:GetPivot()
 			EncounterService:StartNextDungeonVote(room, gateCFrame)
@@ -559,6 +584,11 @@ function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dung
 		if DifficultyData.IsValid(debugDifficulty) then
 			requested = debugDifficulty
 			ascension = tonumber(workspace:GetAttribute(DEBUG_ASCENSION_ATTRIBUTE)) or 1
+		else
+			-- No DebugDifficulty attribute: Studio plays EASY, the tier a
+			-- fresh test character is for (live keeps DEFAULT_DIFFICULTY).
+			requested = Difficulty.Easy
+			ascension = 1
 		end
 		return requested, ascension
 	end
@@ -580,6 +610,29 @@ function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dung
 			("[RunFlowService] Requested rank %d clamped to %s's unlocked %d"):format(rank, leader.Name, unlocked)
 		)
 		rank = unlocked
+	end
+	-- PLAYER-LEVEL gate (DifficultyData minPlayerLevel): a Level 8 leader
+	-- cannot queue Hard however many clears they hold. Clamped DOWN like
+	-- the unlock, read off the leader's profile; an unloaded profile is
+	-- warned and skipped, same as the unlock read above.
+	local dataService = Blitz.OptionalService("DataService")
+	local profile = dataService and dataService:GetProfileData(leader)
+	local playerLevel = profile and tonumber(profile.Level)
+	if not playerLevel then
+		warn(("[RunFlowService] Could not read %s's level -- level gate skipped"):format(leader.Name))
+	else
+		local allowed = DifficultyData.HighestRankForPlayerLevel(playerLevel)
+		if rank > allowed then
+			Log.debug(
+				("[RunFlowService] Requested rank %d clamped to %d: %s is Level %d"):format(
+					rank,
+					allowed,
+					leader.Name,
+					playerLevel
+				)
+			)
+			rank = allowed
+		end
 	end
 	return DifficultyData.FromRank(rank)
 end
@@ -606,8 +659,17 @@ function RunFlowService.Start(self: typeof(RunFlowService))
 		local ok, err = pcall(function()
 			local dungeonId = getPlaceDungeonId()
 			local difficulty, ascension = self:_resolveRunDifficulty(dungeonId)
-			Log.debug(("[RunFlowService] Starting %s on %s (ascension %d)"):format(dungeonId, difficulty, ascension))
-			self:StartRun({ dungeonId }, difficulty, ascension, workspace.IgnoreInstances.DungeonSpawnPoint.CFrame)
+			local floors = DifficultyData.Resolve(difficulty, ascension).floors or 1
+			local sequence = table.create(floors, dungeonId)
+			Log.debug(
+				("[RunFlowService] Starting %s on %s (ascension %d), %d floor(s)"):format(
+					dungeonId,
+					difficulty,
+					ascension,
+					floors
+				)
+			)
+			self:StartRun(sequence, difficulty, ascension, workspace.IgnoreInstances.DungeonSpawnPoint.CFrame)
 		end)
 		if not ok then
 			warn("[RunFlowService] Auto-generation failed: " .. tostring(err))

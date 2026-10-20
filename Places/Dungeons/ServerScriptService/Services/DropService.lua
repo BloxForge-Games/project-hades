@@ -5,6 +5,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
@@ -36,6 +37,7 @@ local IS_BOSS_COIN_DROP_DELAY = 0.05
 -- FRACTION and are summed additively at the credit site, so two +% relics
 -- add rather than compound. Dragon Lantern is deliberately NOT here: its
 -- callback returns a full multiplier and it keeps multiplying on top.
+-- Relics whose effect is a bonus FRACTION on Gems pickups.
 local COIN_BONUS_RELICS = {
 	RelicNames["Pot Of Gold"],
 }
@@ -43,6 +45,35 @@ local COIN_BONUS_RELICS = {
 -- Looter enchantment: ×1.10 coin credit when the COLLECTOR has a
 -- Looter-enchanted weapon EQUIPPED (either slot). Reads the persisted
 -- profile so it can't drift from the inventory UI's source of truth.
+-- The run's reward multiplier (DungeonService.GetRewardScale: difficulty
+-- ladder x dungeon rewardScale). 1 with no run (lobby, tests).
+local function difficultyMultiplier(field: string): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	return if dungeonService then dungeonService:GetRewardScale(field) else 1
+end
+
+-- Relic bonuses on currency pickups (Pot Of Gold +25%), summed into one
+-- BONUS fraction. Each magnitude comes from its own callback, so the
+-- numbers live only in RelicData. Applies to Gems AND chest Coins.
+local function getRelicCoinBonus(player: Player): number
+	local bonus = 0
+	for _, relicName in COIN_BONUS_RELICS do
+		if RelicService:GetSpecificRelicRegistry(player, relicName) > 0 then
+			bonus += RelicService:GetRelicEffect(player, relicName) or 0
+		end
+	end
+	return bonus
+end
+
+-- Dragon Lantern (Cursed): x3 Coins and Gems from all sources, both
+-- taxed on hit (DamageService). Callback returns the full multiplier.
+local function getDragonLanternMultiplier(player: Player): number
+	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon Lantern"]) > 0 then
+		return RelicService:GetRelicEffect(player, RelicNames["Dragon Lantern"]) or 1
+	end
+	return 1
+end
+
 local function getLooterCoinMultiplier(player: Player): number
 	local looterConfig = EnchantmentData[EnchantmentNames.Looter]
 	if not looterConfig or not looterConfig.coinMultiplier or not DataService then
@@ -310,63 +341,58 @@ function DropService.Start(self: typeof(DropService))
 	)
 
 	self.OnDropCollected:Connect(function(player: Player, dropType: string, value: number)
-		if dropType == DropTypes.Coins then
-			-- Collector-side coin multipliers, all at credit time so the
-			-- bonus belongs to whoever picks the coin up and lands on the
-			-- full instance value:
-			--   * Explorer set bonus (all 3 Adventurers pieces): ×1.10
-			--     (getter returns 1 when not fully equipped).
-			--   * Looter (equipped enchanted weapon): ×1.10.
-			--   * Pot Of Gold: ×1.35 ("Gain +35% Coins gain" — personal;
-			--     (its drop-chance half left with the rework).
-			-- All compose multiplicatively.
-			-- Read from the callback rather than a hardcoded 1.50 so the number
-			-- lives in exactly one place (RelicData). Callback returns the BONUS
-			-- fraction (0.50), so the multiplier is 1 + it.
-			-- Relic coin bonuses (Pot Of Gold +25%) sum ADDITIVELY into ONE
-			-- multiplier. Each magnitude comes from its own callback (the BONUS
-			-- fraction), so the numbers live only in RelicData.
-			local relicCoinBonus = 0
-			for _, relicName in COIN_BONUS_RELICS do
-				if RelicService:GetSpecificRelicRegistry(player, relicName) > 0 then
-					relicCoinBonus += RelicService:GetRelicEffect(player, relicName) or 0
-				end
-			end
-			local relicCoinMultiplier = 1 + relicCoinBonus
-			-- Dragon Lantern (Cursed): "+200% more Coins from all sources" -- same
-			-- credit-time site as Pot Of Gold, so the run-coin readout, the 10%
-			-- damage tax and the eventual bank all see the multiplied number.
-			-- (It used to multiply at bank time in CurrencyService, which tripled
-			-- coins earned BEFORE the relic and taxed the un-tripled value.)
-			-- Callback returns the full multiplier (3).
-			local dragonLanternMultiplier = 1
-			if RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon Lantern"]) > 0 then
-				dragonLanternMultiplier = RelicService:GetRelicEffect(player, RelicNames["Dragon Lantern"]) or 1
-			end
+		if dropType == DropTypes.Gems then
+			-- GEMS, the run currency (design call, 2026-10). Collector-side
+			-- multipliers, at credit time so the bonus belongs to whoever
+			-- picks it up and lands on the full instance value:
+			--   * Pot Of Gold (+25% coins and Gems -- personal). Callback
+			--     returns the BONUS fraction; relic bonuses sum into ONE
+			--     multiplier (getRelicCoinBonus).
+			--   * Dragon Lantern (Cursed): x3 Gems and Coins, both taxed on
+			--     hit (DamageService). Callback returns the multiplier.
+			--   * Greater Shrine "Fortune": Gems DROPS only, run-scoped.
+			-- No difficulty or dungeon scale: Gems are fixed everywhere, a
+			-- longer floor just has more mobs.
 			value = math.round(
 				value
-					* ArmorSetBonusService:GetCoinMultiplier(player)
-					* getLooterCoinMultiplier(player)
-					* relicCoinMultiplier
-					* dragonLanternMultiplier
-					-- Greater Shrine "Fortune": coin DROPS only, run-scoped.
+					* (1 + getRelicCoinBonus(player))
+					* getDragonLanternMultiplier(player)
 					* (1 + PlayerStatsService:GetGreaterShrineEffect(player, "Coin"))
 			)
-
-			-- Death economy: run coins go to the ESCROW, not the profile —
-			-- banked on dungeon clear, lost on death/disconnect
+			RunEscrowService:AddGems(player, value)
+			self.OnCoinCollected:Fire(player.Name, value)
+		elseif dropType == DropTypes.Coins then
+			-- COINS, permanent Gold: the miniboss / boss chests only
+			-- (EncounterChestService splits DifficultyData `chestCoins`).
+			-- Bonuses:
+			--   * Pot Of Gold (+25% Coins and Gems, getRelicCoinBonus).
+			--   * Dragon Lantern (x3 Coins and Gems, taxed on hit).
+			--   * Explorer set bonus (all 3 Adventurers pieces): x1.10.
+			--   * Looter (equipped enchanted weapon): x1.10.
+			--   * The dungeon's rewardScale (DungeonService.GetRewardScale:
+			--     +50% per dungeon tier; the difficulty's take is already in
+			--     the chest row).
+			value = math.round(
+				value
+					* (1 + getRelicCoinBonus(player))
+					* getDragonLanternMultiplier(player)
+					* ArmorSetBonusService:GetCoinMultiplier(player)
+					* getLooterCoinMultiplier(player)
+					* difficultyMultiplier("gold")
+			)
+			-- Death economy: run coins go to the ESCROW, not the profile --
+			-- banked on the walk out, lost on death / disconnect
 			-- (RunEscrowService). Multipliers apply here at collect time so
 			-- the escrowed number is already final.
 			RunEscrowService:AddCoins(player, value)
-			-- Fires the coin collected signal for any client-side effects (like text indicators)
 			self.OnCoinCollected:Fire(player.Name, value)
-			--DataService:SetNumericalProfileData(player, ProfileTemplateIndex.Coins, value)
-			-- self.OnCoinCollected:Fire(player, value)
-		elseif dropType == DropTypes.ForgeCrystal then
+		elseif dropType == DropTypes.ForgeOre then
 			-- Escrowed like coins: banked to the profile on clear
-			-- (RunEscrowService.BankAll), lost on death. No multipliers --
-			-- it is the Blacksmith's gating resource, not an economy stat.
-			RunEscrowService:AddForgeCrystal(player, value)
+			-- (RunEscrowService.BankAll), lost on death. Chests only; the
+			-- dungeon's rewardScale is the ONLY multiplier -- no relic or
+			-- set bonus touches it, it is the Blacksmith's gating resource
+			-- rather than an economy stat.
+			RunEscrowService:AddForgeOre(player, math.round(value * difficultyMultiplier("ore")))
 		elseif dropType == DropTypes.Mana then
 			playOrbPickupVFX(player, dropType)
 

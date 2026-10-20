@@ -82,10 +82,10 @@ local COLLECT_RELIC_CHARACTER_VFX_NAME = "CollectRelicVFXCharacter"
 -- Same lingering as the vending collect (Client/Components/Relic).
 local COLLECT_RELIC_VFX_LIFETIME_SCALE = 1.5
 local COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE = 2
--- The merchant's price, on the stall nameplate's owner line. Gold, the
--- same colour the price already uses on the relic card's description.
-local STALL_PRICE_COLOR = Color3.fromRGB(255, 170, 0)
-local STALL_PRICE_FORMAT = "(%d Gold)"
+-- The merchant's price, in Gems (the run currency), on the stall
+-- nameplate's owner line, in the reward green the HUD uses for gains.
+local STALL_PRICE_COLOR = Color3.fromRGB(85, 255, 127)
+local STALL_PRICE_FORMAT = "(%d Gems)"
 
 -- Stall-display particle tints — the RelicParticleAttachment set ONLY
 -- (nameplate text and the RarityGlow PointLight keep the standard

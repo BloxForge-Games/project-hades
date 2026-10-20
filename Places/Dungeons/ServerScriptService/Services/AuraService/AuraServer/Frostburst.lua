@@ -2,8 +2,8 @@
 --[[
 	Module: AuraServer/Frostburst.lua
 	Description:
-	Frostburst (Frost): +30% Magic Damage while up (AuraData owns the
-	magnitude; the AuraDamage module reads the marker).
+	Frostburst (Frost): more Magic Damage while up (AuraData owns the
+	magnitude -- 0.30 after the 2026-10 shift; the AuraDamage module reads the marker).
 
 	CUSTOM rig, per the design call: every ParticleEmitter authored under
 	GameAssets.Auras.Frostburst is cloned into EVERY BasePart of the

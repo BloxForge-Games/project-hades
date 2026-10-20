@@ -877,7 +877,8 @@ function GearDropService._fireSingleDrop(
 	player: Player,
 	originPosition: Vector3,
 	entry: { name: string, type: string, weight: number },
-	fromChest: boolean?
+	fromChest: boolean?,
+	rolledRarity: string?
 ): string?
 	local gearData = self:_getGearData(entry.name, entry.type)
 
@@ -906,6 +907,9 @@ function GearDropService._fireSingleDrop(
 	local rarity
 	if gearData and gearData.rarity then
 		rarity = gearData.rarity
+	elseif rolledRarity then
+		-- DropGear rolled it before choosing the pool (the Legendary gate).
+		rarity = rolledRarity
 	else
 		local weights = self:_getActiveRarityWeights()
 		rarity = rollItemRarity(weights or {}, ItemRarity.Common)
@@ -1001,21 +1005,30 @@ function GearDropService.DropGear(
 	local uuids: { string } = {}
 	for slot = 1, dropCount do
 		if fromChest then
-			-- Yielding is safe here: the only chest caller is
-			-- EncounterChestService:_openChest, which runs inside a
-			-- ProximityPrompt.Triggered handler and so has its own coroutine.
-			-- The coin payout that follows it is delayed by the same total,
-			-- which reads as gear first, then coins.
 			task.wait(CHEST_DROP_STAGGER_SECONDS)
 		end
-		local candidates = table.clone(pool)
+		-- Rarity FIRST, then the pool it selects from: a Legendary roll draws
+		-- from the dungeon's own legendaryPool (its uniques, pinned
+		-- Legendary in their data), never from the common pool -- a
+		-- Legendary Wooden Bat cannot exist (GDD). A dungeon with no uniques
+		-- yet downgrades the roll to Epic rather than dropping nothing.
+		local rolledRarity = rollItemRarity(self:_getActiveRarityWeights() or {}, ItemRarity.Common)
+		local slotPool = pool
+		if rolledRarity == ItemRarity.Legendary then
+			if dropConfig.legendaryPool and #dropConfig.legendaryPool > 0 then
+				slotPool = dropConfig.legendaryPool
+			else
+				rolledRarity = ItemRarity.Epic
+			end
+		end
+		local candidates = table.clone(slotPool)
 		local uuid: string? = nil
-		for _ = 1, #pool do
+		for _ = 1, #slotPool do
 			local entry = self:_rollFromPool(candidates)
 			if not entry then
 				break
 			end
-			uuid = self:_fireSingleDrop(player, originPosition, entry, fromChest)
+			uuid = self:_fireSingleDrop(player, originPosition, entry, fromChest, rolledRarity)
 			if uuid then
 				break
 			end

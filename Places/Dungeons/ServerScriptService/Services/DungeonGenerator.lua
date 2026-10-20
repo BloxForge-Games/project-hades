@@ -41,14 +41,12 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 type Room = DungeonService.Room
 type Dungeon = DungeonService.Dungeon
 
--- What Generate needs to place one floor. `forceShopAfterMiniboss` is the
--- Planner's first-floor rule (RunFlowService decides it from the run index).
+-- What Generate needs to place one floor.
 export type GenerateDescriptor = {
 	dungeonId: string,
 	difficulty: string,
 	seed: number?,
 	originCFrame: CFrame?,
-	forceShopAfterMiniboss: boolean?,
 }
 
 local DungeonGenerator = {
@@ -103,7 +101,6 @@ local GENERATION_YIELD_EVERY_PLACEMENTS = 8
 local EVENT_POOL_NAME = "Event"
 -- The Planner forces one Event slot per floor to this prefab; placement
 -- keeps it to AT MOST one (see the merchant rule in the placement loop).
-local MERCHANT_SHOP_PREFAB_NAME = "MerchantShop"
 local ROOM_ATTRIBUTE = "RoomId" -- set on each room model so encounter systems can map back to room data
 local WALLS_PARENT_FOLDER = workspace.IgnoreInstances.Map.DungeonRooms.Walls
 
@@ -138,7 +135,11 @@ function DungeonGenerator._getPrefabRoot(self: typeof(DungeonGenerator)): Folder
 		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
 		local perDungeon = root:FindFirstChild(folderName)
 		if perDungeon then
-			return perDungeon
+			-- One subfolder per FLOOR (Dungeon1 / Dungeon2 / Dungeon3, the
+			-- floor's recoloured set); a floor without one uses the biome's.
+			local floor = DungeonService:GetFloor()
+			local perFloor = perDungeon:FindFirstChild(("Dungeon%d"):format(floor))
+			return perFloor or perDungeon
 		end
 		warn(
 			("[DungeonGenerator] No prefab folder GameAssets.DungeonRooms.%s -- using the flat folder"):format(
@@ -189,7 +190,8 @@ function DungeonGenerator._pickPrefabExcluding(
 	self: typeof(DungeonGenerator),
 	poolName: string,
 	excluded: { [Model]: true },
-	rng: Random
+	rng: Random,
+	excludedNames: { string }?
 ): Model?
 	local root = self:_getPrefabRoot()
 	if not root then
@@ -199,10 +201,13 @@ function DungeonGenerator._pickPrefabExcluding(
 	if not folder then
 		return nil
 	end
+	-- `excludedNames` (the Planner's per-node rule, e.g. no second shop on
+	-- the first floor) drops those prefabs from the pool outright, so the
+	-- remaining weights renormalise over what is left.
 	local available: { Model } = {}
 	for _, prefab in folder:GetChildren() do
 		local prefabModel = prefab :: Model
-		if not excluded[prefabModel] then
+		if not excluded[prefabModel] and not (excludedNames and table.find(excludedNames, prefabModel.Name)) then
 			table.insert(available, prefabModel)
 		end
 	end
@@ -554,7 +559,7 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 
 	self._generatingDungeonId = dungeonId
 
-	local plan = Planner.Plan(dungeonId, difficulty, resolvedSeed, descriptor.forceShopAfterMiniboss)
+	local plan = Planner.Plan(dungeonId, difficulty, resolvedSeed, DungeonService:GetFloor())
 	local rng = Random.new(resolvedSeed)
 	local runtimeFolder = self:_ensureRuntimeFolder()
 
@@ -642,61 +647,14 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 			task.wait()
 		end
 	end
-	-- The Planner's forced MerchantShop slot could not fit the prefab: the
-	-- force rolls forward to the next Event slot (see below) instead of
-	-- silently leaving the floor without a shop.
-	local shopCarryOver = false
-
 	while slotIdx <= #plan.rooms do
 		local slot = slots[slotIdx]
 		local node = plan.rooms[slotIdx]
-
-		-- Planner exclusion (floor 1's non-shop Event slots): pre-mark the
-		-- blocked prefab as already-tried so the picker below can never
-		-- roll it. Re-marked on every visit, so backtracking that resets
-		-- the tried set cannot resurrect it.
-		if node.blockedPrefabName then
-			local blocked = self:_findPrefabByName(node.prefabPool, node.blockedPrefabName)
-			if blocked then
-				slot.tried[blocked] = true
-			end
-		end
-
-		-- AT MOST ONE MerchantShop per floor, whichever Event slot it lands
-		-- in. The Planner forces one slot to the shop; the OTHER slot rolls
-		-- the pool and could roll a second shop by luck (its EventWeights
-		-- share), which read as "two merchants most floors". So: if an
-		-- earlier slot already holds the shop, this slot's shop force is
-		-- dropped (it rolls the pool like any event) and the shop is
-		-- excluded from that roll. Read per visit off the placed slots, so
-		-- a backtrack that removes the earlier shop restores the guarantee
-		-- here, and the Planner's node is never mutated.
+		-- A forced prefab is the Planner's guaranteed MerchantShop event or
+		-- its DEBUG first-room pin; other events roll EventWeights freely,
+		-- repeats included, minus the node's excludedPrefabNames (the first
+		-- floor's free events never roll a second shop).
 		local forcedPrefabName = node.forcedPrefabName
-		if node.roomType == RoomTypes.Event then
-			-- An earlier forced slot failed to seat the shop: this slot takes
-			-- the force, unless the Planner blocked the shop here (floor 1's
-			-- pre-Miniboss event).
-			if shopCarryOver and node.blockedPrefabName ~= MERCHANT_SHOP_PREFAB_NAME then
-				forcedPrefabName = MERCHANT_SHOP_PREFAB_NAME
-			end
-			local merchantPlacedBefore = false
-			for i = 1, slotIdx - 1 do
-				if slots[i].prefabName == MERCHANT_SHOP_PREFAB_NAME then
-					merchantPlacedBefore = true
-					break
-				end
-			end
-			if merchantPlacedBefore then
-				if forcedPrefabName == MERCHANT_SHOP_PREFAB_NAME then
-					forcedPrefabName = nil
-				end
-				local merchant = self:_findPrefabByName(node.prefabPool, MERCHANT_SHOP_PREFAB_NAME)
-				if merchant then
-					slot.tried[merchant] = true
-				end
-			end
-		end
-
 		-- Where does this slot snap from?
 		local prevExitAnchor: Instance?
 		if slotIdx == 1 then
@@ -717,10 +675,9 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		local exitAnchorCFrame = self:_anchorCFrame(prevExitAnchor) :: CFrame
 
 		-- Try every untried variant until one fits. A node carrying a
-		-- forcedPrefabName (the Planner's shop guarantee) tries THAT model
-		-- first; if it cannot fit — collision on every approach — the slot
-		-- falls back to the general pool rather than failing the floor, and
-		-- the guarantee degrades gracefully instead of wedging generation.
+		-- forcedPrefabName (the guaranteed shop, or the Planner's DEBUG pin)
+		-- tries THAT model first; if it cannot fit the slot falls back to
+		-- the general pool.
 		local placed = false
 		while true do
 			local prefab: Model?
@@ -738,7 +695,7 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 					forcedPrefabName = nil
 				end
 			end
-			prefab = prefab or self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
+			prefab = prefab or self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng, node.excludedPrefabNames)
 			if not prefab then
 				break
 			end
@@ -763,14 +720,6 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		end
 
 		if placed then
-			if slot.prefabName == MERCHANT_SHOP_PREFAB_NAME then
-				shopCarryOver = false
-			elseif forcedPrefabName == MERCHANT_SHOP_PREFAB_NAME then
-				-- The shop was forced here and could not fit: carry the
-				-- guarantee to the next Event slot.
-				shopCarryOver = true
-			end
-
 			-- Optional branch off this room. Best-effort: if it can't fit, skip
 			-- silently — branches don't affect downstream chain placement.
 			--
@@ -827,20 +776,8 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		elseif backtracks >= MAX_BACKTRACKS then
 			-- Safety net: stop backtracking, force-place this slot and continue.
 			collisionsForced += 1
-			-- Honour the slot's exclusions (floor-1 shop block, the one-shop
-			-- rule) here too; the bare uniform pick is only the last resort.
 			local fp = self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
-			if not fp then
-				-- Last resort: any prefab -- but never a SECOND shop. The
-				-- bare uniform pick below ignored the one-shop rule, and a
-				-- floor that backtracked this far could seat two merchants.
-				local shopOnly: { [Model]: true } = {}
-				local merchant = self:_findPrefabByName(node.prefabPool, MERCHANT_SHOP_PREFAB_NAME)
-				if merchant and slot.tried[merchant] then
-					shopOnly[merchant] = true
-				end
-				fp = self:_pickPrefabExcluding(node.prefabPool, shopOnly, rng) or self:_pickPrefab(node.prefabPool, rng)
-			end
+				or self:_pickPrefab(node.prefabPool, rng)
 			local forcedPrefab = fp :: Model
 			local forcedModel = self:_snapPrefab(forcedPrefab, ENTRY_ANCHOR_NAME, exitAnchorCFrame, runtimeFolder)
 			countPlacement()
@@ -963,8 +900,7 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	-- spawns the first room's mobs and advances every player to room 1.
 	GateService:SetupGateTrigger(startModel, 1)
 
-	-- Which events this floor seated, in sequence order: the fastest way to
-	-- see whether the one-shop rule held on a given seed.
+	-- Which events this floor seated, in sequence order.
 	local eventNames = {}
 	for _, placedRoom in roomsList do
 		if placedRoom.roomType == RoomTypes.Event and placedRoom.model then
@@ -972,14 +908,6 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		end
 	end
 	Log.debug(("[DungeonGenerator] Events this floor: %s"):format(table.concat(eventNames, ", ")))
-	if not table.find(eventNames, MERCHANT_SHOP_PREFAB_NAME) then
-		warn(
-			"[DungeonGenerator] No MerchantShop this floor: the forced Event slot could not fit the prefab "
-				.. "and no later Event slot could take it (seed "
-				.. tostring(resolvedSeed)
-				.. ")"
-		)
-	end
 
 	Log.debug(
 		("[DungeonGenerator] Generated %s/%s with %d rooms (seed %d, %d backtracks, %d forced)"):format(

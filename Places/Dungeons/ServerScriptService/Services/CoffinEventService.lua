@@ -604,14 +604,14 @@ end
 --[ Public ]--
 
 -- Drops the Event Chest batch (one per living player) with the active
--- difficulty's coffin coin row. Shared by the win path and the /drop
+-- difficulty's coffin Gems row. Shared by the win path and the /drop
 -- eventchest debug command. Returns false when the chest service is
 -- unavailable, so the caller can open the door itself.
 function CoffinEventService.DropRewardChests(_self: typeof(CoffinEventService), onAllOpened: (() -> ())?): boolean
 	if not EncounterChestService then
 		return false
 	end
-	EncounterChestService:DropChestsForEncounter(EnemyTypes.Event, CHEST_MOB_NAME, onAllOpened, activeTuning().coins)
+	EncounterChestService:DropChestsForEncounter(EnemyTypes.Event, CHEST_MOB_NAME, onAllOpened, activeTuning().gems)
 	return true
 end
 

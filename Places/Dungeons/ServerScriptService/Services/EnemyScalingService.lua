@@ -14,10 +14,11 @@
 	    mob at 5% stays at 5% and never dies (or heals to full) because the
 	    party changed shape.
 
-	The multiplier is (1 + active players) x the run's difficulty health
-	(DifficultyData), so solo Normal is 2x base, duo 3x, ...: the curve the
-	base numbers were tuned against; the same curve applies to
-	mobs, minibosses and bosses alike. "Active" is LifeService's count:
+	The multiplier is (1 + 0.5 x (active players - 1)) x the run's
+	difficulty health x the floor's growth (DifficultyData): solo Normal
+	floor 1 is 1x base, duo 1.5x, trio 2x, a full party 2.5x (design call,
+	2026-10: each extra player adds half a mob's worth). The same curve
+	applies to mobs, minibosses and bosses alike. "Active" is LifeService's count:
 	alive or DOWNED (a downed player may yet buy a revive); fully dead
 	players no longer count, which is why a party of two fighting a boss
 	sees it shrink the moment one of them is truly gone.
@@ -52,13 +53,22 @@ end
 -- is reached at call time (this service is a consumer of it).
 local function difficultyHealthMultiplier(): number
 	local dungeonService = Blitz.OptionalService("DungeonService")
-	return if dungeonService then dungeonService:GetDifficultyScale().enemyHealth else 1
+	if not dungeonService then
+		return 1
+	end
+	-- The tier's multiplier x the floor's (+10% per floor past the first).
+	return dungeonService:GetDifficultyScale().enemyHealth * dungeonService:GetFloorMultiplier()
 end
 
--- (1 + active players) x difficulty. `excluding` is a player mid
--- PlayerRemoving, still listed by Players:GetPlayers() while its handlers run.
+-- Health added per active player past the first, as a fraction of base.
+local HEALTH_PER_EXTRA_PLAYER = 0.5
+
+-- (1 + 0.5 x (active players - 1)) x difficulty x floor. `excluding` is a
+-- player mid PlayerRemoving, still listed by Players:GetPlayers() while
+-- its handlers run.
 function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingService), excluding: Player?): number
-	return (1 + LifeService:GetActivePlayerCount(excluding)) * difficultyHealthMultiplier()
+	local extraPlayers = math.max(LifeService:GetActivePlayerCount(excluding) - 1, 0)
+	return (1 + HEALTH_PER_EXTRA_PLAYER * extraPlayers) * difficultyHealthMultiplier()
 end
 
 -- Spawn-time scaling. `baseHealth` is the MobData number (already

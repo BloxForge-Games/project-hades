@@ -402,11 +402,7 @@ type Fields = {
 	_hipHeight: number,
 	_enemyType: string,
 	_agentRadius: number?,
-	_minDropRate: number,
-	_maxDropRate: number,
-	_forgeCrystal: { chance: number, min: number, max: number }?,
-	_minCoins: number,
-	_maxCoins: number,
+	_gems: { minDropRate: number, maxDropRate: number, minGems: number, maxGems: number }?,
 	_idleAnimation: Animation,
 	_runAnimation: Animation,
 	_damagedAnimation: Animation,
@@ -479,13 +475,9 @@ function MobBase.new(model: Model): MobBase
 	self._hipHeight = data.hipHeight
 	self._enemyType = data.enemyType
 	self._agentRadius = data.agentRadius
-	-- Coin scatter, ChestCoinData's vocabulary: DropRate = pickup count
-	-- range, Coins = value-per-pickup range.
-	self._minDropRate = data.minDropRate
-	self._maxDropRate = data.maxDropRate
-	self._minCoins = data.minCoins
-	self._maxCoins = data.maxCoins
-	self._forgeCrystal = data.forgeCrystal
+	-- Gems scatter (MobData `gems`): DropRate = pickup count range,
+	-- Gems = value-per-pickup range. nil on encounter mobs (chest-paid).
+	self._gems = data.gems
 	self._idleAnimation = data.idle
 	self._runAnimation = data.run
 	self._damagedAnimation = data.damaged
@@ -1457,8 +1449,7 @@ function MobBase.OnDeath(self: MobBase)
 				self:_deferEncounterRewards(killer)
 			else
 				self:_dropGear()
-				self:_dropCoins(killer)
-				self:_dropForgeCrystal()
+				self:_dropGems()
 			end
 		end
 	end
@@ -1745,12 +1736,11 @@ end
 -- Encounter-tier mobs (miniboss / boss) pay through the reward chest, not
 -- the corpse -- see the seam note inside. Without EncounterService
 -- (defensive) they drop like a regular mob.
-function MobBase._deferEncounterRewards(self: MobBase, killer)
+function MobBase._deferEncounterRewards(self: MobBase, _killer)
 	if not EncounterService then
 		-- Defensive: no EncounterService → drop immediately.
 		self:_dropGear()
-		self:_dropCoins(killer)
-		self:_dropForgeCrystal()
+		self:_dropGems()
 		return
 	end
 	-- NOTHING drops at the corpse any more. An encounter's gear and coins
@@ -1763,18 +1753,20 @@ function MobBase._deferEncounterRewards(self: MobBase, killer)
 	-- _scheduleDespawn), so _rootPart would still be a valid drop origin.
 end
 
--- GUARANTEED on every mob (design call — the old 25% roll is gone;
--- big mobs were already guaranteed). Same signal shape the treasure
--- chest uses: DropRate = pickup count, Coins = value per pickup.
--- (Pot Of Gold's +25% coins-gain is collector-side at credit time in
--- DropService; its auto-collect is the client Drop component's
--- distance bypass.)
+-- GEMS, the run currency, off every grunt's corpse (MobData `gems`:
+-- DropRate = pickup count, Gems = value per pickup). Shared pickups --
+-- every player banks the full value once. Pot Of Gold / Dragon Lantern /
+-- Fortune multiply collector-side at credit time (DropService).
 --
--- EXCEPT in a Miniboss / Boss room: those pay in relics and gear, not
--- coins. The gate is the ROOM, not the mob, so the adds a miniboss
--- wave spawns are covered too — every mob carries the RoomId its
--- spawner stamped (MobSpawnService).
-function MobBase._dropCoins(self: MobBase, _killer)
+-- EXCEPT in a Miniboss / Boss room: those pay Coins and Forge Ore through
+-- their reward chest (EncounterChestService), not Gems. The gate is the
+-- ROOM, not the mob, so the adds a miniboss wave spawns are covered too
+-- -- every mob carries the RoomId its spawner stamped (MobSpawnService).
+function MobBase._dropGems(self: MobBase)
+	local gems = self._gems
+	if not gems then
+		return
+	end
 	local roomId = self._model:GetAttribute("RoomId")
 	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
 	local room = if dungeon and type(roomId) == "number" then dungeon.roomsById[roomId] else nil
@@ -1784,34 +1776,13 @@ function MobBase._dropCoins(self: MobBase, _killer)
 
 	DropService.OnDropRequested:Fire(
 		self._rootPart,
-		DropTypes.Coins,
-		self._minDropRate,
-		self._maxDropRate,
-		self._minCoins,
-		self._maxCoins,
+		DropTypes.Gems,
+		gems.minDropRate,
+		gems.maxDropRate,
+		gems.minGems,
+		gems.maxGems,
 		false
 	)
-end
-
--- Forge Crystal off the corpse, at this mob's own rate (MobData
--- `forgeCrystal`). Same room guard as coins: encounter mobs pay through
--- their chest (EncounterChestService), so a boss corpse drops nothing here.
-function MobBase._dropForgeCrystal(self: MobBase)
-	local rate = self._forgeCrystal
-	if not rate or rate.chance <= 0 then
-		return
-	end
-	local roomId = self._model:GetAttribute("RoomId")
-	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
-	local room = if dungeon and type(roomId) == "number" then dungeon.roomsById[roomId] else nil
-	if room and (room.roomType == RoomTypes.Miniboss or room.roomType == RoomTypes.Boss) then
-		return
-	end
-	if math.random() > rate.chance then
-		return
-	end
-
-	DropService.OnDropRequested:Fire(self._rootPart, DropTypes.ForgeCrystal, rate.min, rate.max, 1, 1, false)
 end
 
 function MobBase._playDeathSound(self: MobBase)

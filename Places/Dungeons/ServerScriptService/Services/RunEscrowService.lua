@@ -30,10 +30,16 @@
 	OnDungeonCompleted; the claim rides LifeService's
 	OnPlayerLeavingToLobby, fired once the lobby teleport has gone out.
 
-	Run coins have ONE writer, _commitCoins: it writes the escrow table
-	and republishes both mirrors (the EscrowData property and the RunCoins
-	attribute) from it. Every reader outside this module goes through
-	GetCoins.
+	THREE currencies ride the escrow (design call, 2026-10):
+	  * GEMS -- the run currency. Mobs drop them, the Merchant and the
+	    Relic Slot stand spend them, and they are DISCARDED at the bank:
+	    spend or lose. Replicated as `gems` and mirrored onto the
+	    RunGems attribute (Pot O' Gold Sword reads it client-side).
+	  * COINS -- permanent Gold, from the miniboss / boss chests only.
+	    Banked into the profile's Gold on the walk out.
+	  * FORGE ORE -- the Blacksmith's material, chests only, banked too.
+	Every write goes through _commit, which republishes the mirrors, so
+	the table, the EscrowData property and the attribute never disagree.
 
 	Design rules (locked):
 	  * MAX_RUN_ITEMS cap per player per run. A pickup past the cap is
@@ -41,11 +47,12 @@
 	    no discard UI, the first N you grab are your N.
 	  * Run gear is NOT equippable — trophies you're carrying out, not
 	    upgrades. You fight with what you brought in.
-	  * Run coins are pure cargo (nothing spends them mid-run).
+	  * Coins and Ore are pure cargo (nothing spends them mid-run); Gems
+	    are the only thing a run can spend.
 
 	Replication: EscrowData is per-player (SetFor) —
 	  { items = { { gearType, armorSlot?, item = <inventory entry> } },
-	    coins = number }
+	    gems = number, coins = number, forgeOre = number }
 	RunInventoryInterfaceController renders straight from it.
 ]]
 
@@ -65,6 +72,7 @@ local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Inv
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 local RunEscrowService = {
@@ -77,7 +85,7 @@ local RunEscrowService = {
 RunEscrowService._escrowProperty = RemoteProperty.Server({
 	changed = PlayerNetwork.EscrowDataChanged,
 	get = PlayerNetwork.GetEscrowData,
-}, { items = {}, coins = 0, forgeCrystal = 0 })
+}, { items = {}, gems = 0, coins = 0, forgeOre = 0 })
 
 --[ Constants ]--
 
@@ -102,21 +110,30 @@ type EscrowItem = { gearType: string, armorSlot: string?, item: { [string]: any 
 RunEscrowService._escrow = {} :: {
 	[number]: {
 		items: { EscrowItem },
+		gems: number,
 		coins: number,
-		forgeCrystal: number,
+		forgeOre: number,
 	},
 }
 
 --[ Private helpers ]--
 
 -- Read CLIENT-side by Pot O' Gold Sword's runtimeDescriptionCallback (see
--- _replicate). Keep in step with RelicData's RUN_COINS_ATTRIBUTE.
-local RUN_COINS_ATTRIBUTE = "RunCoins"
+-- _replicate). Keep in step with RelicData.
+local RUN_GEMS_ATTRIBUTE = "RunGems"
+
+-- Whether the run's final boss is down (DungeonService Run.cleared): the
+-- escrow is then safe -- a death banks it rather than losing it.
+-- DungeonService is a consumer of this module, so it is reached at call time.
+local function runIsCleared(): boolean
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	return dungeonService ~= nil and dungeonService:IsRunCleared() == true
+end
 
 function RunEscrowService._getOrCreate(self: typeof(RunEscrowService), player: Player)
 	local entry = self._escrow[player.UserId]
 	if not entry then
-		entry = { items = {}, coins = 0, forgeCrystal = 0 }
+		entry = { items = {}, gems = 0, coins = 0, forgeOre = 0 }
 		self._escrow[player.UserId] = entry
 	end
 	return entry
@@ -126,8 +143,9 @@ function RunEscrowService._replicate(self: typeof(RunEscrowService), player: Pla
 	local entry = self:_getOrCreate(player)
 	self._escrowProperty:SetFor(player, {
 		items = entry.items,
+		gems = entry.gems or 0,
 		coins = entry.coins,
-		forgeCrystal = entry.forgeCrystal,
+		forgeOre = entry.forgeOre,
 	})
 
 	-- Same coin count, mirrored onto an ATTRIBUTE. The Comm property above is
@@ -137,13 +155,19 @@ function RunEscrowService._replicate(self: typeof(RunEscrowService), player: Pla
 	-- PlayerStatsService stamps BonusHealthPercent. Pot O' Gold Sword reads it
 	-- to show its live damage bonus. Every coin change already funnels through
 	-- _replicate, so the number can't go stale.
-	player:SetAttribute(RUN_COINS_ATTRIBUTE, entry.coins)
+	player:SetAttribute(RUN_GEMS_ATTRIBUTE, entry.gems or 0)
 end
 
--- The ONLY writer of a player's run-coin count. Credit, tax, spend, bank
--- and discard all land here: the escrow table is written, then both
+-- The ONLY writers of a player's currency counts. Credit, tax, spend,
+-- bank and discard all land here: the escrow table is written, then both
 -- mirrors are republished from it (_replicate), so the table, the
--- EscrowData property and the RunCoins attribute can never disagree.
+-- EscrowData property and the RunGems attribute can never disagree.
+function RunEscrowService._commitGems(self: typeof(RunEscrowService), player: Player, value: number)
+	local entry = self:_getOrCreate(player)
+	entry.gems = math.max(0, math.floor(value))
+	self:_replicate(player)
+end
+
 function RunEscrowService._commitCoins(self: typeof(RunEscrowService), player: Player, value: number)
 	local entry = self:_getOrCreate(player)
 	entry.coins = value
@@ -155,7 +179,7 @@ end
 -- identity change and stops; the coin wipe then republishes through
 -- _commitCoins like any other coin change.
 function RunEscrowService._clearEscrow(self: typeof(RunEscrowService), player: Player)
-	self._escrow[player.UserId] = { items = {}, coins = 0, forgeCrystal = 0 }
+	self._escrow[player.UserId] = { items = {}, gems = 0, coins = 0, forgeOre = 0 }
 	self:_commitCoins(player, 0)
 end
 
@@ -198,50 +222,61 @@ function RunEscrowService.AddItem(
 	return true
 end
 
--- Credits run coins (post-multiplier value from DropService's credit
--- path). Cargo only — nothing spends these mid-run.
+-- Credits Gems (post-multiplier value from DropService's credit path).
+function RunEscrowService.AddGems(self: typeof(RunEscrowService), player: Player, amount: number)
+	self:_commitGems(player, (self:_getOrCreate(player).gems or 0) + amount)
+end
+
+function RunEscrowService.GetGems(self: typeof(RunEscrowService), player: Player): number
+	return self:_getOrCreate(player).gems or 0
+end
+
+-- Debits Gems if the balance covers it; false (and no change) otherwise.
+-- The Merchant and the Relic Slot stand are the spenders.
+function RunEscrowService.SpendGems(self: typeof(RunEscrowService), player: Player, amount: number): boolean
+	local entry = self:_getOrCreate(player)
+	if amount <= 0 or (entry.gems or 0) < amount then
+		return false
+	end
+	self:_commitGems(player, entry.gems - amount)
+	return true
+end
+
+-- Dragon Lantern's drawback: strips `fraction` of the player's Gems AND
+-- carried Coins (each rounded down). Ore and gear are never touched.
+function RunEscrowService.TaxCurrencies(self: typeof(RunEscrowService), player: Player, fraction: number)
+	local entry = self._escrow[player.UserId]
+	if not entry then
+		return
+	end
+	local gemsLoss = math.floor((entry.gems or 0) * fraction)
+	if gemsLoss > 0 then
+		self:_commitGems(player, entry.gems - gemsLoss)
+	end
+	local coinsLoss = math.floor((entry.coins or 0) * fraction)
+	if coinsLoss > 0 then
+		self:_commitCoins(player, entry.coins - coinsLoss)
+	end
+end
+
+-- Credits Coins (a reward chest's payout, post dungeon scale). Cargo
+-- only -- nothing spends these mid-run; they bank into Gold on the walk
+-- out.
 function RunEscrowService.AddCoins(self: typeof(RunEscrowService), player: Player, amount: number)
 	self:_commitCoins(player, self:_getOrCreate(player).coins + amount)
 end
 
--- Dragon Lantern's drawback: strips `fraction` of the player's UNBANKED
--- run coins (rounded down). Banked profile coins are never touched --
--- the tax rides the same risk model as the rest of the escrow.
--- Forge Crystal rides the escrow under the same rules as coins: banked to
+-- Forge Ore rides the escrow under the same rules as coins: banked to
 -- the profile on clear, gone on death. No tax, no multipliers.
-function RunEscrowService.AddForgeCrystal(self: typeof(RunEscrowService), player: Player, amount: number)
+function RunEscrowService.AddForgeOre(self: typeof(RunEscrowService), player: Player, amount: number)
 	local entry = self:_getOrCreate(player)
-	entry.forgeCrystal = (entry.forgeCrystal or 0) + math.max(0, math.floor(amount))
+	entry.forgeOre = (entry.forgeOre or 0) + math.max(0, math.floor(amount))
 	self:_replicate(player)
 end
 
-function RunEscrowService.GetForgeCrystal(self: typeof(RunEscrowService), player: Player): number
+function RunEscrowService.GetForgeOre(self: typeof(RunEscrowService), player: Player): number
 	local entry = self._escrow[player.UserId]
-	return if entry then (entry.forgeCrystal or 0) else 0
-end
-
-function RunEscrowService.TaxCoins(self: typeof(RunEscrowService), player: Player, fraction: number)
-	local entry = self._escrow[player.UserId]
-	if not entry or entry.coins <= 0 then
-		return
-	end
-	local loss = math.floor(entry.coins * fraction)
-	if loss <= 0 then
-		return
-	end
-	self:_commitCoins(player, entry.coins - loss)
-end
-
--- Debits run coins if the balance covers it; false (and no change)
--- otherwise. The Merchant's buy path is the only spender today — run
--- coins were cargo-only before Event rooms existed.
-function RunEscrowService.SpendCoins(self: typeof(RunEscrowService), player: Player, amount: number): boolean
-	local entry = self:_getOrCreate(player)
-	if amount <= 0 or entry.coins < amount then
-		return false
-	end
-	self:_commitCoins(player, entry.coins - amount)
-	return true
+	return if entry then (entry.forgeOre or 0) else 0
 end
 
 function RunEscrowService.GetCoins(self: typeof(RunEscrowService), player: Player): number
@@ -255,7 +290,9 @@ end
 -- (loadout refresh, hotbar UI) see the whole bank as a single update.
 function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player)
 	local entry = self._escrow[player.UserId]
-	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeCrystal or 0) == 0) then
+	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeOre or 0) == 0) then
+		-- Gems alone are nothing to bank: they die with the run.
+		self:_clearEscrow(player)
 		return
 	end
 
@@ -299,19 +336,20 @@ function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player
 		)
 	end
 
-	if (entry.forgeCrystal or 0) > 0 then
+	if (entry.forgeOre or 0) > 0 then
 		CurrencyService:SetCurrencyValue(
 			player,
-			CurrencyTypes.ForgeCrystal,
-			CurrencyService:GetCurrencyValue(player, CurrencyTypes.ForgeCrystal) + entry.forgeCrystal
+			CurrencyTypes.ForgeOre,
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.ForgeOre) + entry.forgeOre
 		)
 	end
 	Log.debug(
-		("[RunEscrowService] Banked %d items + %d coins + %d forge crystal for %s"):format(
+		("[RunEscrowService] Banked %d items + %d coins + %d forge ore for %s (%d gems discarded)"):format(
 			#entry.items,
 			entry.coins,
-			entry.forgeCrystal or 0,
-			player.Name
+			entry.forgeOre or 0,
+			player.Name,
+			entry.gems or 0
 		)
 	)
 
@@ -334,12 +372,16 @@ end
 -- Until the portal exists, drive it from the command bar:
 --   require(game.ServerScriptService.Services.RunEscrowService):ClaimRewards(game.Players.SomeUser)
 function RunEscrowService.ClaimRewards(self: typeof(RunEscrowService), player: Player): boolean
-	if LifeService and LifeService:IsDeathState(player) then
+	-- A dead player cannot claim -- unless the run is already won (final
+	-- boss down): then the lobby teleport after the death banks it.
+	if LifeService and LifeService:IsDeathState(player) and not runIsCleared() then
 		return false
 	end
 
 	local entry = self._escrow[player.UserId]
-	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeCrystal or 0) == 0) then
+	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeOre or 0) == 0) then
+		-- Nothing to bank; Gems (if any) die with the run.
+		self:_clearEscrow(player)
 		return false
 	end
 
@@ -353,14 +395,17 @@ end
 -- nothing to show for the run so far.
 function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player, reason: string?)
 	local entry = self._escrow[player.UserId]
-	if not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeCrystal or 0) == 0) then
+	if
+		not entry or (#entry.items == 0 and entry.coins == 0 and (entry.forgeOre or 0) == 0 and (entry.gems or 0) == 0)
+	then
 		return
 	end
 
 	Log.debug(
-		("[RunEscrowService] Discarded %d items + %d coins for %s (%s)"):format(
+		("[RunEscrowService] Discarded %d items + %d coins + %d gems for %s (%s)"):format(
 			#entry.items,
 			entry.coins,
+			entry.gems or 0,
 			player.Name,
 			reason or "unspecified"
 		)
@@ -566,6 +611,12 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 		-- Spawned off the signal: the spill waits between items, and
 		-- LifeService's death flow must not stall behind it.
 		task.spawn(function()
+			-- A CLEARED run (final boss down, design call 2026-10: no
+			-- extraction) is already won: nothing spills, nothing is
+			-- discarded -- the lobby teleport that follows banks it.
+			if runIsCleared() then
+				return
+			end
 			self:DropAllOnDeath(player)
 			if isWipe then
 				for _, otherPlayer in Players:GetPlayers() do
@@ -580,7 +631,7 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 	-- here. The death-triggered wipe (lastPlayer set) is already handled
 	-- above, after its spill; discarding again here would race that spill.
 	LifeService.OnPartyWiped:Connect(function(lastPlayer: Player?)
-		if lastPlayer then
+		if lastPlayer or runIsCleared() then
 			return
 		end
 		for _, otherPlayer in Players:GetPlayers() do

@@ -37,14 +37,11 @@ local PICKUP_SWEEP_INTERVAL = 1 / PICKUP_SWEEP_HZ
 
 -- Pot Of Gold: these drop types are collected from ANY distance for owners
 -- -- the proximity gate is skipped and the drop's own fly-to-player tween
--- runs from wherever it sits. Gear drops are deliberately absent: they
--- are a deliberate choice the player should walk to.
+-- runs from wherever it sits. Gems and coins only, as the card says
+-- (design call, 2026-10); orbs, Ore and gear are walked to.
 local COMPASS_DROP_TYPES = {
 	[DropTypes.Coins] = true,
-	[DropTypes.Health] = true,
-	[DropTypes.Mana] = true,
-	[DropTypes.SuperMana] = true,
-	[DropTypes.ForgeCrystal] = true,
+	[DropTypes.Gems] = true,
 }
 
 --[ Types ]--
