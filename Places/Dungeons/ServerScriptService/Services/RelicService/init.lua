@@ -800,9 +800,10 @@ function RelicService.SetRelicSlots(self: typeof(RelicService), player: Player, 
 end
 
 -- True once the player holds as many DISTINCT relics as they have open
--- slots. The vending machine reads this to decide whether to dispense the
--- Skip offer: a capped player cannot claim anything, so the Skip is their
--- only way to clear the pull and open the gate.
+-- slots. The vending machine refuses a capped owner outright (red pop,
+-- machine kept whole, choice marked made for the gate); the offer hand
+-- reads it to decide whether to dispense the Skip for the pulls that
+-- can still reach a capped player (the Forge's fan).
 function RelicService.IsAtRelicCap(self: typeof(RelicService), player: Player): boolean
 	return self:GetOwnedRelicCount(player) >= self:GetRelicSlots(player)
 end

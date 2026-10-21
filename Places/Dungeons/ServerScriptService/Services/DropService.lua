@@ -7,6 +7,7 @@ local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local RelicService = require(ServerScriptService.Services.RelicService)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
@@ -50,6 +51,25 @@ local COIN_BONUS_RELICS = {
 local function difficultyMultiplier(field: string): number
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	return if dungeonService then dungeonService:GetRewardScale(field) else 1
+end
+
+-- The run tier's Gem multiplier (DifficultyData.GemScale: the tier's
+-- per-run `gems` target over its floors' authored rows). 1 with no run.
+local function gemScale(): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService or not dungeonService:GetRun() then
+		return 1
+	end
+	return DifficultyData.GemScale(dungeonService:GetDifficultyScale())
+end
+
+-- `value` x `scale` as a whole number WITHOUT per-pickup rounding bias: the
+-- fraction becomes a chance of one more, so many small pickups average to
+-- exactly the scaled total (plain rounding would overpay a 6-8 row by ~3%).
+local function scaleStochastic(value: number, scale: number): number
+	local scaled = value * scale
+	local whole = math.floor(scaled)
+	return whole + (if math.random() < scaled - whole then 1 else 0)
 end
 
 -- Relic bonuses on currency pickups (Pot Of Gold +25%), summed into one
@@ -351,10 +371,11 @@ function DropService.Start(self: typeof(DropService))
 			--   * Dragon Lantern (Cursed): x3 Gems and Coins, both taxed on
 			--     hit (DamageService). Callback returns the multiplier.
 			--   * Greater Shrine "Fortune": Gems DROPS only, run-scoped.
-			-- No difficulty or dungeon scale: Gems are fixed everywhere, a
-			-- longer floor just has more mobs.
+			-- Before the bonuses, the TIER's GemScale (DifficultyData): the
+			-- rows are authored once, the scale lands the run on its tier's
+			-- `gems` target. No dungeon scale: Gems are the run currency.
 			value = math.round(
-				value
+				scaleStochastic(value, gemScale())
 					* (1 + getRelicCoinBonus(player))
 					* getDragonLanternMultiplier(player)
 					* (1 + PlayerStatsService:GetGreaterShrineEffect(player, "Coin"))

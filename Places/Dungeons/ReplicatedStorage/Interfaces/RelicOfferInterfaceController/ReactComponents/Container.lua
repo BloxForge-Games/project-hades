@@ -44,6 +44,7 @@ local RunService = game:GetService("RunService")
 local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 local Debris = game:GetService("Debris")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
@@ -226,6 +227,11 @@ local function Container(props: any)
 	local phaseRef = React.useRef("closed")
 	local pressedRef = React.useRef(nil)
 	local hoveredRef = React.useRef(nil)
+	-- The card the cursor is over per MouseEnter / MouseLeave, kept through
+	-- EVERY phase. Hover is only honoured once the hand is open, and a
+	-- card that slid under the cursor during the deal fires no second
+	-- MouseEnter when it opens -- so the open replays this instead.
+	local cursorOverRef = React.useRef(nil)
 	local hudHeldRef = React.useRef(false)
 
 	-- The HUD hold, reference counted and never double-held.
@@ -347,6 +353,7 @@ local function Container(props: any)
 		end
 		pressedRef.current = nil
 		hoveredRef.current = nil
+		cursorOverRef.current = nil
 		local panel = panelRef.current
 		if panel then
 			panel.Visible = false
@@ -356,6 +363,9 @@ local function Container(props: any)
 		offerRef.current = queued
 		setOffer(queued)
 	end
+
+	-- Defined with the selection helpers below; the deal's open edge calls it.
+	local applyPendingHover
 
 	-- The deal: every card starts on the row's centre, low and small and
 	-- invisible, then glides to its slot in hand order, fading in and
@@ -432,6 +442,7 @@ local function Container(props: any)
 			task.delay(DEAL_LEAD_SECONDS + (#entries - 1) * DEAL_STAGGER + DEAL_MOVE_TWEEN.Time * 0.6, function()
 				if offerRef.current == thisOffer and phaseRef.current == "dealing" then
 					phaseRef.current = "open"
+					applyPendingHover()
 				end
 			end)
 		end)
@@ -563,7 +574,36 @@ local function Container(props: any)
 		if IS_TOUCH then
 			return
 		end
+		if on then
+			cursorOverRef.current = relicName
+		elseif cursorOverRef.current == relicName then
+			cursorOverRef.current = nil
+		end
 		setSelection(relicName, on)
+	end
+
+	-- The hand just opened: select the card the cursor is already on.
+	-- MouseEnter that fired during the deal was ignored (not interactable
+	-- yet) and will not fire again; a cursor that never moved while the
+	-- cards dealt in under it never got one at all, so when nothing was
+	-- tracked the slots are hit-tested against the cursor directly.
+	function applyPendingHover()
+		if IS_TOUCH or not isInteractable() then
+			return
+		end
+		local under = cursorOverRef.current
+		if not under then
+			local inset = GuiService:GetGuiInset()
+			local cursor = UserInputService:GetMouseLocation() - inset
+			forEachHandle(function(relicName, handle)
+				if under == nil and handle.containsPoint(cursor) then
+					under = relicName
+				end
+			end)
+		end
+		if under and hoveredRef.current ~= under then
+			setSelection(under, true)
+		end
 	end
 
 	-- Clears the selection: the card drops its lift, stroke and tooltips

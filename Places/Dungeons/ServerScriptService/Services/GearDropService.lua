@@ -127,7 +127,6 @@ local RARITY_TO_PARTICLE: { [string]: string } = {
 	[ItemRarity.Rare] = "RareRelicParticles",
 	[ItemRarity.Epic] = "EpicRelicParticles",
 	[ItemRarity.Legendary] = "LegendaryRelicParticles",
-	[ItemRarity.Shiny] = "LegendaryRelicParticles",
 }
 
 -- Pickup-burst attachment names — match prefabs in

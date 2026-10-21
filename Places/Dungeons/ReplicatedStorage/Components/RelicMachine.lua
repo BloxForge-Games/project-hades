@@ -193,7 +193,23 @@ function RelicMachine:Start()
 	end)
 
 	self._proximityPrompt.Triggered:Connect(function(player: Player)
-		if self._ownerId == player.UserId and self._canClick then
+		if self._ownerId ~= player.UserId then
+			return
+		end
+		-- At the relic cap the server refuses the pull (its red pop and
+		-- Error sound) and the machine stays whole, so the prompt must stay
+		-- up too: fire the tap through untouched, no bounce, no disable.
+		-- Both counts are server-stamped Player attributes (RelicService).
+		local owned = tonumber(player:GetAttribute(Attributes.OwnedRelicCount)) or 0
+		local slots = tonumber(player:GetAttribute(Attributes.RelicSlots))
+		if slots and owned >= slots then
+			DungeonNetwork.RelicMachinePromptTriggered.Fire({
+				Machine = self.Instance,
+				CFrame = self.Instance.PrimaryPart.CFrame,
+			})
+			return
+		end
+		if self._canClick then
 			self._proximityPrompt.Enabled = false
 			self._canClick = false
 

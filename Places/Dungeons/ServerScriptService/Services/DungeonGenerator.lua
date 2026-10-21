@@ -33,6 +33,7 @@ local GateService = require(ServerScriptService.Services.GateService)
 local CollisionGroupService = require(ServerScriptService.Submodules.Core.Source.Services.CollisionGroupService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local dungeonContent = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonContent)
 local Planner = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.Planner)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local EventWeights = require(ReplicatedStorage.Submodules.Core.Shared.Data.EventWeights)
@@ -85,16 +86,27 @@ local BUILDINGS_FOLDER_NAME = "Buildings"
 
 local FLOOR_NAME = "Floor"
 local MAX_BACKTRACKS = 200 -- safety cap to prevent infinite loops on broken pools
--- The placement loop yields one frame (task.wait()) every this many
--- placements, where a placement is one prefab cloned and snapped into the
--- world to be tested -- a clone, a PivotTo, a floor scan and a
--- GetPartsInPart per candidate, whether or not it stays. A backtracking
--- floor burns hundreds of those; run without a break they stall every
--- other player's server tick for the whole swap. Callers already
--- tolerate GenerateDungeon yielding (its bounded character wait always
--- could): both run it from their own thread and read nothing back
--- until it returns.
-local GENERATION_YIELD_EVERY_PLACEMENTS = 8
+-- A slot carrying a Planner-forced prefab (the guaranteed MerchantShop)
+-- never seats a substitute while it has this many backtracks left: a
+-- forced prefab that collides sends the loop back a room so the previous
+-- room re-seats and the shop gets a fresh geometric context. Past the
+-- budget the slot gives the guarantee up (warned) and rolls the pool,
+-- so a shop that fits nowhere cannot burn the whole MAX_BACKTRACKS.
+local FORCED_PREFAB_BACKTRACK_BUDGET = 24
+-- The placement loop yields one frame (task.wait()) once it has spent this
+-- much of the current frame, where a placement is one prefab cloned and
+-- snapped into the world to be tested -- a clone, a PivotTo, a floor scan
+-- and a GetPartsInPart per candidate, whether or not it stays. A
+-- backtracking floor burns hundreds of those; run without a break they
+-- stall every other player's server tick for the whole swap. A TIME
+-- budget rather than a placement count: placements measured 10-15ms each
+-- (a 40-backtrack floor ran 100-150ms frames at the old every-8 cadence),
+-- and the budget holds the frame at ~30ms however expensive a prefab is,
+-- while a cheap floor still yields rarely. Callers already tolerate
+-- GenerateDungeon yielding (its bounded character wait always could):
+-- both run it from their own thread and read nothing back until it
+-- returns.
+local GENERATION_FRAME_BUDGET_SECONDS = 0.03
 
 -- The prefabPools name for Event rooms (DungeonData). Only this pool is
 -- weight-picked; every other pool stays uniform.
@@ -116,44 +128,43 @@ DungeonGenerator._floorBuildings = {} :: { Model }
 
 --[ Private Functions ]--
 
--- ServerStorage.GameAssets.DungeonRooms.<assetFolder> -- each dungeon has
--- its own prefab folder (Combat / Shrine / Miniboss / Boss / Treasure
--- pools + Start), named by its DungeonData assetFolder (placeholder
--- dungeons share one). Resolves the dungeon being GENERATED (or the active
--- one), and falls back to the flat DungeonRooms folder with a warn so an
--- unauthored dungeon still generates rather than asserting.
+-- The dungeon being GENERATED (or the active one).
+function DungeonGenerator._contentDungeonId(self: typeof(DungeonGenerator)): string?
+	local active = DungeonService:GetActiveDungeon()
+	return self._generatingDungeonId or (active and active.id)
+end
+
+-- ServerStorage.GameAssets.DungeonRooms.<assetFolder>.Dungeon<floor> -- each
+-- dungeon has its own prefab folder (Combat / Shrine / Miniboss / Boss /
+-- Treasure / Event pools + Start), named by its DungeonData assetFolder,
+-- with one subfolder per floor (the floor's recoloured set). This is the
+-- folder the floor reads FIRST; the per-pool lookup (_getPrefabPool) walks
+-- dungeonContent's fallback chain -- the biome's Dungeon1, the biome,
+-- RunegroveForest's, the flat folder -- so an unauthored dungeon or floor
+-- still generates, with a warn, rather than asserting.
 function DungeonGenerator._getPrefabRoot(self: typeof(DungeonGenerator)): Folder?
 	local gameAssets = ServerStorage:FindFirstChild("GameAssets")
 	local root = gameAssets and gameAssets:FindFirstChild(PREFAB_FOLDER_NAME)
 	if not root then
 		return nil
 	end
-	local active = DungeonService:GetActiveDungeon()
-	local dungeonId = self._generatingDungeonId or (active and active.id)
-	if dungeonId then
-		local config = DungeonData[dungeonId]
-		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
-		local perDungeon = root:FindFirstChild(folderName)
-		if perDungeon then
-			-- One subfolder per FLOOR (Dungeon1 / Dungeon2 / Dungeon3, the
-			-- floor's recoloured set); a floor without one uses the biome's.
-			local floor = DungeonService:GetFloor()
-			local perFloor = perDungeon:FindFirstChild(("Dungeon%d"):format(floor))
-			return perFloor or perDungeon
-		end
-		warn(
-			("[DungeonGenerator] No prefab folder GameAssets.DungeonRooms.%s -- using the flat folder"):format(
-				folderName
-			)
-		)
+	return dungeonContent.PrimaryFolder(root, self:_contentDungeonId(), DungeonService:GetFloor()) :: Folder
+end
+
+-- The pool folder (or the Start prefab) `name` for the floor being built,
+-- from the first folder in the chain that has it.
+function DungeonGenerator._getPrefabPool(self: typeof(DungeonGenerator), name: string): Instance?
+	local gameAssets = ServerStorage:FindFirstChild("GameAssets")
+	local root = gameAssets and gameAssets:FindFirstChild(PREFAB_FOLDER_NAME)
+	if not root then
+		return nil
 	end
-	return root
+	return dungeonContent.FindFloorAsset(root, self:_contentDungeonId(), DungeonService:GetFloor(), name)
 end
 
 function DungeonGenerator._pickPrefab(self: typeof(DungeonGenerator), poolName: string, rng: Random): Model
-	local root = self:_getPrefabRoot()
-	assert(root, "[DungeonGenerator] Missing ServerStorage.GameAssets." .. PREFAB_FOLDER_NAME)
-	local folder = root:FindFirstChild(poolName)
+	assert(self:_getPrefabRoot(), "[DungeonGenerator] Missing ServerStorage.GameAssets." .. PREFAB_FOLDER_NAME)
+	local folder = self:_getPrefabPool(poolName)
 	assert(folder, "[DungeonGenerator] Missing prefab pool folder: " .. poolName)
 	local prefabs = folder:GetChildren()
 	assert(#prefabs > 0, "[DungeonGenerator] Empty prefab pool: " .. poolName)
@@ -168,11 +179,7 @@ function DungeonGenerator._findPrefabByName(
 	poolName: string,
 	prefabName: string
 ): Model?
-	local root = self:_getPrefabRoot()
-	if not root then
-		return nil
-	end
-	local folder = root:FindFirstChild(poolName)
+	local folder = self:_getPrefabPool(poolName)
 	local model = folder and folder:FindFirstChild(prefabName)
 	return if model and model:IsA("Model") then model else nil
 end
@@ -193,11 +200,7 @@ function DungeonGenerator._pickPrefabExcluding(
 	rng: Random,
 	excludedNames: { string }?
 ): Model?
-	local root = self:_getPrefabRoot()
-	if not root then
-		return nil
-	end
-	local folder = root:FindFirstChild(poolName)
+	local folder = self:_getPrefabPool(poolName)
 	if not folder then
 		return nil
 	end
@@ -544,7 +547,7 @@ end
 -- Places one floor: the Start prefab at the origin, then every planned room
 -- snapped on in sequence (with backtracking), branches, gates, buildings.
 -- Returns the Dungeon record; nothing here touches the active dungeon, the
--- run or any player. May yield (see GENERATION_YIELD_EVERY_PLACEMENTS).
+-- run or any player. May yield (see GENERATION_FRAME_BUDGET_SECONDS).
 function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: GenerateDescriptor): Dungeon
 	local dungeonId = descriptor.dungeonId
 	local difficulty = descriptor.difficulty
@@ -564,9 +567,8 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	local runtimeFolder = self:_ensureRuntimeFolder()
 
 	-- Place start room
-	local prefabRoot = self:_getPrefabRoot()
-	assert(prefabRoot, "[DungeonGenerator] Missing ServerStorage.GameAssets." .. PREFAB_FOLDER_NAME)
-	local startPrefab = prefabRoot:FindFirstChild(dungeonConfig.startPrefabName) :: Model?
+	assert(self:_getPrefabRoot(), "[DungeonGenerator] Missing ServerStorage.GameAssets." .. PREFAB_FOLDER_NAME)
+	local startPrefab = self:_getPrefabPool(dungeonConfig.startPrefabName) :: Model?
 	assert(startPrefab, "[DungeonGenerator] Missing start prefab: " .. dungeonConfig.startPrefabName)
 
 	local startModel = startPrefab:Clone()
@@ -604,10 +606,20 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		floors: { BasePart },
 		branchModel: Model?,
 		branchFloors: { BasePart },
+		-- Backtracks this slot's forced prefab has spent (survives the
+		-- `tried` reset, see FORCED_PREFAB_BACKTRACK_BUDGET).
+		forcedBacktracks: number,
 	}
 	local slots: { SlotState } = {}
 	for i = 1, #plan.rooms do
-		slots[i] = { tried = {}, model = nil, floors = {}, branchModel = nil, branchFloors = {} }
+		slots[i] = {
+			tried = {},
+			model = nil,
+			floors = {},
+			branchModel = nil,
+			branchFloors = {},
+			forcedBacktracks = 0,
+		}
 	end
 
 	local function removeFloors(floors: { BasePart })
@@ -638,13 +650,13 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	local backtracks = 0
 	local collisionsForced = 0
 	local slotIdx = 1
-	-- See GENERATION_YIELD_EVERY_PLACEMENTS: called once per candidate
+	-- See GENERATION_FRAME_BUDGET_SECONDS: called once per candidate
 	-- snapped into the world.
-	local placements = 0
+	local frameStart = os.clock()
 	local function countPlacement()
-		placements += 1
-		if placements % GENERATION_YIELD_EVERY_PLACEMENTS == 0 then
+		if os.clock() - frameStart >= GENERATION_FRAME_BUDGET_SECONDS then
 			task.wait()
+			frameStart = os.clock()
 		end
 	end
 	while slotIdx <= #plan.rooms do
@@ -653,8 +665,20 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		-- A forced prefab is the Planner's guaranteed MerchantShop event or
 		-- its DEBUG first-room pin; other events roll EventWeights freely,
 		-- repeats included, minus the node's excludedPrefabNames (the first
-		-- floor's free events never roll a second shop).
+		-- floor's free events never roll a second shop). A forced slot
+		-- does NOT substitute on a collision: it backtracks (budgeted) so
+		-- the previous room re-seats and the forced prefab is retried.
 		local forcedPrefabName = node.forcedPrefabName
+		if forcedPrefabName and slot.forcedBacktracks >= FORCED_PREFAB_BACKTRACK_BUDGET then
+			warn(
+				("[DungeonGenerator] Forced prefab '%s' did not fit slot %d after %d backtracks — rolling the pool"):format(
+					forcedPrefabName,
+					slotIdx,
+					slot.forcedBacktracks
+				)
+			)
+			forcedPrefabName = nil
+		end
 		-- Where does this slot snap from?
 		local prevExitAnchor: Instance?
 		if slotIdx == 1 then
@@ -676,16 +700,17 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 
 		-- Try every untried variant until one fits. A node carrying a
 		-- forcedPrefabName (the guaranteed shop, or the Planner's DEBUG pin)
-		-- tries THAT model first; if it cannot fit the slot falls back to
-		-- the general pool.
+		-- tries THAT model and nothing else: when it has already failed
+		-- here the slot is left unplaced so the loop below backtracks
+		-- (the previous room re-seats, this slot's `tried` clears, the
+		-- forced prefab goes again). Only a prefab missing from the pool
+		-- falls back to the general roll.
 		local placed = false
 		while true do
 			local prefab: Model?
 			if forcedPrefabName then
 				local forced = self:_findPrefabByName(node.prefabPool, forcedPrefabName)
-				if forced and not slot.tried[forced] then
-					prefab = forced
-				elseif not forced then
+				if not forced then
 					warn(
 						(
 							"[DungeonGenerator] Forced prefab '%s' not found in pool '%s' "
@@ -693,6 +718,11 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 						):format(forcedPrefabName, node.prefabPool)
 					)
 					forcedPrefabName = nil
+				elseif slot.tried[forced] then
+					slot.forcedBacktracks += 1
+					break
+				else
+					prefab = forced
 				end
 			end
 			prefab = prefab or self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng, node.excludedPrefabNames)
@@ -775,8 +805,13 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 			slotIdx += 1
 		elseif backtracks >= MAX_BACKTRACKS then
 			-- Safety net: stop backtracking, force-place this slot and continue.
+			-- Overlap is accepted here anyway, so a forced prefab (the shop)
+			-- is force-placed as itself rather than swapped for a random event.
 			collisionsForced += 1
-			local fp = self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
+			local fp = (
+				if node.forcedPrefabName then self:_findPrefabByName(node.prefabPool, node.forcedPrefabName) else nil
+			)
+				or self:_pickPrefabExcluding(node.prefabPool, slot.tried, rng)
 				or self:_pickPrefab(node.prefabPool, rng)
 			local forcedPrefab = fp :: Model
 			local forcedModel = self:_snapPrefab(forcedPrefab, ENTRY_ANCHOR_NAME, exitAnchorCFrame, runtimeFolder)
@@ -900,7 +935,8 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	-- spawns the first room's mobs and advances every player to room 1.
 	GateService:SetupGateTrigger(startModel, 1)
 
-	-- Which events this floor seated, in sequence order.
+	-- Which events this floor seated, in sequence order, and a loud check
+	-- that every Planner-forced prefab (the guaranteed shop) is really there.
 	local eventNames = {}
 	for _, placedRoom in roomsList do
 		if placedRoom.roomType == RoomTypes.Event and placedRoom.model then
@@ -908,6 +944,19 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 		end
 	end
 	Log.debug(("[DungeonGenerator] Events this floor: %s"):format(table.concat(eventNames, ", ")))
+	for i, node in ipairs(plan.rooms) do
+		local seated = slots[i].prefabName
+		if node.forcedPrefabName and seated and seated ~= node.forcedPrefabName then
+			warn(
+				("[DungeonGenerator] Slot %d lost its forced prefab '%s' (seated '%s', seed %d)"):format(
+					i,
+					node.forcedPrefabName,
+					seated,
+					resolvedSeed
+				)
+			)
+		end
+	end
 
 	Log.debug(
 		("[DungeonGenerator] Generated %s/%s with %d rooms (seed %d, %d backtracks, %d forced)"):format(

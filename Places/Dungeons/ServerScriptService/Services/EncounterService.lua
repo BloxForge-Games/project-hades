@@ -27,6 +27,7 @@ local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local dungeonContent = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonContent)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
@@ -274,14 +275,15 @@ function EncounterService._getMobNameForKind(_self: typeof(EncounterService), ki
 	if not dungeon then
 		return nil
 	end
-	local config = DungeonData[dungeon.id]
-	if not config then
+	-- The FLOOR's row (DungeonData floors[n], merged over floor 1).
+	local content = dungeonContent.FloorContent(dungeon.id, DungeonService:GetFloor())
+	if not content then
 		return nil
 	end
 	if kind == ROOM_TYPES.Miniboss then
-		return config.miniboss
+		return content.miniboss
 	elseif kind == ROOM_TYPES.Boss then
-		return config.boss
+		return content.boss
 	end
 	return nil
 end

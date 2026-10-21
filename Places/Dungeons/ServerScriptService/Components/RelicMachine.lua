@@ -9,6 +9,7 @@
 
 --[ Roblox Services ]--
 
+local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -16,6 +17,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local RelicOfferService = require(ServerScriptService.Services.RelicOfferService)
@@ -40,9 +42,46 @@ local RelicMachine = Component.new({
 
 --[ Constants ]--
 
+-- RELIC CAP (design call, 2026-10-21): a machine never opens for an
+-- owner holding as many relics as they have slots. The pull would only
+-- ever end in a Skip, so the prompt refuses instead -- the shop's own
+-- red pop over the player and its Error sound -- and the machine stays
+-- intact. A capped owner's choice is marked MADE the moment the machine
+-- lands (and again on every refused tap), so the segment gate does not
+-- hold its full countdown for a pull nobody can take.
+local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
+local RELIC_CAP_TEXT = "Reached Maximum Relics! (%d)"
+local RELIC_CAP_LABEL = "Vending Machine (Relics Full)"
+local ERROR_SOUND_NAME = "Error"
+local ERROR_SOUND_LIFETIME = 3
+
 --[ Properties ]--
 
 --[ Private Functions ]--
+
+-- The shop's refusal pop and sound, over the player's root.
+local function refuseAtRelicCap(player: Player)
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not (hrp and hrp:IsA("BasePart")) then
+		return
+	end
+	TextIndicatorService:ShowIndicator(
+		player,
+		hrp,
+		RELIC_CAP_TEXT:format(RelicService:GetRelicSlots(player)),
+		RELIC_CAP_COLOR,
+		true
+	)
+	local sounds = ReplicatedStorage.GameAssets:FindFirstChild("Sounds")
+	local template = sounds and sounds:FindFirstChild(ERROR_SOUND_NAME)
+	if template and template:IsA("Sound") then
+		local clone = template:Clone()
+		clone.Parent = hrp
+		clone:Play()
+		Debris:AddItem(clone, ERROR_SOUND_LIFETIME)
+	end
+end
 
 -- Picks the next relic for this machine via RelicService:RollRandomRelicFromPool,
 -- which buckets the per-player available pool by rarity and rolls using the
@@ -216,12 +255,29 @@ function RelicMachine:Start()
 
 	self.Instance.PrimaryPart.Idle:Play()
 
-	self._relics = RelicService:GetPlayerAvailableRelics(Players:GetPlayerByUserId(self._ownerId))
+	local owner = Players:GetPlayerByUserId(self._ownerId)
+	self._relics = RelicService:GetPlayerAvailableRelics(owner)
+
+	-- A capped owner (see RELIC_CAP_COLOR): the label says so from the
+	-- landing, and their choice is already made for the gate.
+	if owner and RelicService:IsAtRelicCap(owner) then
+		self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.Text = RELIC_CAP_LABEL
+		self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.TextColor3 = RELIC_CAP_COLOR
+		RelicService:MarkRelicChoiceMade(owner)
+	end
 
 	promptRouter:Bind(self.Instance, function(player: Player, _payload: { CFrame: CFrame })
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
 		if LifeService:IsDeathState(player) then
+			return
+		end
+		-- At the relic cap the machine refuses and stays whole (the client
+		-- keeps its prompt up for the same reason): red pop, Error sound,
+		-- choice marked made so the gate never waits on it.
+		if self._ownerId == player.UserId and RelicService:IsAtRelicCap(player) then
+			refuseAtRelicCap(player)
+			RelicService:MarkRelicChoiceMade(player)
 			return
 		end
 		if self._ownerId == player.UserId and self._canClick then

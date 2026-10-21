@@ -937,9 +937,15 @@ function MobBase._hasLineOfSight(self: MobBase): boolean
 		return false
 	end
 
-	local rayOrigin = self._rootPart.Position - Vector3.new(0, self._rootPart.Size.Y, 0)
-	local rayDirection = Vector3.new(self._currentTargetHRP.Position.X, rayOrigin.Y, self._currentTargetHRP.Position.Z)
-		- rayOrigin
+	-- Root centre to root centre. The ray used to start one root-height
+	-- BELOW the root and run dead flat at that height, so across a room it
+	-- grazed the floor: a step, a root, the next chunk's floor at a
+	-- different elevation all read as "blocked" (measured 2026-10-20: a
+	-- Robombie's ray hit a Floor part 71 studs out), which sent every
+	-- distant chase down the pathfinder and, when that found no path,
+	-- left the mob standing until the player walked up to it.
+	local rayOrigin = self._rootPart.Position
+	local rayDirection = self._currentTargetHRP.Position - rayOrigin
 
 	-- Target essentially on top of us — LOS is trivially true.
 	if rayDirection.Magnitude < 0.05 then
@@ -1014,12 +1020,22 @@ function MobBase._followPath(self: MobBase, destination: Vector3)
 	local path = self:_ensurePath()
 	local ok = pcall(path.ComputeAsync, path, self._rootPart.Position, destination)
 	if not ok or path.Status ~= Enum.PathStatus.Success then
+		-- No path (the navmesh does not reach the spawn point, a Plastic
+		-- prop walls the goal off, the target is on another chunk's
+		-- floor): walk straight at the target instead of standing still.
+		-- A mob that gets stuck on the way is caught by _checkStuck and
+		-- retries the pathfinder next second; a mob that never moves is
+		-- the bug this replaces.
+		self:_cleanupPathConnections()
+		self._waypoints = nil
+		self._humanoid:MoveTo(destination, self._currentTargetHRP)
 		return
 	end
 
 	local waypoints = path:GetWaypoints()
 	self._waypoints = waypoints
 	if #waypoints < 2 then
+		self._humanoid:MoveTo(destination, self._currentTargetHRP)
 		return
 	end
 	self._lastPathDestination = destination
@@ -1759,9 +1775,11 @@ end
 -- Fortune multiply collector-side at credit time (DropService).
 --
 -- EXCEPT in a Miniboss / Boss room: those pay Coins and Forge Ore through
--- their reward chest (EncounterChestService), not Gems. The gate is the
--- ROOM, not the mob, so the adds a miniboss wave spawns are covered too
--- -- every mob carries the RoomId its spawner stamped (MobSpawnService).
+-- their reward chest (EncounterChestService), not corpse Gems -- the
+-- Miniboss's own `gems` row is its chest's Gem PURSE, paid there, so it
+-- must never scatter here as well. The gate is the ROOM, not the mob, so
+-- the adds a miniboss wave spawns are covered too -- every mob carries
+-- the RoomId its spawner stamped (MobSpawnService).
 function MobBase._dropGems(self: MobBase)
 	local gems = self._gems
 	if not gems then

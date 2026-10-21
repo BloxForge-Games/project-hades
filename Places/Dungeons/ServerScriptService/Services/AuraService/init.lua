@@ -129,12 +129,12 @@ local function playAuraShockwave(character: Model, auraName: string)
 	emitVFXPart(templateName, root.CFrame, nil, { DefaultEmitCount = AURA_SHOCKWAVE_EMIT_COUNT })
 end
 
--- The OWNER-relic riders on a Stonebound payload. Base magnitudes are
--- AuraData's; Leland and Spartan enlarge what this owner's Stonebound
--- gives its users.
+-- The OWNER-relic riders on a Stonebound payload. The aura's own
+-- magnitude is AuraData's damage reduction; its damage half is riders
+-- ONLY (Spartan, Leland), so a Stonebound with no riders deals no bonus.
 function AuraService._computeStoneboundPayload(_self: typeof(AuraService), ownerPlayer: Player): (number, number)
 	local config = AuraData[AuraNames.Stonebound]
-	local damageBonus = config.damagePercent
+	local damageBonus = 0
 	local damageReduction = config.damageReduction
 
 	if RelicService then

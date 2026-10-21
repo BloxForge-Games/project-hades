@@ -18,10 +18,12 @@
 	    still spills.)
 	  * LEAVE (disconnect mid-run): the gear SPILLS from where the player
 	    stood, exactly as a full death spills it, so the party can carry
-	    it on; the coins are lost with the escrow.
-	  * DISCARD (escrow lost): what is left after a spill -- the coins on
-	    a party wipe or a leave. Knowledge is the only thing the Spire
-	    can't take back.
+	    it on; the Coins and Ore are banked on the way out.
+	  * DISCARD (escrow lost): what is left after a spill -- the run gear
+	    nobody picked up, and the Gems. The COINS AND FORGE ORE ARE NEVER
+	    LOST (design call, 2026-10-21): a wipe or a leave banks them into
+	    the profile first (BankCurrencies); only the run-bound gear and the
+	    Gems die with the run.
 
 	Beating the boss is not the same as getting out. The escrow stays
 	full and visible in the Spire's Bounty panel after the boss dies, and
@@ -35,9 +37,10 @@
 	    Relic Slot stand spend them, and they are DISCARDED at the bank:
 	    spend or lose. Replicated as `gems` and mirrored onto the
 	    RunGems attribute (Pot O' Gold Sword reads it client-side).
-	  * COINS -- permanent Gold, from the miniboss / boss chests only.
-	    Banked into the profile's Gold on the walk out.
-	  * FORGE ORE -- the Blacksmith's material, chests only, banked too.
+	  * COINS -- permanent Gold, from the chests only. Banked into the
+	    profile's Gold on the walk out, and on a wipe or a leave too.
+	  * FORGE ORE -- the Blacksmith's material, the miniboss / boss chests
+	    only, banked exactly like the Coins.
 	Every write goes through _commit, which republishes the mirrors, so
 	the table, the EscrowData property and the attribute never disagree.
 
@@ -356,6 +359,41 @@ function RunEscrowService.BankAll(self: typeof(RunEscrowService), player: Player
 	self:_clearEscrow(player)
 end
 
+-- Banks the Coins and Forge Ore alone (the profile's Gold and Ore) and
+-- zeroes them in the escrow, leaving the run gear and the Gems where they
+-- are. The currencies are never lost (design call, 2026-10-21): a wipe
+-- and a leave land here before the gear is discarded.
+function RunEscrowService.BankCurrencies(self: typeof(RunEscrowService), player: Player)
+	local entry = self._escrow[player.UserId]
+	if not entry or (entry.coins == 0 and (entry.forgeOre or 0) == 0) then
+		return
+	end
+	if not (DataService and DataService:GetProfileData(player)) then
+		warn(("[RunEscrowService] Currency bank failed — no profile for %s"):format(player.Name))
+		return
+	end
+	local coins, ore = entry.coins, entry.forgeOre or 0
+	if coins > 0 then
+		CurrencyService:SetCurrencyValue(
+			player,
+			CurrencyTypes.Gold,
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) + coins
+		)
+	end
+	if ore > 0 then
+		CurrencyService:SetCurrencyValue(
+			player,
+			CurrencyTypes.ForgeOre,
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.ForgeOre) + ore
+		)
+	end
+	entry.forgeOre = 0
+	self:_commitCoins(player, 0)
+	Log.debug(
+		("[RunEscrowService] Banked %d coins + %d forge ore for %s (currencies only)"):format(coins, ore, player.Name)
+	)
+end
+
 -- THE claim entry point — call this when a player walks through the exit
 -- portal. Banks their escrow into the profile and empties it.
 --
@@ -389,10 +427,11 @@ function RunEscrowService.ClaimRewards(self: typeof(RunEscrowService), player: P
 	return true
 end
 
--- Discards the whole escrow — a party WIPE, or disconnect mid-run. The
--- Spire keeps what you carried. A single death does NOT land here (see
--- Start): a revive would otherwise bring the player back with
--- nothing to show for the run so far.
+-- Discards the escrow — a party WIPE, or disconnect mid-run. The Coins
+-- and Forge Ore are BANKED first (BankCurrencies, design call
+-- 2026-10-21); the Spire keeps the run gear and the Gems. A single death
+-- does NOT land here (see Start): a revive would otherwise bring the
+-- player back with nothing to show for the run so far.
 function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player, reason: string?)
 	local entry = self._escrow[player.UserId]
 	if
@@ -400,6 +439,8 @@ function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player
 	then
 		return
 	end
+
+	self:BankCurrencies(player)
 
 	Log.debug(
 		("[RunEscrowService] Discarded %d items + %d coins + %d gems for %s (%s)"):format(
@@ -658,12 +699,14 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 	end)
 
 	-- Disconnect mid-run: the gear spills where the player stood (a
-	-- teammate can carry it on), THEN the escrow is dropped -- the coins
-	-- were never in the profile, so removing the in-memory entry IS the
-	-- discard. The spill runs first, on the same frame, so the entry is
-	-- still there for it.
+	-- teammate can carry it on), the Coins and Ore are banked (the
+	-- profile is still loaded at this edge -- DataService releases it on
+	-- its own PlayerRemoving, and a release that raced ahead only warns),
+	-- THEN the entry is dropped. The spill runs first, on the same frame,
+	-- so the entry is still there for it.
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self:DropAllOnLeave(player)
+		self:BankCurrencies(player)
 		self._escrow[player.UserId] = nil
 	end)
 end

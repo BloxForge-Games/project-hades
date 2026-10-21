@@ -138,7 +138,7 @@ local DEFAULT_CRITICAL_MULTIPLIER = 1.5
 -- the +50% WEAPON half, so this drawback lives here as its own knob.
 local BONE_SCYTHE_MAGIC_MULTIPLIER = 0.5
 local RESISTED_COLOR3 = DamageIndicatorColors.Resisted
-local MAGIC_COLOR3 = DamageIndicatorColors.Magic
+local MAGIC_COLOR3 = DamageIndicatorColors.Arcane
 local WEAPON_COLOR3 = DamageIndicatorColors.Weapon
 local RAGDOLL_VELOCITY = 25
 
@@ -799,11 +799,9 @@ function DamageService.GetCritParameters(
 	-- the pooled value adds as-is.
 	critMultiplier += PlayerStatsService:GetGreaterShrineEffect(player, "CritDamage")
 
-	-- Stormcharged carries a crit-DAMAGE half again (AuraData owns it, as a
-	-- FRACTION -- its crit-CHANCE sibling is in points).
+	-- Stormcharged itself is crit CHANCE only (AuraData); the crit-DAMAGE
+	-- on its window is the relic riders below.
 	if isStormcharged then
-		critMultiplier += AuraData[AuraNames.Stormcharged].critDamageBonus or 0
-
 		-- Lightning Wand: the Rare crit-damage rider on the same window.
 		if DamageService.RelicCount(relics, RelicNames["Lightning Wand"]) > 0 then
 			critMultiplier += DamageService.RelicEffect(relics, RelicNames["Lightning Wand"]) or 0

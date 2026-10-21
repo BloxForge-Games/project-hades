@@ -7,8 +7,8 @@
 
 	  * Records a clear for every player still in the server when the
 	    run's final boss falls (DungeonService.Signals.OnFinalDungeonCompleted):
-	    clear count, highest cleared rank, and the Keystone on a Hard-or-
-	    above clear.
+	    clear count, highest cleared rank, the Keystone on a Hard-or-
+	    above clear, and the tier's Dungeon Mastery XP (MasteryData).
 	  * Answers what a player has unlocked, which RunFlowService uses to
 	    clamp the difficulty a party arrives with.
 
@@ -22,6 +22,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local MasteryData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MasteryData)
 local dungeonProgress = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonProgress)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
@@ -78,7 +79,9 @@ function DungeonProgressService._recordClear(
 	_self: typeof(DungeonProgressService),
 	player: Player,
 	dungeonId: string,
-	rank: number
+	rank: number,
+	difficulty: string,
+	ascension: number
 )
 	local profile = DataService:GetProfileData(player)
 	if not profile then
@@ -89,14 +92,21 @@ function DungeonProgressService._recordClear(
 		progress = {}
 	end
 	local keystone = dungeonProgress.recordClear(progress, dungeonId, rank)
+	-- Dungeon Mastery: the clear pays the tier's XP into the same entry.
+	-- The level is derived, so a level-up is just the two reads differing.
+	local masteryXp = MasteryData.XpForClear(difficulty, ascension)
+	local masteryBefore, masteryAfter = dungeonProgress.addMasteryXp(progress, dungeonId, masteryXp)
 	-- Written back through DataService so the change pushes and saves.
 	DataService:SetProfileValue(player, PROGRESS_KEY, progress)
 	Log.debug(
-		("[DungeonProgressService] %s cleared %s at rank %d%s"):format(
+		("[DungeonProgressService] %s cleared %s at rank %d%s; +%d Mastery XP (level %d -> %d)"):format(
 			player.Name,
 			dungeonId,
 			rank,
-			if keystone then " -- Keystone earned" else ""
+			if keystone then " -- Keystone earned" else "",
+			masteryXp,
+			masteryBefore,
+			masteryAfter
 		)
 	)
 end
@@ -117,7 +127,7 @@ function DungeonProgressService.Start(self: typeof(DungeonProgressService))
 			return
 		end
 		for _, player in Players:GetPlayers() do
-			self:_recordClear(player, dungeon.id, rank)
+			self:_recordClear(player, dungeon.id, rank, run.difficulty, run.ascension or 0)
 		end
 	end)
 end

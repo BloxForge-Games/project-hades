@@ -34,6 +34,8 @@
 	  handle.wobble()           the refused shake.
 	  handle.setDim(on) also fades this card's embers (see below).
 	  handle.slotCenter()       the slot's centre on screen, for the deal.
+	  handle.containsPoint(p)   whether screen point p (inset-adjusted, the
+	                            AbsolutePosition space) lies on the slot.
 	  handle.rarity             ItemRarity value.
 
 	The card's own idle motion needs nothing from the Container: the bob
@@ -556,11 +558,12 @@ local function OfferCard(props: any)
 						Position = UDim2.fromScale(if on then 0 else TOOLTIP_SLIDE_FROM, 0),
 						BackgroundTransparency = if on then TOOLTIP_PLATE_TRANSPARENCY else 1,
 					}):Play()
-					lastTween = TweenService:Create(label, info, {
+					local created = TweenService:Create(label, info, {
 						TextTransparency = if on then 0 else 1,
 						TextStrokeTransparency = if on then TOOLTIP_TEXT_STROKE_TRANSPARENCY else 1,
 					})
-					lastTween:Play()
+					created:Play()
+					lastTween = created
 				end
 
 				-- Only the arrival staggers. Leaving all at once stops the
@@ -736,6 +739,19 @@ local function OfferCard(props: any)
 			return slot.AbsolutePosition + slot.AbsoluteSize * 0.5
 		end
 
+		local function containsPoint(point: Vector2): boolean
+			local slot = slotRef.current
+			if not slot then
+				return false
+			end
+			local topLeft = slot.AbsolutePosition
+			local bottomRight = topLeft + slot.AbsoluteSize
+			return point.X >= topLeft.X
+				and point.X <= bottomRight.X
+				and point.Y >= topLeft.Y
+				and point.Y <= bottomRight.Y
+		end
+
 		-- The ember field. Built once: every ember gets its own lane, rise
 		-- time, sway and shimmer from a per-card seeded Random, so the three
 		-- cards in a hand never drift in lockstep but a given card looks the
@@ -858,6 +874,7 @@ local function OfferCard(props: any)
 			shockwave = shockwave,
 			wobble = wobble,
 			slotCenter = slotCenter,
+			containsPoint = containsPoint,
 			rarity = rarity,
 		})
 

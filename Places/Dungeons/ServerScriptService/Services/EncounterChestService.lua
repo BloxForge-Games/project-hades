@@ -23,6 +23,9 @@
 	          mob's MobData `chestPickups` counts. These are the run's ONLY
 	          source of permanent currency (design call, 2026-10); grunts
 	          drop Gems, the run currency, and the Event Chest pays Gems.
+	  * GEMS  an encounter mob with a MobData `gems` row pays that purse
+	          from its chest too, on top of the Coins + Ore (the Miniboss:
+	          ~50 a floor before the tier's GemScale; the Boss has no row).
 
 	PER PLAYER, OWNER-LOCKED: a chest carries its owner's UserId and only
 	that player can open it, so nobody can take a teammate's reward. This
@@ -115,7 +118,8 @@ local BATCH_TIMEOUT_SECONDS = 90
 
 -- One chest batch (see BATCH_TIMEOUT_SECONDS). `gems` is an optional
 -- MobData `gems`-shaped row the Event Chest pays (the run currency);
--- encounter chests pay the tier's Coins + Ore instead (DifficultyData).
+-- encounter chests pay the tier's Coins + Ore (DifficultyData) plus the
+-- encounter mob's own `gems` row when it has one (the Miniboss purse).
 type ChestBatch = {
 	pending: number,
 	done: boolean,
@@ -302,6 +306,25 @@ local function pickupCountsFor(mobName: string?): { coins: { number }, ore: { nu
 	return (data and data.chestPickups) or DEFAULT_PICKUPS
 end
 
+-- Fires a MobData `gems`-shaped row (pickup count range x value range)
+-- from `origin`, private to `player`, chest-style (a blip per pickup).
+local function dropGems(origin: BasePart, gems: { [string]: number }, player: Player)
+	if not DropService then
+		return
+	end
+	DropService.OnDropRequested:Fire(
+		origin,
+		DropTypes.Gems,
+		gems.minDropRate,
+		gems.maxDropRate,
+		gems.minGems,
+		gems.maxGems,
+		false,
+		player.UserId,
+		true
+	)
+end
+
 -- Fires `total` of `dropType` as `count` pickups from `origin`, private to
 -- `player`, chest-style (a blip per pickup). Rounds the per-pickup value
 -- up so the chest never pays less than its row.
@@ -383,25 +406,18 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 	-- of the tier's permanent take -- Coins and Forge Ore, run totals from
 	-- DifficultyData `chestCoins` / `chestOre` split by floor and by
 	-- miniboss / boss (ChestPayout), then into MobData `chestPickups`
-	-- pickups. The EVENT chest (Laughing Coffin) pays Gems from the
-	-- batch's own row instead. Everything is PRIVATE to the chest's owner:
-	-- chests are per player, so shared pickups meant everybody banked
-	-- everybody else's chest. DropService applies the dungeon's
-	-- rewardScale at collect time.
+	-- pickups -- plus the encounter mob's own Gem purse when its MobData
+	-- row has `gems` (the Miniboss, ~50 a floor; DropService applies the
+	-- tier's GemScale at collect time). The EVENT chest
+	-- (Laughing Coffin) pays Gems from the batch's own row instead.
+	-- Everything is PRIVATE to the chest's owner: chests are per player,
+	-- so shared pickups meant everybody banked everybody else's chest.
+	-- DropService applies the dungeon's rewardScale to the Coins and Ore
+	-- at collect time.
 	if enemyType == EnemyTypes.Event then
 		local gems = batch and batch.gems
-		if DropService and gems then
-			DropService.OnDropRequested:Fire(
-				origin,
-				DropTypes.Gems,
-				gems.minDropRate,
-				gems.maxDropRate,
-				gems.minGems,
-				gems.maxGems,
-				false,
-				player.UserId,
-				true
-			)
+		if gems then
+			dropGems(origin, gems, player)
 		end
 	elseif enemyType then
 		-- The tier's run total, split across floors (back-loaded) and
@@ -416,6 +432,11 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		local ore = DifficultyData.ChestPayout(tier, floor, enemyType, "chestOre")
 		if ore then
 			dropSplit(origin, DropTypes.ForgeOre, ore, pickups.ore, player)
+		end
+		local mobData = mobName and MobData[mobName]
+		local purse = mobData and mobData.gems
+		if purse then
+			dropGems(origin, purse, player)
 		end
 	end
 

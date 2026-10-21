@@ -587,7 +587,7 @@ function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dung
 		else
 			-- No DebugDifficulty attribute: Studio plays EASY, the tier a
 			-- fresh test character is for (live keeps DEFAULT_DIFFICULTY).
-			requested = Difficulty.Easy
+			requested = Difficulty.Normal
 			ascension = 1
 		end
 		return requested, ascension

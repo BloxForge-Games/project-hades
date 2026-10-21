@@ -132,16 +132,16 @@ local FORGE_OFFER_COUNT = 3
 -- Merchant.
 local MERCHANT_STOCK_SIZE = 5
 -- RELIC PRICES ARE FIXED, IN GEMS (design call, 2026-10). Gems are the
--- run currency: mobs drop them at the same rate on every tier, so a
--- price means the same thing wherever the shop appears -- a longer floor
--- simply affords more. Tuned so an Easy run (~290 Gems) buys about two
--- Rares; Nightmare (~915) three to four. Each pedestal rolls its tag
+-- run currency, and a run's take is authored per tier (DifficultyData
+-- `gems`: 350 / 650 / 950 / 950 solo, before relic bonuses), so a price
+-- means the same thing wherever the shop appears: an Easy run buys two
+-- Rares, a Nightmare run six. Each pedestal rolls its tag
 -- within -PRICE_MARKUP_MAX..+PRICE_MARKUP_MAX of the base, once per
 -- player, so a stall can be a bargain or a rip-off (design call, 2026-10).
 local BUY_PRICES = {
-	[ItemRarity.Rare] = 100,
-	[ItemRarity.Epic] = 150,
-	[ItemRarity.Legendary] = 200,
+	[ItemRarity.Rare] = 150,
+	[ItemRarity.Epic] = 200,
+	[ItemRarity.Legendary] = 300,
 	-- No Cursed row: the shop never stocks or buys them.
 }
 -- The random swing on a stocked relic's tag: -this..+this, uniform.

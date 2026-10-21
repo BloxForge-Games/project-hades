@@ -4,7 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
-local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local dungeonContent = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonContent)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
@@ -133,27 +133,19 @@ end
 
 --[ Per-dungeon mob pool ]--
 
+-- The floor the run is on (1 outside a run).
+function MobSpawnService._floor(_self: typeof(MobSpawnService)): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	return if dungeonService then dungeonService:GetFloor() else 1
+end
+
 -- ReplicatedStorage.GameAssets.Mobs.<assetFolder>.Dungeon<floor> -- each
 -- dungeon has its own folder of mob templates, named by its DungeonData
--- assetFolder, with one subfolder per floor (the floor's recolours). A
--- missing floor folder falls back to the biome folder, a missing biome
--- folder to the flat Mobs folder (with a warn), so a gap degrades to
--- "same mobs everywhere" instead of a dead dungeon.
-function MobSpawnService._mobFolder(_self: typeof(MobSpawnService), dungeonId: string?): Instance
-	local root = ReplicatedStorage.GameAssets.Mobs
-	if dungeonId then
-		local config = DungeonData[dungeonId]
-		local folderName = if config and config.assetFolder then config.assetFolder else dungeonId
-		local folder = root:FindFirstChild(folderName)
-		if folder then
-			local dungeonService = Blitz.OptionalService("DungeonService")
-			local floor = if dungeonService then dungeonService:GetFloor() else 1
-			local floorFolder = folder:FindFirstChild(("Dungeon%d"):format(floor))
-			return floorFolder or folder
-		end
-		warn(("[MobSpawnService] No mob folder GameAssets.Mobs.%s -- using the flat folder"):format(folderName))
-	end
-	return root
+-- assetFolder, with one subfolder per floor (the floor's recolours). The
+-- fallback chain (the biome's Dungeon1, the biome, then RunegroveForest's,
+-- then the flat folder) is dungeonContent's, shared with the generator.
+function MobSpawnService._mobFolder(self: typeof(MobSpawnService), dungeonId: string?): Instance
+	return dungeonContent.PrimaryFolder(ReplicatedStorage.GameAssets.Mobs, dungeonId, self:_floor())
 end
 
 function MobSpawnService._activeDungeonId(_self: typeof(MobSpawnService)): string?
@@ -162,25 +154,32 @@ function MobSpawnService._activeDungeonId(_self: typeof(MobSpawnService)): strin
 	return dungeon and dungeon.id or nil
 end
 
--- Template for `mobName` in the ACTIVE dungeon's pool (nil + warn if
--- absent -- a name that isn't in this dungeon's folder is a data error, not
--- a reason to spawn a mob from another dungeon).
+-- Template for `mobName` on the ACTIVE dungeon's floor: the floor's own
+-- rig, else the biome's Dungeon1 rig (a floor not recoloured yet), else
+-- the fallback biome's (dungeonContent warns once per fallback). nil + a
+-- warn when no folder in the chain has it -- a data error, not a reason
+-- to spawn something else.
 function MobSpawnService._mobTemplate(self: typeof(MobSpawnService), mobName: string): Model?
-	local folder = self:_mobFolder(self:_activeDungeonId())
-	local template = folder:FindFirstChild(mobName) :: Model?
-	if not template then
-		warn(("[MobSpawnService] No mob template '%s' under %s"):format(mobName, folder:GetFullName()))
+	local dungeonId = self:_activeDungeonId()
+	local template = dungeonContent.FindFloorAsset(ReplicatedStorage.GameAssets.Mobs, dungeonId, self:_floor(), mobName)
+	if not template or not template:IsA("Model") then
+		warn(
+			("[MobSpawnService] No mob template '%s' for %s floor %d"):format(
+				mobName,
+				tostring(dungeonId),
+				self:_floor()
+			)
+		)
 		return nil
 	end
 	return template
 end
 
--- Queue tuning for the active dungeon (DungeonData[id].mobQueue), with
--- the module defaults filling any gap.
+-- Queue tuning for the active dungeon's floor (DungeonData floors[n]
+-- .mobQueue, merged over floor 1), with the module defaults filling any gap.
 function MobSpawnService._queueTuning(self: typeof(MobSpawnService))
-	local dungeonId = self:_activeDungeonId()
-	local config = dungeonId and DungeonData[dungeonId]
-	local tuning = config and config.mobQueue or {}
+	local content = dungeonContent.FloorContent(self:_activeDungeonId(), self:_floor())
+	local tuning: { [string]: any } = if content then content.mobQueue else {}
 	return {
 		perRoom = tuning.perRoom or QUEUE_PER_ROOM,
 		perPlayer = tuning.perPlayer or QUEUE_PER_PLAYER,
@@ -190,17 +189,19 @@ function MobSpawnService._queueTuning(self: typeof(MobSpawnService))
 	}
 end
 
--- Rebuilds the random-spawn plan from DungeonData[dungeonId].mobPool: the
--- explicit list of MobNames that spawn in this dungeon, each weighted by
--- MobData[name].spawnWeight (0 / no data = skipped + warned). Every name
--- must ALSO have a template in the dungeon's GameAssets.Mobs folder --
--- checked here so a typo warns at generation, not on the first spawn.
--- Called by DungeonService on every generation.
+-- Rebuilds the random-spawn plan from the FLOOR's mobPool (DungeonData
+-- floors[n], merged over floor 1): the explicit list of MobNames that
+-- spawn on it, each weighted by MobData[name].spawnWeight (0 / no data =
+-- skipped + warned). Every name must ALSO have a rig somewhere in the
+-- floor's folder chain (dungeonContent.FindFloorAsset) -- checked here so
+-- a typo warns at generation, not on the first spawn. Called by
+-- DungeonService on every generation.
 function MobSpawnService.BuildMobPlanForDungeon(self: typeof(MobSpawnService), dungeonId: string)
 	local plan = LootPlan.new("single")
 	local added = 0
-	local config = DungeonData[dungeonId]
-	local pool = config and config.mobPool or {}
+	local floor = self:_floor()
+	local content = dungeonContent.FloorContent(dungeonId, floor)
+	local pool: { string } = if content then content.mobPool else {}
 	local folder = self:_mobFolder(dungeonId)
 	for _, mobName in pool do
 		local data = MobData[mobName]
@@ -214,10 +215,11 @@ function MobSpawnService.BuildMobPlanForDungeon(self: typeof(MobSpawnService), d
 			)
 			continue
 		end
-		if not folder:FindFirstChild(mobName) then
+		if not dungeonContent.FindFloorAsset(ReplicatedStorage.GameAssets.Mobs, dungeonId, floor, mobName) then
 			warn(
-				("[MobSpawnService] %s.mobPool: no template '%s' under %s -- skipped"):format(
+				("[MobSpawnService] %s floor %d mobPool: no rig '%s' under %s or its fallbacks -- skipped"):format(
 					dungeonId,
+					floor,
 					tostring(mobName),
 					folder:GetFullName()
 				)
