@@ -99,10 +99,22 @@ local ROW_Y = 0.541
 -- They rise HEADER_RISE (fraction of the screen) into place while fading
 -- in, the countdown a beat behind the title; on close they sink back down
 -- while fading out.
-local TITLE_POSITION = Vector2.new(0.499, 0.19)
+local TITLE_POSITION = Vector2.new(0.498268, 0.170443)
 local TITLE_SIZE = UDim2.fromScale(0.318, 0.058)
-local COUNTDOWN_POSITION = Vector2.new(0.499, 0.254)
+local COUNTDOWN_POSITION = Vector2.new(0.498, 0.226089)
 local COUNTDOWN_SIZE = UDim2.fromScale(0.063, 0.049)
+-- The bar under the number: a thin neutral track that drains left to
+-- right with the seconds left (design call, 2026-10-21). A child of the
+-- number's label, so it rides its entry / exit glide and fades with it.
+local COUNTDOWN_BAR_POSITION = UDim2.fromScale(0.5, 1.22643)
+local COUNTDOWN_BAR_SIZE = UDim2.fromScale(1.3, 0.1)
+local COUNTDOWN_BAR_TRACK_COLOR = Color3.fromRGB(255, 255, 255)
+local COUNTDOWN_BAR_TRACK_TRANSPARENCY = 0.8
+local COUNTDOWN_BAR_FILL_COLOR = Color3.fromRGB(255, 255, 255)
+local COUNTDOWN_BAR_FILL_TRANSPARENCY = 0.1
+-- The server's hand length, for the bar's full width; a hand that reads
+-- longer on its first tick stretches it (the max seen wins).
+local COUNTDOWN_BAR_FULL_SECONDS = 30
 local HEADER_RISE = 0.03
 local COUNTDOWN_ENTRY_DELAY = 0.08
 local HEADER_IN_MOVE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -215,6 +227,11 @@ local function Container(props: any)
 	local titleRef = React.useRef(nil)
 	local countdownRef = React.useRef(nil)
 	local countdownScaleRef = React.useRef(nil)
+	local countdownBarTrackRef = React.useRef(nil)
+	local countdownBarFillRef = React.useRef(nil)
+	-- The seconds the bar reads as full for this hand (see
+	-- COUNTDOWN_BAR_FULL_SECONDS); reset by the deal.
+	local countdownBarFullRef = React.useRef(COUNTDOWN_BAR_FULL_SECONDS)
 	local titleAlphaRef = React.useRef(nil)
 	local countdownAlphaRef = React.useRef(nil)
 
@@ -375,6 +392,7 @@ local function Container(props: any)
 		local thisOffer = offerRef.current
 		phaseRef.current = "dealing"
 		shownSecondRef.current = nil
+		countdownBarFullRef.current = COUNTDOWN_BAR_FULL_SECONDS
 		holdHud(true)
 		local panel = panelRef.current
 		if panel then
@@ -727,7 +745,15 @@ local function Container(props: any)
 			if not current or not countdown then
 				return
 			end
-			local remaining = math.max(0, math.ceil(current.ExpiresAt - workspace:GetServerTimeNow()))
+			local secondsLeft = math.max(0, current.ExpiresAt - workspace:GetServerTimeNow())
+			-- The bar drains continuously, every frame, on the exact time.
+			local fill = countdownBarFillRef.current
+			if fill then
+				local full = math.max(countdownBarFullRef.current, secondsLeft)
+				countdownBarFullRef.current = full
+				fill.Size = UDim2.fromScale(if full > 0 then math.clamp(secondsLeft / full, 0, 1) else 0, 1)
+			end
+			local remaining = math.ceil(secondsLeft)
 			if remaining == shownSecondRef.current then
 				return
 			end
@@ -763,10 +789,23 @@ local function Container(props: any)
 		local countdownValue = Instance.new("NumberValue")
 		countdownValue.Value = 1
 		countdownAlphaRef.current = countdownValue
-		local countdownConnection = countdownValue.Changed:Connect(function(a: number)
+		local function applyCountdownAlpha(a: number)
 			applyLabelAlpha(countdownRef.current, a)
-		end)
-		applyLabelAlpha(countdownRef.current, 1)
+			-- The bar fades with the number (its own transparencies, lerped
+			-- from fully drawn to gone).
+			local track = countdownBarTrackRef.current
+			if track then
+				track.BackgroundTransparency = COUNTDOWN_BAR_TRACK_TRANSPARENCY
+					+ (1 - COUNTDOWN_BAR_TRACK_TRANSPARENCY) * a
+			end
+			local fill = countdownBarFillRef.current
+			if fill then
+				fill.BackgroundTransparency = COUNTDOWN_BAR_FILL_TRANSPARENCY
+					+ (1 - COUNTDOWN_BAR_FILL_TRANSPARENCY) * a
+			end
+		end
+		local countdownConnection = countdownValue.Changed:Connect(applyCountdownAlpha)
+		applyCountdownAlpha(1)
 
 		return function()
 			connection:Disconnect()
@@ -880,6 +919,33 @@ local function Container(props: any)
 				UIScale = React.createElement("UIScale", {
 					ref = countdownScaleRef,
 					Scale = 1,
+				}),
+				-- The time-left bar: a track with a fill that drains to the
+				-- left edge (anchored left). Both start invisible with the
+				-- number and fade with it.
+				Bar = React.createElement("Frame", {
+					ref = countdownBarTrackRef,
+					AnchorPoint = Vector2.new(0.5, 0),
+					Position = COUNTDOWN_BAR_POSITION,
+					Size = COUNTDOWN_BAR_SIZE,
+					BackgroundColor3 = COUNTDOWN_BAR_TRACK_COLOR,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					ZIndex = 2,
+				}, {
+					UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+					Fill = React.createElement("Frame", {
+						ref = countdownBarFillRef,
+						AnchorPoint = Vector2.new(0, 0.5),
+						Position = UDim2.fromScale(0, 0.5),
+						Size = UDim2.fromScale(1, 1),
+						BackgroundColor3 = COUNTDOWN_BAR_FILL_COLOR,
+						BackgroundTransparency = 1,
+						BorderSizePixel = 0,
+						ZIndex = 3,
+					}, {
+						UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+					}),
 				}),
 			}),
 

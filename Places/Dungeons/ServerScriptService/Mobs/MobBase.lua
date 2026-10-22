@@ -1791,6 +1791,11 @@ function MobBase._dropGems(self: MobBase)
 	if room and (room.roomType == RoomTypes.Miniboss or room.roomType == RoomTypes.Boss) then
 		return
 	end
+	-- The row's `dropChance` (default 1): the kill drops at all, or not.
+	local dropChance = (gems :: any).dropChance
+	if type(dropChance) == "number" and math.random() >= dropChance then
+		return
+	end
 
 	DropService.OnDropRequested:Fire(
 		self._rootPart,

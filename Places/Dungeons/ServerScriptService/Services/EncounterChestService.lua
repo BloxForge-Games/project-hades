@@ -26,6 +26,9 @@
 	  * GEMS  an encounter mob with a MobData `gems` row pays that purse
 	          from its chest too, on top of the Coins + Ore (the Miniboss:
 	          ~50 a floor before the tier's GemScale; the Boss has no row).
+	  * EVENT CHEST  the Coffin's: its Gem row plus half a Boss chest's
+	          Coins for the tier and floor (EVENT_CHEST_COIN_SHARE_OF_BOSS),
+	          an unbalanced bonus by design.
 
 	PER PLAYER, OWNER-LOCKED: a chest carries its owner's UserId and only
 	that player can open it, so nobody can take a teammate's reward. This
@@ -115,6 +118,13 @@ local OWNER_ATTRIBUTE = "OwnerId"
 -- chest early when its owner leaves or the chest is destroyed, so the
 -- timeout is a backstop rather than the normal path.
 local BATCH_TIMEOUT_SECONDS = 90
+
+-- The EVENT chest (the Laughing Coffin) pays this share of a BOSS chest's
+-- Coins for the run's tier and floor, on top of its Gem row (design call,
+-- 2026-10-21): a lucky find, not part of the balanced take, scaling with
+-- the tier so it stays worth the fight on Nightmare. No Ore.
+local EVENT_CHEST_COIN_SHARE_OF_BOSS = 0.5
+local EVENT_CHEST_COIN_PICKUPS = { 8, 12 }
 
 -- One chest batch (see BATCH_TIMEOUT_SECONDS). `gems` is an optional
 -- MobData `gems`-shaped row the Event Chest pays (the run currency);
@@ -418,6 +428,18 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		local gems = batch and batch.gems
 		if gems then
 			dropGems(origin, gems, player)
+		end
+		local tier = DungeonService:GetDifficultyScale()
+		local floor = DungeonService:GetFloor()
+		local bossCoins = DifficultyData.ChestPayout(tier, floor, EnemyTypes.Boss, "chestCoins")
+		if bossCoins then
+			dropSplit(
+				origin,
+				DropTypes.Coins,
+				math.round(bossCoins * EVENT_CHEST_COIN_SHARE_OF_BOSS),
+				EVENT_CHEST_COIN_PICKUPS,
+				player
+			)
 		end
 	elseif enemyType then
 		-- The tier's run total, split across floors (back-loaded) and
