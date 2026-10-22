@@ -85,7 +85,7 @@ local CATEGORY_ACTIVE_STROKE_COLOR = Color3.fromRGB(26, 48, 74)
 -- The bag's 2026-10-22 palette: dark blue panels, blue-grey border and rows.
 local PANEL_COLOR = Color3.fromRGB(20, 31, 40)
 local PANEL_STROKE_COLOR = Color3.fromRGB(43, 65, 85)
-local PANEL_STROKE_THICKNESS = 0.008
+local PANEL_STROKE_THICKNESS = 0.005
 local ROW_COLOR = Color3.fromRGB(45, 70, 90)
 local CATEGORY_SELECTED_OVERLAY_T = 0.75
 
