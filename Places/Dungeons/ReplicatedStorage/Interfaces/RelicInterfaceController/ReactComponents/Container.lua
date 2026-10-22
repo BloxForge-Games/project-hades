@@ -16,6 +16,8 @@ local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRa
 local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
+local shineStroke = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.shineStroke)
+local ShineRing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.ShineRing)
 
 local localPlayer = Players.LocalPlayer
 
@@ -29,6 +31,11 @@ local localPlayer = Players.LocalPlayer
 --                                        handler that acts on a relic must
 --                                        check `locked` first -- Sell,
 --                                        Reforge and Drop all refuse it.
+-- The toggle plate's ring (see the effect in Container): the inventory
+-- tiles' animated shine outline in the tray's accent blue, at the plate
+-- stroke's own thickness, for as long as the toggle exists.
+local TOGGLE_RING_COLOR = Color3.fromRGB(105, 158, 186)
+local TOGGLE_RING_THICKNESS = 0.04
 local LOCKED_SLOT_NAME = "Relic Slot"
 local LOCKED_SLOT_RARITY = "Locked"
 local LOCKED_SLOT_RARITY_COLOR = Color3.fromRGB(141, 141, 141)
@@ -38,8 +45,8 @@ local LOCKED_SLOT_DESCRIPTION =
 -- The card's own copy of the locked box sits on a lighter panel than the
 -- tray, so it carries its own tints, and drops the shadow.
 local LOCKED_CARD_LOOK = {
-	background = Color3.fromRGB(97, 97, 97),
-	icon = Color3.fromRGB(31, 31, 31),
+	background = Color3.fromRGB(52, 80, 102),
+	icon = Color3.fromRGB(20, 31, 40),
 	shadowVisible = false,
 }
 -- Drop on a locked slot masks itself like Sell / Reroll do ("???"), in a
@@ -121,9 +128,19 @@ local function Container(props: any)
 	local backgroundFrameRef = React.useRef(nil)
 	local descriptionFrameRef = React.useRef(nil)
 	local toggleButtonRef = React.useRef(nil)
+	local toggleRingAnchorRef = React.useRef(nil)
 	local notificationButtonRef = React.useRef(nil)
 
 	local visibleRef = React.useRef(visible)
+
+	-- The toggle's ring (TOGGLE_RING_*).
+	React.useEffect(function()
+		local anchor = toggleRingAnchorRef.current
+		if not anchor then
+			return nil
+		end
+		return shineStroke(anchor, TOGGLE_RING_THICKNESS, TOGGLE_RING_COLOR)
+	end, {})
 	local selectedRelicRef = React.useRef(selectedRelic)
 
 	React.useEffect(function()
@@ -429,7 +446,7 @@ local function Container(props: any)
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
 			Size = UDim2.fromScale(2, 2),
-			BackgroundColor3 = Color3.fromRGB(38, 38, 38),
+			BackgroundColor3 = Color3.fromRGB(25, 25, 25),
 			BackgroundTransparency = 0.5,
 			ZIndex = -1,
 		}),
@@ -453,12 +470,27 @@ local function Container(props: any)
 					AnchorPoint = Vector2.new(0.5, 0.5),
 					Position = UDim2.fromScale(0.536, 0.457319),
 					Size = UDim2.fromScale(1.071, 0.884638),
-					BackgroundColor3 = Color3.fromRGB(38, 38, 38),
+					BackgroundColor3 = Color3.fromRGB(20, 31, 40),
 					BackgroundTransparency = 0,
 					ZIndex = -1,
 				}, {
 					UICorner = React.createElement("UICorner", {
 						CornerRadius = UDim.new(0.05, 0),
+					}),
+
+					-- The bag's panel stroke and its shine ring (ShineRing), so the
+					-- card matches the tray panel beside it.
+					UIStroke = React.createElement("UIStroke", {
+						Color = Color3.fromRGB(43, 65, 85),
+						StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
+						Thickness = 0.008,
+					}),
+
+					ShineRing = React.createElement(ShineRing, {
+						color = Color3.fromRGB(43, 65, 85),
+						thickness = 0.008,
+						cornerRadius = UDim.new(0.05, 0),
+						active = visible and selectedRelic ~= nil,
 					}),
 				}),
 
@@ -591,7 +623,7 @@ local function Container(props: any)
 				-- Merchant's sell session; Reforge = the Forge's anvil).
 				SetBonusFrame = React.createElement("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
-					BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+					BackgroundColor3 = Color3.fromRGB(45, 70, 90),
 					Position = UDim2.fromScale(0.561539, 0.699734),
 					Size = UDim2.fromScale(0.595079, 0.247),
 				}, {
@@ -820,6 +852,7 @@ local function Container(props: any)
 
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.968, -0.01),
+				Rotation = -13.712,
 				Size = UDim2.fromScale(0.575, 0.575),
 				BackgroundTransparency = 0,
 				BackgroundColor3 = Color3.fromRGB(255, 102, 102),
@@ -854,11 +887,14 @@ local function Container(props: any)
 				}),
 			}),
 
+			-- The tray toggle wears the toolbar's slot plate (2026-10-22): the
+			-- same flat blue-grey square, black border and bevel overlay as a
+			-- weapon slot, with the relic icon in it and no number.
 			ToggleImageButton = React.createElement("ImageButton", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromScale(1.15, 1.15),
-				BackgroundColor3 = Color3.fromRGB(47, 47, 48),
+				BackgroundColor3 = Color3.fromRGB(43, 65, 85),
 				BackgroundTransparency = 0,
 				Image = "",
 				ImageColor3 = Color3.fromRGB(255, 255, 255),
@@ -872,22 +908,58 @@ local function Container(props: any)
 					setVisible(not visible)
 				end,
 			}, {
+				UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
+					AspectRatio = 1,
+					AspectType = Enum.AspectType.FitWithinMaxSize,
+				}),
+
 				UICorner = React.createElement("UICorner", {
-					CornerRadius = UDim.new(1, 0),
+					CornerRadius = UDim.new(0.1, 0),
 				}),
 
 				UIStroke = React.createElement("UIStroke", {
 					ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-					Color = Color3.fromRGB(22, 22, 22),
+					Color = Color3.fromRGB(0, 0, 0),
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.1,
+					Thickness = 0.04,
 					ZIndex = 6,
+				}),
+
+				-- The ring's anchor (see TOGGLE_RING_*): a child frame's stroke
+				-- draws above the plate's own black border.
+				RingAnchor = React.createElement("Frame", {
+					ref = toggleRingAnchorRef,
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromScale(1, 1),
+					BackgroundTransparency = 1,
+					ZIndex = 8,
+				}, {
+					UICorner = React.createElement("UICorner", {
+						CornerRadius = UDim.new(0.1, 0),
+					}),
+				}),
+
+				OuterOutlineImageLabel = React.createElement("ImageLabel", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromScale(1, 1),
+					BackgroundTransparency = 1,
+					Image = "rbxassetid://6096768861",
+					ScaleType = Enum.ScaleType.Stretch,
+					ImageColor3 = Color3.fromRGB(255, 255, 255),
+					ImageTransparency = 0.5,
+					ZIndex = 7,
+				}, {
+					UICorner = React.createElement("UICorner", {
+						CornerRadius = UDim.new(0.1, 0),
+					}),
 				}),
 
 				ToggleImageLabel = React.createElement("ImageLabel", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
 					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(0.85, 0.85),
+					Size = UDim2.fromScale(0.8, 0.8),
 					BackgroundTransparency = 1,
 					Image = "rbxassetid://72334652371090",
 					ImageColor3 = Color3.fromRGB(255, 255, 255),
@@ -902,27 +974,58 @@ local function Container(props: any)
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.106003, 0.496374),
 			Size = UDim2.fromScale(0.233005, 0.580662),
-			BackgroundColor3 = Color3.fromRGB(38, 38, 38),
+			BackgroundColor3 = Color3.fromRGB(20, 31, 40),
 			BackgroundTransparency = 0,
 			ZIndex = 0,
 		}, {
+			-- The animated shine ring (ShineRing), over the static stroke.
+			ShineRing = React.createElement(ShineRing, {
+				color = Color3.fromRGB(43, 65, 85),
+				thickness = 0.008,
+				cornerRadius = UDim.new(0.025, 0),
+				active = visible,
+			}),
 			UICorner = React.createElement("UICorner", {
 				CornerRadius = UDim.new(0.025, 0),
 			}),
 
+			-- The bevel is kept but off (the 2026-10-22 export): the panel wears
+			-- the bag's blue-grey stroke instead.
 			ShadowBackgroundImageLabel = React.createElement("ImageLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromScale(1, 1),
 				Image = "rbxassetid://6096768861",
 				BackgroundTransparency = 1,
-				ImageColor3 = Color3.fromRGB(255, 255, 255),
 				ImageTransparency = 0.35,
 				ScaleType = Enum.ScaleType.Stretch,
+				Visible = false,
 				ZIndex = 2,
 			}, {
 				UICorner = React.createElement("UICorner", {
 					CornerRadius = UDim.new(0.025, 0),
+				}),
+			}),
+
+			UIStroke = React.createElement("UIStroke", {
+				Color = Color3.fromRGB(43, 65, 85),
+				StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
+				Thickness = 0.008,
+			}, {
+				UIGradient = React.createElement("UIGradient", {
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(0.141623, Color3.fromRGB(206, 206, 206)),
+						ColorSequenceKeypoint.new(0.499136, Color3.fromRGB(211, 211, 211)),
+						ColorSequenceKeypoint.new(0.777202, Color3.fromRGB(206, 206, 206)),
+						ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
+					}),
+					Rotation = 45,
+					Transparency = NumberSequence.new({
+						NumberSequenceKeypoint.new(0, 0),
+						NumberSequenceKeypoint.new(0.625156, 0),
+						NumberSequenceKeypoint.new(1, 0),
+					}),
 				}),
 			}),
 		}),

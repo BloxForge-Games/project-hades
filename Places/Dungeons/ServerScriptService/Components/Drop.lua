@@ -4,6 +4,7 @@ local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local DropService = require(ServerScriptService.Services.DropService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
@@ -15,6 +16,19 @@ local LifeService = require(ServerScriptService.Services.LifeService)
 
 local DESTROY_DELAY = 25
 local MANA_DESTROY_DELAY = 10
+
+-- Gems and the two orbs are ROOM-BOUND (2026-10-22): their fade timer
+-- does not start at spawn but when the room is done -- the next segment
+-- clear (a gate opening) or the dungeon completing -- so nothing that
+-- dropped mid-fight is lost to the clock while the fight is still on.
+-- Coins and Ore keep the plain timer. DungeonService is reached through
+-- OptionalService, never required (see Docs/Architecture.md); without
+-- it (no run) the plain timer applies.
+local ROOM_BOUND_TYPES: { [string]: boolean } = {
+	[DropTypes.Gems] = true,
+	[DropTypes.Mana] = true,
+	[DropTypes.Health] = true,
+}
 
 -- The one emitter DropData `particleScale` resizes (Base.Attachment.Shine);
 -- the drop sparkle and the Collected burst keep their authored size.
@@ -40,6 +54,7 @@ local Drop = Component.new({
 
 function Drop:Construct()
 	self._playerRegistry = {} :: { [Players]: boolean }
+	self._connections = {} :: { RBXScriptConnection }
 	self._dropValue = self.Instance:GetAttribute(Attributes.DropValue)
 	self._dropType = self.Instance:GetAttribute(Attributes.DropType)
 	self._imageId = self.Instance:GetAttribute(Attributes.ImageId)
@@ -73,20 +88,28 @@ function Drop:Start()
 		self.Instance.PrimaryPart.BillboardGui.Image.Image = self._imageId
 	end)
 
-	-- Removes the coin within 15 seconds
-	task.delay(
-		if self._dropType == DropTypes.Coins
-			then DESTROY_DELAY
-			elseif self._dropType == DropTypes.Mana then MANA_DESTROY_DELAY
-			else DESTROY_DELAY,
-		function()
+	-- The fade-out, DESTROY_DELAY (MANA_DESTROY_DELAY for mana) after it
+	-- is armed: at spawn for coins and ore, at room completion for the
+	-- room-bound types (ROOM_BOUND_TYPES).
+	local fadeDelay = if self._dropType == DropTypes.Mana then MANA_DESTROY_DELAY else DESTROY_DELAY
+	local fadeArmed = false
+	local function armFade()
+		if fadeArmed then
+			return
+		end
+		fadeArmed = true
+		task.delay(fadeDelay, function()
+			local primary = self.Instance and self.Instance.PrimaryPart
+			if not primary or not primary.Parent then
+				return -- collected or torn down already
+			end
 			local coinImageTransparencyTween = TweenService:Create(
-				self.Instance.PrimaryPart.BillboardGui.Image,
+				primary.BillboardGui.Image,
 				TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 				{ ImageTransparency = 1 }
 			)
 
-			for _, descendant in self.Instance.PrimaryPart:GetDescendants() do
+			for _, descendant in primary:GetDescendants() do
 				if descendant:IsA("ParticleEmitter") then
 					descendant.Enabled = false
 				end
@@ -97,8 +120,26 @@ function Drop:Start()
 			coinImageTransparencyTween.Completed:Connect(function()
 				self.Instance:Destroy()
 			end)
+		end)
+	end
+
+	local dungeonService = if ROOM_BOUND_TYPES[self._dropType] then Blitz.OptionalService("DungeonService") else nil
+	if dungeonService then
+		-- The room is done when its gate opens (a segment clear) or, for
+		-- the last room, when the dungeon completes; any one of these arms
+		-- the fade once.
+		for _, signal in
+			{
+				dungeonService.Signals.OnSegmentCleared,
+				dungeonService.Signals.OnDungeonCompleted,
+				dungeonService.Signals.OnFinalDungeonCompleted,
+			}
+		do
+			table.insert(self._connections, signal:Connect(armFade))
 		end
-	)
+	else
+		armFade()
+	end
 
 	collectedRouter:Bind(self.Instance, function(player: Player)
 		-- A dead player collects nothing: the run gear that spilled out of the
@@ -122,6 +163,13 @@ function Drop:Start()
 
 		DropService.OnDropCollected:Fire(player, self._dropType, self._dropValue)
 	end)
+end
+
+function Drop:Stop()
+	for _, connection in self._connections do
+		connection:Disconnect()
+	end
+	table.clear(self._connections)
 end
 
 return Drop

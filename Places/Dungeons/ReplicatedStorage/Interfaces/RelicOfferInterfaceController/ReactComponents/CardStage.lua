@@ -20,22 +20,14 @@
 	face for the embers, the shadow blur and the pick ring, since a
 	SurfaceGui clips at its edge.
 
-	THE KEYWORD TOOLTIPS are NOT on the part. AlwaysOnTop SurfaceGuis on
-	overlapping parts sort by depth, so a column hung off one card's part
-	could be covered by the neighbour's. Instead the stage owns one 2D
-	ScreenGui (the tooltip host) holding one FaceRect frame PER CARD
-	(card.tooltipRect, made and destroyed with the card), each moved every
-	placement onto its own card's projected face. Each OfferCard portals
-	its tooltip column into its own rect in face-relative scale, exactly
-	as it hung off the face before; a column sliding away stays over its
-	own card while the next card's opens over that one. A ScreenGui always
-	draws over every SurfaceGui, so nothing can cover it.
-
-	The rect is projected from the card's REST placement -- its slot and
-	the pose's x / y / depth 0, no yaw / pitch / roll and no hover tilt or
-	lift -- so the column's size never changes under a moving cursor (a
-	tilted face projects narrower, which would rescale the text). Only the
-	slot and the deal / dismiss motion move it.
+	THE KEYWORD TOOLTIPS are on the part too: the OfferCard hangs its
+	column off the face's right edge in the front gui, so it turns, tilts
+	and lifts with the card. The part therefore carries a wide margin on
+	the face's RIGHT (TOOLTIP_MARGIN) for the column to land in, since a
+	SurfaceGui clips at its edge. AlwaysOnTop guis on overlapping parts
+	sort by depth, and only the hovered card is lifted toward the camera
+	(the Container drops every other card's hover the moment one is
+	hovered), so the open column always draws over its neighbour.
 
 	POSE, per card -- every field tweenable through tweenPose:
 	  x       displacement from the slot, in face WIDTHS (right positive)
@@ -99,13 +91,18 @@ local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Ro
 -- The card face: width over height (the old 2D slot's constraint).
 local FACE_ASPECT = 0.68
 
--- The part, in face widths / heights, and where the face sits in it: the
--- face centred with 0.2 of margin on every side (the ember field is
--- 1.32 x 1.28, the pick ring grows to 1.18, the shadow blurs past that).
-local PART_WIDTH = 1.4
-local PART_HEIGHT = 1.4
-local FACE_LEFT = (PART_WIDTH - 1) / 2
-local FACE_TOP = (PART_HEIGHT - 1) / 2
+-- The part, in face widths / heights, and where the face sits in it:
+-- FACE_MARGIN of margin on the left, top and bottom (the ember field is
+-- 1.32 x 1.28, the pick ring grows to 1.18, the shadow blurs past that)
+-- and, on the RIGHT, that margin plus TOOLTIP_MARGIN for the keyword
+-- column the OfferCard hangs off the face (its TOOLTIP_GAP + TOOLTIP_WIDTH
+-- is 0.86 face widths; the rest is slack for the plates' slide).
+local FACE_MARGIN = 0.2
+local TOOLTIP_MARGIN = 0.9
+local PART_WIDTH = 1 + 2 * FACE_MARGIN + TOOLTIP_MARGIN
+local PART_HEIGHT = 1 + 2 * FACE_MARGIN
+local FACE_LEFT = FACE_MARGIN
+local FACE_TOP = FACE_MARGIN
 local PART_THICKNESS = 0.05
 
 -- How far in front of the camera the cards rest. Far enough that a card
@@ -118,11 +115,6 @@ local STAGE_DISTANCE = 8
 -- the cursor is at the face's edge, and how fast it follows (per second).
 local TILT_MAX_DEGREES = 7
 local TILT_FOLLOW_RATE = 12
-
--- The tooltip overlay: above the hand's own ScreenGui (50) and under the
--- cinematic bars (999).
-local TOOLTIP_HOST_NAME = "RelicOfferTooltips"
-local TOOLTIP_HOST_DISPLAY_ORDER = 60
 
 -- The RenderStep bind runs AFTER the camera controller has moved the
 -- camera for the frame (sizing, tilt, the fallback placement). Anything
@@ -170,9 +162,6 @@ export type Card = {
 	part: Part,
 	frontGui: SurfaceGui,
 	backGui: SurfaceGui,
-	-- This card's FaceRect in the tooltip overlay (header): the frame the
-	-- OfferCard portals its keyword column into.
-	tooltipRect: Frame,
 	-- The pose's yaw, live (degrees): the deal's reveal watches it.
 	yawValue: NumberValue,
 	setSlot: (self: Card, index: number, count: number) -> (),
@@ -213,8 +202,6 @@ local renderBound = false
 local dimPart: Part? = nil
 local dimGeneration = 0
 
--- The tooltip overlay ScreenGui the per-card FaceRects live in.
-local tooltipHost: ScreenGui? = nil
 local lastClock = os.clock()
 
 --[ Metrics ]--
@@ -284,31 +271,8 @@ local function faceOffsetInPart(): Vector3
 	return Vector3.new(partWidth / 2 - (FACE_LEFT + 0.5) * metrics.faceWidth, 0, 0)
 end
 
--- Every card's FaceRect onto its REST face (header): the slot plus the
--- pose's x / y on the rest plane, unrotated, no tilt, no lift, so the
--- column's size holds while the cursor moves over the card.
-local function placeFaceRects(camera: Camera, cameraCFrame: CFrame)
-	local halfW = metrics.faceWidth / 2
-	local halfH = metrics.faceHeight / 2
-	for _, card in cards do
-		local slot = slotCenterFraction(card)
-		local pose = card.pose
-		local x = (slot.X - 0.5) * 2 * metrics.halfWidth + pose.x.Value * metrics.faceWidth
-		local y = (0.5 - slot.Y) * 2 * metrics.halfHeight - pose.y.Value * metrics.faceHeight
-		local topLeft = camera:WorldToViewportPoint(
-			cameraCFrame:PointToWorldSpace(Vector3.new(x - halfW, y + halfH, -STAGE_DISTANCE))
-		)
-		local bottomRight = camera:WorldToViewportPoint(
-			cameraCFrame:PointToWorldSpace(Vector3.new(x + halfW, y - halfH, -STAGE_DISTANCE))
-		)
-		local rect = card.tooltipRect
-		rect.Position = UDim2.fromOffset(topLeft.X, topLeft.Y)
-		rect.Size = UDim2.fromOffset(bottomRight.X - topLeft.X, bottomRight.Y - topLeft.Y)
-	end
-end
-
 -- PLACEMENT: every part's CFrame from a camera CFrame and the current
--- metrics and poses, and the tooltip FaceRects. No sizing, no tilt
+-- metrics and poses. No sizing, no tilt
 -- stepping, no allocations beyond the CFrames themselves: this runs on
 -- every camera write in a frame.
 local function place(cameraCFrame: CFrame)
@@ -323,10 +287,6 @@ local function place(cameraCFrame: CFrame)
 		-- that faces the camera, then the slide that puts the face (not
 		-- the part) on the pivot.
 		card.part.CFrame = cameraCFrame * CFrame.new(faceCenter) * rotation * FACE_CAMERA * CFrame.new(-partOffset)
-	end
-	local camera = workspace.CurrentCamera
-	if camera then
-		placeFaceRects(camera, cameraCFrame)
 	end
 end
 
@@ -458,23 +418,6 @@ local function makeSurfaceGui(name: string, face: Enum.NormalId, part: Part): Su
 	return gui
 end
 
--- The tooltip overlay ScreenGui (header), made on first use and kept.
-local function ensureTooltipHost(): ScreenGui
-	local host = tooltipHost
-	if host and host.Parent then
-		return host
-	end
-	host = Instance.new("ScreenGui")
-	host.Name = TOOLTIP_HOST_NAME
-	host.ResetOnSpawn = false
-	host.DisplayOrder = TOOLTIP_HOST_DISPLAY_ORDER
-	host.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
-	host.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	host.Parent = localPlayer:WaitForChild("PlayerGui")
-	tooltipHost = host
-	return host
-end
-
 local CardStage = {}
 
 CardStage.FACE_ASPECT = FACE_ASPECT
@@ -513,14 +456,6 @@ function CardStage.create(name: string, index: number, count: number): Card
 	local frontGui = makeSurfaceGui("RelicOfferCardFront_" .. name, Enum.NormalId.Front, part)
 	local backGui = makeSurfaceGui("RelicOfferCardBack_" .. name, Enum.NormalId.Back, part)
 
-	-- This card's FaceRect in the tooltip overlay; placed by the step.
-	local tooltipRect = Instance.new("Frame")
-	tooltipRect.Name = "FaceRect_" .. name
-	tooltipRect.BackgroundTransparency = 1
-	tooltipRect.Active = false
-	tooltipRect.Position = UDim2.fromOffset(-10000, -10000)
-	tooltipRect.Parent = ensureTooltipHost()
-
 	local function value(initial: number): NumberValue
 		local v = Instance.new("NumberValue")
 		v.Value = initial
@@ -532,7 +467,6 @@ function CardStage.create(name: string, index: number, count: number): Card
 		part = part,
 		frontGui = frontGui,
 		backGui = backGui,
-		tooltipRect = tooltipRect,
 		yawValue = yawValue,
 		index = index,
 		count = math.max(count, 1),
@@ -619,7 +553,6 @@ function CardStage.create(name: string, index: number, count: number): Card
 		end
 		self.alive = false
 		cards[self] = nil
-		self.tooltipRect:Destroy()
 		for _, v in self.pose do
 			v:Destroy()
 		end

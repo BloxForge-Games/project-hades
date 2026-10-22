@@ -55,8 +55,9 @@
 	CardStage keeps in front of the camera (one part per card, two guis:
 	the front tree here and the card back). The whole gui is the PART; the
 	Face frame below is the card's own rectangle in it (CardStage.FACE_LEFT
-	/ FACE_TOP). The keyword tooltip column is NOT on the part: it is
-	portaled into the stage's 2D overlay (see the tooltip constants).
+	/ FACE_TOP). The keyword tooltip column hangs off the face's right
+	edge in the same gui, in the part's wide right margin, so it turns
+	and tilts with the card (see the tooltip constants).
 
 	The card's own idle motion needs nothing from the Container: the bob
 	(a looping tween on its Bob frame, phase-shifted by slot) and the
@@ -78,7 +79,6 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
-local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
@@ -322,15 +322,14 @@ local PHONE_DESCRIPTION_TEXT_SIZE = 7
 -- slides out past the card's right edge on hover.
 --
 -- Always to the RIGHT, on every card, because a tooltip that switches
--- sides is a tooltip the player has to look for. On cards 1 and 2 the
--- column lands over the neighbouring card, which is why it is NOT drawn
--- on this card's part: it is portaled into this card's own FaceRect in
--- the stage's 2D tooltip overlay (card.tooltipRect, a ScreenGui that
--- always draws over the SurfaceGuis), which the stage keeps on the
--- card's projected rest face, so the same face-relative layout below
--- lands beside the card, holds its size under the cursor, and nothing
--- can cover it. The other cards take a deeper veil while a card is
--- hovered (DIM_TRANSPARENCY in Container).
+-- sides is a tooltip the player has to look for. It is drawn on this
+-- card's own part (the stage leaves a wide margin right of the face for
+-- it), so it turns, tilts and lifts with the card. On cards 1 and 2 the
+-- column lands over the neighbouring card: the hovered card is lifted
+-- toward the camera and is the ONLY lifted card (the Container drops
+-- every other hover when one starts), so its column sorts in front. The
+-- other cards take a deeper veil while a card is hovered
+-- (DIM_TRANSPARENCY in Container).
 --
 -- Sizes are fractions of the CARD, so the column scales with the card
 -- on every viewport rather than needing its own platform cases. No
@@ -358,6 +357,9 @@ local TOOLTIP_SLIDE_FROM = -0.22
 local TOOLTIP_STAGGER = 0.06
 local TOOLTIP_IN_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local TOOLTIP_OUT_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- The column sits above the card group and the front embers (7), under
+-- the deal's cover.
+local TOOLTIP_ZINDEX = 8
 -- The deal's card-back cover, above everything on the part.
 local COVER_ZINDEX = 9
 
@@ -1099,23 +1101,20 @@ local function OfferCard(props: any)
 			})
 		end
 
-		-- Into this card's own FaceRect in the stage's overlay (the face on
-		-- screen), so these face-relative values land beside the card.
-		tooltip = ReactRoblox.createPortal(
-			React.createElement("Frame", {
-				ref = tooltipRef,
-				Name = "Tooltip_" .. relicName,
-				-- Hung off the card's right edge and centred on it. Hidden
-				-- until setTooltip raises it, so a never-hovered card costs
-				-- nothing to draw.
-				AnchorPoint = Vector2.new(0, 0.5),
-				Position = UDim2.fromScale(1 + TOOLTIP_GAP, 0.5),
-				Size = UDim2.fromScale(TOOLTIP_WIDTH, columnHeight),
-				BackgroundTransparency = 1,
-				Visible = false,
-			}, rows),
-			card.tooltipRect
-		)
+		-- Hung off the card's right edge and centred on it, in the part's
+		-- own gui. Hidden until setTooltip raises it, so a never-hovered
+		-- card costs nothing to draw. Above the card group and its embers,
+		-- under the deal cover.
+		tooltip = React.createElement("Frame", {
+			ref = tooltipRef,
+			Name = "Tooltip_" .. relicName,
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.fromScale(1 + TOOLTIP_GAP, 0.5),
+			Size = UDim2.fromScale(TOOLTIP_WIDTH, columnHeight),
+			BackgroundTransparency = 1,
+			Visible = false,
+			ZIndex = TOOLTIP_ZINDEX,
+		}, rows)
 	end
 
 	return React.createElement(CardStage.CardSurface, { card = card, back = cardBack(nil) }, {
@@ -1167,8 +1166,8 @@ local function OfferCard(props: any)
 						ZIndex = 7,
 					}),
 
-					-- The keyword tooltips (see the tooltip constants): a portal
-					-- into the stage's 2D overlay, not a child of this part.
+					-- The keyword tooltips (see the tooltip constants), hung
+					-- off the face's right edge on this same surface.
 					Tooltip = tooltip,
 
 					-- The pick's shockwave ring (see shockwave()). Outside the

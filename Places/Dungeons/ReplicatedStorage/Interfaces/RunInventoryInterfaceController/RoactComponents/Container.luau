@@ -60,6 +60,7 @@ local getItemDescription = require(ReplicatedStorage.Submodules.Core.Shared.Func
 local getItemImageId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.getItemImageId)
 local INTRO_POP_SECONDS = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.useIntroPop).INTRO_POP_SECONDS
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
+local ShineRing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.ShineRing)
 
 --[ Constants ]--
 
@@ -78,8 +79,14 @@ local GRID_COLUMNS = 5
 local INTRO_TILE_SPREAD_SECONDS = INTRO_TILE_SWEEP_SECONDS - INTRO_POP_SECONDS
 
 -- The single category pill's palette, in the ACTIVE state it never leaves.
-local CATEGORY_ACTIVE_COLOR = Color3.fromRGB(217, 121, 4)
-local CATEGORY_ACTIVE_STROKE_COLOR = Color3.fromRGB(74, 40, 1)
+local CATEGORY_ACTIVE_COLOR = Color3.fromRGB(105, 158, 186)
+local CATEGORY_ACTIVE_STROKE_COLOR = Color3.fromRGB(26, 48, 74)
+
+-- The bag's 2026-10-22 palette: dark blue panels, blue-grey border and rows.
+local PANEL_COLOR = Color3.fromRGB(20, 31, 40)
+local PANEL_STROKE_COLOR = Color3.fromRGB(43, 65, 85)
+local PANEL_STROKE_THICKNESS = 0.008
+local ROW_COLOR = Color3.fromRGB(45, 70, 90)
 local CATEGORY_SELECTED_OVERLAY_T = 0.75
 
 -- Timings / easing — identical to the Inventory's.
@@ -627,12 +634,19 @@ local function Container(props: any)
 
 			InventoryBackgroundFrame = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+				BackgroundColor3 = PANEL_COLOR,
 				Interactable = false,
 				Position = UDim2.fromScale(0.165, 0.493324),
 				Size = UDim2.fromScale(0.993, 0.89),
 				ZIndex = 0,
 			}, {
+				-- The animated shine ring (ShineRing), over the static stroke.
+				ShineRing = React.createElement(ShineRing, {
+					color = PANEL_STROKE_COLOR,
+					thickness = PANEL_STROKE_THICKNESS,
+					cornerRadius = UDim.new(0.015, 0),
+					active = props.Visible == true,
+				}),
 				ICorner1 = React.createElement("UICorner", {
 					BottomLeftRadius = UDim.new(0.015, 0),
 					BottomRightRadius = UDim.new(0.015, 0),
@@ -641,8 +655,9 @@ local function Container(props: any)
 				}),
 
 				UIStroke = React.createElement("UIStroke", {
+					Color = PANEL_STROKE_COLOR,
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.007,
+					Thickness = PANEL_STROKE_THICKNESS,
 				}, {
 					UIGradient = React.createElement("UIGradient", {
 						Color = ColorSequence.new({
@@ -664,10 +679,10 @@ local function Container(props: any)
 
 			ScrollingGradientFrame = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+				BackgroundColor3 = PANEL_STROKE_COLOR,
 				LayoutOrder = 6,
-				Position = UDim2.fromScale(0.171955, 0.881224),
-				Size = UDim2.fromScale(0.97, 0.0728559),
+				Position = UDim2.fromScale(0.165, 0.89156),
+				Size = UDim2.fromScale(0.993, 0.0935278),
 				ZIndex = 2,
 			}, {
 				ICorner1 = React.createElement("UICorner", {
@@ -793,9 +808,21 @@ local function Container(props: any)
 			-- detail pane needs less height, and the Close button moved out of
 			-- here to InnerContainerFrame. Static now that there's only one
 			-- layout -- nothing resizes it at runtime any more.
+			-- The detail panel's shine ring: a SIBLING of the panel, not a child,
+			-- because the panel is a CanvasGroup and would clip the stroke.
+			ItemInfoRing = React.createElement(ShineRing, {
+				color = PANEL_STROKE_COLOR,
+				thickness = PANEL_STROKE_THICKNESS,
+				cornerRadius = UDim.new(0.015, 0),
+				active = props.Visible == true,
+				position = DROP_INFO_BACKGROUND_POSITION,
+				size = DROP_INFO_BACKGROUND_SIZE,
+				zIndex = 0,
+			}),
+
 			ItemInfoContainerBackground = React.createElement("CanvasGroup", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+				BackgroundColor3 = PANEL_COLOR,
 				Position = DROP_INFO_BACKGROUND_POSITION,
 				Size = DROP_INFO_BACKGROUND_SIZE,
 				ZIndex = -1,
@@ -809,7 +836,8 @@ local function Container(props: any)
 
 				UIStroke = React.createElement("UIStroke", {
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.007,
+					Thickness = PANEL_STROKE_THICKNESS,
+					Color = PANEL_STROKE_COLOR,
 				}, {
 					UIGradient = React.createElement("UIGradient", {
 						Color = ColorSequence.new({
@@ -897,6 +925,7 @@ local function Container(props: any)
 				UIStroke = React.createElement("UIStroke", {
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
 					Thickness = 0.04,
+					Color = Color3.fromRGB(25, 25, 25),
 				}, {
 					UIGradient = React.createElement("UIGradient", {
 						Color = ColorSequence.new({
@@ -1021,7 +1050,7 @@ local function Container(props: any)
 
 				LineFrame = React.createElement("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0),
-					BackgroundColor3 = Color3.fromRGB(75, 75, 75),
+					BackgroundColor3 = ROW_COLOR,
 					Position = DROP_LINE_POSITION,
 					Size = DROP_LINE_SIZE,
 				}, {
@@ -1144,7 +1173,7 @@ local function Container(props: any)
 					-- children, so QualityFrame slides up into slot 1.
 					MainStatFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 1,
 						Position = UDim2.fromScale(0.467157, 2.36716),
 						Size = UDim2.fromScale(0.737, 0.686),
@@ -1193,7 +1222,7 @@ local function Container(props: any)
 
 					QualityFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 2,
 						Position = UDim2.fromScale(0.467157, 2.36716),
 						Size = UDim2.fromScale(0.737, 0.686),
@@ -1241,7 +1270,7 @@ local function Container(props: any)
 
 					EnchantmentFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 3,
 						Position = UDim2.fromScale(0.467157, 3.36644),
 						Size = UDim2.fromScale(0.737, 0.686),
@@ -1292,7 +1321,7 @@ local function Container(props: any)
 					-- ONLY FOR ARMOR PIECES
 					ArmorSetBonusFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 3,
 						Position = UDim2.fromScale(0.467157, 3.36644),
 						Size = UDim2.fromScale(0.737, 0.686),

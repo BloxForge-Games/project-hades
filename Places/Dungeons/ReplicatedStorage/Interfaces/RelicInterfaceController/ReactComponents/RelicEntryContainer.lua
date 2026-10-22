@@ -6,14 +6,26 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
+local shineStroke = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.shineStroke)
+local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
+
+-- A FILLED slot's ring (2026-10-22): the inventory tiles' animated shine
+-- outline in the relic's RARITY colour, at the resting stroke's own
+-- thickness, on an anchor above the box's blue-grey border. Resting it
+-- sweeps slowly with a faint band; picked, it brightens and speeds up
+-- to the tiles' own look. Empty and locked boxes keep the static border.
+local RING_THICKNESS = 0.03
+local RING_RESTING = { speed = 25, shine = 0.3 }
+local RING_SELECTED = { speed = 50, shine = 0.6 }
+local BORDER_COLOR = Color3.fromRGB(43, 65, 85)
 
 -- A LOCKED slot: a padlock on a dark box, past the run's open count. The
 -- tray look is the default; the description card passes its own lighter
 -- tint through `lockedLook`, since it sits on a lighter panel.
 local LOCK_ICON = "rbxassetid://4830959937"
 local DEFAULT_LOCKED_LOOK = {
-	background = Color3.fromRGB(63, 63, 63),
-	icon = Color3.fromRGB(35, 35, 35),
+	background = Color3.fromRGB(42, 66, 85),
+	icon = Color3.fromRGB(20, 31, 40),
 	shadowVisible = true,
 }
 
@@ -36,6 +48,7 @@ local function RelicEntryContainer(props: any)
 	local slotIndex = props.slotIndex
 	local lockedLook = props.lockedLook or DEFAULT_LOCKED_LOOK
 	local containerRef = React.useRef(nil)
+	local selectionAnchorRef = React.useRef(nil)
 
 	-- A locked slot matches the selection by INDEX; a relic by name. The
 	-- relic comparison is the original one, untouched: a locked selection
@@ -69,6 +82,16 @@ local function RelicEntryContainer(props: any)
 		end
 	end, { selectedRelic })
 
+	local hasRing = not locked and count > 0 and relicInfo ~= nil
+	local ringColor = RarityColors:Get(relicInfo and relicInfo.rarity)
+	React.useEffect(function()
+		local anchor = selectionAnchorRef.current
+		if not hasRing or not anchor then
+			return nil
+		end
+		return shineStroke(anchor, RING_THICKNESS, ringColor, if isSelected then RING_SELECTED else RING_RESTING)
+	end, { hasRing, isSelected, ringColor })
+
 	-- Empty OPEN boxes stay inert (nothing to say about them); locked
 	-- boxes take clicks whenever a handler exists.
 	local interactable
@@ -86,7 +109,9 @@ local function RelicEntryContainer(props: any)
 		Size = UDim2.fromScale(1.1, 1.1),
 		BackgroundColor3 = if locked
 			then lockedLook.background
-			else relicInfo and relicInfo.color or Color3.fromRGB(95, 95, 95),
+			-- An open, empty slot: the palette's dim blue-grey, a step
+			-- darker than a locked box so it reads as available but unused.
+			else relicInfo and relicInfo.color or Color3.fromRGB(33, 52, 67),
 		BackgroundTransparency = 0,
 		ImageTransparency = 1,
 		Active = interactable,
@@ -98,11 +123,11 @@ local function RelicEntryContainer(props: any)
 			if interactable then
 				uiSound:PlayHover()
 			end
-			TweenService:Create(
-				containerRef.current,
-				TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ Rotation = if math.random(1, 2) == 1 then -5 else 5 }
-			):Play()
+			-- TweenService:Create(
+			-- 	containerRef.current,
+			-- 	TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			-- 	{ Rotation = if math.random(1, 2) == 1 then -5 else 5 }
+			-- ):Play()
 
 			tweenGui.size(
 				containerRef.current,
@@ -147,15 +172,29 @@ local function RelicEntryContainer(props: any)
 		end,
 	}, {
 		UICorner = React.createElement("UICorner", {
-			CornerRadius = UDim.new(1, 0),
+			CornerRadius = UDim.new(0.05, 0),
 		}),
 
 		UIStroke = React.createElement("UIStroke", {
 			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-			Color = if isSelected then Color3.fromRGB(200, 200, 200) else Color3.fromRGB(22, 22, 22),
+			Color = BORDER_COLOR,
 			StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-			Thickness = 0.03,
+			Thickness = RING_THICKNESS,
 			ZIndex = 1,
+		}),
+
+		-- The rarity ring's anchor (see RING_*).
+		SelectionAnchor = React.createElement("Frame", {
+			ref = selectionAnchorRef,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			ZIndex = 3,
+		}, {
+			UICorner = React.createElement("UICorner", {
+				CornerRadius = UDim.new(0.05, 0),
+			}),
 		}),
 
 		ShadowBackgroundImageLabel = React.createElement("ImageLabel", {
@@ -171,7 +210,7 @@ local function RelicEntryContainer(props: any)
 			ZIndex = 2,
 		}, {
 			UICorner = React.createElement("UICorner", {
-				CornerRadius = UDim.new(1, 0),
+				CornerRadius = UDim.new(0.05, 0),
 			}),
 		}),
 

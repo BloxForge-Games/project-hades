@@ -692,6 +692,18 @@ local function Container(props: any)
 			return
 		end
 		if on then
+			-- One hover at a time. A cursor crossing straight from one card
+			-- onto the next can land the new MouseEnter before the old
+			-- MouseLeave, which left the first card lifted with its keyword
+			-- column still sliding out. Every other card is dropped here,
+			-- unconditionally, before the new one lifts: its column tweens
+			-- back and its lift and stroke go with it (setHover is a no-op
+			-- on a card that is not hovered).
+			forEachHandle(function(otherName, other)
+				if otherName ~= relicName then
+					other.setHover(false)
+				end
+			end)
 			hoveredRef.current = relicName
 			handle.setHover(true)
 			playSoundId(HOVER_SOUND_ID, 0.4)
