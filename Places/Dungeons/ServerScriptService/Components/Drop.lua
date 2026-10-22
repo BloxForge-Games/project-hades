@@ -13,7 +13,11 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local LifeService = require(ServerScriptService.Services.LifeService)
+local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
 
+-- The client collects inside its PICKUP_RADIUS (10); this is that with
+-- margin for the trigger's latency (QA 2026-10-21, P0 #3).
+local PICKUP_REACH = 24
 local DESTROY_DELAY = 25
 local MANA_DESTROY_DELAY = 10
 
@@ -145,6 +149,9 @@ function Drop:Start()
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
 		if LifeService:IsDeathState(player) then
+			return
+		end
+		if not withinPickupReach(player, self.Instance, PICKUP_REACH) then
 			return
 		end
 		-- PRIVATE drop (chest loot): only its owner banks it. The client

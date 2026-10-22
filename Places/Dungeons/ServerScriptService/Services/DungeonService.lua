@@ -82,6 +82,12 @@ export type Run = {
 	-- Ascension level (1..MaxAscension) when difficulty is Ascension, else 0.
 	ascension: number,
 	exited: { [Player]: true },
+	-- OnPlayerExtracted has fired for this player: the clear bonus and the
+	-- progress record are paid ONCE per run, however many times the
+	-- portal prompt is triggered while the sweep plays or after a failed
+	-- teleport (QA 2026-10-21, P0 #2). Separate from `exited`, which
+	-- only counts a player who actually left.
+	extracted: { [Player]: true },
 	originCFrame: CFrame?,
 	-- Set once the FINAL floor's boss rewards have dropped: the run is
 	-- won, and from here a death banks the escrow instead of losing it

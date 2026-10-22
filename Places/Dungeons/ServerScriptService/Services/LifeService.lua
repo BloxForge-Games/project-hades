@@ -122,6 +122,24 @@ LifeService._isGameOver = false
 
 local POST_LIFE_LOSS_INVULN_SECONDS = 3
 local DEFAULT_LIVES = 1
+
+-- NATIVE deaths (QA 2026-10-21, P0 #4). The header's promise is that
+-- Humanoid.Health never reaches 0, but anything outside DamageService
+-- can still kill the body: a fall off the map past
+-- FallenPartsDestroyHeight, a script setting Health to 0. Before this,
+-- such a death simply respawned the player: no life lost, no downed
+-- state, the escrow intact. Now every character is watched:
+--   * a fall past the VOID line (FallenPartsDestroyHeight +
+--     VOID_CATCH_MARGIN, well above where the parts are destroyed) is
+--     caught: the body is put back on the last ground it stood on and
+--     the ordinary life loss runs (a life gone + full heal, or downed
+--     on the spot).
+--   * Humanoid.Died -- a true native death -- runs the ordinary life
+--     loss too. Roblox's auto-respawn follows (the body is already dead),
+--     so this is the safety net, not the design path.
+local VOID_CATCH_MARGIN = 60
+local VOID_SCAN_SECONDS = 0.25
+local VOID_RETURN_LIFT = Vector3.new(0, 3, 0)
 local DEATH_ANIMATION_ID = "rbxassetid://73249560309673"
 local DEATH_ANIMATION_SPEED = 0.35
 -- How close to the track's end (seconds of track time) the hold engages.
@@ -590,6 +608,77 @@ end
 -- Decrements lives and either restores HP in place (lives left) or
 -- DOWNS the player (no lives left): the revive window opens here, and
 -- _finalizeDeath closes it.
+-- One character's watch (see the NATIVE deaths constants): a void scan
+-- on a slow tick, and Humanoid.Died. Ends with the character.
+function LifeService._watchCharacter(self: typeof(LifeService), player: Player, character: Model)
+	task.spawn(function()
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		local root = character:WaitForChild("HumanoidRootPart", 10)
+		if not humanoid or not humanoid:IsA("Humanoid") or not root or not root:IsA("BasePart") then
+			return
+		end
+
+		local handled = false
+		local lastGround: CFrame? = nil
+		local diedConnection = humanoid.Died:Connect(function()
+			if handled then
+				return
+			end
+			handled = true
+			self:_onNativeDeath(player, character, "Humanoid.Died", nil)
+		end)
+
+		local voidY = workspace.FallenPartsDestroyHeight + VOID_CATCH_MARGIN
+		while not handled and character.Parent and humanoid.Parent and root.Parent do
+			if root.Position.Y < voidY then
+				handled = true
+				self:_onNativeDeath(player, character, "void", lastGround)
+				break
+			end
+			if humanoid.Health > 0 and humanoid.FloorMaterial ~= Enum.Material.Air then
+				lastGround = root.CFrame
+			end
+			task.wait(VOID_SCAN_SECONDS)
+		end
+		diedConnection:Disconnect()
+	end)
+end
+
+-- A death the life system did not deal (see the NATIVE deaths
+-- constants): routed into the ordinary life loss so a life is spent and
+-- the downed / dead phases happen exactly as for a lethal hit. A void
+-- fall first puts the body back on the last ground it stood on, so the
+-- heal (lives left) or the downed body (none) is somewhere the party
+-- can reach.
+function LifeService._onNativeDeath(
+	self: typeof(LifeService),
+	player: Player,
+	character: Model,
+	reason: string,
+	lastGround: CFrame?
+)
+	if not player.Parent or self:IsDeathState(player) then
+		return
+	end
+	warn(("[LifeService] Native death for %s (%s): routing through the life system"):format(player.Name, reason))
+	if reason == "void" then
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			root.AssemblyLinearVelocity = Vector3.zero
+		end
+		if lastGround then
+			character:PivotTo(lastGround + VOID_RETURN_LIFT)
+		else
+			local spawnPoint = workspace:FindFirstChild("IgnoreInstances")
+			spawnPoint = spawnPoint and spawnPoint:FindFirstChild("DungeonSpawnPoint")
+			if spawnPoint and spawnPoint:IsA("BasePart") then
+				character:PivotTo(spawnPoint.CFrame + VOID_RETURN_LIFT)
+			end
+		end
+	end
+	self:LoseLife(player)
+end
+
 function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 	local userId = player.UserId
 	local entry = self._lives[userId]
@@ -881,6 +970,17 @@ function LifeService.Start(self: typeof(LifeService))
 		end
 		self:InitializePlayer(player, maxLives)
 	end)
+
+	-- Every character, for the deaths the life system did not deal (see
+	-- the NATIVE deaths constants).
+	PlayerEventService.OnCharacterAdded:Connect(function(player: Player, character: Model)
+		self:_watchCharacter(player, character)
+	end)
+	for _, player in Players:GetPlayers() do
+		if player.Character then
+			self:_watchCharacter(player, player.Character)
+		end
+	end
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		local userId = player.UserId

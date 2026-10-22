@@ -285,14 +285,6 @@ local function getFaceDecal(model: Model): Decal
 	return face
 end
 
-local function getRagdollTrigger(model: Model): BoolValue
-	local trigger = model:FindFirstChild(ValueNames.RagdollTrigger)
-	if not trigger or not trigger:IsA("BoolValue") then
-		error("[MobBase] No " .. ValueNames.RagdollTrigger .. " BoolValue on mob: " .. model.Name)
-	end
-	return trigger
-end
-
 --[ Shared per-tick caches ]--
 
 -- One RaycastParams reused across all mobs for LOS checks.
@@ -1372,6 +1364,7 @@ function MobBase._startAILoop(self: MobBase)
 		task.wait(math.random() * UPDATE_DELAY)
 		while
 			self._model
+			and self._model.Parent
 			and self._model:FindFirstChildOfClass("Humanoid")
 			and self._humanoid.Health > 0
 			and task.wait(UPDATE_DELAY)
@@ -1385,7 +1378,14 @@ function MobBase._startAILoop(self: MobBase)
 			if not self._rootPart then
 				continue
 			end
-			if getRagdollTrigger(self._model).Value then
+			-- Looked up without the throwing getter: a floor advance destroys
+			-- the model from under a live tick, and the trigger goes with it
+			-- (QA 2026-10-21, P1 #5). The loop just ends with the model.
+			local ragdollTrigger = self._model:FindFirstChild(ValueNames.RagdollTrigger)
+			if not ragdollTrigger then
+				break
+			end
+			if ragdollTrigger:IsA("BoolValue") and ragdollTrigger.Value then
 				continue
 			end
 
@@ -1853,8 +1853,12 @@ function MobBase._relocateToDeadFolder(self: MobBase)
 	end
 
 	if self:_ragdollOnDeath() then
-		-- Trigger the ragdoll AFTER the collision group is locked in.
-		getRagdollTrigger(self._model).Value = true
+		-- Trigger the ragdoll AFTER the collision group is locked in. A
+		-- model torn down mid-death has no trigger left; nothing to ragdoll.
+		local ragdollTrigger = self._model:FindFirstChild(ValueNames.RagdollTrigger)
+		if ragdollTrigger and ragdollTrigger:IsA("BoolValue") then
+			ragdollTrigger.Value = true
+		end
 	else
 		-- Non-ragdoll death (minibosses / bosses): stay upright in place and
 		-- play a death animation instead of collapsing. The existing

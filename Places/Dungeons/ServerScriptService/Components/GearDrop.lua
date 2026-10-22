@@ -40,6 +40,7 @@ local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTyp
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local LifeService = require(ServerScriptService.Services.LifeService)
+local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
 
 -- Weapon-drop enchantment roll: ENCHANTMENT_CHANCE of rolling one at all,
 -- then a uniform pick from the pool. Looter only — the status
@@ -97,6 +98,9 @@ local DEFAULT_INVENTORY_LEVEL = 1
 
 --[ Component ]--
 
+-- The client's prompt reaches PROMPT_MAX_DISTANCE (5); this is that with
+-- margin for the trigger's latency (QA 2026-10-21, P0 #3).
+local PICKUP_REACH = 20
 local collectedRouter = InstanceRouter.Server(DungeonNetwork.GearDropCollected)
 
 local GearDrop = Component.new({
@@ -272,6 +276,9 @@ function GearDrop:Start()
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
 		if LifeService:IsDeathState(player) then
+			return
+		end
+		if not withinPickupReach(player, self.Instance, PICKUP_REACH) then
 			return
 		end
 		-- Idempotency — drops the second click on the floor.

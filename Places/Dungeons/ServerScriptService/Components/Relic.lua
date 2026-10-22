@@ -13,12 +13,16 @@ local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
 local LifeService = require(ServerScriptService.Services.LifeService)
+local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
 
 -- The pickup fade, mirrored by the client's PICKUP_FADE_SECONDS, plus a
 -- margin before the instance goes so the tween is never cut short.
 local PICKUP_FADE_SECONDS = 0.75
 local POST_FADE_DESTROY_DELAY = PICKUP_FADE_SECONDS + 0.25
 
+-- The client's prompt reaches 6 studs; this is that with margin for the
+-- trigger's latency (QA 2026-10-21, P0 #3).
+local PICKUP_REACH = 20
 local collectRouter = InstanceRouter.Server(RelicNetwork.RelicCollectRequested)
 
 -- Every live OWNED relic on the floor, by owner: what a claim-one pickup
@@ -79,6 +83,9 @@ function Relic:Start()
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
 		if LifeService:IsDeathState(player) then
+			return
+		end
+		if not withinPickupReach(player, self.Instance, PICKUP_REACH) then
 			return
 		end
 		if self._playerRegistry[player] or self._claimed then

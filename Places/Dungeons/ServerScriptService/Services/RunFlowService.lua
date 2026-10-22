@@ -213,6 +213,7 @@ function RunFlowService.StartRun(
 		difficulty = difficulty,
 		ascension = if difficulty == Difficulty.Ascension then ascension else 0,
 		exited = {},
+		extracted = {},
 		originCFrame = originCFrame,
 	}
 	DungeonService:SetRun(run)
@@ -487,8 +488,13 @@ function RunFlowService._extractPlayer(_self: typeof(RunFlowService), player: Pl
 		return
 	end
 	-- Bank / record hook FIRST, then the teleport (the player is still fully
-	-- present with their escrow when listeners run).
-	DungeonService.Signals.OnPlayerExtracted:Fire(player, DungeonService:GetActiveDungeon())
+	-- present with their escrow when listeners run) -- and ONCE: the
+	-- prompt can be triggered again during the sweep, or after a teleport
+	-- that failed and left the player here (see Run.extracted).
+	if not run.extracted[player] then
+		run.extracted[player] = true
+		DungeonService.Signals.OnPlayerExtracted:Fire(player, DungeonService:GetActiveDungeon())
+	end
 
 	-- Only a player who is ACTUALLY leaving counts as exited. If the teleport
 	-- can't be issued (Studio; a place-teleport failure) they're still here --

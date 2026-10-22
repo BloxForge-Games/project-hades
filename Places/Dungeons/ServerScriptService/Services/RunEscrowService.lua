@@ -64,6 +64,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
 local LifeService = require(ServerScriptService.Services.LifeService)
@@ -699,12 +700,14 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 	end)
 
 	-- Disconnect mid-run: the gear spills where the player stood (a
-	-- teammate can carry it on), the Coins and Ore are banked (the
-	-- profile is still loaded at this edge -- DataService releases it on
-	-- its own PlayerRemoving, and a release that raced ahead only warns),
-	-- THEN the entry is dropped. The spill runs first, on the same frame,
-	-- so the entry is still there for it.
-	Players.PlayerRemoving:Connect(function(player: Player)
+	-- teammate can carry it on), the Coins and Ore are banked, THEN the
+	-- entry is dropped. On PlayerEventService.OnPlayerLeaving, the edge
+	-- that runs BEFORE the profile release and the currency registry
+	-- teardown (both on OnPlayerRemoved): on raw PlayerRemoving this
+	-- raced them, and a leaver carrying Coins or Ore lost them (QA
+	-- 2026-10-21, P0 #1). The spill runs first, on the same frame, so
+	-- the entry is still there for it.
+	PlayerEventService.OnPlayerLeaving:Connect(function(player: Player)
 		self:DropAllOnLeave(player)
 		self:BankCurrencies(player)
 		self._escrow[player.UserId] = nil
