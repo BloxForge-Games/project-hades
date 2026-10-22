@@ -640,6 +640,15 @@ local function Container(props: any)
 				Size = UDim2.fromScale(0.993, 0.89),
 				ZIndex = 0,
 			}, {
+				-- A soft top-down shade on the plate (the 2026-10-22 export).
+				PlateGradient = React.createElement("UIGradient", {
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 184, 184)),
+					}),
+					Rotation = 90,
+				}),
+
 				-- The animated shine ring (ShineRing), over the static stroke.
 				ShineRing = React.createElement(ShineRing, {
 					color = PANEL_STROKE_COLOR,
@@ -677,29 +686,29 @@ local function Container(props: any)
 				}),
 			}),
 
-			ScrollingGradientFrame = React.createElement("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = PANEL_STROKE_COLOR,
-				LayoutOrder = 6,
-				Position = UDim2.fromScale(0.165, 0.89156),
-				Size = UDim2.fromScale(0.993, 0.0935278),
-				ZIndex = 2,
-			}, {
-				ICorner1 = React.createElement("UICorner", {
-					BottomLeftRadius = UDim.new(0.08, 0),
-					BottomRightRadius = UDim.new(0.08, 0),
-					TopLeftRadius = UDim.new(0.08, 0),
-					TopRightRadius = UDim.new(0.08, 0),
-				}),
+			-- ScrollingGradientFrame = React.createElement("Frame", {
+			-- 	AnchorPoint = Vector2.new(0.5, 0.5),
+			-- 	BackgroundColor3 = PANEL_STROKE_COLOR,
+			-- 	LayoutOrder = 6,
+			-- 	Position = UDim2.fromScale(0.165, 0.89156),
+			-- 	Size = UDim2.fromScale(0.993, 0.0935278),
+			-- 	ZIndex = 2,
+			-- }, {
+			-- 	ICorner1 = React.createElement("UICorner", {
+			-- 		BottomLeftRadius = UDim.new(0.08, 0),
+			-- 		BottomRightRadius = UDim.new(0.08, 0),
+			-- 		TopLeftRadius = UDim.new(0.08, 0),
+			-- 		TopRightRadius = UDim.new(0.08, 0),
+			-- 	}),
 
-				IGradient = React.createElement("UIGradient", {
-					Rotation = -90,
-					Transparency = NumberSequence.new({
-						NumberSequenceKeypoint.new(0, 0),
-						NumberSequenceKeypoint.new(1, 1),
-					}),
-				}),
-			}),
+			-- 	IGradient = React.createElement("UIGradient", {
+			-- 		Rotation = -90,
+			-- 		Transparency = NumberSequence.new({
+			-- 			NumberSequenceKeypoint.new(0, 0),
+			-- 			NumberSequenceKeypoint.new(1, 1),
+			-- 		}),
+			-- 	}),
+			-- }),
 
 			DropGrid = React.createElement(DropGrid, {
 				dropItems = dropItems,
@@ -827,6 +836,15 @@ local function Container(props: any)
 				Size = DROP_INFO_BACKGROUND_SIZE,
 				ZIndex = -1,
 			}, {
+				-- A soft top-down shade on the plate (the 2026-10-22 export).
+				PlateGradient = React.createElement("UIGradient", {
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 184, 184)),
+					}),
+					Rotation = 90,
+				}),
+
 				ICorner1 = React.createElement("UICorner", {
 					BottomLeftRadius = UDim.new(0.015, 0),
 					BottomRightRadius = UDim.new(0.015, 0),
