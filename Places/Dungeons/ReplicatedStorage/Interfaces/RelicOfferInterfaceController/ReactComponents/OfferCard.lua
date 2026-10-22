@@ -15,16 +15,28 @@
 	                            shadow: every part fades together, always.
 	  handle.setScale(s)        the card's size relative to its slot.
 	  handle.tweenScale(s, info)
-	  handle.setOffset(udim2)   the card's displacement from its slot
-	  handle.tweenOffset(udim2, info)   (the deal-in, the sink, the rise).
-	  handle.setHover(on)       the selected look: lift + SelectionUIStroke,
-	                            and slides the keyword tooltips out past
-	                            the card's right edge.
+	  handle.setOffset(udim2)   the card's displacement from its slot INSIDE
+	  handle.tweenOffset(udim2, info)   the gui (legacy 2D nudges; the hand's
+	                            motion now moves the PART, below).
+	  handle.setPose(pose)      the card's 3D pose (CardStage.Pose: x / y in
+	  handle.tweenPose(pose, info)      face widths / heights, depth toward the
+	                            camera, yaw / pitch / roll in degrees): the
+	                            deal-in flight and spin, the taken fly-in,
+	                            the dismissed flip and drop.
+	  handle.setHover(on)       the selected look: the part moves toward the
+	                            camera and tilts toward the cursor, the
+	                            SelectionUIStroke lights, and the keyword
+	                            tooltips slide out past the card's right edge.
 	  handle.setDim(on)         a black veil over the card (the unfocused
 	                            look while another card is hovered).
 	  handle.brightenStroke()   the chosen card's stroke goes fully opaque.
 	  handle.revealDescription() the description text fades in, a beat after
 	                            the deal (it is dealt transparent).
+	  handle.setCover(on)       the card-back COVER over the front (the
+	                            deal: the card arrives showing its back on
+	                            both faces, and the cover drops mid-spin).
+	  handle.revealAtYaw(deg)   hides the cover the moment the part's yaw
+	                            passes `deg` (edge-on, so nothing pops).
 	  handle.hideTooltip()      the keyword column slides away without
 	                            touching the hover look (the chosen card's rise).
 	  handle.sweep()            a light streak crosses the card once.
@@ -33,19 +45,27 @@
 	                            from the card's edge and fades.
 	  handle.wobble()           the refused shake.
 	  handle.setDim(on) also fades this card's embers (see below).
-	  handle.slotCenter()       the slot's centre on screen, for the deal.
-	  handle.containsPoint(p)   whether screen point p (inset-adjusted, the
-	                            AbsolutePosition space) lies on the slot.
+	  handle.slotCenter()       the face's centre on screen (viewport space).
+	  handle.containsPoint(p)   whether screen point p (inset-adjusted) lies
+	                            on the face.
 	  handle.rarity             ItemRarity value.
+	  handle.card               the CardStage Card (the part and its guis).
+
+	IN 3D: the card is drawn on a SurfaceGui over an invisible part the
+	CardStage keeps in front of the camera (one part per card, two guis:
+	the front tree here and the card back). The whole gui is the PART; the
+	Face frame below is the card's own rectangle in it (CardStage.FACE_LEFT
+	/ FACE_TOP). The keyword tooltip column is NOT on the part: it is
+	portaled into the stage's 2D overlay (see the tooltip constants).
 
 	The card's own idle motion needs nothing from the Container: the bob
 	(a looping tween on its Bob frame, phase-shifted by slot) and the
 	tile scroll (the label sliding one tile along its tilted axis). None
 	of it moves per frame from Lua.
 
-	Frames, outermost in: Slot (laid out by the row) > Bob (idle tween) >
-	Offset (deal / sink / rise) > Lift (hover) > Card (CanvasGroup: scale,
-	fade, shadow) > Art (the button and everything drawn).
+	Frames, outermost in: Face (the card's rectangle in the part's gui) >
+	Bob (idle tween) > Offset (legacy 2D nudges) > Card (CanvasGroup:
+	scale, fade, shadow) > Art (the button and everything drawn).
 
 	Colours come from RarityColors:GetCard. Layout is in fractions of the
 	card, so the same tree serves the desktop size and the larger mobile
@@ -58,6 +78,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
+local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
@@ -65,6 +86,8 @@ local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Elem
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
 local getRelicKeywords = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicKeywords)
 local KeywordData = require(ReplicatedStorage.Submodules.Core.Shared.Data.KeywordData)
+
+local CardStage = require(script.Parent.CardStage)
 
 --[ Tuning ]--
 
@@ -171,8 +194,10 @@ local ICON_GRADIENT_TRANSPARENCY = NumberSequence.new({
 	NumberSequenceKeypoint.new(1, 1),
 })
 
--- Hover: a soft lift (fraction of the card height) and the stroke.
-local HOVER_LIFT = -0.02
+-- Hover: the part comes this far toward the camera (studs; the stage
+-- rests STAGE_DISTANCE out) and the stroke lights. The tilt toward the
+-- cursor is the stage's (CardStage.setTilt).
+local HOVER_DEPTH = 0.45
 local HOVER_TWEEN = TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 -- The veil and the chosen stroke ease on a gentler curve than the lift.
 local DIM_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
@@ -298,11 +323,14 @@ local PHONE_DESCRIPTION_TEXT_SIZE = 7
 --
 -- Always to the RIGHT, on every card, because a tooltip that switches
 -- sides is a tooltip the player has to look for. On cards 1 and 2 the
--- column lands over the neighbouring card, which is why the hovered
--- card raises its SLOT's ZIndex (the row draws slots in order, so a
--- tooltip buried in slot 1 would otherwise be painted over by slot 2)
--- and why the other cards take a deeper veil while a card is hovered
--- (DIM_TRANSPARENCY in Container).
+-- column lands over the neighbouring card, which is why it is NOT drawn
+-- on this card's part: it is portaled into this card's own FaceRect in
+-- the stage's 2D tooltip overlay (card.tooltipRect, a ScreenGui that
+-- always draws over the SurfaceGuis), which the stage keeps on the
+-- card's projected rest face, so the same face-relative layout below
+-- lands beside the card, holds its size under the cursor, and nothing
+-- can cover it. The other cards take a deeper veil while a card is
+-- hovered (DIM_TRANSPARENCY in Container).
 --
 -- Sizes are fractions of the CARD, so the column scales with the card
 -- on every viewport rather than needing its own platform cases. No
@@ -330,10 +358,16 @@ local TOOLTIP_SLIDE_FROM = -0.22
 local TOOLTIP_STAGGER = 0.06
 local TOOLTIP_IN_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local TOOLTIP_OUT_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
--- Above the front embers (ZIndex 7) within the card, and the slot ZIndex
--- the hovered card claims so its column clears the next card entirely.
-local TOOLTIP_ZINDEX = 8
-local HOVERED_SLOT_ZINDEX = 2
+-- The deal's card-back cover, above everything on the part.
+local COVER_ZINDEX = 9
+
+-- The CARD BACK: the card's own frame art in its rarity tint, with the
+-- icon window's tile pattern laid faintly over the whole face and no
+-- content -- so each card's back reads as its tier. Drawn twice: on the
+-- part's Back gui, and as the front's deal-in COVER.
+local BACK_TILE_TRANSPARENCY = 0.82
+local BACK_TILE_LABEL = 2.6
+local BACK_TILE_SIZE = UDim2.fromScale(0.09, 0.09)
 
 -- The keyword name is drawn in the same blue the card writes it in, so a
 -- player maps the plate to the word that opened it.
@@ -396,15 +430,20 @@ local localPlayer = Players.LocalPlayer
 
 -- Props:
 --   relicName      the relic this card offers
---   index          1-based position in the hand (bob phase, layout order)
+--   index          1-based position in the hand (bob phase, slot)
+--   count          cards in the hand (slot layout)
 --   isPhone        true on a phone: fixed title / description sizes
+--   tilt           true to lean the card toward the cursor while hovered
+--                  (off on touch, where there is no cursor)
 --   onRegister     (relicName, handle | nil)
 --   onHover        (relicName, on: boolean)
 --   onActivated    (relicName)
 local function OfferCard(props: any)
 	local relicName: string = props.relicName
 	local index: number = props.index or 1
+	local count: number = props.count or 1
 	local isPhone: boolean = props.isPhone == true
+	local tiltEnabled: boolean = props.tilt == true
 	local relicInfo = RelicData[relicName]
 	local rarity: string = relicInfo and relicInfo.rarity or ItemRarity.Common
 	local colors = RarityColors:GetCard(rarity)
@@ -414,17 +453,21 @@ local function OfferCard(props: any)
 	-- and it is the TIER's (Cursed is authored pure red in the palette).
 	local cardTint = colors.tint
 
-	local slotRef = React.useRef(nil)
+	-- The stage part and its guis, rented for this card's life. A lazy
+	-- initialiser, so the part exists for the first render's portal.
+	local card: CardStage.Card = React.useState(function()
+		return CardStage.create(relicName, index, count)
+	end)
 	local tooltipRef = React.useRef(nil)
 	local descriptionRef = React.useRef(nil)
 	local groupRef = React.useRef(nil)
 	local bobRef = React.useRef(nil)
 	local offsetRef = React.useRef(nil)
-	local liftRef = React.useRef(nil)
 	local strokeRef = React.useRef(nil)
 	local shadowRef = React.useRef(nil)
 	local sweepRef = React.useRef(nil)
 	local dimRef = React.useRef(nil)
+	local coverRef = React.useRef(nil)
 	local flashRef = React.useRef(nil)
 	local ringRef = React.useRef(nil)
 	local tileRef = React.useRef(nil)
@@ -439,6 +482,16 @@ local function OfferCard(props: any)
 	local keywords = getRelicKeywords(description)
 	local twoLineTitle = #relicName > TITLE_ONE_LINE_MAX_LENGTH
 	local pillWidth = PILL_WIDTHS[rarity] or (PILL_WIDTH_BASE + PILL_WIDTH_PER_CHARACTER * #rarity)
+
+	-- The part follows its slot in the hand, and is destroyed with the card.
+	React.useEffect(function()
+		card:setSlot(index, count)
+	end, { index, count })
+	React.useEffect(function()
+		return function()
+			card:destroy()
+		end
+	end, {})
 
 	-- The handle: registered once the refs exist, withdrawn on unmount.
 	React.useEffect(function()
@@ -496,6 +549,14 @@ local function OfferCard(props: any)
 
 		local function setOffset(offset: UDim2)
 			offsetFrame.Position = offset
+		end
+
+		local function setPose(pose: CardStage.Pose)
+			card:setPose(pose)
+		end
+
+		local function tweenPose(pose: CardStage.Pose, info: TweenInfo): Tween?
+			return card:tweenPose(pose, info)
 		end
 
 		local function tweenOffset(offset: UDim2, info: TweenInfo): Tween
@@ -593,18 +654,12 @@ local function OfferCard(props: any)
 			end
 			hoveredRef.current = on
 			setTooltip(on)
-			local lift = liftRef.current
 			local stroke = strokeRef.current
-			-- Claim the row's top slot while hovered so this card's tooltip
-			-- column draws over the neighbouring card instead of under it.
-			local slot = slotRef.current
-			if slot then
-				slot.ZIndex = if on then HOVERED_SLOT_ZINDEX else 1
-			end
-			if lift then
-				TweenService:Create(lift, HOVER_TWEEN, { Position = UDim2.fromScale(0, if on then HOVER_LIFT else 0) })
-					:Play()
-			end
+			-- The part comes toward the camera (which also sorts its gui,
+			-- tooltip column included, in front of the neighbour's) and
+			-- leans toward the cursor.
+			card:tweenPose({ depth = if on then HOVER_DEPTH else 0 }, HOVER_TWEEN)
+			card:setTilt(on and tiltEnabled)
 			if stroke then
 				TweenService:Create(stroke, STROKE_TWEEN, {
 					Transparency = if on then LIT_STROKE_TRANSPARENCY else 1,
@@ -660,6 +715,34 @@ local function OfferCard(props: any)
 		-- and lift while its tooltips leave with it.
 		local function hideTooltip()
 			setTooltip(false)
+		end
+
+		-- The card-back cover over the front face (see the Cover frame).
+		local revealConnection: RBXScriptConnection? = nil
+		local function setCover(on: boolean)
+			if revealConnection then
+				revealConnection:Disconnect()
+				revealConnection = nil
+			end
+			local cover = coverRef.current
+			if cover then
+				cover.Visible = on
+			end
+		end
+
+		-- The deal's reveal: the cover drops the frame the spin passes
+		-- `revealYaw` (edge-on), so the last part of the turn shows the
+		-- front. One shot; a new deal arms it again.
+		local function revealAtYaw(revealYaw: number)
+			if revealConnection then
+				revealConnection:Disconnect()
+			end
+			local yaw = card.yawValue
+			revealConnection = yaw.Changed:Connect(function(value: number)
+				if value >= revealYaw then
+					setCover(false)
+				end
+			end)
 		end
 
 		-- The light sweep: the streak's gradient slides across once.
@@ -732,24 +815,11 @@ local function OfferCard(props: any)
 		end
 
 		local function slotCenter(): Vector2
-			local slot = slotRef.current
-			if not slot then
-				return Vector2.zero
-			end
-			return slot.AbsolutePosition + slot.AbsoluteSize * 0.5
+			return card:faceCenter()
 		end
 
 		local function containsPoint(point: Vector2): boolean
-			local slot = slotRef.current
-			if not slot then
-				return false
-			end
-			local topLeft = slot.AbsolutePosition
-			local bottomRight = topLeft + slot.AbsoluteSize
-			return point.X >= topLeft.X
-				and point.X <= bottomRight.X
-				and point.Y >= topLeft.Y
-				and point.Y <= bottomRight.Y
+			return card:containsPoint(point)
 		end
 
 		-- The ember field. Built once: every ember gets its own lane, rise
@@ -759,11 +829,11 @@ local function OfferCard(props: any)
 		local embers = {}
 		local emberRandom = Random.new(#relicName * 7919 + index * 104729)
 
-		local function buildEmbers(layer: Instance?, count: number, isFront: boolean)
+		local function buildEmbers(layer: Instance?, emberCount: number, isFront: boolean)
 			if not layer then
 				return
 			end
-			for _ = 1, count do
+			for _ = 1, emberCount do
 				local size = emberRandom:NextNumber(EMBER_SIZE_MIN, EMBER_SIZE_MAX)
 					* (if isFront then EMBER_FRONT_SIZE_SCALE else 1)
 
@@ -864,11 +934,15 @@ local function OfferCard(props: any)
 			tweenScale = tweenScale,
 			setOffset = setOffset,
 			tweenOffset = tweenOffset,
+			setPose = setPose,
+			tweenPose = tweenPose,
 			setHover = setHover,
 			setDim = setDim,
 			brightenStroke = brightenStroke,
 			revealDescription = revealDescription,
 			hideTooltip = hideTooltip,
+			setCover = setCover,
+			revealAtYaw = revealAtYaw,
 			sweep = sweep,
 			flash = flash,
 			shockwave = shockwave,
@@ -876,11 +950,16 @@ local function OfferCard(props: any)
 			slotCenter = slotCenter,
 			containsPoint = containsPoint,
 			rarity = rarity,
+			card = card,
 		})
 
 		return function()
 			alive = false
 			props.onRegister(relicName, nil)
+			if revealConnection then
+				revealConnection:Disconnect()
+				revealConnection = nil
+			end
 			unregisterEmberField(embers)
 			embersDimConnection:Disconnect()
 			embersDim:Destroy()
@@ -897,6 +976,50 @@ local function OfferCard(props: any)
 			alpha:Destroy()
 		end
 	end, {})
+
+	-- The card back (see the BACK_TILE constants): the art, tinted, under
+	-- the tilted tile pattern, clipped to the card's rounded rectangle by
+	-- the CanvasGroup. Sized to the face like the Art (ART_INSET).
+	local function cardBack(ref)
+		return React.createElement("CanvasGroup", {
+			ref = ref,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(ART_INSET, ART_INSET),
+			BackgroundTransparency = 1,
+			Visible = ref == nil,
+			ZIndex = COVER_ZINDEX,
+		}, {
+			UICorner = React.createElement("UICorner", {
+				CornerRadius = UDim.new(0.07, 0),
+			}),
+			Art = React.createElement("ImageLabel", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				Image = cardImage,
+				ImageColor3 = cardTint,
+				ScaleType = Enum.ScaleType.Stretch,
+			}, {
+				UICorner = React.createElement("UICorner", {
+					CornerRadius = UDim.new(0.07, 0),
+				}),
+			}),
+			Pattern = React.createElement("ImageLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromScale(BACK_TILE_LABEL, BACK_TILE_LABEL),
+				Rotation = TILE_ROTATION,
+				BackgroundTransparency = 1,
+				Image = TILE_IMAGE,
+				ImageColor3 = TILE_COLOR,
+				ImageTransparency = BACK_TILE_TRANSPARENCY,
+				ResampleMode = Enum.ResamplerMode.Pixelated,
+				ScaleType = Enum.ScaleType.Tile,
+				TileSize = BACK_TILE_SIZE,
+				ZIndex = 2,
+			}),
+		})
+	end
 
 	-- The keyword column, built only when the card HAS hoverable keywords
 	-- (a card with none gets no Tooltip frame at all). setTooltip finds the plates by name rather than through refs,
@@ -976,47 +1099,46 @@ local function OfferCard(props: any)
 			})
 		end
 
-		tooltip = React.createElement("Frame", {
-			ref = tooltipRef,
-			-- Hung off the card's right edge and centred on it. Hidden
-			-- until setTooltip raises it, so a never-hovered card costs
-			-- nothing to draw.
-			AnchorPoint = Vector2.new(0, 0.5),
-			Position = UDim2.fromScale(1 + TOOLTIP_GAP, 0.5),
-			Size = UDim2.fromScale(TOOLTIP_WIDTH, columnHeight),
-			BackgroundTransparency = 1,
-			Visible = false,
-			ZIndex = TOOLTIP_ZINDEX,
-		}, rows)
+		-- Into this card's own FaceRect in the stage's overlay (the face on
+		-- screen), so these face-relative values land beside the card.
+		tooltip = ReactRoblox.createPortal(
+			React.createElement("Frame", {
+				ref = tooltipRef,
+				Name = "Tooltip_" .. relicName,
+				-- Hung off the card's right edge and centred on it. Hidden
+				-- until setTooltip raises it, so a never-hovered card costs
+				-- nothing to draw.
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.fromScale(1 + TOOLTIP_GAP, 0.5),
+				Size = UDim2.fromScale(TOOLTIP_WIDTH, columnHeight),
+				BackgroundTransparency = 1,
+				Visible = false,
+			}, rows),
+			card.tooltipRect
+		)
 	end
 
-	return React.createElement("Frame", {
-		-- The SLOT: laid out by the row; its width follows its height.
-		ref = slotRef,
-		Name = relicName,
-		LayoutOrder = index,
-		Size = UDim2.fromScale(0, 1),
-		BackgroundTransparency = 1,
-	}, {
-		UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
-			AspectRatio = 0.68,
-			AspectType = Enum.AspectType.ScaleWithParentSize,
-			DominantAxis = Enum.DominantAxis.Height,
-		}),
-
-		Bob = React.createElement("Frame", {
-			ref = bobRef,
-			Size = UDim2.fromScale(1, 1),
-			Rotation = SUBPIXEL_ROTATION,
+	return React.createElement(CardStage.CardSurface, { card = card, back = cardBack(nil) }, {
+		Face = React.createElement("Frame", {
+			-- The card's rectangle in the part's gui (the gui is the whole
+			-- part; the part is sized to the face by the stage, so this
+			-- keeps the 0.68 aspect without a constraint).
+			Name = relicName,
+			Position = UDim2.fromScale(
+				CardStage.FACE_LEFT / CardStage.PART_WIDTH,
+				CardStage.FACE_TOP / CardStage.PART_HEIGHT
+			),
+			Size = UDim2.fromScale(1 / CardStage.PART_WIDTH, 1 / CardStage.PART_HEIGHT),
 			BackgroundTransparency = 1,
 		}, {
-			Offset = React.createElement("Frame", {
-				ref = offsetRef,
+			Bob = React.createElement("Frame", {
+				ref = bobRef,
 				Size = UDim2.fromScale(1, 1),
+				Rotation = SUBPIXEL_ROTATION,
 				BackgroundTransparency = 1,
 			}, {
-				Lift = React.createElement("Frame", {
-					ref = liftRef,
+				Offset = React.createElement("Frame", {
+					ref = offsetRef,
 					Size = UDim2.fromScale(1, 1),
 					BackgroundTransparency = 1,
 				}, {
@@ -1045,10 +1167,8 @@ local function OfferCard(props: any)
 						ZIndex = 7,
 					}),
 
-					-- The keyword tooltips (see the tooltip constants). Under
-					-- Lift so the column rides the hover lift with the card,
-					-- and OUTSIDE the card's CanvasGroup, whose bounds would
-					-- clip anything hanging past the card's edge.
+					-- The keyword tooltips (see the tooltip constants): a portal
+					-- into the stage's 2D overlay, not a child of this part.
 					Tooltip = tooltip,
 
 					-- The pick's shockwave ring (see shockwave()). Outside the
@@ -1072,6 +1192,15 @@ local function OfferCard(props: any)
 							Transparency = 1,
 						}),
 					}),
+					-- The card-back COVER: the same back as the Back gui, over
+					-- the whole face and above everything on it (the front
+					-- embers at 7, the tooltips at 8), so a card dealt
+					-- front-first still reads as back-on until the spin
+					-- passes edge-on and the Container drops it
+					-- (handle.revealAtYaw). Outside the Card CanvasGroup so
+					-- the deal's fade-in happens UNDER it. Hidden until a deal.
+					Cover = cardBack(coverRef),
+
 					-- The card proper. A CanvasGroup: scale tweens run on it
 					-- and GroupTransparency fades every descendant as one.
 					Card = React.createElement("CanvasGroup", {

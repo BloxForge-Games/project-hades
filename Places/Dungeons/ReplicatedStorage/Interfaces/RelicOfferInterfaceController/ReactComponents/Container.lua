@@ -1,11 +1,22 @@
 --[[
 	Module: Container.lua
 	Description:
-	The relic-offer overlay: a dimmed backdrop, "Pick a Relic" with the
-	auto-pick countdown under it, and the hand of OfferCards in a row.
-	No buttons: the hand stays up until a card is picked or the countdown
-	runs out and the server picks. The last COUNTDOWN_URGENT_SECONDS tick
-	in red with a pulse and a tick sound.
+	The relic-offer overlay: "Pick a Relic" with the auto-pick countdown
+	under it (this ScreenGui), and the hand of OfferCards standing in 3D
+	in front of the camera (CardStage: one part per card, drawn through a
+	SurfaceGui). No buttons: the hand stays up until a card is picked or
+	the countdown runs out and the server picks. The last
+	COUNTDOWN_URGENT_SECONDS tick in red with a pulse and a tick sound.
+
+	NO DIM BACKDROP in this ScreenGui. An AlwaysOnTop SurfaceGui draws
+	under every ScreenGui, so a full-screen frame here would paint over
+	the cards and swallow their input. Instead the WORLD recedes while a
+	hand is up (the scene helpers below): a DepthOfFieldEffect focused on
+	the card plane blurs the dungeon behind, and the stage's dim plane
+	(CardStage.setDim, a black part behind the cards) darkens it to the
+	old backdrop's level. Both tween in with the deal and out on finish.
+	Nothing touches the Atmosphere: a haze boost read differently at every
+	zoom level and perspective (owner, 2026-10-22).
 
 	The relic tray (RelicInterfaceController) draws ABOVE this overlay, so
 	a player can open it mid-offer to read their relics or drop one to free
@@ -25,18 +36,24 @@
 	a refused pick (cap, dead) cannot leave the screen out of step. The
 	press itself gets an instant dip so the click still feels immediate.
 
-	Motion (all imperative, on the OfferCard handles):
-	  * deal:    the cards start stacked at the row's centre, a little low
-	             and small, and fan out to their slots one after another,
-	             fading in; a light sweep crosses each as it lands (and
-	             again on the card's own timer, OfferCard)
-	  * hover:   the card lifts and gains its stroke; the others go under
-	             their black veil
+	Motion (all imperative, on the OfferCard handles; the part poses go
+	through handle.tweenPose, CardStage):
+	  * deal:    the cards fly in ONE BY ONE straight up from below the
+	             bottom edge of the view to their slots, each turning
+	             exactly once about its spine as it rises. Both faces show
+	             the card back until the turn passes edge-on at
+	             DEAL_REVEAL_YAW, when the front's cover drops, so the
+	             player sees back, edge, back, edge, front. A light sweep
+	             crosses each as it lands (and again on the card's own
+	             timer, OfferCard)
+	  * hover:   the card comes toward the camera, leans toward the cursor
+	             and gains its stroke; the others go under their black veil
 	  * idle:    a slow sine bob per card (OfferCard's own looping tween)
-	  * taken:   the others sink and fade; the chosen card flashes white, a
-	             ring in its tier colour ripples out, its stroke goes white,
-	             it holds a beat, then rises away while fading
-	  * skipped / cancelled: everything sinks and fades
+	  * taken:   the others flip back over and drop out of view; the
+	             chosen card flashes white, a ring in its tier colour
+	             ripples out, its stroke lights, it holds a beat, then
+	             flies toward the camera while fading
+	  * skipped / cancelled: every card flips back over and drops away
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -45,6 +62,7 @@ local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
+local Lighting = game:GetService("Lighting")
 local Debris = game:GetService("Debris")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
@@ -54,6 +72,7 @@ local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.I
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 local OfferCard = require(script.Parent.OfferCard)
+local CardStage = require(script.Parent.CardStage)
 
 -- The HUD scope hold while the hand is up.
 local HUD_HIDE_SOURCE = "RelicOffer"
@@ -64,8 +83,6 @@ local FONT_BOLD = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.Fon
 
 local TITLE_TEXT = "Pick a Relic"
 
-local BACKDROP_COLOR = Color3.fromRGB(0, 0, 0)
-local BACKDROP_TRANSPARENCY = 0.45
 local TEXT_COLOR = Color3.fromRGB(255, 255, 255)
 
 -- The countdown. For the last COUNTDOWN_URGENT_SECONDS each new second
@@ -82,7 +99,9 @@ local COUNTDOWN_TICK_SOUND_ID = "rbxassetid://134410911353980"
 local COUNTDOWN_TICK_VOLUME = 0.6
 
 -- Card row: height as a fraction of the screen, by platform. The width
--- follows from the card's aspect ratio (OfferCard).
+-- follows from the card's aspect ratio (CardStage.FACE_ASPECT). The stage
+-- lays the faces out on screen exactly as the old 2D row did: centred as
+-- a group, CARD_GAP of the width apart, centred on ROW_Y.
 -- Phones use the desktop height (their fixed card text is tuned for it);
 -- touch tablets get the larger cards.
 -- TOUCH, by the project's own definition (ScreenSizeController): a
@@ -104,10 +123,15 @@ local TITLE_SIZE = UDim2.fromScale(0.318, 0.058)
 local COUNTDOWN_POSITION = Vector2.new(0.498, 0.226089)
 local COUNTDOWN_SIZE = UDim2.fromScale(0.063, 0.049)
 -- The bar under the number: a thin neutral track that drains left to
--- right with the seconds left (design call, 2026-10-21). A child of the
--- number's label, so it rides its entry / exit glide and fades with it.
-local COUNTDOWN_BAR_POSITION = UDim2.fromScale(0.5, 1.22643)
-local COUNTDOWN_BAR_SIZE = UDim2.fromScale(1.3, 0.1)
+-- right with the seconds left (design call, 2026-10-21). A SIBLING of the
+-- number's label (its UIScale pulse must not scale the bar), placed where
+-- it sat as the label's child: top at 1.22643 label heights under the
+-- label's top, 1.3 label widths wide, 0.1 label heights tall. It rides
+-- the countdown's entry / exit glide and fades with it; its fill goes
+-- red with the number on the urgent ticks.
+local COUNTDOWN_BAR_POSITION =
+	Vector2.new(COUNTDOWN_POSITION.X, COUNTDOWN_POSITION.Y + 0.72643 * COUNTDOWN_SIZE.Y.Scale)
+local COUNTDOWN_BAR_SIZE = UDim2.fromScale(1.3 * COUNTDOWN_SIZE.X.Scale, 0.16 * COUNTDOWN_SIZE.Y.Scale)
 local COUNTDOWN_BAR_TRACK_COLOR = Color3.fromRGB(255, 255, 255)
 local COUNTDOWN_BAR_TRACK_TRANSPARENCY = 0.8
 local COUNTDOWN_BAR_FILL_COLOR = Color3.fromRGB(255, 255, 255)
@@ -122,35 +146,45 @@ local HEADER_IN_FADE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.Easi
 local HEADER_OUT_MOVE_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 local HEADER_OUT_FADE_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
 
--- The deal: from the row's centre, this far below the slots (fraction
--- of the card height) and this small, one card every STAGGER, each
--- gliding to its slot on a Quint and sweeping as it lands.
-local DEAL_FROM_SCALE = 0.85
-local DEAL_DROP = 0.15
+-- The deal: each card starts just below the bottom edge of the view
+-- (OFFSCREEN_MARGIN face heights under it), one card every STAGGER after
+-- a LEAD beat, and rises straight up to its slot on a Quad-Out (no
+-- overshoot, x never moves) while turning DEAL_SPIN degrees about its
+-- spine on a Quad-InOut, pivoting on the face centre, with no pitch or
+-- roll. Its front wears the card-back COVER until the turn passes
+-- DEAL_REVEAL_YAW (edge-on), so the turn reads as one spin that reveals
+-- the card. The front fades in under the cover and sweeps as it lands.
 local DEAL_STAGGER = 0.14
--- A beat after the backdrop lands before the first card moves.
 local DEAL_LEAD_SECONDS = 0.12
-local DEAL_MOVE_TWEEN = TweenInfo.new(1.05, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local DEAL_MOVE_TWEEN = TweenInfo.new(1.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local DEAL_SPIN_TWEEN = TweenInfo.new(1.05, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+local DEAL_SPIN = 360
+local DEAL_REVEAL_YAW = 270
 local DEAL_FADE_TWEEN = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
--- Leaving: the cards sink this far (fraction of the card height) while
--- fading. The fade beats the sink, so the drop is never watched to the
--- end.
-local SINK = 0.06
-local SINK_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-local SINK_FADE_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
--- The chosen card: stroke to white, a held beat, then it rises this far
--- while fading out.
+local OFFSCREEN_MARGIN = 0.1
+-- Leaving (the dismissed cards, and the others when one is taken): each
+-- flips back over (DISMISS_FLIP degrees) while dropping below the view.
+local DISMISS_FLIP = 180
+local DISMISS_FLIP_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+local DISMISS_DROP_TWEEN = TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+-- The chosen card: stroke lit, a held beat, then it flies this far toward
+-- the camera (studs, of CardStage.STAGE_DISTANCE) while fading out.
 local CHOSEN_HOLD_SECONDS = 0.45
-local RISE = -0.06
+local TAKEN_FLY_DEPTH = 5
+local TAKEN_FLY_RISE = -0.1
 local RISE_TWEEN = TweenInfo.new(0.65, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 local RISE_FADE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
 -- The press: a quick dip, instantly, while the server answers.
 local PRESS_SCALE = 0.975
 local PRESS_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
--- Panel-wide fades: backdrop and copy.
-local PANEL_FADE_TWEEN = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-local PANEL_CLOSE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.In)
+-- The world behind the hand: a depth of field focused on the card plane
+-- (CardStage.STAGE_DISTANCE out, the cards sharp, the dungeon soft) and
+-- the stage's dim plane behind the cards. Both ease over SCENE_TWEEN.
+local SCENE_DOF_NAME = "RelicOfferDepthOfField"
+local SCENE_DOF_IN_FOCUS_RADIUS = 6
+local SCENE_DOF_FAR_INTENSITY = 0.75
+local SCENE_TWEEN = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 
 local PICK_SOUND_NAME = "RelicPickup"
 -- No hover asset yet: set an id here to give the cards a hover tick.
@@ -201,6 +235,84 @@ local function applyLabelAlpha(label: TextLabel?, a: number)
 	label.TextStrokeTransparency = 0.5 + 0.5 * a
 end
 
+--[ Scene ]--
+
+-- ONE scene state for this client. `token` is the owner of the current
+-- transition: an out that has been overtaken by a new in (a hand dealt
+-- while the last one is closing) finds its token stale and leaves the
+-- effects alone, so nothing double-applies and nothing restores early.
+-- The dim plane keeps its own generation the same way (CardStage.setDim).
+local scene = {
+	token = 0,
+	active = false,
+	dof = nil :: DepthOfFieldEffect?,
+}
+
+local function sceneDof(): DepthOfFieldEffect
+	local existing = scene.dof
+	if existing and existing.Parent == Lighting then
+		return existing
+	end
+	local found = Lighting:FindFirstChild(SCENE_DOF_NAME)
+	local dof: DepthOfFieldEffect
+	if found and found:IsA("DepthOfFieldEffect") then
+		dof = found
+	else
+		dof = Instance.new("DepthOfFieldEffect")
+		dof.Name = SCENE_DOF_NAME
+		dof.NearIntensity = 0
+		dof.FarIntensity = 0
+		dof.Parent = Lighting
+	end
+	dof.FocusDistance = CardStage.STAGE_DISTANCE
+	dof.InFocusRadius = SCENE_DOF_IN_FOCUS_RADIUS
+	scene.dof = dof
+	return dof
+end
+
+local function sceneIn()
+	scene.token += 1
+	scene.active = true
+	local dof = sceneDof()
+	dof.Enabled = true
+	tween(dof, SCENE_TWEEN, { FarIntensity = SCENE_DOF_FAR_INTENSITY })
+	CardStage.setDim(true, SCENE_TWEEN)
+end
+
+-- `immediate` (unmount) restores on the spot instead of easing out.
+local function sceneOut(immediate: boolean?)
+	if not scene.active then
+		return
+	end
+	scene.token += 1
+	local token = scene.token
+	local dof = scene.dof
+
+	local function restore()
+		if scene.token ~= token then
+			return
+		end
+		scene.active = false
+		if dof then
+			dof.FarIntensity = 0
+			dof.Enabled = false
+		end
+	end
+
+	if immediate then
+		CardStage.destroyDim()
+		restore()
+		return
+	end
+	CardStage.setDim(false, SCENE_TWEEN)
+	local out = if dof then tween(dof, SCENE_TWEEN, { FarIntensity = 0 }) else nil
+	if out then
+		out.Completed:Once(restore)
+	else
+		restore()
+	end
+end
+
 --[ Component ]--
 
 -- Props:
@@ -221,9 +333,7 @@ local function Container(props: any)
 		elseif props.isMobile() then CARD_HEIGHT_TABLET
 		else CARD_HEIGHT_DESKTOP
 
-	local backdropRef = React.useRef(nil)
 	local panelRef = React.useRef(nil)
-	local panelAlphaRef = React.useRef(nil)
 	local titleRef = React.useRef(nil)
 	local countdownRef = React.useRef(nil)
 	local countdownScaleRef = React.useRef(nil)
@@ -290,44 +400,44 @@ local function Container(props: any)
 		return (current and table.find(current.Relics, relicName)) or 1
 	end
 
-	-- Panel alpha (0 drawn, 1 invisible): the backdrop. The title and
-	-- countdown fade on their own values (headerIn / headerOut).
-	local function applyPanelAlpha(a: number)
-		local backdrop = backdropRef.current
-		if backdrop then
-			backdrop.BackgroundTransparency = BACKDROP_TRANSPARENCY + (1 - BACKDROP_TRANSPARENCY) * a
-		end
-	end
-
-	local function tweenPanelAlpha(a: number, info: TweenInfo): Tween?
-		return tween(panelAlphaRef.current, info, { Value = a })
+	-- The face's offset (in face heights) that puts its top edge just under
+	-- the bottom of the view: the deal's start and the dismissed drop's end.
+	local function offscreenBelow(): number
+		return (1 - ROW_Y) / cardHeight + 0.5 + OFFSCREEN_MARGIN
 	end
 
 	-- The title and countdown arrive: each starts HEADER_RISE lower and
 	-- invisible, then glides up into place while fading in, the countdown
 	-- COUNTDOWN_ENTRY_DELAY behind the title.
 	local function headerIn(forOffer)
-		local function enter(label: TextLabel?, alphaValue: NumberValue?, rest: Vector2, delay: number)
-			if not label or not alphaValue then
+		-- `alphaValue` nil: the object fades on another's value (the bar
+		-- on the countdown's) and only glides here.
+		local function enter(label: GuiObject?, alphaValue: NumberValue?, rest: Vector2, delay: number)
+			if not label then
 				return
 			end
 			label.Position = UDim2.fromScale(rest.X, rest.Y + HEADER_RISE)
-			alphaValue.Value = 1
+			if alphaValue then
+				alphaValue.Value = 1
+			end
 			task.delay(delay, function()
 				if offerRef.current ~= forOffer or phaseRef.current == "resolving" then
 					return
 				end
 				tween(label, HEADER_IN_MOVE_TWEEN, { Position = UDim2.fromScale(rest.X, rest.Y) })
-				tween(alphaValue, HEADER_IN_FADE_TWEEN, { Value = 0 })
+				if alphaValue then
+					tween(alphaValue, HEADER_IN_FADE_TWEEN, { Value = 0 })
+				end
 			end)
 		end
 		enter(titleRef.current, titleAlphaRef.current, TITLE_POSITION, 0)
 		enter(countdownRef.current, countdownAlphaRef.current, COUNTDOWN_POSITION, COUNTDOWN_ENTRY_DELAY)
+		enter(countdownBarTrackRef.current, nil, COUNTDOWN_BAR_POSITION, COUNTDOWN_ENTRY_DELAY)
 	end
 
 	-- The reverse on close: both sink back down while fading out.
 	local function headerOut()
-		local function leave(label: TextLabel?, alphaValue: NumberValue?, rest: Vector2)
+		local function leave(label: GuiObject?, alphaValue: NumberValue?, rest: Vector2)
 			if label then
 				tween(label, HEADER_OUT_MOVE_TWEEN, { Position = UDim2.fromScale(rest.X, rest.Y + HEADER_RISE) })
 			end
@@ -337,14 +447,21 @@ local function Container(props: any)
 		end
 		leave(titleRef.current, titleAlphaRef.current, TITLE_POSITION)
 		leave(countdownRef.current, countdownAlphaRef.current, COUNTDOWN_POSITION)
+		leave(countdownBarTrackRef.current, nil, COUNTDOWN_BAR_POSITION)
 	end
 
-	-- One urgent second: red flash settling to a deeper red, a pulse, the tick.
+	-- One urgent second: red flash settling to a deeper red (the number and
+	-- the bar's fill), a pulse on the number alone, the tick.
 	local function tickCountdown()
 		local countdown = countdownRef.current
 		if countdown then
 			countdown.TextColor3 = COUNTDOWN_FLASH_COLOR
 			tween(countdown, COUNTDOWN_FLASH_TWEEN, { TextColor3 = COUNTDOWN_URGENT_COLOR })
+		end
+		local fill = countdownBarFillRef.current
+		if fill then
+			fill.BackgroundColor3 = COUNTDOWN_FLASH_COLOR
+			tween(fill, COUNTDOWN_FLASH_TWEEN, { BackgroundColor3 = COUNTDOWN_URGENT_COLOR })
 		end
 		local scale = countdownScaleRef.current
 		if scale then
@@ -364,9 +481,10 @@ local function Container(props: any)
 		phaseRef.current = "closed"
 		offerRef.current = nil
 		-- Kept held when another hand is queued, so the HUD does not flash
-		-- up for a frame between two hands.
+		-- up for a frame between two hands (and the world stays receded).
 		if queuedOfferRef.current == nil then
 			holdHud(false)
+			sceneOut()
 		end
 		pressedRef.current = nil
 		hoveredRef.current = nil
@@ -384,10 +502,10 @@ local function Container(props: any)
 	-- Defined with the selection helpers below; the deal's open edge calls it.
 	local applyPendingHover
 
-	-- The deal: every card starts on the row's centre, low and small and
-	-- invisible, then glides to its slot in hand order, fading in and
-	-- sweeping as it lands. The slots' screen positions are read one
-	-- frame in, once the row has laid them out.
+	-- The deal: every card is parked below the view, back-facing and
+	-- invisible, then flies up to its slot in hand order, spinning to face
+	-- up, fading in and sweeping as it lands. The stage owns the slots, so
+	-- nothing has to be measured first.
 	local function deal()
 		local thisOffer = offerRef.current
 		phaseRef.current = "dealing"
@@ -402,95 +520,103 @@ local function Container(props: any)
 		if countdown then
 			countdown.TextColor3 = COUNTDOWN_COLOR
 		end
-		local alpha = panelAlphaRef.current
-		if alpha then
-			alpha.Value = 1
+		local fill = countdownBarFillRef.current
+		if fill then
+			fill.BackgroundColor3 = COUNTDOWN_BAR_FILL_COLOR
 		end
-		tweenPanelAlpha(0, PANEL_FADE_TWEEN)
+		sceneIn()
 		headerIn(thisOffer)
 
-		-- Hidden until the positions are known, so nothing flashes in place.
-		forEachHandle(function(_, handle)
+		local entries = {}
+		forEachHandle(function(relicName, handle)
+			-- Parked out of view below the bottom edge, front toward the
+			-- camera but under its back cover.
 			handle.alpha.Value = 1
-			handle.setScale(DEAL_FROM_SCALE)
+			handle.setScale(1)
+			handle.setOffset(UDim2.new())
+			handle.setCover(true)
+			handle.setPose({ x = 0, y = offscreenBelow(), depth = 0, yaw = 0, pitch = 0, roll = 0 })
+			table.insert(entries, { name = relicName, handle = handle })
+		end)
+		if #entries == 0 then
+			phaseRef.current = "open"
+			return
+		end
+		table.sort(entries, function(a, b)
+			return orderOf(a.name) < orderOf(b.name)
 		end)
 
-		task.spawn(function()
-			RunService.RenderStepped:Wait()
-			if offerRef.current ~= thisOffer then
-				return
-			end
-
-			local entries = {}
-			local centerSum = 0
-			forEachHandle(function(relicName, handle)
-				local center = handle.slotCenter()
-				table.insert(entries, { name = relicName, handle = handle, center = center })
-				centerSum += center.X
-			end)
-			if #entries == 0 then
-				phaseRef.current = "open"
-				return
-			end
-			local rowCenterX = centerSum / #entries
-			table.sort(entries, function(a, b)
-				return orderOf(a.name) < orderOf(b.name)
-			end)
-
-			for index, entry in entries do
-				local handle = entry.handle
-				handle.setOffset(UDim2.new(0, rowCenterX - entry.center.X, DEAL_DROP, 0))
-				task.delay(DEAL_LEAD_SECONDS + (index - 1) * DEAL_STAGGER, function()
-					if offerRef.current ~= thisOffer or phaseRef.current == "closed" then
-						return
-					end
-					local move = handle.tweenOffset(UDim2.new(), DEAL_MOVE_TWEEN)
-					handle.tweenScale(1, DEAL_MOVE_TWEEN)
-					tween(handle.alpha, DEAL_FADE_TWEEN, { Value = 0 })
-					-- The text follows the art in, a beat later (OfferCard).
-					handle.revealDescription()
+		for index, entry in entries do
+			local handle = entry.handle
+			task.delay(DEAL_LEAD_SECONDS + (index - 1) * DEAL_STAGGER, function()
+				if offerRef.current ~= thisOffer or phaseRef.current == "closed" then
+					return
+				end
+				local move = handle.tweenPose({ y = 0 }, DEAL_MOVE_TWEEN)
+				handle.revealAtYaw(DEAL_REVEAL_YAW)
+				local spin = handle.tweenPose({ yaw = DEAL_SPIN }, DEAL_SPIN_TWEEN)
+				tween(handle.alpha, DEAL_FADE_TWEEN, { Value = 0 })
+				-- The text follows the art in, a beat later (OfferCard).
+				handle.revealDescription()
+				if spin then
+					-- A full turn is where it started: rest at 0 so the later
+					-- flip-back turns half, not one and a half.
+					spin.Completed:Once(function()
+						if offerRef.current == thisOffer then
+							handle.setCover(false)
+							handle.setPose({ yaw = 0 })
+						end
+					end)
+				end
+				if move then
 					move.Completed:Once(function()
 						if offerRef.current == thisOffer then
 							handle.sweep()
 						end
 					end)
-				end)
-			end
-
-			task.delay(DEAL_LEAD_SECONDS + (#entries - 1) * DEAL_STAGGER + DEAL_MOVE_TWEEN.Time * 0.6, function()
-				if offerRef.current == thisOffer and phaseRef.current == "dealing" then
-					phaseRef.current = "open"
-					applyPendingHover()
 				end
 			end)
+		end
+
+		-- Open only once the LAST card's flight and spin have completed:
+		-- a hover before that would add its depth and tilt to the spin.
+		task.delay(DEAL_LEAD_SECONDS + (#entries - 1) * DEAL_STAGGER + DEAL_MOVE_TWEEN.Time + 0.05, function()
+			if offerRef.current == thisOffer and phaseRef.current == "dealing" then
+				phaseRef.current = "open"
+				applyPendingHover()
+			end
 		end)
 	end
 
-	-- Every card but `except` (all when nil) sinks and fades.
-	local function sink(except: string?)
+	-- Every card but `except` (all when nil) flips back over and drops out
+	-- of the view. Returns the longest tween, for the caller's finish.
+	local function dismiss(except: string?): Tween?
+		local last: Tween? = nil
 		forEachHandle(function(relicName, handle)
 			if relicName == except then
 				return
 			end
 			handle.setHover(false)
 			handle.setDim(false)
-			handle.tweenOffset(UDim2.fromScale(0, SINK), SINK_TWEEN)
-			tween(handle.alpha, SINK_FADE_TWEEN, { Value = 1 })
+			handle.hideTooltip()
+			handle.tweenPose({ yaw = DISMISS_FLIP, depth = 0 }, DISMISS_FLIP_TWEEN)
+			last = handle.tweenPose({ y = offscreenBelow() }, DISMISS_DROP_TWEEN) or last
 		end)
+		return last
 	end
 
-	-- A pick landed: the others sink, the chosen card holds, then rises away.
+	-- A pick landed: the others leave, the chosen card holds, then flies
+	-- into the camera.
 	local function animateTaken(relicName: string)
 		local thisOffer = offerRef.current
 		phaseRef.current = "resolving"
 		playUiSound(PICK_SOUND_NAME)
-		sink(relicName)
-		tweenPanelAlpha(1, PANEL_CLOSE_TWEEN)
+		dismiss(relicName)
 		headerOut()
 
 		local handle = handlesRef.current[relicName]
 		if not handle then
-			task.delay(PANEL_CLOSE_TWEEN.Time, function()
+			task.delay(DISMISS_DROP_TWEEN.Time, function()
 				finish(thisOffer)
 			end)
 			return
@@ -505,11 +631,13 @@ local function Container(props: any)
 			if offerRef.current ~= thisOffer then
 				return
 			end
-			local rise = handle.tweenOffset(UDim2.fromScale(0, RISE), RISE_TWEEN)
+			local fly = handle.tweenPose({ depth = TAKEN_FLY_DEPTH, y = TAKEN_FLY_RISE }, RISE_TWEEN)
 			tween(handle.alpha, RISE_FADE_TWEEN, { Value = 1 })
 			-- The keyword column leaves with the card instead of lingering.
 			handle.hideTooltip()
-			rise.Completed:Wait()
+			if fly then
+				fly.Completed:Wait()
+			end
 			finish(thisOffer)
 		end)
 	end
@@ -518,9 +646,8 @@ local function Container(props: any)
 	local function animateDismissed()
 		local thisOffer = offerRef.current
 		phaseRef.current = "resolving"
-		sink(nil)
 		headerOut()
-		local out = tweenPanelAlpha(1, PANEL_CLOSE_TWEEN)
+		local out = dismiss(nil)
 		if out then
 			out.Completed:Once(function()
 				finish(thisOffer)
@@ -704,8 +831,10 @@ local function Container(props: any)
 		return function()
 			offeredConnection:Disconnect()
 			resolvedConnection:Disconnect()
-			-- Unmounting mid-hand must not leave the HUD held.
+			-- Unmounting mid-hand must not leave the HUD held or the world
+			-- receded.
 			holdHud(false)
+			sceneOut(true)
 		end
 	end, {})
 
@@ -716,6 +845,32 @@ local function Container(props: any)
 			connection:Disconnect()
 		end
 	end, {})
+
+	-- TOUCH ONLY: a tap anywhere off the hand clears the selection (see the
+	-- two-tap in onActivated). A tap on a card is game-processed by its
+	-- ImageButton and skipped here. Absent on desktop, where the cursor
+	-- leaving a card already clears it. (A full-screen catcher frame would
+	-- sit in this ScreenGui, above the cards' SurfaceGuis, and eat their
+	-- taps.)
+	React.useEffect(function()
+		if not IS_TOUCH then
+			return nil
+		end
+		local connection = UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+			if processed or input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+			clearSelection()
+		end)
+		return function()
+			connection:Disconnect()
+		end
+	end, {})
+
+	-- The stage lays the faces out from the platform's card height.
+	React.useEffect(function()
+		CardStage.setLayout({ cardHeight = cardHeight, rowY = ROW_Y, gap = CARD_GAP })
+	end, { cardHeight })
 
 	-- Phone or not is re-read live (rotation, window resize).
 	React.useEffect(function()
@@ -769,15 +924,8 @@ local function Container(props: any)
 		end
 	end, {})
 
-	-- The panel alpha value: one tween drives every panel transparency.
+	-- The title and countdown each fade on their own value.
 	React.useEffect(function()
-		local value = Instance.new("NumberValue")
-		value.Value = 1
-		panelAlphaRef.current = value
-		local connection = value.Changed:Connect(applyPanelAlpha)
-		applyPanelAlpha(1)
-
-		-- The title and countdown each fade on their own value.
 		local titleValue = Instance.new("NumberValue")
 		titleValue.Value = 1
 		titleAlphaRef.current = titleValue
@@ -808,33 +956,27 @@ local function Container(props: any)
 		applyCountdownAlpha(1)
 
 		return function()
-			connection:Disconnect()
 			titleConnection:Disconnect()
 			countdownConnection:Disconnect()
-			value:Destroy()
 			titleValue:Destroy()
 			countdownValue:Destroy()
-			panelAlphaRef.current = nil
 			titleAlphaRef.current = nil
 			countdownAlphaRef.current = nil
 		end
 	end, {})
 
-	local cardChildren = {
-		UIListLayout = React.createElement("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			HorizontalAlignment = Enum.HorizontalAlignment.Center,
-			VerticalAlignment = Enum.VerticalAlignment.Center,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(CARD_GAP, 0),
-		}),
-	}
+	-- The cards. Each OfferCard draws itself on the stage (its own part in
+	-- front of the camera); this ScreenGui holds only their React nodes,
+	-- not their pixels.
+	local cardChildren = {}
 	if offer then
 		for index, relicName in offer.Relics do
 			cardChildren[relicName] = React.createElement(OfferCard, {
 				relicName = relicName,
 				index = index,
+				count = #offer.Relics,
 				isPhone = isPhone,
+				tilt = not IS_TOUCH,
 				onRegister = function(name: string, handle)
 					handlesRef.current[name] = handle
 				end,
@@ -854,33 +996,6 @@ local function Container(props: any)
 			BackgroundTransparency = 1,
 			Visible = false,
 		}, {
-			-- Swallows clicks under the cards while the hand is open.
-			Backdrop = React.createElement("Frame", {
-				ref = backdropRef,
-				Size = UDim2.fromScale(1, 1),
-				BackgroundColor3 = BACKDROP_COLOR,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				Active = true,
-				ZIndex = 0,
-			}),
-
-			-- TOUCH ONLY: a tap anywhere off the hand clears the selection
-			-- (see the two-tap in onActivated). Above the backdrop and
-			-- BELOW the cards (ZIndex 2), so a tap on a card still reaches
-			-- the card. Absent entirely on desktop, where the cursor
-			-- leaving a card already clears it.
-			DeselectCatcher = if IS_TOUCH
-				then React.createElement("ImageButton", {
-					Size = UDim2.fromScale(1, 1),
-					BackgroundTransparency = 1,
-					ImageTransparency = 1,
-					AutoButtonColor = false,
-					ZIndex = 1,
-					[React.Event.Activated] = clearSelection,
-				})
-				else nil,
-
 			Title = React.createElement("TextLabel", {
 				ref = titleRef,
 				AnchorPoint = Vector2.new(0.5, 0.5),
@@ -920,42 +1035,38 @@ local function Container(props: any)
 					ref = countdownScaleRef,
 					Scale = 1,
 				}),
-				-- The time-left bar: a track with a fill that drains to the
-				-- left edge (anchored left). Both start invisible with the
-				-- number and fade with it.
-				Bar = React.createElement("Frame", {
-					ref = countdownBarTrackRef,
-					AnchorPoint = Vector2.new(0.5, 0),
-					Position = COUNTDOWN_BAR_POSITION,
-					Size = COUNTDOWN_BAR_SIZE,
-					BackgroundColor3 = COUNTDOWN_BAR_TRACK_COLOR,
+			}),
+
+			-- The time-left bar: a track with a fill that drains to the left
+			-- edge (anchored left). Under the number but NOT inside it, so the
+			-- number's pulse leaves it still. Both start invisible with the
+			-- number and fade with it.
+			SecondsBar = React.createElement("Frame", {
+				ref = countdownBarTrackRef,
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.fromScale(COUNTDOWN_BAR_POSITION.X, COUNTDOWN_BAR_POSITION.Y),
+				Size = COUNTDOWN_BAR_SIZE,
+				BackgroundColor3 = COUNTDOWN_BAR_TRACK_COLOR,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 2,
+			}, {
+				UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+				Fill = React.createElement("Frame", {
+					ref = countdownBarFillRef,
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.fromScale(0, 0.5),
+					Size = UDim2.fromScale(1, 1),
+					BackgroundColor3 = COUNTDOWN_BAR_FILL_COLOR,
 					BackgroundTransparency = 1,
 					BorderSizePixel = 0,
-					ZIndex = 2,
+					ZIndex = 3,
 				}, {
 					UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-					Fill = React.createElement("Frame", {
-						ref = countdownBarFillRef,
-						AnchorPoint = Vector2.new(0, 0.5),
-						Position = UDim2.fromScale(0, 0.5),
-						Size = UDim2.fromScale(1, 1),
-						BackgroundColor3 = COUNTDOWN_BAR_FILL_COLOR,
-						BackgroundTransparency = 1,
-						BorderSizePixel = 0,
-						ZIndex = 3,
-					}, {
-						UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-					}),
 				}),
 			}),
 
-			Cards = React.createElement("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, ROW_Y),
-				Size = UDim2.fromScale(1, cardHeight),
-				BackgroundTransparency = 1,
-				ZIndex = 2,
-			}, cardChildren),
+			Cards = React.createElement("Folder", {}, cardChildren),
 		}),
 	})
 end
