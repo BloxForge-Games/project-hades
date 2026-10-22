@@ -478,6 +478,15 @@ local function Container(props: any)
 						CornerRadius = UDim.new(0.05, 0),
 					}),
 
+					-- A soft top-down shade on the plate (the 2026-10-22 export).
+					UIGradient = React.createElement("UIGradient", {
+						Color = ColorSequence.new({
+							ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+							ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 184, 184)),
+						}),
+						Rotation = 90,
+					}),
+
 					-- The bag's panel stroke and its shine ring (ShineRing), so the
 					-- card matches the tray panel beside it.
 					UIStroke = React.createElement("UIStroke", {
@@ -488,7 +497,7 @@ local function Container(props: any)
 
 					ShineRing = React.createElement(ShineRing, {
 						color = Color3.fromRGB(43, 65, 85),
-						thickness = 0.008,
+						thickness = 0.015,
 						cornerRadius = UDim.new(0.05, 0),
 						active = visible and selectedRelic ~= nil,
 					}),
@@ -852,7 +861,7 @@ local function Container(props: any)
 
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.968, -0.01),
-				Rotation = -13.712,
+				Rotation = -15,
 				Size = UDim2.fromScale(0.575, 0.575),
 				BackgroundTransparency = 0,
 				BackgroundColor3 = Color3.fromRGB(255, 102, 102),
@@ -987,6 +996,15 @@ local function Container(props: any)
 			}),
 			UICorner = React.createElement("UICorner", {
 				CornerRadius = UDim.new(0.025, 0),
+			}),
+
+			-- A soft top-down shade on the plate (the 2026-10-22 export).
+			UIGradient = React.createElement("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+					ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 184, 184)),
+				}),
+				Rotation = 90,
 			}),
 
 			-- The bevel is kept but off (the 2026-10-22 export): the panel wears
