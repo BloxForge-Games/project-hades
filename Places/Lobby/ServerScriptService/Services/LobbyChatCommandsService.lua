@@ -7,8 +7,10 @@
 	a new row), kept separate because the two places share no commands: the
 	Dungeons set drives run systems that do not exist here.
 
-	Open to EVERY player today (dev / playtest convenience). Restrict in
-	`_canRun` if that ever changes.
+	Open to every player EXCEPT /tp (and its aliases), which only a member
+	of the dev group at TP_GROUP_MIN_RANK or above may run (2026-10-23);
+	Studio is exempt so it can be exercised locally. `_canRun` is the one
+	permission seam.
 
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
 	                                      commands are ignored silently
@@ -79,6 +81,13 @@ local TELEPORT_RETRY_GRACE_SECONDS = 15
 -- /wipedata: the reply gets this long on screen before the kick.
 local WIPE_KICK_DELAY_SECONDS = 2
 local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
+
+-- /tp is for the team: the Roblox group whose members at this rank or
+-- above may run it. Ranks are the group's role ranks (0..255).
+local TP_GROUP_ID = 33936009
+local TP_GROUP_MIN_RANK = 100
+-- Commands behind the group gate (aliases included below).
+local TP_GATED_COMMANDS: { [string]: boolean } = { tp = true, dungeon = true, dungeons = true }
 
 -- /tp defaults when no argument names them.
 local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
@@ -230,14 +239,28 @@ COMMANDS.dungeons = COMMANDS.tp
 
 --[ Private ]--
 
--- Single permission seam. Open to everyone today; restrict HERE if that
--- ever changes, so no individual command has to care.
+-- Single permission seam. Everything is open except the gated commands,
+-- which need the dev group rank; Studio is exempt. GetRankInGroup is a
+-- web call, so it is pcall'd and a failure refuses (never grants).
 function LobbyChatCommandsService._canRun(
 	_self: typeof(LobbyChatCommandsService),
-	_player: Player,
-	_commandName: string
+	player: Player,
+	commandName: string
 ): boolean
-	return true
+	if not TP_GATED_COMMANDS[commandName] then
+		return true
+	end
+	if RunService:IsStudio() then
+		return true
+	end
+	local ok, rank = pcall(function()
+		return player:GetRankInGroup(TP_GROUP_ID)
+	end)
+	if not ok then
+		warn(("[LobbyChatCommands] GetRankInGroup failed for %s: %s"):format(player.Name, tostring(rank)))
+		return false
+	end
+	return (tonumber(rank) or 0) >= TP_GROUP_MIN_RANK
 end
 
 -- Echoes command feedback back to the caller: the floating indicator when
