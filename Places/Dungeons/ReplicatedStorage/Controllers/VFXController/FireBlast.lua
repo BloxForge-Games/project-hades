@@ -3,7 +3,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
-local IgnoreListController = require(ReplicatedStorage.Controllers.IgnoreListController)
+local IgnoreListController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.IgnoreListController)
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)

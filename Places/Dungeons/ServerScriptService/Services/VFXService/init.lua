@@ -15,7 +15,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
+local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Services.IgnoreListService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)

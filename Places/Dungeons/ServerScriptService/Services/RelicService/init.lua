@@ -16,7 +16,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local VFXService = require(ServerScriptService.Services.VFXService)
-local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
+local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Services.IgnoreListService)
 local DodgeService = require(ServerScriptService.Submodules.Core.Source.Services.DodgeService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
