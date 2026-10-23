@@ -453,7 +453,7 @@ local function RunItemFrame(props: any)
 			LevelTextLabel = React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0),
 				BackgroundColor3 = Color3.new(),
-				BackgroundTransparency = 0.4,
+				BackgroundTransparency = 0.25,
 				FontFace = Font.new(
 					"rbxasset://fonts/families/Montserrat.json",
 					Enum.FontWeight.ExtraBold,

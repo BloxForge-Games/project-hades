@@ -957,7 +957,7 @@ local function Container(props: any)
 					Image = "rbxassetid://6096768861",
 					ScaleType = Enum.ScaleType.Stretch,
 					ImageColor3 = Color3.fromRGB(255, 255, 255),
-					ImageTransparency = 0.5,
+					ImageTransparency = 0.6,
 					ZIndex = 7,
 				}, {
 					UICorner = React.createElement("UICorner", {

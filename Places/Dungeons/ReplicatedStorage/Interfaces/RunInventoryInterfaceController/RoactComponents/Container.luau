@@ -598,7 +598,8 @@ local function Container(props: any)
 				PlateGradient = React.createElement("UIGradient", {
 					Color = ColorSequence.new({
 						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-						ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 184, 184)),
+						ColorSequenceKeypoint.new(0.468048, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 140, 140)),
 					}),
 					Rotation = 90,
 				}),
@@ -848,7 +849,8 @@ local function Container(props: any)
 				PlateGradient = React.createElement("UIGradient", {
 					Color = ColorSequence.new({
 						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-						ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 184, 184)),
+						ColorSequenceKeypoint.new(0.468048, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 140, 140)),
 					}),
 					Rotation = 90,
 				}),
