@@ -583,6 +583,17 @@ local function Container(props: any)
 				Size = UDim2.fromScale(0.993, 0.89),
 				ZIndex = 0,
 			}, {
+				-- A GuiButton swallows the click (a Frame, Active or not, lets it
+				-- through to the backdrop button behind the window, which closes
+				-- it). No handler: it only exists so clicks on the panel stop here.
+				-- Lowest in the plate, so every real button above still wins.
+				ClickSink = React.createElement("TextButton", {
+					AutoButtonColor = false,
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Text = "",
+					ZIndex = 0,
+				}),
 				-- A soft top-down shade on the plate (the 2026-10-22 export).
 				PlateGradient = React.createElement("UIGradient", {
 					Color = ColorSequence.new({
@@ -822,6 +833,17 @@ local function Container(props: any)
 				Size = DROP_INFO_BACKGROUND_SIZE,
 				ZIndex = -1,
 			}, {
+				-- A GuiButton swallows the click (a Frame, Active or not, lets it
+				-- through to the backdrop button behind the window, which closes
+				-- it). No handler: it only exists so clicks on the panel stop here.
+				-- Lowest in the plate, so every real button above still wins.
+				ClickSink = React.createElement("TextButton", {
+					AutoButtonColor = false,
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Text = "",
+					ZIndex = 0,
+				}),
 				-- A soft top-down shade on the plate (the 2026-10-22 export).
 				PlateGradient = React.createElement("UIGradient", {
 					Color = ColorSequence.new({
