@@ -86,6 +86,8 @@ local CATEGORY_ACTIVE_STROKE_COLOR = Color3.fromRGB(26, 48, 74)
 local PANEL_COLOR = Color3.fromRGB(20, 31, 40)
 local PANEL_STROKE_COLOR = Color3.fromRGB(43, 65, 85)
 local PANEL_STROKE_THICKNESS = 0.005
+-- The detail panel's stroke and ring, a hair heavier than the bag's (2026-10-22).
+local DETAIL_STROKE_THICKNESS = 0.006
 local ROW_COLOR = Color3.fromRGB(45, 70, 90)
 local CATEGORY_SELECTED_OVERLAY_T = 0.75
 
@@ -103,24 +105,6 @@ local PANEL_OPEN_POSITION = UDim2.fromScale(0.5, 0.5)
 local PANEL_CLOSED_POSITION = UDim2.fromScale(0.5, 0.6)
 local PANEL_OPEN_TRANSPARENCY = 0
 local PANEL_CLOSED_TRANSPARENCY = 1
-
-local BUTTON_HOVER_TWEEN_INFO = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local BUTTON_PULSE_UP_TWEEN_INFO = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local BUTTON_PULSE_DOWN_TWEEN_INFO = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local BUTTON_PULSE_UP_DURATION = 0.08
-local BUTTON_HOVER_SCALE = 1.075
-local BUTTON_PEAK_SCALE = 1.15
-
--- "Close" button. A wide pill hanging BELOW the panel body (it lives in
--- InnerContainerFrame, which doesn't clip), not the Inventory's square X.
--- Authored Size = (0.23191, 0.0821221); hover / peak are re-derived from
--- that so the motion beat matches the tiles and category tabs.
-local EXIT_BUTTON_BASE_SIZE = UDim2.fromScale(0.23191, 0.0821221)
-local EXIT_BUTTON_HOVER_SIZE = UDim2.fromScale(0.23191 * BUTTON_HOVER_SCALE, 0.0821221 * BUTTON_HOVER_SCALE)
-local EXIT_BUTTON_PEAK_SIZE = UDim2.fromScale(0.23191 * BUTTON_PEAK_SCALE, 0.0821221 * BUTTON_PEAK_SCALE)
-
-local BUTTON_SELECTED_OVERLAY_VISIBLE_T = 0.75
-local BUTTON_SELECTED_OVERLAY_HIDDEN_T = 1
 
 local STAT_COLOR_NEUTRAL = Color3.fromRGB(200, 200, 200)
 local STAT_COLOR_INACTIVE = Color3.fromRGB(150, 150, 150)
@@ -315,7 +299,6 @@ end
 
 local function Container(props: any)
 	local EscrowData = props.EscrowData
-	local onClose = props.onClose
 
 	-- Opening-sweep generation, derived DURING RENDER from the Visible prop
 	-- flipping true (refs, not state) so the tiles see it in the same
@@ -340,11 +323,6 @@ local function Container(props: any)
 	local wrapperRef = React.useRef(nil)
 	-- Fade-timeline generation token; stale timelines self-cancel.
 	local fadeGenerationRef = React.useRef(0)
-
-	local exitButtonHovered, setExitButtonHovered = React.useState(false)
-	local exitButtonClickToken, setExitButtonClickToken = React.useState(0)
-	local exitButtonFrameRef = React.useRef(nil)
-	local exitButtonSelectedFrameRef = React.useRef(nil)
 
 	React.useEffect(function()
 		if not EscrowData then
@@ -434,43 +412,6 @@ local function Container(props: any)
 			wrapperRef.current.GroupTransparency = PANEL_CLOSED_TRANSPARENCY
 		end
 	end, {})
-
-	React.useEffect(function()
-		local instance = exitButtonFrameRef.current
-		if not instance then
-			return
-		end
-		local target = if exitButtonHovered then EXIT_BUTTON_HOVER_SIZE else EXIT_BUTTON_BASE_SIZE
-		TweenService:Create(instance, BUTTON_HOVER_TWEEN_INFO, { Size = target }):Play()
-	end, { exitButtonHovered })
-
-	React.useEffect(function()
-		local instance = exitButtonSelectedFrameRef.current
-		if not instance then
-			return
-		end
-		local target = if exitButtonHovered then BUTTON_SELECTED_OVERLAY_VISIBLE_T else BUTTON_SELECTED_OVERLAY_HIDDEN_T
-		TweenService:Create(instance, BUTTON_HOVER_TWEEN_INFO, { BackgroundTransparency = target }):Play()
-	end, { exitButtonHovered })
-
-	React.useEffect(function()
-		if exitButtonClickToken == 0 then
-			return
-		end
-		local instance = exitButtonFrameRef.current
-		if not instance then
-			return
-		end
-		local resting = if exitButtonHovered then EXIT_BUTTON_HOVER_SIZE else EXIT_BUTTON_BASE_SIZE
-		task.spawn(function()
-			TweenService:Create(instance, BUTTON_PULSE_UP_TWEEN_INFO, { Size = EXIT_BUTTON_PEAK_SIZE }):Play()
-			task.wait(BUTTON_PULSE_UP_DURATION)
-			if not exitButtonFrameRef.current then
-				return
-			end
-			TweenService:Create(exitButtonFrameRef.current, BUTTON_PULSE_DOWN_TWEEN_INFO, { Size = resting }):Play()
-		end)
-	end, { exitButtonClickToken })
 
 	--[ Detail-pane derived state ]--
 
@@ -632,10 +573,12 @@ local function Container(props: any)
 				AspectRatio = 1.25,
 			}),
 
+			-- Active: a click on the plate stops here instead of reaching the
+			-- backdrop button behind the window (which closes it).
 			InventoryBackgroundFrame = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				BackgroundColor3 = PANEL_COLOR,
-				Interactable = false,
+				Active = true,
 				Position = UDim2.fromScale(0.165, 0.493324),
 				Size = UDim2.fromScale(0.993, 0.89),
 				ZIndex = 0,
@@ -821,7 +764,7 @@ local function Container(props: any)
 			-- because the panel is a CanvasGroup and would clip the stroke.
 			ItemInfoRing = React.createElement(ShineRing, {
 				color = PANEL_STROKE_COLOR,
-				thickness = PANEL_STROKE_THICKNESS,
+				thickness = DETAIL_STROKE_THICKNESS,
 				cornerRadius = UDim.new(0.015, 0),
 				active = props.Visible == true,
 				position = DROP_INFO_BACKGROUND_POSITION,
@@ -829,9 +772,52 @@ local function Container(props: any)
 				zIndex = 0,
 			}),
 
+			-- The detail panel's static stroke lives on this SIBLING, not on the
+			-- panel: the panel is a CanvasGroup and clips its own UIStroke to the
+			-- plate's bounds, so a stroke placed there never shows. Non-Active, so
+			-- clicks fall through to the content and the plate below.
+			ItemInfoBorder = React.createElement("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				BackgroundTransparency = 1,
+				Position = DROP_INFO_BACKGROUND_POSITION,
+				Size = DROP_INFO_BACKGROUND_SIZE,
+				ZIndex = 0,
+			}, {
+				ICorner1 = React.createElement("UICorner", {
+					BottomLeftRadius = UDim.new(0.015, 0),
+					BottomRightRadius = UDim.new(0.015, 0),
+					TopLeftRadius = UDim.new(0.015, 0),
+					TopRightRadius = UDim.new(0.015, 0),
+				}),
+				UIStroke = React.createElement("UIStroke", {
+					Color = PANEL_STROKE_COLOR,
+					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
+					Thickness = DETAIL_STROKE_THICKNESS,
+				}, {
+					UIGradient = React.createElement("UIGradient", {
+						Color = ColorSequence.new({
+							ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+							ColorSequenceKeypoint.new(0.141623, Color3.fromRGB(206, 206, 206)),
+							ColorSequenceKeypoint.new(0.499136, Color3.fromRGB(211, 211, 211)),
+							ColorSequenceKeypoint.new(0.777202, Color3.fromRGB(206, 206, 206)),
+							ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
+						}),
+						Rotation = 45,
+						Transparency = NumberSequence.new({
+							NumberSequenceKeypoint.new(0, 0),
+							NumberSequenceKeypoint.new(0.625156, 0),
+							NumberSequenceKeypoint.new(1, 0),
+						}),
+					}),
+				}),
+			}),
+
+			-- Active so a click on the plate stops here instead of reaching the
+			-- backdrop button behind the window (which closes it).
 			ItemInfoContainerBackground = React.createElement("CanvasGroup", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				BackgroundColor3 = PANEL_COLOR,
+				Active = true,
 				Position = DROP_INFO_BACKGROUND_POSITION,
 				Size = DROP_INFO_BACKGROUND_SIZE,
 				ZIndex = -1,
@@ -851,145 +837,6 @@ local function Container(props: any)
 					TopLeftRadius = UDim.new(0.015, 0),
 					TopRightRadius = UDim.new(0.015, 0),
 				}),
-
-				UIStroke = React.createElement("UIStroke", {
-					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = PANEL_STROKE_THICKNESS,
-					Color = PANEL_STROKE_COLOR,
-				}, {
-					UIGradient = React.createElement("UIGradient", {
-						Color = ColorSequence.new({
-							ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-							ColorSequenceKeypoint.new(0.141623, Color3.fromRGB(206, 206, 206)),
-							ColorSequenceKeypoint.new(0.499136, Color3.fromRGB(211, 211, 211)),
-							ColorSequenceKeypoint.new(0.777202, Color3.fromRGB(206, 206, 206)),
-							ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
-						}),
-						Rotation = 45,
-						Transparency = NumberSequence.new({
-							NumberSequenceKeypoint.new(0, 0),
-							NumberSequenceKeypoint.new(0.625156, 0),
-							NumberSequenceKeypoint.new(1, 0),
-						}),
-					}),
-				}),
-			}),
-
-			-- Close pill. Parented to InnerContainerFrame (not the info-pane
-			-- background) and positioned past Y = 1, so it hangs BELOW the whole
-			-- panel — InnerContainerFrame doesn't clip. Living out here also
-			-- keeps it clear of ItemInfoContainer's per-selection fade; it only
-			-- fades with the panel's own open/close tween.
-			ExitButtonFrame = React.createElement("Frame", {
-				ref = exitButtonFrameRef,
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(217, 90, 90),
-				LayoutOrder = 6,
-				Position = UDim2.fromScale(0.518777, 1.04726),
-				-- Hardcoded BASE_SIZE constant: React's diff sees the same
-				-- value across renders and won't re-apply, so TweenService
-				-- stays the sole runtime writer (no mid-tween snap-back).
-				Size = EXIT_BUTTON_BASE_SIZE,
-				ZIndex = 2,
-			}, {
-				ICorner1 = React.createElement("UICorner", {
-					BottomLeftRadius = UDim.new(0.08, 0),
-					BottomRightRadius = UDim.new(0.08, 0),
-					TopLeftRadius = UDim.new(0.08, 0),
-					TopRightRadius = UDim.new(0.08, 0),
-				}),
-
-				-- White hover overlay at ZIndex 2, with the label bumped to
-				-- ZIndex 3 so the wash never paints over the text.
-				SelectedFrame = React.createElement("Frame", {
-					ref = exitButtonSelectedFrameRef,
-					Active = false,
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					BackgroundColor3 = Color3.new(1, 1, 1),
-					BackgroundTransparency = BUTTON_SELECTED_OVERLAY_HIDDEN_T,
-					BorderSizePixel = 0,
-					Position = UDim2.fromScale(0.503935, 0.513531),
-					Size = UDim2.fromScale(1.00787, 0.973074),
-					ZIndex = 2,
-				}, {
-					UICorner = React.createElement("UICorner", {
-						CornerRadius = UDim.new(0.08, 0),
-					}),
-				}),
-
-				ExitButton = React.createElement("TextLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					BackgroundTransparency = 1,
-					FontFace = Font.new(
-						"rbxasset://fonts/families/Montserrat.json",
-						Enum.FontWeight.ExtraBold,
-						Enum.FontStyle.Normal
-					),
-					Position = UDim2.fromScale(0.508321, 0.513531),
-					Size = UDim2.fromScale(1.01664, 0.632498),
-					Text = "Close",
-					TextColor3 = Color3.fromRGB(255, 245, 234),
-					TextScaled = true,
-					ZIndex = 3,
-				}, {
-					IStroke2 = React.createElement("UIStroke", {
-						Color = Color3.fromRGB(25, 25, 25),
-						LineJoinMode = Enum.LineJoinMode.Bevel,
-						StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-						Thickness = 0.05,
-					}),
-				}),
-
-				UIStroke = React.createElement("UIStroke", {
-					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.04,
-					Color = Color3.fromRGB(25, 25, 25),
-				}, {
-					UIGradient = React.createElement("UIGradient", {
-						Color = ColorSequence.new({
-							ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-							ColorSequenceKeypoint.new(0.141623, Color3.fromRGB(206, 206, 206)),
-							ColorSequenceKeypoint.new(0.499136, Color3.fromRGB(211, 211, 211)),
-							ColorSequenceKeypoint.new(0.777202, Color3.fromRGB(206, 206, 206)),
-							ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
-						}),
-						Rotation = 45,
-						Transparency = NumberSequence.new({
-							NumberSequenceKeypoint.new(0, 0),
-							NumberSequenceKeypoint.new(0.625156, 0),
-							NumberSequenceKeypoint.new(1, 0),
-						}),
-					}),
-				}),
-			}),
-
-			ExitButtonDetector = React.createElement("ImageButton", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundTransparency = 1,
-				ImageTransparency = 1,
-				Position = UDim2.fromScale(0.518871, 1.04727),
-				Size = UDim2.fromScale(0.231541, 0.0825226),
-				ZIndex = 10,
-
-				[React.Event.Activated] = function()
-					uiSound:PlayClick()
-					-- Bump the click token BEFORE closing so the pulse has
-					-- a chance to start; it runs in a task.spawn and
-					-- self-cancels once the ref clears.
-					setExitButtonClickToken(function(t)
-						return t + 1
-					end)
-					if onClose then
-						onClose()
-					end
-				end,
-				[React.Event.MouseEnter] = function()
-					uiSound:PlayHover()
-					setExitButtonHovered(true)
-				end,
-				[React.Event.MouseLeave] = function()
-					setExitButtonHovered(false)
-				end,
 			}),
 
 			ItemInfoContainer = React.createElement("CanvasGroup", {

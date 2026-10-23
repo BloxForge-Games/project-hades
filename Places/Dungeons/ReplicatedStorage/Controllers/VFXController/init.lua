@@ -17,6 +17,9 @@ local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local warmSwordSlashTextures = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.warmSwordSlashTextures)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 
 -- Sub-registry: per-projectile modules for MOB ranged attacks. Keyed
 -- by projectileName (matches MobData[name].genericAttacks[i].projectileName).
@@ -194,7 +197,9 @@ function VFXController.Start(self: typeof(VFXController))
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
-		if gameProcessedEvent then
+		-- No aura swings while a window covers the screen (the HUD is held
+		-- closed by the bag, the forge, the run bag, a relic offer ...).
+		if gameProcessedEvent or not InterfaceManagerController:IsScopeOpen(InterfaceScopes.HUD) then
 			return
 		end
 

@@ -17,6 +17,9 @@ local CinematicInterfaceController =
 	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
 local DialogueBillboardInterface =
 	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.DialogueBillboardInterface)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
@@ -202,9 +205,15 @@ function PlayerStateController.GeneralActionEnabled(_self: typeof(PlayerStateCon
 		-- aim gate above blocks cursor rotation. Walking away still works and
 		-- closes the dialogue, which clears the attribute.
 		or Players.LocalPlayer.Character:GetAttribute(Attributes.TalkingToNPC) == true
-		or Players.LocalPlayer.Character
-			and Players.LocalPlayer.Character:FindFirstChild(ValueNames.RagdollTrigger)
-			and Players.LocalPlayer.Character:FindFirstChild(ValueNames.RagdollTrigger).Value == true
+		or Players.LocalPlayer.Character and Players.LocalPlayer.Character:FindFirstChild(ValueNames.RagdollTrigger) and Players.LocalPlayer.Character:FindFirstChild(
+			ValueNames.RagdollTrigger
+		).Value == true
+		-- A window covering the screen (the bag, the forge, the run bag, a
+		-- relic offer) or anything else holding the HUD closed (landing,
+		-- death): no attacking, no spells, no dodge, same as a dialogue. The
+		-- weapons, the arcane caster, auto-attack and the aim watch all read
+		-- this, so the ONE gate covers every input path (2026-10-22).
+		or not InterfaceManagerController:IsScopeOpen(InterfaceScopes.HUD)
 	then
 		return false
 	end
