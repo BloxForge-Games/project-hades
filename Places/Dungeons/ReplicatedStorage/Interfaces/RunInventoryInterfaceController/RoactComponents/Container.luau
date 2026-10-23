@@ -231,7 +231,7 @@ local function DropGrid(props: any)
 	local tileChildren = {
 		IGridLayout = React.createElement("UIGridLayout", {
 			CellPadding = UDim2.fromScale(-0.05, -0.03),
-			CellSize = UDim2.fromScale(0.24, 0.32),
+			CellSize = UDim2.fromScale(0.24, 0.35),
 			FillDirectionMaxCells = GRID_COLUMNS,
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
@@ -271,8 +271,8 @@ local function DropGrid(props: any)
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Position = UDim2.fromScale(0.151426, 0.485),
-		Size = UDim2.fromScale(0.96631, 0.78),
+		Position = UDim2.fromScale(0.170534, 0.482694),
+		Size = UDim2.fromScale(0.993, 0.706212),
 	}, {
 		ScrollingFrame = React.createElement("ScrollingFrame", {
 			Active = true,
@@ -574,10 +574,9 @@ local function Container(props: any)
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				BackgroundColor3 = PANEL_COLOR,
 				Active = true,
-				-- No tab strip above it any more (2026-10-23): the plate matches the
-				-- detail panel's height, and the grid fills it.
-				Position = UDim2.fromScale(0.165, 0.485),
-				Size = UDim2.fromScale(0.993, 0.835495),
+				-- No tab strip above it any more; the 2026-10-23 export's geometry.
+				Position = UDim2.fromScale(0.170534, 0.483909),
+				Size = UDim2.fromScale(0.993, 0.731853),
 				ZIndex = 0,
 			}, {
 				-- A GuiButton swallows the click (a Frame, Active or not, lets it
