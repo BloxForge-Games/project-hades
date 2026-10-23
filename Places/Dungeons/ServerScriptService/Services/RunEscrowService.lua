@@ -65,6 +65,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local InventoryCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.InventoryCapData)
+local countOwnedGear = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.countOwnedGear)
 local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
 local LifeService = require(ServerScriptService.Services.LifeService)
@@ -201,6 +203,23 @@ function RunEscrowService.AddItem(
 	escrowItem: { [string]: any }
 ): boolean
 	local entry = self:_getOrCreate(player)
+
+	-- The BAG cap (InventoryCapData): what is owned plus what this run is
+	-- already carrying, so banking the escrow can never overfill the bag.
+	local owned = countOwnedGear(DataService and DataService:GetProfileData(player))
+	if owned + #entry.items >= InventoryCapData.BASE_SLOTS then
+		local character = player.Character
+		if TextIndicatorService and character then
+			TextIndicatorService:ShowIndicator(
+				player,
+				((character:FindFirstChild("Head") :: BasePart?) or character.PrimaryPart) :: BasePart,
+				"Bag full!",
+				Color3.fromRGB(255, 90, 90),
+				true
+			)
+		end
+		return false
+	end
 
 	if #entry.items >= MAX_RUN_ITEMS then
 		local character = player.Character
