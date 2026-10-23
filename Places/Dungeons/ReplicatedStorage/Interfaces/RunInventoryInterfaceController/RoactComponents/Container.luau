@@ -78,10 +78,6 @@ local INTRO_TILE_SWEEP_SECONDS = 0.75
 local GRID_COLUMNS = 5
 local INTRO_TILE_SPREAD_SECONDS = INTRO_TILE_SWEEP_SECONDS - INTRO_POP_SECONDS
 
--- The single category pill's palette, in the ACTIVE state it never leaves.
-local CATEGORY_ACTIVE_COLOR = Color3.fromRGB(105, 158, 186)
-local CATEGORY_ACTIVE_STROKE_COLOR = Color3.fromRGB(26, 48, 74)
-
 -- The bag's 2026-10-22 palette: dark blue panels, blue-grey border and rows.
 local PANEL_COLOR = Color3.fromRGB(20, 31, 40)
 local PANEL_STROKE_COLOR = Color3.fromRGB(43, 65, 85)
@@ -89,7 +85,6 @@ local PANEL_STROKE_THICKNESS = 0.005
 -- The detail panel's stroke and ring, a hair heavier than the bag's (2026-10-22).
 local DETAIL_STROKE_THICKNESS = 0.006
 local ROW_COLOR = Color3.fromRGB(45, 70, 90)
-local CATEGORY_SELECTED_OVERLAY_T = 0.75
 
 -- Timings / easing — identical to the Inventory's.
 local INFO_PANE_FADE_DURATION = 0.12
@@ -276,8 +271,8 @@ local function DropGrid(props: any)
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Position = UDim2.fromScale(0.151426, 0.587545),
-		Size = UDim2.fromScale(0.96631, 0.822984),
+		Position = UDim2.fromScale(0.151426, 0.485),
+		Size = UDim2.fromScale(0.96631, 0.78),
 	}, {
 		ScrollingFrame = React.createElement("ScrollingFrame", {
 			Active = true,
@@ -579,8 +574,10 @@ local function Container(props: any)
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				BackgroundColor3 = PANEL_COLOR,
 				Active = true,
-				Position = UDim2.fromScale(0.165, 0.493324),
-				Size = UDim2.fromScale(0.993, 0.89),
+				-- No tab strip above it any more (2026-10-23): the plate matches the
+				-- detail panel's height, and the grid fills it.
+				Position = UDim2.fromScale(0.165, 0.485),
+				Size = UDim2.fromScale(0.993, 0.835495),
 				ZIndex = 0,
 			}, {
 				-- A GuiButton swallows the click (a Frame, Active or not, lets it
@@ -683,91 +680,6 @@ local function Container(props: any)
 			-- and no detector -- a tab that reacts to the cursor but does
 			-- nothing reads as broken.
 			--
-			-- Centered rather than left-aligned now that it's a lone heading:
-			-- the strip was sized and offset for two pills, so a single one
-			-- pinned left read as lopsided.
-			CategoryContainerFrame = React.createElement("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundTransparency = 1,
-				Position = UDim2.fromScale(0.151426, 0.123028),
-				Size = UDim2.fromScale(0.892409, 0.1),
-			}, {
-				UIListLayout = React.createElement("UIListLayout", {
-					FillDirection = Enum.FillDirection.Horizontal,
-					HorizontalAlignment = Enum.HorizontalAlignment.Center,
-					Padding = UDim.new(0.025, 0),
-					SortOrder = Enum.SortOrder.LayoutOrder,
-				}),
-
-				UIPadding = React.createElement("UIPadding", {
-					PaddingBottom = UDim.new(0.1, 0),
-					PaddingLeft = UDim.new(0.015, 0),
-					PaddingRight = UDim.new(0.015, 0),
-					PaddingTop = UDim.new(0.1, 0),
-				}),
-
-				DungeonDrops = React.createElement("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					BackgroundTransparency = 1,
-					LayoutOrder = 1,
-					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(0.175, 1),
-				}, {
-					InnerFrame = React.createElement("Frame", {
-						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = CATEGORY_ACTIVE_COLOR,
-						Position = UDim2.fromScale(0.5, 0.5),
-						Size = UDim2.fromScale(1.69655, 1),
-					}, {
-						UICorner = React.createElement("UICorner", {
-							BottomLeftRadius = UDim.new(0.08, 0),
-							BottomRightRadius = UDim.new(0.08, 0),
-							TopLeftRadius = UDim.new(0.08, 0),
-							TopRightRadius = UDim.new(0.08, 0),
-						}),
-
-						-- Pinned at the selected wash rather than tweened, since
-						-- it can never be deselected.
-						SelectedFrame = React.createElement("Frame", {
-							AnchorPoint = Vector2.new(0.5, 0.5),
-							BackgroundColor3 = Color3.new(1, 1, 1),
-							BackgroundTransparency = CATEGORY_SELECTED_OVERLAY_T,
-							Position = UDim2.fromScale(0.5, 0.5),
-							Size = UDim2.fromScale(1, 1),
-							ZIndex = 5,
-						}, {
-							UICorner = React.createElement("UICorner", {
-								BottomLeftRadius = UDim.new(0.08, 0),
-								BottomRightRadius = UDim.new(0.08, 0),
-								TopLeftRadius = UDim.new(0.08, 0),
-								TopRightRadius = UDim.new(0.08, 0),
-							}),
-						}),
-
-						TextLabel = React.createElement("TextLabel", {
-							AnchorPoint = Vector2.new(0.5, 0.5),
-							BackgroundTransparency = 1,
-							FontFace = Font.new(
-								"rbxasset://fonts/families/Montserrat.json",
-								Enum.FontWeight.ExtraBold,
-								Enum.FontStyle.Normal
-							),
-							Position = UDim2.fromScale(0.5, 0.5),
-							Size = UDim2.fromScale(1, 0.5),
-							Text = "Spire's Bounty",
-							TextColor3 = Color3.new(1, 1, 1),
-							TextScaled = true,
-						}, {
-							UIStroke = React.createElement("UIStroke", {
-								Color = CATEGORY_ACTIVE_STROKE_COLOR,
-								StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-								Thickness = 0.05,
-							}),
-						}),
-					}),
-				}),
-			}),
-
 			-- Shorter than the grid's background: with MainStatFrame hidden the
 			-- detail pane needs less height, and the Close button moved out of
 			-- here to InnerContainerFrame. Static now that there's only one
