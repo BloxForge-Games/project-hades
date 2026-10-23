@@ -272,6 +272,20 @@ function GearDrop:_playBezierFlight()
 	self._dropParticles.Enabled = false
 	self:_emitLandingBurst()
 	lootSound:PlayLanding()
+
+	-- Re-assert the authored look now that the flight is over
+	-- (2026-10-23). The reveal in Start is the real one; this repeats it,
+	-- idempotently, to close the window in which a hover dim's tween or a
+	-- late write could leave a part at the hidden value -- chest spills
+	-- landed with pieces of armor missing. Then the floor dim is put back
+	-- if the last commit had this drop dimmed, so a drop landing under a
+	-- hover does not come up bright.
+	if self.Instance:GetAttribute(ATTR_EXPIRED) ~= true then
+		privateDropVisibility.reveal(self.Instance)
+		if GearDropsRenderController then
+			GearDropsRenderController:ReapplyDim(self.Instance)
+		end
+	end
 end
 
 -- The burst as the drop hits the floor, tinted by the rarity prefab it

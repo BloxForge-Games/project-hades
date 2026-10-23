@@ -33,6 +33,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local PickupHoverStyle = require(ReplicatedStorage.Submodules.Core.Shared.Data.PickupHoverStyle)
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 --[ Constants ]--
 
@@ -118,13 +119,35 @@ function GearDropsRenderController._findVisualModel(_self: typeof(GearDropsRende
 	return nil
 end
 
+-- True for a part, decal or texture the drop was AUTHORED to keep
+-- invisible (see the skip note on _applyDropDim). Anything that does not
+-- render through a Transparency is never skipped here; the fade walk
+-- handles those by class on its own.
+local function isAuthoredInvisible(instance: Instance): boolean
+	if not (instance:IsA("BasePart") or instance:IsA("Decal")) then
+		return false
+	end
+	local authored = instance:GetAttribute(Attributes.PrivateHiddenTransparency)
+	if typeof(authored) == "number" then
+		return authored >= 1
+	end
+	return (instance :: any).Transparency == 1
+end
+
 -- The dim (or restore) of ONE drop: the shared fade walk (fadeSubtree),
 -- riding its one pass for the billboard flag and the sparkles too.
 --
---   * BaseParts already at Transparency 1 (carrier, hidden Handle on
+--   * BaseParts AUTHORED at Transparency 1 (carrier, hidden Handle on
 --     weapon drops, artist-authored invisible markers) are skipped:
 --     tweening those would expose geometry that's meant to stay
---     invisible.
+--     invisible. "Authored" is the value privateDropVisibility stored
+--     before the server hid the drop, when there is one -- a private
+--     drop still waiting on its reveal sits at 1 on EVERY part, and the
+--     old raw check (2026-10-23) could not tell that from a part meant
+--     to be invisible. Deciding on the current value left the dim's
+--     bookkeeping and the reveal free to interleave on a chest spill,
+--     and parts came up missing. A public drop never had a stored value
+--     and is never hidden, so its current value IS the authored one.
 --   * Labels and their strokes take the TEXT value, lighter than the
 --     mesh, and their billboard drops behind geometry while dimmed. Every
 --     TextLabel in a drop is billboard text (the prompt is a custom
@@ -142,7 +165,7 @@ function GearDropsRenderController._applyDropDim(
 		targetTransparency = if dim then PickupHoverStyle.ModelTransparency else 0,
 		textTransparency = if dim then PickupHoverStyle.TextTransparency else 0,
 		tweenInfo = PickupHoverStyle.TweenInfo,
-		skipHidden = true,
+		skip = isAuthoredInvisible,
 		includeDecals = true,
 		includeGuis = true,
 		visit = function(descendant)
@@ -156,6 +179,18 @@ function GearDropsRenderController._applyDropDim(
 			end
 		end,
 	})
+end
+
+-- Re-applies the floor dim to ONE drop that was just revealed (the owner
+-- component re-asserts the authored look when the flight lands). The
+-- reveal writes authored values over a dim in progress, so a drop landing
+-- while the player hovers another would come up bright; this puts it
+-- back to whatever the last commit decided for it. A no-op when no dim is
+-- recorded for the drop.
+function GearDropsRenderController.ReapplyDim(self: typeof(GearDropsRenderController), model: Instance)
+	if self._dimApplied[model] == true then
+		self:_applyDropDim(model, true)
+	end
 end
 
 -- Recomputes whether a drop's billboard should be showing from the three
