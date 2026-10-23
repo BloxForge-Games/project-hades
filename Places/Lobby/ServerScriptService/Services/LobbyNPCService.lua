@@ -8,10 +8,11 @@
 	NPC component and the billboard dialogue key off) and a ProximityPrompt
 	under its PrimaryPart if the rig ships none.
 
-	  "Twig the Moglin"        -> DialogueRegistry/LobbyMerchant   (opens the Shop)
-	  "Cysero the Blacksmith"  -> DialogueRegistry/LobbyBlacksmith (opens the Forge)
-	(the earlier "The Merchant" / "The Blacksmith" names still map, so an
-	older place file keeps working.)
+	  a name containing "twig" or "merchant"       -> LobbyMerchant   (the Shop)
+	  a name containing "cysero" or "blacksmith"   -> LobbyBlacksmith (the Forge)
+	Matched by keyword, case-insensitive, so "Twig the Moglin", "Twig the
+	Merchant" or "The Merchant" all land on the same graph (an exact-name
+	table missed a rename and dropped Twig onto the default graph).
 
 	A model whose name is not in the table is left alone with a warn, so a
 	misnamed rig is visible in the log rather than silently mute.
@@ -32,13 +33,24 @@ local IGNORE_INSTANCES_NAME = "IgnoreInstances"
 local NPC_FOLDER_NAME = "NPCs"
 local DIALOGUE_GRAPH_ATTRIBUTE = "DialogueGraph"
 
--- Model name -> DialogueRegistry module name.
-local GRAPH_BY_NAME: { [string]: string } = {
-	["Twig the Moglin"] = "LobbyMerchant",
-	["Cysero the Blacksmith"] = "LobbyBlacksmith",
-	["The Merchant"] = "LobbyMerchant",
-	["The Blacksmith"] = "LobbyBlacksmith",
+-- Lower-cased keyword in the model name -> DialogueRegistry module name.
+-- First match in order wins.
+local GRAPH_BY_KEYWORD: { { keyword: string, graph: string } } = {
+	{ keyword = "twig", graph = "LobbyMerchant" },
+	{ keyword = "cysero", graph = "LobbyBlacksmith" },
+	{ keyword = "merchant", graph = "LobbyMerchant" },
+	{ keyword = "blacksmith", graph = "LobbyBlacksmith" },
 }
+
+local function graphForName(name: string): string?
+	local lowered = string.lower(name)
+	for _, entry in GRAPH_BY_KEYWORD do
+		if string.find(lowered, entry.keyword, 1, true) then
+			return entry.graph
+		end
+	end
+	return nil
+end
 
 -- The prompt, when the rig ships none. Roblox's default style: the custom
 -- prompt UI the Dungeons chests use lives in that place file, not here.
@@ -82,9 +94,11 @@ function LobbyNPCService._wire(_self: typeof(LobbyNPCService), model: Instance)
 	if not model:IsA("Model") then
 		return
 	end
-	local graphName = GRAPH_BY_NAME[model.Name]
+	local graphName = graphForName(model.Name)
 	if not graphName then
-		warn(("[LobbyNPCService] No dialogue graph for NPC '%s' -- add it to GRAPH_BY_NAME"):format(model.Name))
+		warn(
+			("[LobbyNPCService] No dialogue graph for NPC '%s' -- add a keyword to GRAPH_BY_KEYWORD"):format(model.Name)
+		)
 		return
 	end
 	-- A rig without a PrimaryPart adorns the billboard to an arbitrary part;
