@@ -8,8 +8,10 @@
 	NPC component and the billboard dialogue key off) and a ProximityPrompt
 	under its PrimaryPart if the rig ships none.
 
-	  "The Merchant"    -> DialogueRegistry/LobbyMerchant   (opens the Shop)
-	  "The Blacksmith"  -> DialogueRegistry/LobbyBlacksmith (opens the Forge)
+	  "Twig the Moglin"        -> DialogueRegistry/LobbyMerchant   (opens the Shop)
+	  "Cysero the Blacksmith"  -> DialogueRegistry/LobbyBlacksmith (opens the Forge)
+	(the earlier "The Merchant" / "The Blacksmith" names still map, so an
+	older place file keeps working.)
 
 	A model whose name is not in the table is left alone with a warn, so a
 	misnamed rig is visible in the log rather than silently mute.
@@ -32,6 +34,8 @@ local DIALOGUE_GRAPH_ATTRIBUTE = "DialogueGraph"
 
 -- Model name -> DialogueRegistry module name.
 local GRAPH_BY_NAME: { [string]: string } = {
+	["Twig the Moglin"] = "LobbyMerchant",
+	["Cysero the Blacksmith"] = "LobbyBlacksmith",
 	["The Merchant"] = "LobbyMerchant",
 	["The Blacksmith"] = "LobbyBlacksmith",
 }
