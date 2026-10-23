@@ -94,6 +94,12 @@ local function Container(props: any)
 	-- local character's CutscenePlaying attribute the same way the topbar
 	-- icons do. The tray itself is already slid shut by the Windows scope
 	-- lock; this is the one piece of relic chrome that stayed on screen.
+	--
+	-- EXCEPT during a sell / reforge session: the Merchant and the Forge
+	-- run their dialogue under the same cutscene flag, force the tray open,
+	-- and wait on the tray CLOSING to move their "..." node on. The toggle
+	-- is the only way to close it, so hiding it there trapped the player
+	-- in the conversation (the first cut of this did exactly that).
 	local cutscenePlaying, setCutscenePlaying = React.useState(false)
 
 	React.useEffect(function()
@@ -876,7 +882,7 @@ local function Container(props: any)
 			Position = TOGGLE_SHOWN_POSITION,
 			Size = UDim2.fromScale(0.035, 0.062),
 			BackgroundTransparency = 1,
-			Visible = not cutscenePlaying,
+			Visible = not cutscenePlaying or sellMode or reforgeMode,
 			ZIndex = 1,
 		}, {
 			UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
