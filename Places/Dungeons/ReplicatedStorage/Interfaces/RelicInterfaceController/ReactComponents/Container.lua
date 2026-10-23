@@ -503,21 +503,21 @@ local function Container(props: any)
 					}),
 				}),
 
-				ShadowBackgroundImageLabelFrame = React.createElement("ImageLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.536, 0.457319),
-					Size = UDim2.fromScale(1.071, 0.884638),
-					Image = "rbxassetid://6096768861",
-					BackgroundTransparency = 1,
-					ImageColor3 = Color3.fromRGB(255, 255, 255),
-					ImageTransparency = 0.35,
-					ScaleType = Enum.ScaleType.Stretch,
-					ZIndex = -1,
-				}, {
-					UICorner = React.createElement("UICorner", {
-						CornerRadius = UDim.new(0.05, 0),
-					}),
-				}),
+				-- ShadowBackgroundImageLabelFrame = React.createElement("ImageLabel", {
+				-- 	AnchorPoint = Vector2.new(0.5, 0.5),
+				-- 	Position = UDim2.fromScale(0.536, 0.457319),
+				-- 	Size = UDim2.fromScale(1.071, 0.884638),
+				-- 	Image = "rbxassetid://6096768861",
+				-- 	BackgroundTransparency = 1,
+				-- 	ImageColor3 = Color3.fromRGB(255, 255, 255),
+				-- 	ImageTransparency = 0.35,
+				-- 	ScaleType = Enum.ScaleType.Stretch,
+				-- 	ZIndex = -1,
+				-- }, {
+				-- 	UICorner = React.createElement("UICorner", {
+				-- 		CornerRadius = UDim.new(0.05, 0),
+				-- 	}),
+				-- }),
 
 				RelicRarityTextLabel = React.createElement("TextLabel", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
