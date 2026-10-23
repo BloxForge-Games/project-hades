@@ -18,6 +18,7 @@ local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Fun
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 local shineStroke = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.shineStroke)
 local ShineRing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.ShineRing)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 local localPlayer = Players.LocalPlayer
 
@@ -89,6 +90,31 @@ local function Container(props: any)
 	-- (the two events cannot run at once), but tracked separately so each
 	-- button only ever answers to its own event.
 	local reforgeMode, setReforgeMode = React.useState(false)
+	-- The toggle button hides for a cutscene (2026-10-23), following the
+	-- local character's CutscenePlaying attribute the same way the topbar
+	-- icons do. The tray itself is already slid shut by the Windows scope
+	-- lock; this is the one piece of relic chrome that stayed on screen.
+	local cutscenePlaying, setCutscenePlaying = React.useState(false)
+
+	React.useEffect(function()
+		local connections: { RBXScriptConnection } = {}
+		local function bind(character: Model)
+			local function refresh()
+				setCutscenePlaying(character:GetAttribute(Attributes.CutscenePlaying) == true)
+			end
+			table.insert(connections, character:GetAttributeChangedSignal(Attributes.CutscenePlaying):Connect(refresh))
+			refresh()
+		end
+		table.insert(connections, localPlayer.CharacterAdded:Connect(bind))
+		if localPlayer.Character then
+			bind(localPlayer.Character)
+		end
+		return function()
+			for _, connection in connections do
+				connection:Disconnect()
+			end
+		end
+	end, {})
 
 	-- Unavailable buttons keep a DIM of their identity color (gold Sell,
 	-- blue Reforge) and mask their label as "???" until their event
@@ -850,6 +876,7 @@ local function Container(props: any)
 			Position = TOGGLE_SHOWN_POSITION,
 			Size = UDim2.fromScale(0.035, 0.062),
 			BackgroundTransparency = 1,
+			Visible = not cutscenePlaying,
 			ZIndex = 1,
 		}, {
 			UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
