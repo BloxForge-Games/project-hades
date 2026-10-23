@@ -142,7 +142,7 @@ All melee weapons use a **3-hit combo system** with per-hit hitbox delay, animat
 
 | Weapon | Type | Rarity | Damage Range | Walk Speed |
 |--------|------|--------|-------------|------------|
-| Wooden Bat | Sword | Uncommon | 35–40 | 12.5 |
+| Steel Sword | Sword | Uncommon | 35–40 | 12.5 |
 | Dragonbone Katana | Sword | Uncommon | 45–55 | 12.5 |
 | Jujutsu Cleaver | Sword | Uncommon | 45–55 | 12.5 |
 | Samehada Greatsword | Greatsword | Uncommon | 80–100 | 10.5 |

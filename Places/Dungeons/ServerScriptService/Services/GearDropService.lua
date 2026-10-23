@@ -1009,7 +1009,7 @@ function GearDropService.DropGear(
 		-- Rarity FIRST, then the pool it selects from: a Legendary roll draws
 		-- from the dungeon's own legendaryPool (its uniques, pinned
 		-- Legendary in their data), never from the common pool -- a
-		-- Legendary Wooden Bat cannot exist (GDD). A dungeon with no uniques
+		-- Legendary Steel Sword cannot exist (GDD). A dungeon with no uniques
 		-- yet downgrades the roll to Epic rather than dropping nothing.
 		local rolledRarity = rollItemRarity(self:_getActiveRarityWeights() or {}, ItemRarity.Common)
 		local slotPool = pool
