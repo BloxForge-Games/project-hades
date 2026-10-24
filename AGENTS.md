@@ -35,7 +35,7 @@ Run these once from the worktree root:
 ```bash
 git submodule update --init --recursive
 git -C bfg-core switch -c <your-branch-name>
-rokit install
+rokit install --no-trust-check
 (cd bfg-core && wally install)
 rojo sourcemap dungeons.project.json --include-non-scripts -o sourcemap.json
 rojo sourcemap lobby.project.json --include-non-scripts -o sourcemap.lobby.json
@@ -43,8 +43,18 @@ rojo sourcemap lobby.project.json --include-non-scripts -o sourcemap.lobby.json
 
 - **bfg-core starts on a detached HEAD.** Create a branch in it (second
   command) before editing, or your commits strand and cannot be pushed.
-- **Type definitions are gitignored.** Copy `tools/luau/globalTypes.d.luau`
-  from the main checkout into the same path in your worktree.
+- **Type definitions are gitignored.** Download them once per worktree,
+  pinned to the luau-lsp version in `rokit.toml`:
+
+  ```bash
+  mkdir -p tools/luau && curl -sSfL -o tools/luau/globalTypes.d.luau https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/1.69.0/scripts/globalTypes.d.luau
+  ```
+
+- **`rokit install --no-trust-check`** skips a prompt about `lune`, a
+  tool pinned outside this repo that normal work never uses.
+- **`wally install` rewrites `bfg-core/wally.lock`** until the lock is
+  fixed on bfg-core's main. Undo it with `git -C bfg-core checkout
+  wally.lock`; never commit it with a feature.
 - **Packages are untracked.** Without `wally install` every package require
   shows as "Unknown require".
 
