@@ -43,6 +43,7 @@ local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
 local HyperText = require(ReplicatedStorage.Submodules.Core.Libraries.HyperText)
+local shineStroke = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.shineStroke)
 
 local PULSE_HIDDEN_TRANSPARENCY = 1
 
@@ -86,6 +87,19 @@ local REVIVE_BUTTON_POSITION = UDim2.fromScale(0.5, 0.65)
 local REVIVE_BUTTON_START_POSITION = UDim2.fromScale(0.5, 0.65 + TEXT_RISE_OFFSET)
 local REVIVE_BUTTON_SIZE = UDim2.fromScale(0.105, 0.047)
 local REVIVE_BUTTON_FONT = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold)
+-- The button's look, from the inventory / relic tray palette: the tray
+-- toggle's navy plate and black border, and its EasyVisuals shine ring
+-- (shineStroke) in the tray's accent blue, at the same scale thickness.
+-- The plate is inset inside the CanvasGroup: a CanvasGroup clips whatever
+-- draws past its bounds, and the border and ring both sit OUTSIDE the plate.
+local REVIVE_PLATE_SIZE = UDim2.fromScale(0.9, 0.8)
+local REVIVE_PLATE_COLOR = Color3.fromRGB(43, 65, 85)
+local REVIVE_BORDER_COLOR = Color3.fromRGB(0, 0, 0)
+local REVIVE_BORDER_THICKNESS = 0.04
+local REVIVE_TEXT_STROKE_COLOR = Color3.fromRGB(25, 25, 25)
+local REVIVE_RING_COLOR = Color3.fromRGB(105, 158, 186)
+local REVIVE_RING_THICKNESS = 0.04
+local REVIVE_CORNER = UDim.new(0.2, 0)
 
 -- Fixed subtitle per spec. No randomization (the death screen picks
 -- from DEATH_REASON_TEXTS); Game Over has a single deterministic line
@@ -260,6 +274,17 @@ local function Container(props: any)
 	-- subtitle when the button is told to hide first.
 	local reviveGroupRef = React.useRef(nil)
 	local reviveShowTokenRef = React.useRef(nil)
+	-- The REVIVE plate's shine ring (REVIVE_RING_*). The group stays
+	-- mounted, so the ring lives for the screen's whole life and fades with
+	-- the group.
+	local reviveRingAnchorRef = React.useRef(nil)
+	React.useEffect(function()
+		local anchor = reviveRingAnchorRef.current
+		if not anchor then
+			return nil
+		end
+		return shineStroke(anchor, REVIVE_RING_THICKNESS, REVIVE_RING_COLOR)
+	end, {})
 
 	local imageColor3 = props.ImageColor3
 
@@ -628,8 +653,8 @@ local function Container(props: any)
 			ReviveButton = React.createElement("TextButton", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromScale(1, 1),
-				BackgroundColor3 = Color3.fromRGB(85, 255, 127),
+				Size = REVIVE_PLATE_SIZE,
+				BackgroundColor3 = REVIVE_PLATE_COLOR,
 				Text = "REVIVE",
 				TextColor3 = Color3.fromRGB(255, 255, 255),
 				TextScaled = true,
@@ -637,29 +662,46 @@ local function Container(props: any)
 				BorderSizePixel = 0,
 				AutoButtonColor = true,
 				Interactable = reviveShown,
+				ZIndex = 1,
 				[React.Event.Activated] = function()
 					PlayerNetwork.PromptRevivePurchase.Fire()
 				end,
 			}, {
-				UICorner = React.createElement("UICorner", { CornerRadius = UDim.new(0.2, 0) }),
-				UIStroke = React.createElement("UIStroke", {
-					Color = Color3.fromRGB(31, 94, 46),
+				UICorner = React.createElement("UICorner", { CornerRadius = REVIVE_CORNER }),
+				-- The label's outline (Contextual applies to the text).
+				TextStroke = React.createElement("UIStroke", {
+					Color = REVIVE_TEXT_STROKE_COLOR,
 					Thickness = 0.06,
 					ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
 				}),
 				BorderStroke = React.createElement("UIStroke", {
-					Color = Color3.fromRGB(31, 94, 46),
-					Thickness = 0.075,
+					Color = REVIVE_BORDER_COLOR,
+					Thickness = REVIVE_BORDER_THICKNESS,
 					ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
 				}),
 				UIPadding = React.createElement("UIPadding", {
 					PaddingLeft = UDim.new(0, 0),
 					PaddingRight = UDim.new(0, 0),
-					PaddingTop = UDim.new(0.15, 0),
-					PaddingBottom = UDim.new(0.15, 0),
+					PaddingTop = UDim.new(0.2, 0),
+					PaddingBottom = UDim.new(0.2, 0),
 				}),
+			}),
+			-- A dedicated, transparent anchor for the ring over the plate: a
+			-- SIBLING, not a child, so the plate's text padding cannot shrink
+			-- it, and not the plate itself, since EasyVisuals adopts (and on
+			-- teardown destroys) the first UIStroke under its anchor.
+			ReviveRingAnchor = React.createElement("Frame", {
+				ref = reviveRingAnchorRef,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = REVIVE_PLATE_SIZE,
+				BackgroundTransparency = 1,
+				Active = false,
+				ZIndex = 2,
+			}, {
+				UICorner = React.createElement("UICorner", { CornerRadius = REVIVE_CORNER }),
 			}),
 		}),
 	})

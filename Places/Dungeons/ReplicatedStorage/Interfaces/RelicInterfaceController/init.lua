@@ -79,6 +79,11 @@ RelicInterfaceController.Signals = {
 	-- offer (RelicOfferInterfaceController) stops taking card picks while
 	-- the tray is open.
 	OnVisibilityChanged = Signal.new(),
+	-- (visible: boolean) -- shows / hides the tray's TOGGLE button.
+	-- LifeController fires false while the local player is downed or dead
+	-- and true on revive; hiding it also slides the tray shut, since the
+	-- toggle is the way to close it.
+	SetToggleVisible = Signal.new(),
 }
 
 function RelicInterfaceController.IsOpen(self: typeof(RelicInterfaceController)): boolean
@@ -139,6 +144,7 @@ function RelicInterfaceController._render(_self: typeof(RelicInterfaceController
 				relicData = relicData,
 				relicSlots = relicSlots,
 				setVisibleSignal = RelicInterfaceController.Signals.SetVisible,
+				toggleVisibleSignal = RelicInterfaceController.Signals.SetToggleVisible,
 				sellModeSignal = RelicInterfaceController.Signals.SetSellMode,
 				reforgeModeSignal = RelicInterfaceController.Signals.SetReforgeMode,
 
@@ -199,6 +205,12 @@ function RelicInterfaceController.Init(self: typeof(RelicInterfaceController))
 end
 
 function RelicInterfaceController.Start(self: typeof(RelicInterfaceController))
+	self.Signals.SetToggleVisible:Connect(function(visible: boolean)
+		if not visible then
+			self.Signals.SetVisible:Fire(false)
+		end
+	end)
+
 	-- The Merchant's "sell relics" option: force the tray open with the
 	-- Sell button lit. Closing the tray (any path) ends the session.
 	getEventController().Signals.OnSellModeRequested:Connect(function()
