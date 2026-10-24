@@ -64,8 +64,11 @@ rojo sourcemap lobby.project.json --include-non-scripts -o sourcemap.lobby.json
   `Invulnerable` have a single writer; do not write them from elsewhere.
 - **Networking is Blink.** Definitions live in `bfg-core/Network/*.blink`.
   After editing one, regenerate from `bfg-core/Network` with
-  `blink <File> -y` (for example `blink Player -y`). Never hand-edit the
-  generated `Source/*/Network/` files.
+  `blink <File> -y` (for example `blink Player -y`), then format the output
+  (`stylua --syntax Luau Source/Client/Network Source/Server/Network
+  Source/Shared/Network` from `bfg-core`): Blink's output is not
+  stylua-clean and bfg-core CI checks it. Never hand-edit the generated
+  files otherwise.
 - **Tables over remotes:** a numeric-keyed table with a hole (`{ [2] = x }`)
   does not survive a remote as an array. Send every slot (use `false` for
   empty) or use string keys.
