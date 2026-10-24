@@ -9,7 +9,7 @@
 	    EXP grant, gear-drop trigger, despawn)
 	  * Attribute reactions (Jailed, Slowed, etc.)
 
-	Per-mob configuration lives in Shared/Data/ZombieData.lua. See that
+	Per-mob configuration lives in Shared/Data/MobData.lua. See that
 	file's header for the post-refactor shape.
 
 	==========================================================
@@ -51,11 +51,17 @@
 	    is the hot loop. Could lower to 0.15-0.2s with no gameplay
 	    impact if perf gets tight.
 	  * `cachedAlivePlayerEntries` shared across mobs amortizes player
-	    eligibility filtering to O(zombies + players) instead of
-	    O(zombies × players). Keep.
+	    eligibility filtering to O(mobs + players) instead of
+	    O(mobs × players). Keep.
 	  * `_ensureLOSRaycastParams` shared across all mobs avoids
 	    re-allocating RaycastParams per-tick. Keep.
-	  * Pathfinding recompute is throttled per-mob via _lastPathComputeAt.
+	  * Pathfinding recompute is throttled per-mob via _lastPathComputeAt,
+	    AND gated on the target having moved PATH_RECOMPUTE_MOVE_STUDS since
+	    the current path was computed (or the path being gone / stuck).
+	  * Each mob's tick is phase-offset by a random fraction of UPDATE_DELAY
+	    (_startAILoop) so a wave spawned in one frame doesn't tick in
+	    lock-step on the same frame forever.
+	  * Line of sight is raycast at most ONCE per tick (_chaseStep).
 ]]
 
 --[ Roblox Services ]--
@@ -63,44 +69,48 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PathfindingService = game:GetService("PathfindingService")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
 local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
-local ZombieService = require(ServerScriptService.Services.ZombieService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
+local MobService = require(ServerScriptService.Services.MobService)
 local RagdollService = require(ServerScriptService.Services.RagdollService)
 local DropService = require(ServerScriptService.Services.DropService)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local RoundStatisticsService = require(ServerScriptService.Services.RoundStatisticsService)
 local AuraService = require(ServerScriptService.Services.AuraService)
 local VFXService = require(ServerScriptService.Services.VFXService)
-local IgnoreListService = require(ServerScriptService.Services.IgnoreListService)
+local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Services.IgnoreListService)
 local GearDropService = require(ServerScriptService.Services.GearDropService)
 local DamageService = require(ServerScriptService.Services.DamageService)
 local StatusConditionService = require(ServerScriptService.Services.StatusConditionService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local EnemyScalingService = require(ServerScriptService.Services.EnemyScalingService)
+local ExpRewardService = require(ServerScriptService.Services.ExpRewardService)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
-local MagicService = require(ServerScriptService.Services.MagicService)
+local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
+local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
-local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
+local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 
 --[ Constants ]--
 
@@ -137,14 +147,94 @@ local FACE_IDS = {
 	"rbxassetid://13542531090",
 	"rbxassetid://15590506766",
 }
-local PUMPKIN_DELAY = 0.75
+-- Lobbed bombs (Trick Or Trap's pumpkins, the Fuse Bomb): the client's
+-- arc flies for BOMB_FLIGHT_SECONDS; the server hitbox fires the margin
+-- after that, so the blast never lands before the bomb visibly does.
+local BOMB_FLIGHT_SECONDS = 0.75
+local BOMB_DETONATION_MARGIN_SECONDS = 0.25
+-- Each bomb lands within this many studs (per axis) of the corpse's
+-- ground point.
+local BOMB_SCATTER_STUDS = 5
+-- Lift above the ground point so the bomb (and its hitbox) rests ON the
+-- floor rather than half inside it.
+local BOMB_REST_HEIGHT_STUDS = 3.25 / 2
 -- CONCURRENT bomb cap, PER RELIC and SERVER-WIDE (the counter lives in
 -- RelicService's limit registry, keyed by relic name and shared by every
 -- player). Trick Or Trap and Fuse Bomb each get their own 15, so at most
 -- 30 bombs are ever in flight at once — a frame-rate guard, not a
 -- balance one. A slot is held only from the lob to the detonation
--- (PUMPKIN_DELAY + 0.25), so the cap bites only on a genuine pile-up.
+-- (BOMB_FLIGHT_SECONDS + BOMB_DETONATION_MARGIN_SECONDS), so the cap bites
+-- only on a genuine pile-up.
 local BOMB_LIMIT_PER_RELIC = 15
+
+-- One lobbed-bomb relic. `_lobBombs` runs the recipe both share (ground
+-- the corpse, roll the count, claim a cap slot per bomb, broadcast the
+-- arc, detonate a hitbox after the fuse); these fields are everything the
+-- two relics differ in.
+type BombSpec = {
+	relicName: string,
+	arcaneName: string,
+	-- How many bombs this takedown lobs. A closure rather than a maximum so
+	-- the Fuse Bomb's fixed 1 never touches the RNG, exactly as before.
+	rollBombCount: () -> number,
+	-- The blast's damage lane, per struck mob.
+	onHit: (killer: Player, model: Model, targetCFrame: CFrame) -> (),
+}
+
+-- Trick Or Trap: 1-3 pumpkins. ANY takedown drops them. The
+-- Burning-target requirement came off in the 2026-08 pass when the relic
+-- became NC: gating an opener behind a Burn the player might have no way
+-- to apply made it dead on pickup. The pumpkins apply Burn themselves
+-- now, so this is what STARTS the Blaze chain rather than paying it off.
+local TRICK_OR_TRAP_BOMBS: BombSpec = {
+	relicName = RelicNames["Trick Or Trap"],
+	arcaneName = ArcaneNames["Pumpkin Explosion"],
+	rollBombCount = function()
+		return math.random(1, 3)
+	end,
+	onHit = function(killer, model, targetCFrame)
+		-- isRelicSourced = true rides the UNTYPED lane now: unqualified
+		-- Damage bonuses scale the blast, typed relics/crits never apply.
+		-- Still rolls the WEAPON applier hub via onHitboxDamage
+		-- (isMagic = false).
+		onHitboxDamage(model, targetCFrame, killer, ArcaneData[ArcaneNames["Pumpkin Explosion"]], false, true)
+
+		-- "...and burning them": the blast applies Burn outright rather
+		-- than rolling for it, which is what lets Trick Or Trap open the
+		-- Blaze tree on its own.
+		-- The cast: StatusConditionService's own helper signatures disagree
+		-- on Player vs Player?, which fails its self type on any method
+		-- call from a strict file.
+		if StatusConditionService then
+			(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Burn)
+		end
+	end,
+}
+
+-- Fuse Bomb (Neutral Rare): the pumpkin recipe — same fuse, same cap
+-- machinery (its OWN BOMB_LIMIT_PER_RELIC counter, not one shared with the
+-- pumpkins), same hitbox — but ONE bomb per takedown (no 1-3 roll), the
+-- Fuse Bomb model (relicName rides the client payload), and the blast is
+-- PLAIN damage: neither weapon nor arcane — the raw path, no amplifiers /
+-- crit / appliers (Summer Fireworks' recipe). No Burn either.
+local FUSE_BOMBS: BombSpec = {
+	relicName = RelicNames["Fuse Bomb"],
+	arcaneName = ArcaneNames["Fuse Bomb Explosion"],
+	rollBombCount = function()
+		return 1
+	end,
+	onHit = function(killer, model, _targetCFrame)
+		-- UNTYPED relic lane (isRelicSourced): unqualified Damage bonuses
+		-- scale the blast; Weapon/Arcane-typed relics and crits never apply.
+		local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
+		if not targetHumanoid or not DamageService then
+			return
+		end
+		local config = ArcaneData[ArcaneNames["Fuse Bomb Explosion"]]
+		local damageRoll = if config.runtimeDamageCallback then config.runtimeDamageCallback(killer) else config.damage
+		DamageService:TakeDamage(killer, targetHumanoid, damageRoll, false, false, false, true, true)
+	end,
+}
 
 -- Zombie Bomb (Venom Legendary): a takedown on a POISONED mob leaves a
 -- Poison Cloud at the corpse (the Blighted clause was dropped in the
@@ -153,23 +243,47 @@ local BOMB_LIMIT_PER_RELIC = 15
 -- CLOUD_STATUS_CHANCE to Poison everything inside (the sheet's "+30%
 -- Status Chance"). LIMIT bounds live clouds PER PLAYER, same shape as
 -- the pumpkin cap.
-local ZOMBIE_BOMB_CLOUD_DURATION = 5
-local ZOMBIE_BOMB_CLOUD_TICK_SECONDS = 1
-local ZOMBIE_BOMB_CLOUD_RADIUS = 7
-local ZOMBIE_BOMB_CLOUD_LIMIT = 3
-local ZOMBIE_BOMB_CLOUD_FADE_SECONDS = 1.5
+local MOB_BOMB_CLOUD_DURATION = 5
+local MOB_BOMB_CLOUD_TICK_SECONDS = 1
+local MOB_BOMB_CLOUD_RADIUS = 7
+local MOB_BOMB_CLOUD_LIMIT = 3
+local MOB_BOMB_CLOUD_FADE_SECONDS = 1.5
 local ROAM_DURATION_MIN = 2
 local ROAM_DURATION_MAX = 4
 local ROAM_RADIUS_MIN = 20
 local ROAM_RADIUS_MAX = 25
 local ROAM_PICK_ATTEMPTS = 5
 local PATH_RECOMPUTE_INTERVAL = 1
+-- A live path is only recomputed once the target has moved this far from
+-- where the path was computed to; the 1 s interval above still applies.
+local PATH_RECOMPUTE_MOVE_STUDS = 4
 local STUCK_DETECTION_WINDOW = 1
 local STUCK_MOVE_THRESHOLD = 0.5
 local STATE_ROAMING = "roaming"
 local STATE_CHASE = "chase"
 local STATE_ATTACKING = "attacking"
 local STATE_DEAD = "dead"
+
+--[ Rig lookups ]--
+
+-- The rig parts a mob reads by NAME. A mob asset missing one is an
+-- authoring error, so these throw exactly as the dotted lookups they
+-- replace did (`model.Head.Face`), only with the mob's name attached.
+local function getHead(model: Model): Instance
+	local head = model:FindFirstChild("Head")
+	if not head then
+		error("[MobBase] No Head on mob: " .. model.Name)
+	end
+	return head
+end
+
+local function getFaceDecal(model: Model): Decal
+	local face = getHead(model):FindFirstChild("Face")
+	if not face or not face:IsA("Decal") then
+		error("[MobBase] No Head.Face decal on mob: " .. model.Name)
+	end
+	return face
+end
 
 --[ Shared per-tick caches ]--
 
@@ -183,14 +297,14 @@ local function _ensureLOSRaycastParams(): RaycastParams
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = {
-		workspace.IgnoreInstances.Zombies,
-		workspace.IgnoreInstances.DeadZombies,
+		workspace.IgnoreInstances.Mobs,
+		workspace.IgnoreInstances.DeadMobs,
 		workspace.PlayerBaseplates,
 		workspace.Terrain,
 		workspace.IgnoreInstances.Boundaries,
 		workspace.IgnoreInstances.ActBarriers,
 		workspace.IgnoreInstances.CameraPoints,
-		workspace.IgnoreInstances.MagicSpells,
+		workspace.IgnoreInstances.ArcaneSpells,
 		workspace.IgnoreInstances.MapMarkers,
 		workspace.IgnoreInstances.Regions,
 		workspace.IgnoreInstances.Terrain,
@@ -230,7 +344,7 @@ local function _refreshAlivePlayersCache()
 		if desyncedPlayers and character:IsDescendantOf(desyncedPlayers) then
 			continue
 		end
-		local hrp = character:FindFirstChild("HumanoidRootPart")
+		local hrp = getRoot(character)
 		if not hrp then
 			continue
 		end
@@ -247,40 +361,96 @@ type AttackPoolEntry = {
 	kind: string,
 	attackRange: number,
 	recoveryDuration: number?,
-	entry: any?,
+	-- The MobData generic attack; absent on a unique entry.
+	entry: any,
 	genericIndex: number?,
-	run: any?,
+	-- run(mob, target) -> active duration (seconds); see _buildAttackPool.
+	run: ((mob: Model, target: Model) -> number?)?,
 }
+
+-- One MobData entry: the table MobData[name] resolves to.
+type MobEntry = typeof(MobData[""])
 
 local MobBase = {}
 MobBase.__index = MobBase
 
--- model -> live mob instance. Lets systems that only hold a Model (chiefly
--- DamageService, which sees a Humanoid on hit) reach the behaviour object
--- without reversing into the Component layer. Populated in .new, cleared in
--- :Stop — weak-keyed so a model destroyed without a clean :Stop can't pin the
--- instance in memory.
-MobBase._activeByModel = setmetatable({} :: { [Model]: any }, { __mode = "k" })
+-- Every field a mob carries, so the checker can follow the state bag the
+-- subclasses (Miniboss / Boss) extend. Optional fields are the ones that
+-- are genuinely nil until a state sets them (a target, a live path, the
+-- overhead bar that encounter mobs never get).
+type Fields = {
+	_model: Model,
+	_rootPart: BasePart,
+	_humanoid: Humanoid,
+	_animator: Animator,
+	_janitor: typeof(Janitor.new()),
+	_data: MobEntry,
 
-function MobBase.FromModel(model: Model?): any?
-	if not model then
-		return nil
-	end
-	return MobBase._activeByModel[model]
-end
+	-- Cached config (flat for speed)
+	_health: number | () -> number,
+	_defaultWalkSpeed: number,
+	_baseWalkSpeed: number,
+	_detectionRange: number,
+	_hipHeight: number,
+	_enemyType: string,
+	_agentRadius: number?,
+	_gems: { minDropRate: number, maxDropRate: number, minGems: number, maxGems: number }?,
+	_idleAnimation: Animation,
+	_runAnimation: Animation,
+	_damagedAnimation: Animation,
+	_deathSound: Sound,
+
+	_attackPool: { AttackPoolEntry },
+	_loadedGenericAnimations: { [number]: AnimationTrack },
+	_genericAttackCounter: number,
+	_runTrack: AnimationTrack,
+	_idleTrack: AnimationTrack,
+	_damagedTrack: AnimationTrack,
+	_mobHighlight: Highlight,
+	_healthInterface: BillboardGui?,
+
+	-- Runtime state
+	_walking: boolean,
+	_currentTarget: Model?,
+	_currentTargetHRP: BasePart?,
+	_playerAssistRegistry: { [string]: number },
+	_lastCreditedHealth: number?,
+	_state: string,
+	_stateEndTime: number,
+	_nextRoamPickAt: number,
+	_chosenAttack: AttackPoolEntry?,
+	_attackGeneration: number,
+
+	-- Pathfinding state
+	_path: Path?,
+	_waypoints: { PathWaypoint }?,
+	_nextWaypointIndex: number?,
+	_reachedConnection: RBXScriptConnection?,
+	_blockedConnection: RBXScriptConnection?,
+	_lastPathComputeAt: number,
+	_lastPathDestination: Vector3?,
+
+	-- Stuck detection
+	_lastStuckSamplePos: Vector3,
+	_lastStuckSampleAt: number,
+}
+
+export type MobBase = typeof(setmetatable({} :: Fields, MobBase))
 
 --[ Construction ]--
 
-function MobBase.new(model: Model)
-	local self = setmetatable({}, MobBase)
+function MobBase.new(model: Model): MobBase
+	local self = setmetatable({} :: Fields, MobBase)
 
 	self._model = model
-	self._rootPart = model:FindFirstChild("HumanoidRootPart") :: BasePart
+	local rootPart = getRoot(model)
+	assert(rootPart, "[MobBase] No HumanoidRootPart on mob: " .. model.Name)
+	self._rootPart = rootPart
 	self._humanoid = model:FindFirstChildOfClass("Humanoid") :: Humanoid
 	self._animator = self._humanoid:FindFirstChildOfClass("Animator") :: Animator
 	self._janitor = Janitor.new()
 
-	local data = ZombieData[model.Name]
+	local data = MobData[model.Name]
 	assert(data, "[MobBase] No data entry for mob: " .. model.Name)
 	self._data = data
 
@@ -294,17 +464,12 @@ function MobBase.new(model: Model)
 	-- state's speed.
 	self._baseWalkSpeed = data.walkSpeed
 	self._detectionRange = data.detectionRange or 60
-	self._density = data.density
 	self._hipHeight = data.hipHeight
 	self._enemyType = data.enemyType
-	self._exp = data.exp or 0
 	self._agentRadius = data.agentRadius
-	-- Coin scatter, ChestCoinData's vocabulary: DropRate = pickup count
-	-- range, Coins = value-per-pickup range.
-	self._minDropRate = data.minDropRate
-	self._maxDropRate = data.maxDropRate
-	self._minCoins = data.minCoins
-	self._maxCoins = data.maxCoins
+	-- Gems scatter (MobData `gems`): DropRate = pickup count range,
+	-- Gems = value-per-pickup range. nil on encounter mobs (chest-paid).
+	self._gems = data.gems
 	self._idleAnimation = data.idle
 	self._runAnimation = data.run
 	self._damagedAnimation = data.damaged
@@ -345,7 +510,7 @@ function MobBase.new(model: Model)
 	self._stateEndTime = 0 -- when current (timed) state expires
 	self._nextRoamPickAt = 0 -- when Roaming should pick its next point
 
-	self._chosenAttack = nil :: { kind: string, attackRange: number }?
+	self._chosenAttack = nil
 
 	self._attackGeneration = 0
 
@@ -356,12 +521,11 @@ function MobBase.new(model: Model)
 	self._reachedConnection = nil
 	self._blockedConnection = nil
 	self._lastPathComputeAt = 0
+	self._lastPathDestination = nil :: Vector3?
 
 	-- Stuck detection
 	self._lastStuckSamplePos = self._rootPart and self._rootPart.Position or Vector3.zero
 	self._lastStuckSampleAt = tick()
-
-	MobBase._activeByModel[model] = self
 
 	return self
 end
@@ -369,7 +533,7 @@ end
 -- Builds the unified attack pool table. Pool entries are uniform shape
 -- so attack selection + dispatch don't branch on source. See comment
 -- in MobBase.new where this is called.
-function MobBase:_buildAttackPool(data)
+function MobBase._buildAttackPool(_self: MobBase, data)
 	local pool: { AttackPoolEntry } = {}
 
 	for i, attack in ipairs(data.genericAttacks or {}) do
@@ -387,7 +551,7 @@ function MobBase:_buildAttackPool(data)
 
 	for _, attack in ipairs(data.uniqueAttacks or {}) do
 		-- uniqueAttacks contract: { attackRange = N, recoveryDuration = N?, run = fn }.
-		-- run(zombieModel, target) returns the ACTIVE attack duration (seconds);
+		-- run(mobModel, target) returns the ACTIVE attack duration (seconds);
 		-- MobBase waits that, THEN recoveryDuration, before leaving Attacking — the
 		-- same two-stage clock a generic attack runs on.
 		table.insert(pool, {
@@ -414,7 +578,7 @@ end
 -- attacks). Generic attacks get their animation pre-loaded + a fresh index
 -- so the Attacking dispatch resolves them exactly like the originals built
 -- in MobBase.new.
-function MobBase:_addAttacks(genericAttacks: { any }?, uniqueAttacks: { any }?)
+function MobBase._addAttacks(self: MobBase, genericAttacks: { any }?, uniqueAttacks: { any }?)
 	for _, attack in ipairs(genericAttacks or {}) do
 		self._genericAttackCounter += 1
 		local genericIndex = self._genericAttackCounter
@@ -442,7 +606,7 @@ end
 
 --[ Lifecycle ]--
 
-function MobBase:Start()
+function MobBase.Start(self: MobBase)
 	self:_fadeInOnSpawn()
 
 	RagdollService:Setup(self._model)
@@ -469,41 +633,33 @@ function MobBase:Start()
 	self:_startAILoop()
 end
 
-function MobBase:Stop()
-	MobBase._activeByModel[self._model] = nil
+function MobBase.Stop(self: MobBase)
 	self._janitor:Destroy()
 end
 
 --[ Setup helpers ]--
 
-function MobBase:_resetAttributes()
-	self._model:SetAttribute(Attributes.ZombieIsAttacking, false)
+function MobBase._resetAttributes(self: MobBase)
+	self._model:SetAttribute(Attributes.MobIsAttacking, false)
 	self._model:SetAttribute(Attributes.SuperArmor, false)
 	self._model:SetAttribute(Attributes.SlainBy, "")
 	self._model:SetAttribute(Attributes.Jailed, false)
-	self._model:SetAttribute(Attributes.HitStunned, false)
 	self._model:SetAttribute(Attributes.Slowed, false)
 	self._model:SetAttribute(Attributes.CCDebounce, false)
 	self._model:SetAttribute(Attributes.EnemyType, self._enemyType)
 end
 
-function MobBase:_applyHumanoidProperties()
-	-- for _, descendant in self._model:GetChildren() do
-	-- 	if descendant:IsA("BasePart") or descendant:IsA("MeshPart") then
-	-- 		descendant.CustomPhysicalProperties = PhysicalProperties.new(self._density, 2, 0, 1, 1)
-	-- 	end
-	-- end
-
-	-- ZombieData carries the BASE health (a function-valued entry is still
+function MobBase._applyHumanoidProperties(self: MobBase)
+	-- MobData carries the BASE health (a function-valued entry is still
 	-- honoured and resolved here). The live player multiplier, the two
 	-- scaling attributes and the MaxHealth / Health write all belong to
 	-- EnemyScalingService, which also rescales this mob later when the
 	-- party changes shape.
-	if type(self._health) == "function" then
-		self._health = self._health()
-	end
+	local health = self._health
+	local resolvedHealth: number = if type(health) == "function" then health() else health
+	self._health = resolvedHealth
 
-	EnemyScalingService:ApplyToMob(self._model, self._humanoid, self._health)
+	EnemyScalingService:ApplyToMob(self._model, self._humanoid, resolvedHealth)
 	self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 	self._humanoid.HipHeight = self._hipHeight
 	self._humanoid.MaxSlopeAngle = 89
@@ -511,37 +667,44 @@ function MobBase:_applyHumanoidProperties()
 	self._humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
 	self._humanoid:SetStateEnabled(Enum.HumanoidStateType.Flying, false)
 
-	self._model.Head.Face.Texture = FACE_IDS[math.random(1, #FACE_IDS)]
+	getFaceDecal(self._model).Texture = FACE_IDS[math.random(1, #FACE_IDS)]
 end
 
 -- Overhead health bar -- REGULAR MOBS ONLY. Minibosses and bosses show their
 -- health in the encounter HUD instead (EncounterService.Client.EncounterData
 -- -> EncounterBarInterfaceController), so an overhead bar would be a second,
 -- smaller copy of the same number. The role attributes are stamped before the
--- model is parented (ZombieSpawnService:SpawnMinibossInRoom), so they are
+-- model is parented (MobSpawnService:SpawnMinibossInRoom), so they are
 -- readable here at construction. _healthInterface stays nil for them; every
 -- use site nil-guards.
-function MobBase:_buildHealthUI()
+--
+-- The bar's FILL is animated by every CLIENT: MobController watches this
+-- mob's Humanoid.HealthChanged and tweens RedBar locally. The server only
+-- clones the billboard, enables it on first damage and disables it on
+-- death -- one replicated write each -- instead of streaming a tweened
+-- UDim2 to everyone on every hit.
+function MobBase._buildHealthUI(self: MobBase)
 	if
 		self._model:GetAttribute(Attributes.IsBoss) == true
 		or self._model:GetAttribute(Attributes.IsMiniBoss) == true
 	then
 		return
 	end
-	self._healthInterface = ReplicatedStorage.GameAssets.BillboardGuis.HealthInterface:Clone()
-	self._healthInterface.Parent = self._model.Head
+	local healthInterface = ReplicatedStorage.GameAssets.BillboardGuis.HealthInterface:Clone() :: BillboardGui
+	healthInterface.Parent = getHead(self._model)
+	self._healthInterface = healthInterface
 end
 
-function MobBase:_prepareDeathSound()
+function MobBase._prepareDeathSound(self: MobBase)
 	self._deathSound = self._deathSound:Clone()
 	self._deathSound.Parent = self._rootPart
 end
 
-function MobBase:_setupAnimations()
+function MobBase._setupAnimations(self: MobBase)
 	self._idleTrack:Play()
 end
 
-function MobBase:_setNetworkOwner(owner: Player?)
+function MobBase._setNetworkOwner(self: MobBase, owner: Player?)
 	for _, basepart in self._model:GetChildren() do
 		if basepart:IsA("BasePart") or basepart:IsA("MeshPart") then
 			basepart:SetNetworkOwner(owner)
@@ -556,20 +719,21 @@ end
 -- entry / roam ticks), and raw resyncs assumed chase speed (a chill
 -- applying or expiring mid-roam launched the mob at 3× its roam speed
 -- until the next roam tick).
-function MobBase:_setBaseWalkSpeed(baseSpeed: number)
+function MobBase._setBaseWalkSpeed(self: MobBase, baseSpeed: number)
 	self._baseWalkSpeed = baseSpeed
 	self:_resyncWalkSpeed()
 end
 
-function MobBase:_resyncWalkSpeed()
+function MobBase._resyncWalkSpeed(self: MobBase)
 	-- Chill status slow (0..1 multiplier, stamped by StatusConditionService;
 	-- nil = no chill). Composes MULTIPLICATIVELY with the binary Slowed
 	-- state so a chilled + slowed mob is slower than either alone. Jailed
 	-- stays a hard 0. Derived from the CURRENT state's base speed, so a
 	-- status flip mid-roam / mid-attack keeps that state's pace.
 	local baseSpeed = self._baseWalkSpeed or self._defaultWalkSpeed
-	local statusSlow = self._model:GetAttribute("StatusSlowMultiplier") or 1
-	if self._model:GetAttribute(Attributes.Jailed) or self._model:GetAttribute(Attributes.HitStunned) then
+	local statusSlowAttribute = self._model:GetAttribute("StatusSlowMultiplier")
+	local statusSlow: number = if type(statusSlowAttribute) == "number" then statusSlowAttribute else 1
+	if self._model:GetAttribute(Attributes.Jailed) then
 		self._humanoid.WalkSpeed = 0
 	elseif self._model:GetAttribute(Attributes.Slowed) then
 		self._humanoid.WalkSpeed = (baseSpeed / 2.5) * statusSlow
@@ -580,12 +744,8 @@ end
 
 --[ Listeners ]--
 
-function MobBase:_setupListeners()
+function MobBase._setupListeners(self: MobBase)
 	self._janitor:Add(self._model:GetAttributeChangedSignal(Attributes.Jailed):Connect(function()
-		self:_resyncWalkSpeed()
-	end))
-	-- The on-hit stagger (DamageService/HitStun): planted while it is set.
-	self._janitor:Add(self._model:GetAttributeChangedSignal(Attributes.HitStunned):Connect(function()
 		self:_resyncWalkSpeed()
 	end))
 
@@ -597,18 +757,18 @@ function MobBase:_setupListeners()
 		self:_resyncWalkSpeed()
 	end))
 
-	-- HealthChanged: update bar + play damaged anim (unless SuperArmor)
+	-- HealthChanged: show the bar + play the damaged anim (unless SuperArmor).
+	-- The bar's fill is tweened on every client off this same signal (see
+	-- _buildHealthUI); here only the Enabled flip, and only when it changes,
+	-- so a mob under fire costs one replicated write for its whole life.
+	--
+	-- The damaged track also restarts on every status-condition tick. Telling
+	-- a DoT tick from a hit needs a signal DamageService does not expose yet
+	-- (its DoT path writes nothing distinguishable on the mob), so that stays.
 	self._janitor:Add(self._humanoid.HealthChanged:Connect(function()
 		-- nil for minibosses / bosses (see _buildHealthUI).
-		if self._healthInterface then
+		if self._healthInterface and not self._healthInterface.Enabled then
 			self._healthInterface.Enabled = true
-			tweenGui.size(
-				self._healthInterface.InnerFrame.RedBar,
-				UDim2.fromScale(self._humanoid.Health / self._humanoid.MaxHealth, 1.3),
-				Enum.EasingDirection.Out,
-				Enum.EasingStyle.Quad,
-				0.1
-			)
 		end
 		if self._model:GetAttribute(Attributes.SuperArmor) then
 			return
@@ -617,7 +777,7 @@ function MobBase:_setupListeners()
 	end))
 
 	self._janitor:Add(self._humanoid.Running:Connect(function(speed)
-		local isAttacking = self._model:GetAttribute(Attributes.ZombieIsAttacking) == true
+		local isAttacking = self._model:GetAttribute(Attributes.MobIsAttacking) == true
 
 		if isAttacking then
 			return
@@ -650,7 +810,7 @@ function MobBase:_setupListeners()
 	-- long as a player is actually fighting.
 	local function creditCurrentAttacker()
 		local slainBy = self._model:GetAttribute(Attributes.SlainBy)
-		if slainBy and slainBy ~= "" then
+		if type(slainBy) == "string" and slainBy ~= "" then
 			self._playerAssistRegistry[slainBy] = os.clock()
 		end
 	end
@@ -670,8 +830,8 @@ function MobBase:_setupListeners()
 	end))
 end
 
-function MobBase:_stopNonAttackTracks()
-	for _, track in self._humanoid.Animator:GetPlayingAnimationTracks() do
+function MobBase._stopNonAttackTracks(self: MobBase)
+	for _, track in self._animator:GetPlayingAnimationTracks() do
 		if not track.Name:match("Attack") then
 			track:Stop()
 		end
@@ -680,17 +840,27 @@ end
 
 --[ Fade-in on spawn ]--
 
-function MobBase:_fadeInOnSpawn()
-	for _, part in self._model:GetDescendants() do
-		if
-			part:IsA("BasePart")
-			and part.Name ~= "RaycastHitbox"
-			and part.Name ~= "HumanoidRootPart"
-			and part.Name ~= "ParticlePart"
-		then
-			part.Transparency = 1
+-- The parts the spawn fade covers: every BasePart except the ones
+-- MobFadeData excludes (authored invisible, or an emitter carrier).
+local function forEachSpawnFadePart(model: Model, callback: (BasePart) -> ())
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") and not MobFadeData.SpawnFadeExcludedParts[part.Name] then
+			callback(part)
 		end
 	end
+end
+
+-- The body blooms in on every CLIENT (Combat.MobFade -> MobController).
+-- The server writes each part's Transparency exactly twice: 1 here, so
+-- the model never shows a frame before its hitbox and humanoid exist,
+-- and 0 once the clients' fade has run, so a late joiner (or a part
+-- streaming back in) sees the landed body. In between it fires ONE cue
+-- instead of tweening every part itself, which streamed a property per
+-- part per frame to every client.
+function MobBase._fadeInOnSpawn(self: MobBase)
+	forEachSpawnFadePart(self._model, function(part)
+		part.Transparency = 1
+	end)
 
 	task.delay(MODEL_LOAD_DURATION, function()
 		-- Bail once the mob is gone: death destroys the RaycastHitbox and
@@ -698,35 +868,37 @@ function MobBase:_fadeInOnSpawn()
 		-- window could never satisfy the condition and this polled forever.
 		repeat
 			task.wait(MODEL_LOAD_DURATION)
-		until (self._model:FindFirstChild("RaycastHitbox") and self._model:FindFirstChild("Humanoid"))
+		until (self._model:FindFirstChild("RaycastHitbox") and self._model:FindFirstChildOfClass("Humanoid"))
 			or self._state == STATE_DEAD
 			or not self._model.Parent
 		if self._state == STATE_DEAD or not self._model.Parent then
 			return
 		end
 
-		for _, part in self._model:GetDescendants() do
-			if
-				part:IsA("BasePart")
-				and part.Name ~= "RaycastHitbox"
-				and part.Name ~= "HumanoidRootPart"
-				and part.Name ~= "ParticlePart"
-			then
-				TweenService:Create(
-					part,
-					TweenInfo.new(0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
-					{ Transparency = 0 }
-				):Play()
-			end
-		end
+		CombatNetwork.MobFade.FireAll({
+			Mob = self._model,
+			Phase = "In",
+			Duration = MobFadeData.SpawnFadeSeconds,
+		})
 
-		ZombieSpawnService:IncrementZombieCount(self._model)
+		MobSpawnService:IncrementMobCount(self._model)
+
+		-- Land the value the clients' tween ends on. A mob that died in the
+		-- meantime lands too: its corpse is meant to be opaque, and the
+		-- despawn dissolve (DESPAWN_TIMER later) starts from there.
+		task.wait(MobFadeData.SpawnFadeSeconds + MobFadeData.SpawnLandingMarginSeconds)
+		if not self._model.Parent then
+			return
+		end
+		forEachSpawnFadePart(self._model, function(part)
+			part.Transparency = 0
+		end)
 	end)
 end
 
 --[ Targeting ]--
 
-function MobBase:FindTarget(): boolean
+function MobBase.FindTarget(self: MobBase): boolean
 	self._currentTarget = nil
 	self._currentTargetHRP = nil
 
@@ -752,14 +924,20 @@ end
 
 --[ Line of sight ]--
 
-function MobBase:_hasLineOfSight(): boolean
+function MobBase._hasLineOfSight(self: MobBase): boolean
 	if not self._currentTargetHRP or not self._currentTargetHRP.Parent then
 		return false
 	end
 
-	local rayOrigin = self._rootPart.Position - Vector3.new(0, self._rootPart.Size.Y, 0)
-	local rayDirection = Vector3.new(self._currentTargetHRP.Position.X, rayOrigin.Y, self._currentTargetHRP.Position.Z)
-		- rayOrigin
+	-- Root centre to root centre. The ray used to start one root-height
+	-- BELOW the root and run dead flat at that height, so across a room it
+	-- grazed the floor: a step, a root, the next chunk's floor at a
+	-- different elevation all read as "blocked" (measured 2026-10-20: a
+	-- Robombie's ray hit a Floor part 71 studs out), which sent every
+	-- distant chase down the pathfinder and, when that found no path,
+	-- left the mob standing until the player walked up to it.
+	local rayOrigin = self._rootPart.Position
+	local rayDirection = self._currentTargetHRP.Position - rayOrigin
 
 	-- Target essentially on top of us — LOS is trivially true.
 	if rayDirection.Magnitude < 0.05 then
@@ -778,7 +956,7 @@ end
 
 --[ Pathfinding ]--
 
-function MobBase:_cleanupPathConnections()
+function MobBase._cleanupPathConnections(self: MobBase)
 	if self._blockedConnection then
 		self._blockedConnection:Disconnect()
 		self._blockedConnection = nil
@@ -789,43 +967,77 @@ function MobBase:_cleanupPathConnections()
 	end
 end
 
-function MobBase:_followPath(destination: Vector3)
+-- The mob's one Path object, created on first use and owned by the janitor.
+function MobBase._ensurePath(self: MobBase): Path
+	local existing = self._path
+	if existing then
+		return existing
+	end
+	local path = PathfindingService:CreatePath({
+		AgentRadius = self._agentRadius or 2,
+		AgentHeight = 5,
+		AgentCanJump = false,
+		WaypointSpacing = 1,
+		Costs = {
+			SmoothPlastic = 1,
+			Plastic = math.huge,
+		},
+	})
+	self._path = path
+	self._janitor:Add(path)
+	return path
+end
+
+function MobBase._followPath(self: MobBase, destination: Vector3)
 	local now = tick()
 	if now - self._lastPathComputeAt < PATH_RECOMPUTE_INTERVAL then
 		return
 	end
+
+	-- Still walking a path towards (roughly) where the target still is:
+	-- keep it. Only a target that moved PATH_RECOMPUTE_MOVE_STUDS, a
+	-- finished / never-computed path, or a stuck or Blocked signal (both
+	-- zero the throttle) pays for another ComputeAsync.
+	local walkingPath = self._reachedConnection ~= nil and self._waypoints ~= nil
+	if
+		walkingPath
+		and self._lastPathComputeAt > 0
+		and self._lastPathDestination ~= nil
+		and (destination - self._lastPathDestination).Magnitude <= PATH_RECOMPUTE_MOVE_STUDS
+	then
+		return
+	end
 	self._lastPathComputeAt = now
 
-	if not self._path then
-		self._path = PathfindingService:CreatePath({
-			AgentRadius = self._agentRadius or 2,
-			AgentHeight = 5,
-			AgentCanJump = false,
-			WaypointSpacing = 1,
-			Costs = {
-				SmoothPlastic = 1,
-				Plastic = math.huge,
-			},
-		})
-		self._janitor:Add(self._path)
-	end
-
-	local ok = pcall(function()
-		self._path:ComputeAsync(self._rootPart.Position, destination)
-	end)
-	if not ok or self._path.Status ~= Enum.PathStatus.Success then
+	local path = self:_ensurePath()
+	local ok = pcall(path.ComputeAsync, path, self._rootPart.Position, destination)
+	if not ok or path.Status ~= Enum.PathStatus.Success then
+		-- No path (the navmesh does not reach the spawn point, a Plastic
+		-- prop walls the goal off, the target is on another chunk's
+		-- floor): walk straight at the target instead of standing still.
+		-- A mob that gets stuck on the way is caught by _checkStuck and
+		-- retries the pathfinder next second; a mob that never moves is
+		-- the bug this replaces.
+		self:_cleanupPathConnections()
+		self._waypoints = nil
+		self._humanoid:MoveTo(destination, self._currentTargetHRP)
 		return
 	end
 
-	self._waypoints = self._path:GetWaypoints()
-	if #self._waypoints < 2 then
+	local waypoints = path:GetWaypoints()
+	self._waypoints = waypoints
+	if #waypoints < 2 then
+		self._humanoid:MoveTo(destination, self._currentTargetHRP)
 		return
 	end
+	self._lastPathDestination = destination
 
 	self:_cleanupPathConnections()
 
-	self._blockedConnection = self._path.Blocked:Connect(function(blockedWaypointIndex)
-		if blockedWaypointIndex >= self._nextWaypointIndex then
+	self._blockedConnection = path.Blocked:Connect(function(blockedWaypointIndex)
+		-- `_nextWaypointIndex` is nil until the first path is walked;
+		-- treat that as "nothing ahead to block".
+		if blockedWaypointIndex >= (self._nextWaypointIndex or math.huge) then
 			if self._blockedConnection then
 				self._blockedConnection:Disconnect()
 			end
@@ -837,18 +1049,20 @@ function MobBase:_followPath(destination: Vector3)
 	self._nextWaypointIndex = 2
 
 	self._reachedConnection = self._humanoid.MoveToFinished:Connect(function(reached)
-		if reached and self._nextWaypointIndex < #self._waypoints then
-			self._nextWaypointIndex += 1
-			self._humanoid:MoveTo(self._waypoints[self._nextWaypointIndex].Position)
+		local nextWaypointIndex = self._nextWaypointIndex
+		if reached and nextWaypointIndex and nextWaypointIndex < #waypoints then
+			nextWaypointIndex += 1
+			self._nextWaypointIndex = nextWaypointIndex
+			self._humanoid:MoveTo(waypoints[nextWaypointIndex].Position)
 		else
 			self:_cleanupPathConnections()
 		end
 	end)
 
-	self._humanoid:MoveTo(self._waypoints[self._nextWaypointIndex].Position)
+	self._humanoid:MoveTo(waypoints[2].Position)
 end
 
-function MobBase:_checkStuck()
+function MobBase._checkStuck(self: MobBase)
 	local now = tick()
 	if now - self._lastStuckSampleAt < STUCK_DETECTION_WINDOW then
 		return
@@ -868,7 +1082,7 @@ end
 
 --[ Roam point picking ]--
 
-function MobBase:_pickRoamPosition(): Vector3?
+function MobBase._pickRoamPosition(self: MobBase): Vector3?
 	if not self._rootPart then
 		return nil
 	end
@@ -878,7 +1092,7 @@ function MobBase:_pickRoamPosition(): Vector3?
 	return origin + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
 end
 
-function MobBase:_isPointReachable(point: Vector3): boolean
+function MobBase._isPointReachable(self: MobBase, point: Vector3): boolean
 	if not self._rootPart then
 		return false
 	end
@@ -893,7 +1107,7 @@ end
 
 --[ State transitions ]--
 
-function MobBase:_enterRoaming()
+function MobBase._enterRoaming(self: MobBase)
 	self._state = STATE_ROAMING
 	-- Roam pace = default/3, through the status pipe (Jailed→0 handled
 	-- inside the resync; Chill keeps its bite while roaming).
@@ -916,14 +1130,14 @@ function MobBase:_enterRoaming()
 	end
 end
 
-function MobBase:_enterChase()
+function MobBase._enterChase(self: MobBase)
 	self._state = STATE_CHASE
 	self._chosenAttack = self:_pickAttack()
 	self._lastPathComputeAt = 0 -- allow first recompute immediately
 	self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 end
 
-function MobBase:_pickAttack()
+function MobBase._pickAttack(self: MobBase)
 	local pool = self._attackPool
 	if #pool == 0 then
 		return nil
@@ -933,11 +1147,8 @@ end
 
 --[ Chase step ]--
 
-function MobBase:_chaseStep()
-	-- Jailed or hit-stunned: no pursuit and no attack decision this tick
-	-- (the walk speed is already 0; this keeps a swing from starting
-	-- out of the stagger).
-	if self._model:GetAttribute(Attributes.Jailed) or self._model:GetAttribute(Attributes.HitStunned) then
+function MobBase._chaseStep(self: MobBase)
+	if self._model:GetAttribute(Attributes.Jailed) then
 		return
 	end
 	if not self._currentTarget or not self._currentTargetHRP or not self._currentTargetHRP.Parent then
@@ -946,12 +1157,22 @@ function MobBase:_chaseStep()
 		return
 	end
 
+	-- ONE raycast per tick: the LOS-gated attack check and the chase branch
+	-- below share the answer instead of each casting their own.
+	local lineOfSight: boolean? = nil
+	local function hasLineOfSight(): boolean
+		if lineOfSight == nil then
+			lineOfSight = self:_hasLineOfSight()
+		end
+		return lineOfSight :: boolean
+	end
+
 	if self._chosenAttack then
 		local distance = (self._rootPart.Position - self._currentTargetHRP.Position).Magnitude
 		if distance <= self._chosenAttack.attackRange then
 			local entry = self._chosenAttack.entry
 			local needsLOS = entry and entry.requiresLineOfSight
-			if not needsLOS or self:_hasLineOfSight() then
+			if not needsLOS or hasLineOfSight() then
 				self:_runAttack(self._chosenAttack)
 				return
 			end
@@ -960,7 +1181,7 @@ function MobBase:_chaseStep()
 		end
 	end
 
-	if self:_hasLineOfSight() then
+	if hasLineOfSight() then
 		self._humanoid:MoveTo(self._currentTargetHRP.Position, self._currentTargetHRP)
 	else
 		self:_followPath(self._currentTargetHRP.Position)
@@ -971,7 +1192,7 @@ end
 
 --[ Attack pipeline ]--
 
-function MobBase:_runAttack(chosenAttack)
+function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	if self._state == STATE_ATTACKING then
 		return -- re-entry guard
 	end
@@ -981,7 +1202,7 @@ function MobBase:_runAttack(chosenAttack)
 
 	task.spawn(function()
 		self._model:SetAttribute("AttackInterrupted", false)
-		self._model:SetAttribute(Attributes.ZombieIsAttacking, true)
+		self._model:SetAttribute(Attributes.MobIsAttacking, true)
 		self._model:SetAttribute(Attributes.SuperArmor, true)
 		self._humanoid:MoveTo(self._rootPart.Position) -- cancel in-flight MoveTo
 		self:_setBaseWalkSpeed(0)
@@ -1027,7 +1248,7 @@ function MobBase:_runAttack(chosenAttack)
 		-- gap (and death skips _afterAttack entirely, where 0 is fine).
 		self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 		self._model:SetAttribute(Attributes.SuperArmor, false)
-		self._model:SetAttribute(Attributes.ZombieIsAttacking, false)
+		self._model:SetAttribute(Attributes.MobIsAttacking, false)
 
 		if self._humanoid.Health > 0 then
 			self:_afterAttack()
@@ -1035,11 +1256,11 @@ function MobBase:_runAttack(chosenAttack)
 	end)
 end
 
-function MobBase:_runGenericAttack(chosenAttack)
+function MobBase._runGenericAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	local entry = chosenAttack.entry
 	local genericIndex = chosenAttack.genericIndex
 
-	local animTrack = self._loadedGenericAnimations[genericIndex]
+	local animTrack = if genericIndex then self._loadedGenericAnimations[genericIndex] else nil
 	if animTrack then
 		animTrack:Play()
 	end
@@ -1052,11 +1273,11 @@ function MobBase:_runGenericAttack(chosenAttack)
 	if kind == "ranged" then
 		self:_runRangedSwing(entry)
 	else
-		ZombieService:ExecuteMobAttack(self._model, entry)
+		MobService:ExecuteMobAttack(self._model, entry)
 	end
 end
 
-function MobBase:_runRangedSwing(entry)
+function MobBase._runRangedSwing(self: MobBase, entry)
 	-- Aim BEFORE the attack: snap to face the current target, THEN wind
 	-- up, then fire STRAIGHT AHEAD — FireMobRangedAttack derives the
 	-- shot from the mob's facing at cast time, not the target's
@@ -1094,14 +1315,14 @@ function MobBase:_runRangedSwing(entry)
 		return
 	end
 
-	ZombieService:FireMobRangedAttack(self._model, targetPlayer, entry)
+	MobService:FireMobRangedAttack(self._model, targetPlayer, entry)
 end
 
 -- Unique attack pipeline: hand off to the callback, block for the ACTIVE
 -- duration it returns. The callback owns its whole active timeline (windup,
--- VFX, hit-frames — typically via ZombieService:SpawnHitbox); _runAttack then
+-- VFX, hit-frames — typically via MobService:SpawnHitbox); _runAttack then
 -- applies chosenAttack.recoveryDuration after this returns.
-function MobBase:_runUniqueAttack(chosenAttack)
+function MobBase._runUniqueAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	local target = self._currentTarget
 	if not target then
 		return
@@ -1110,33 +1331,41 @@ function MobBase:_runUniqueAttack(chosenAttack)
 	if self._model:GetAttribute(Attributes.Jailed) then
 		return
 	end
-	local duration = chosenAttack.run(self._model, target) or 0
+	local run = chosenAttack.run
+	assert(run, "[MobBase] Unique attack without a `run` callback on mob: " .. self._model.Name)
+	local duration = run(self._model, target) or 0
 	task.wait(duration)
 end
 
-function MobBase:_afterAttack()
+function MobBase._afterAttack(self: MobBase)
 	self:_enterRoaming()
 end
 
-function MobBase:_interruptAttack()
+function MobBase._interruptAttack(self: MobBase)
 	self._attackGeneration += 1
 	self._model:SetAttribute("AttackInterrupted", true)
 	self._model:SetAttribute("MobHighlightAttackActive", false)
-	self._model:SetAttribute(Attributes.ZombieIsAttacking, false)
+	self._model:SetAttribute(Attributes.MobIsAttacking, false)
 	self._model:SetAttribute(Attributes.SuperArmor, false)
 	self._humanoid.AutoRotate = true
-	for _, track in self._humanoid:GetPlayingAnimationTracks() do
+	for _, track in self._animator:GetPlayingAnimationTracks() do
 		track:Stop()
 	end
 end
 
 --[ Main AI loop ]--
 
-function MobBase:_startAILoop()
+function MobBase._startAILoop(self: MobBase)
 	task.spawn(function()
+		-- Phase offset: mobs spawned in the same frame would otherwise tick
+		-- on the same frame forever, landing the whole wave's AI work as one
+		-- spike every UPDATE_DELAY. A random fraction of the tick spreads
+		-- them across frames.
+		task.wait(math.random() * UPDATE_DELAY)
 		while
 			self._model
-			and self._model:FindFirstChild("Humanoid")
+			and self._model.Parent
+			and self._model:FindFirstChildOfClass("Humanoid")
 			and self._humanoid.Health > 0
 			and task.wait(UPDATE_DELAY)
 		do
@@ -1149,7 +1378,14 @@ function MobBase:_startAILoop()
 			if not self._rootPart then
 				continue
 			end
-			if self._model[ValueNames.RagdollTrigger].Value then
+			-- Looked up without the throwing getter: a floor advance destroys
+			-- the model from under a live tick, and the trigger goes with it
+			-- (QA 2026-10-21, P1 #5). The loop just ends with the model.
+			local ragdollTrigger = self._model:FindFirstChild(ValueNames.RagdollTrigger)
+			if not ragdollTrigger then
+				break
+			end
+			if ragdollTrigger:IsA("BoolValue") and ragdollTrigger.Value then
 				continue
 			end
 
@@ -1180,12 +1416,13 @@ function MobBase:_startAILoop()
 
 			-- Chase: pursue + maybe attack.
 			if self._state == STATE_CHASE then
-				if not hasTarget then
+				local targetHRP = self._currentTargetHRP
+				if not hasTarget or not targetHRP then
 					self:_enterRoaming()
 					continue
 				end
 				-- Target escaped detection? Back to Roaming.
-				local distance = (self._rootPart.Position - self._currentTargetHRP.Position).Magnitude
+				local distance = (self._rootPart.Position - targetHRP.Position).Magnitude
 				if distance > self._detectionRange then
 					self:_enterRoaming()
 					continue
@@ -1199,21 +1436,28 @@ end
 
 --[ Death ]--
 
-function MobBase:OnDeath()
+function MobBase.OnDeath(self: MobBase)
 	self._state = STATE_DEAD
-	ZombieSpawnService:DecrementZombieCount(self._model)
+	MobSpawnService:DecrementMobCount(self._model)
 	self._janitor:Cleanup()
 
 	self:_interruptAttack()
 
-	self._model.Head.Face.Texture = DEAD_FACE_ID
+	getFaceDecal(self._model).Texture = DEAD_FACE_ID
+
+	-- A player's kill pays EXP to the whole living party (ExpRewardService),
+	-- whether or not the killer is still here.
+	local slainBy = self._model:GetAttribute(Attributes.SlainBy)
+	if type(slainBy) == "string" and slainBy ~= "" then
+		ExpRewardService:GrantKill(self._enemyType)
+	end
 
 	if self._model:GetAttribute(Attributes.SlainBy) ~= "" then
 		local killer = Players:FindFirstChild(self._model:GetAttribute(Attributes.SlainBy))
 		if killer and killer.Character then
 			self:_applyDeathImpulse(killer)
-			self:_runPumpkinExplosion(killer)
-			self:_runFuseBombDrop(killer)
+			self:_lobBombs(killer, TRICK_OR_TRAP_BOMBS)
+			self:_lobBombs(killer, FUSE_BOMBS)
 			self:_runZombieBombCloud(killer)
 			self:_handleAssists() -- stats + auras (immediate, regardless of mob tier)
 
@@ -1221,7 +1465,7 @@ function MobBase:OnDeath()
 				self:_deferEncounterRewards(killer)
 			else
 				self:_dropGear()
-				self:_dropCoins(killer)
+				self:_dropGems()
 			end
 		end
 	end
@@ -1232,183 +1476,82 @@ function MobBase:OnDeath()
 	self:_scheduleDespawn()
 end
 
-function MobBase:_applyDeathImpulse(killer: Player)
-	local killerRoot = (killer.Character :: Model):FindFirstChild("HumanoidRootPart") :: BasePart
+function MobBase._applyDeathImpulse(self: MobBase, killer: Player)
+	local killerRoot = getRoot.fromPlayer(killer)
+	if not killerRoot then
+		return
+	end
 	local direction = (self._rootPart.Position - killerRoot.Position).Unit
 	direction = Vector3.new(direction.X, 0, direction.Z).Unit
 	self._rootPart:ApplyImpulse((direction + Vector3.new(0, 1, 0)) * self._rootPart.AssemblyMass * (200 * 0.35))
 end
 
-function MobBase:_runPumpkinExplosion(killer: Player)
-	local pumpkinCount = RelicService:GetSpecificRelicRegistry(killer, RelicNames["Trick Or Trap"])
-	if not pumpkinCount or pumpkinCount <= 0 then
+-- The lobbed-bomb recipe both bomb relics share (TRICK_OR_TRAP_BOMBS,
+-- FUSE_BOMBS). Every bomb claims a slot against its relic's global cap
+-- (BOMB_LIMIT_PER_RELIC) before spawning, and simply does not spawn when
+-- the cap is full. The claim is read-then-write with no yield between, so
+-- the bombs of one takedown cannot over-claim each other.
+function MobBase._lobBombs(self: MobBase, killer: Player, spec: BombSpec)
+	local owned = RelicService:GetSpecificRelicRegistry(killer, spec.relicName)
+	if not owned or owned <= 0 then
 		return
 	end
-	-- ANY takedown drops pumpkins. The Burning-target requirement came off
-	-- in the 2026-08 pass when the relic became NC: gating an opener behind
-	-- a Burn the player might have no way to apply made it dead on pickup.
-	-- The pumpkins apply Burn themselves now, so this is what STARTS the
-	-- Blaze chain rather than paying it off.
 
-	local rayOrigin = self._rootPart.Position
-	local rayDirection = Vector3.new(0, -500, 0)
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {
-		workspace.IgnoreInstances.Zombies,
-		workspace.IgnoreInstances.DeadZombies,
-	}
-	local raycastResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-	local groundPosition = raycastResult and raycastResult.Position or self._rootPart.Position
-	local cachedCFrame = CFrame.new(groundPosition) + Vector3.new(0, 3.25 / 2, 0)
+	local groundPosition = snapToGround(self._rootPart.Position) or self._rootPart.Position
+	local cachedCFrame = CFrame.new(groundPosition) + Vector3.new(0, BOMB_REST_HEIGHT_STUDS, 0)
+	local arcaneName = spec.arcaneName
 
-	local magicName = MagicNames["Pumpkin Explosion"]
-
-	-- Drops 1-3 pumpkins; each one claims a slot against the global Trick Or
-	-- Trap cap (BOMB_LIMIT_PER_RELIC) before spawning, and simply does not
-	-- spawn when the cap is full. The claim is read-then-write with no yield
-	-- between, so the three cannot over-claim each other.
-	for _ = 1, math.random(1, 3) do
+	for _ = 1, spec.rollBombCount() do
 		task.spawn(function()
-			local currentLimit = RelicService:GetRelicLimitRegistry(RelicNames["Trick Or Trap"]) or 0
+			local currentLimit = RelicService:GetRelicLimitRegistry(spec.relicName) or 0
 			if currentLimit >= BOMB_LIMIT_PER_RELIC then
 				return
 			end
 
-			RelicService:SetRelicLimitRegistry(RelicNames["Trick Or Trap"], currentLimit + 1)
-			local targetCFrame = cachedCFrame + Vector3.new(math.random(-5, 5), 0, math.random(-5, 5))
+			RelicService:SetRelicLimitRegistry(spec.relicName, currentLimit + 1)
+			local targetCFrame = cachedCFrame
+				+ Vector3.new(
+					math.random(-BOMB_SCATTER_STUDS, BOMB_SCATTER_STUDS),
+					0,
+					math.random(-BOMB_SCATTER_STUDS, BOMB_SCATTER_STUDS)
+				)
 
 			RelicNetwork.ThrownRelicLaunched.FireAll({
 				Position = self._rootPart.Position,
 				TargetPosition = targetCFrame.Position,
 				StartTime = workspace:GetServerTimeNow(),
-				Duration = PUMPKIN_DELAY,
-				MagicName = magicName,
-				RelicName = RelicNames["Trick Or Trap"],
+				Duration = BOMB_FLIGHT_SECONDS,
+				ArcaneName = arcaneName,
+				RelicName = spec.relicName,
 			})
 
-			task.delay(PUMPKIN_DELAY + 0.25, function()
+			task.delay(BOMB_FLIGHT_SECONDS + BOMB_DETONATION_MARGIN_SECONDS, function()
 				-- Slot released FIRST, before the blast: this bomb is detonating,
 				-- so its slot is spent either way, and a hitbox that ERRORS must
 				-- never strand it — the counter is server-wide and nothing ever
 				-- resets it, so a leaked slot would starve the relic for the life
 				-- of the server.
 				RelicService:SetRelicLimitRegistry(
-					RelicNames["Trick Or Trap"],
-					(RelicService:GetRelicLimitRegistry(RelicNames["Trick Or Trap"]) or 0) - 1
+					spec.relicName,
+					(RelicService:GetRelicLimitRegistry(spec.relicName) or 0) - 1
 				)
 				VFXService:CreateHitbox(
-					magicName,
+					arcaneName,
 					killer,
 					targetCFrame,
 					TagList.Zombie,
 					IgnoreListService:GetWeaponIgnoreList(),
 					function(model: Model)
-						-- isRelicSourced = true rides the UNTYPED lane now:
-						-- unqualified Damage bonuses scale the blast, typed
-						-- relics/crits never apply. Still rolls the WEAPON
-						-- applier hub via onHitboxDamage (isMagic = false).
-						onHitboxDamage(model, targetCFrame, killer, MagicData[magicName], false, true)
-
-						-- "...and burning them": the blast applies Burn outright
-						-- rather than rolling for it, which is what lets Trick Or
-						-- Trap open the Blaze tree on its own.
-						-- The cast: StatusConditionService's own helper signatures
-						-- disagree on Player vs Player?, which fails its self type
-						-- on any method call from a strict file.
-						if StatusConditionService then
-							(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Burn)
-						end
+						spec.onHit(killer, model, targetCFrame)
 					end,
-					MagicData[magicName].hitboxSize.X
+					ArcaneData[arcaneName].hitboxSize.X
 				)
 			end)
 		end)
 	end
 end
 
--- Fuse Bomb (Neutral Rare): the Pumpkin Explosion recipe — same fuse
--- delay, same cap machinery (its OWN BOMB_LIMIT_PER_RELIC counter, not
--- one shared with the pumpkins), same hitbox — but ONE lobbed
--- bomb per takedown (no 1-3 roll), with the Fuse Bomb model (relicName
--- rides the client payload), and the blast is PLAIN damage: neither
--- weapon nor magic — the raw path, no amplifiers / crit / appliers
--- (Summer Fireworks' recipe). No Burn either.
-function MobBase:_runFuseBombDrop(killer: Player)
-	local bombCount = RelicService:GetSpecificRelicRegistry(killer, RelicNames["Fuse Bomb"])
-	if not bombCount or bombCount <= 0 then
-		return
-	end
-
-	local rayOrigin = self._rootPart.Position
-	local rayDirection = Vector3.new(0, -500, 0)
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {
-		workspace.IgnoreInstances.Zombies,
-		workspace.IgnoreInstances.DeadZombies,
-	}
-	local raycastResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-	local groundPosition = raycastResult and raycastResult.Position or self._rootPart.Position
-	local cachedCFrame = CFrame.new(groundPosition) + Vector3.new(0, 3.25 / 2, 0)
-
-	local magicName = MagicNames["Fuse Bomb Explosion"]
-
-	-- ONE bomb per takedown — a plain do-block where the pumpkin rolls
-	-- its 1-3 loop, so the shared body keeps its shape.
-	do
-		task.spawn(function()
-			local currentLimit = RelicService:GetRelicLimitRegistry(RelicNames["Fuse Bomb"]) or 0
-			if currentLimit >= BOMB_LIMIT_PER_RELIC then
-				return
-			end
-
-			RelicService:SetRelicLimitRegistry(RelicNames["Fuse Bomb"], currentLimit + 1)
-			local targetCFrame = cachedCFrame + Vector3.new(math.random(-5, 5), 0, math.random(-5, 5))
-
-			RelicNetwork.ThrownRelicLaunched.FireAll({
-				Position = self._rootPart.Position,
-				TargetPosition = targetCFrame.Position,
-				StartTime = workspace:GetServerTimeNow(),
-				Duration = PUMPKIN_DELAY,
-				MagicName = magicName,
-				RelicName = RelicNames["Fuse Bomb"],
-			})
-
-			task.delay(PUMPKIN_DELAY + 0.25, function()
-				-- Slot released FIRST — see the pumpkin's note above.
-				RelicService:SetRelicLimitRegistry(
-					RelicNames["Fuse Bomb"],
-					(RelicService:GetRelicLimitRegistry(RelicNames["Fuse Bomb"]) or 0) - 1
-				)
-				VFXService:CreateHitbox(
-					magicName,
-					killer,
-					targetCFrame,
-					TagList.Zombie,
-					IgnoreListService:GetWeaponIgnoreList(),
-					function(model: Model)
-						-- UNTYPED relic lane (isRelicSourced): unqualified
-						-- Damage bonuses scale the blast; Weapon/Magic-typed
-						-- relics and crits never apply.
-						local targetHumanoid = model:FindFirstChild("Humanoid") :: Humanoid?
-						if not targetHumanoid or not DamageService then
-							return
-						end
-						local config = MagicData[magicName]
-						local damageRoll = if config.runtimeDamageCallback
-							then config.runtimeDamageCallback(killer)
-							else config.damage
-						DamageService:TakeDamage(killer, targetHumanoid, damageRoll, false, false, false, true, true)
-					end,
-					MagicData[magicName].hitboxSize.X
-				)
-			end)
-		end)
-	end
-end
-
-function MobBase:_runZombieBombCloud(killer: Player)
+function MobBase._runZombieBombCloud(self: MobBase, killer: Player)
 	local damagePerLevel = RelicService:GetRelicEffect(killer, RelicNames["Zombie Bomb"])
 	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(killer, RelicNames["Zombie Bomb"]) <= 0 then
 		return
@@ -1421,7 +1564,7 @@ function MobBase:_runZombieBombCloud(killer: Player)
 
 	local limitKey = RelicNames["Zombie Bomb"] .. "_" .. killer.UserId
 	local liveClouds = RelicService:GetRelicLimitRegistry(limitKey) or 0
-	if liveClouds >= ZOMBIE_BOMB_CLOUD_LIMIT then
+	if liveClouds >= MOB_BOMB_CLOUD_LIMIT then
 		return
 	end
 	RelicService:SetRelicLimitRegistry(limitKey, liveClouds + 1)
@@ -1440,35 +1583,21 @@ function MobBase:_runZombieBombCloud(killer: Player)
 				part.CanTouch = false
 			end
 		end
-		cloud.Parent = workspace.IgnoreInstances.MagicSpells
+		cloud.Parent = workspace.IgnoreInstances.ArcaneSpells
 	else
 		warn("[MobBase] Missing ReplicatedStorage.GameAssets.VFX.PoisonCloud")
 	end
 
 	local tickDamage = math.round(damagePerLevel * getPlayerLevel(killer))
 	task.spawn(function()
-		local overlapParams = OverlapParams.new()
-		overlapParams.FilterType = Enum.RaycastFilterType.Include
-		overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Zombies }
-
 		local elapsed = 0
-		while elapsed < ZOMBIE_BOMB_CLOUD_DURATION do
-			task.wait(ZOMBIE_BOMB_CLOUD_TICK_SECONDS)
-			elapsed += ZOMBIE_BOMB_CLOUD_TICK_SECONDS
+		while elapsed < MOB_BOMB_CLOUD_DURATION do
+			task.wait(MOB_BOMB_CLOUD_TICK_SECONDS)
+			elapsed += MOB_BOMB_CLOUD_TICK_SECONDS
 
-			local struck = {}
-			for _, part in workspace:GetPartBoundsInRadius(cloudPosition, ZOMBIE_BOMB_CLOUD_RADIUS, overlapParams) do
-				local model = part:FindFirstAncestorWhichIsA("Model")
-				if not model or struck[model] then
-					continue
-				end
-				local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
-				if not targetHumanoid or targetHumanoid.Health <= 0 then
-					continue
-				end
-				struck[model] = true
-				-- Relic damage, NEUTRAL type (isMagic = false): no magic
-				-- amplifiers, no magic resist, white number — the same bucket
+			forEachEnemyInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
+				-- Relic damage, NEUTRAL type (isMagic = false): no arcane
+				-- amplifiers, no arcane resist, white number — the same bucket
 				-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
 				-- (isRelicSourced = true).
 				if DamageService and tickDamage > 0 then
@@ -1478,10 +1607,10 @@ function MobBase:_runZombieBombCloud(killer: Player)
 				-- its Status Chance clause in the 2026-08 pass, so the cloud is
 				-- now a guaranteed Poison field rather than a chance to seed one.
 				if StatusConditionService then
-					-- Cast: see _runPumpkinExplosion.
+					-- Cast: see TRICK_OR_TRAP_BOMBS.
 					(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Poison, false)
 				end
-			end
+			end)
 		end
 
 		RelicService:SetRelicLimitRegistry(limitKey, (RelicService:GetRelicLimitRegistry(limitKey) or 1) - 1)
@@ -1492,7 +1621,7 @@ function MobBase:_runZombieBombCloud(killer: Player)
 					emitter.Enabled = false
 				end
 			end
-			task.delay(ZOMBIE_BOMB_CLOUD_FADE_SECONDS, function()
+			task.delay(MOB_BOMB_CLOUD_FADE_SECONDS, function()
 				cloud:Destroy()
 			end)
 		end
@@ -1501,12 +1630,12 @@ end
 
 -- True while `name` still holds live assist credit on this mob (last hit
 -- within ASSIST_WINDOW_SECONDS).
-function MobBase:_assistedRecently(name: string): boolean
+function MobBase._assistedRecently(self: MobBase, name: string): boolean
 	local lastHitAt = self._playerAssistRegistry[name]
 	return lastHitAt ~= nil and (os.clock() - lastHitAt) <= ASSIST_WINDOW_SECONDS
 end
 
-function MobBase:_handleAssists()
+function MobBase._handleAssists(self: MobBase)
 	for name, _ in self._playerAssistRegistry do
 		if not self:_assistedRecently(name) then
 			continue
@@ -1556,11 +1685,11 @@ function MobBase:_handleAssists()
 
 		-- Midnight Sword: takedowns restore 5% of Maximum Mana.
 		if RelicService:GetSpecificRelicRegistry(player, RelicNames["Midnight Sword"]) > 0 then
-			local magicData = MagicService:GetPlayerMagicData(player)
-			if magicData and magicData.maxMana and magicData.mana < magicData.maxMana then
+			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
+			if arcaneData and arcaneData.maxMana and arcaneData.mana < arcaneData.maxMana then
 				local refunded =
-					math.min(magicData.mana + magicData.maxMana * MIDNIGHT_SWORD_MANA_FRACTION, magicData.maxMana)
-				MagicService:SetPlayerMagicData(player, refunded, magicData.maxMana)
+					math.min(arcaneData.mana + arcaneData.maxMana * MIDNIGHT_SWORD_MANA_FRACTION, arcaneData.maxMana)
+				ArcaneService:SetPlayerArcaneData(player, refunded, arcaneData.maxMana)
 			end
 		end
 
@@ -1588,102 +1717,102 @@ function MobBase:_handleAssists()
 		-- so encounter mobs can DEFER it to after the outro cinematic while
 		-- regular mobs still drop immediately. Stats + auras above stay here
 		-- (they fire on death regardless).
-
-		-- TODO: EXP drop, currently disabled until we have a solid design for it. The main
-		-- if ExperienceService and self._exp > 0 then
-		-- 	ExperienceService:GrantExp(player, self._exp)
-		-- end
 	end
 end
 
 -- Personal-loot gear roll for every player in the assist registry. Split out
 -- of _handleAssists so encounter mobs can DEFER it to after the outro
 -- cinematic; regular mobs call it inline in OnDeath.
-function MobBase:_dropGear()
+function MobBase._dropGear(self: MobBase)
 	if not GearDropService then
 		return
 	end
 	for name, _ in self._playerAssistRegistry do
 		local player = Players:FindFirstChild(name)
 		if player and self:_assistedRecently(name) then
-			GearDropService:DropGear(player, self._rootPart.Position, self._model:GetAttribute(Attributes.EnemyType))
+			GearDropService:DropGear(player, self._rootPart.Position, self._enemyType)
 		end
 	end
 end
 
 -- True for minibosses + bosses (the encounter-tier mobs whose death plays an
--- outro cinematic). Their coin + gear rewards are held until that cinematic
--- finishes (see _deferEncounterRewards).
-function MobBase:_isEncounterMob(): boolean
+-- outro cinematic). Their coin + gear rewards come from the reward chest
+-- (see _deferEncounterRewards).
+--
+-- Deliberately the spawn-side IsBoss / IsMiniboss flags MobSpawnService
+-- stamps, NOT Shared/Functions/Mob/isEncounterEnemy (the EnemyType tier
+-- from MobData): the outro, the long despawn and the reward chest
+-- belong to the ROLE this mob was spawned in, and the same model can serve
+-- either role across difficulties (Components/Mob).
+function MobBase._isEncounterMob(self: MobBase): boolean
 	return self._model:GetAttribute(Attributes.IsMiniBoss) == true
 		or self._model:GetAttribute(Attributes.IsBoss) == true
 end
 
--- Holds the coin + gear drops until EncounterService finishes the outro
--- cinematic, then drops them at the corpse — so the rewards "rain down" when
--- control returns to the player instead of landing mid-cinematic. The corpse
--- persists through the outro (encounter despawn timer, see _scheduleDespawn),
--- so _rootPart is still a valid drop origin when the signal fires. One-shot —
--- disconnects once its own mob's outro fires.
-function MobBase:_deferEncounterRewards(killer)
+-- Encounter-tier mobs (miniboss / boss) pay through the reward chest, not
+-- the corpse -- see the seam note inside. Without EncounterService
+-- (defensive) they drop like a regular mob.
+function MobBase._deferEncounterRewards(self: MobBase, _killer)
 	if not EncounterService then
 		-- Defensive: no EncounterService → drop immediately.
 		self:_dropGear()
-		self:_dropCoins(killer)
+		self:_dropGems()
 		return
 	end
 	-- NOTHING drops at the corpse any more. An encounter's gear and coins
 	-- are the reward CHEST's contents (EncounterChestService, off the same
 	-- outro beat), so dropping them here as well would pay the player
-	-- twice. The listener is kept as the seam where corpse-side rewards
-	-- would go if any are ever added back.
-	local conn
-	conn = EncounterService.OnEncounterOutroFinished:Connect(function(_kind, _room, mob)
-		if mob ~= self._model then
-			return
-		end
-		conn:Disconnect()
-	end)
-	-- Bounded by the corpse: Stop's janitor Destroy drops it if this mob's
-	-- own outro never fires (floor torn down first, run advanced).
-	self._janitor:Add(conn, "Disconnect")
+	-- twice. This is the seam where corpse-side rewards would go if any
+	-- are ever added back: EncounterService.OnEncounterOutroFinished
+	-- (kind, room, mob) fires once THIS mob's outro cinematic ends, and the
+	-- corpse persists through it (encounter despawn timer, see
+	-- _scheduleDespawn), so _rootPart would still be a valid drop origin.
 end
 
--- GUARANTEED on every mob (design call — the old 25% roll is gone;
--- big mobs were already guaranteed). Same signal shape the treasure
--- chest uses: DropRate = pickup count, Coins = value per pickup.
--- (Pot Of Gold's +25% coins-gain is collector-side at credit time in
--- DropService; its auto-collect is the client Drop component's
--- distance bypass.)
+-- GEMS, the run currency, off every grunt's corpse (MobData `gems`:
+-- DropRate = pickup count, Gems = value per pickup). Shared pickups --
+-- every player banks the full value once. Pot Of Gold / Dragon Lantern /
+-- Fortune multiply collector-side at credit time (DropService).
 --
--- EXCEPT in a Miniboss / Boss room: those pay in relics and gear, not
--- coins. The gate is the ROOM, not the mob, so the adds a miniboss
--- wave spawns are covered too — every mob carries the RoomId its
--- spawner stamped (ZombieSpawnService).
-function MobBase:_dropCoins(_killer)
+-- EXCEPT in a Miniboss / Boss room: those pay Coins and Forge Ore through
+-- their reward chest (EncounterChestService), not corpse Gems -- the
+-- Miniboss's own `gems` row is its chest's Gem PURSE, paid there, so it
+-- must never scatter here as well. The gate is the ROOM, not the mob, so
+-- the adds a miniboss wave spawns are covered too -- every mob carries
+-- the RoomId its spawner stamped (MobSpawnService).
+function MobBase._dropGems(self: MobBase)
+	local gems = self._gems
+	if not gems then
+		return
+	end
 	local roomId = self._model:GetAttribute("RoomId")
 	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
-	local room = dungeon and roomId and dungeon.roomsById[roomId]
+	local room = if dungeon and type(roomId) == "number" then dungeon.roomsById[roomId] else nil
 	if room and (room.roomType == RoomTypes.Miniboss or room.roomType == RoomTypes.Boss) then
+		return
+	end
+	-- The row's `dropChance` (default 1): the kill drops at all, or not.
+	local dropChance = (gems :: any).dropChance
+	if type(dropChance) == "number" and math.random() >= dropChance then
 		return
 	end
 
 	DropService.OnDropRequested:Fire(
 		self._rootPart,
-		DropTypes.Coins,
-		self._minDropRate,
-		self._maxDropRate,
-		self._minCoins,
-		self._maxCoins,
+		DropTypes.Gems,
+		gems.minDropRate,
+		gems.maxDropRate,
+		gems.minGems,
+		gems.maxGems,
 		false
 	)
 end
 
-function MobBase:_playDeathSound()
+function MobBase._playDeathSound(self: MobBase)
 	self._deathSound:Play()
 end
 
-function MobBase:_applyForwardKnockback()
+function MobBase._applyForwardKnockback(self: MobBase)
 	self._rootPart:ApplyImpulse(-self._rootPart.CFrame.LookVector * (DEFAULT_KNOCKBACK * self._rootPart.AssemblyMass))
 end
 
@@ -1691,18 +1820,18 @@ end
 -- physics; minibosses/bosses override _ragdollOnDeath to stay upright and
 -- _onDeathAnimation to play a death animation in place (placeholder print
 -- until the animation asset exists).
-function MobBase:_ragdollOnDeath(): boolean
+function MobBase._ragdollOnDeath(_self: MobBase): boolean
 	return true
 end
 
-function MobBase:_onDeathAnimation() end
+function MobBase._onDeathAnimation(_self: MobBase) end
 
-function MobBase:_relocateToDeadFolder()
-	self._model.Parent = workspace.IgnoreInstances.DeadZombies
+function MobBase._relocateToDeadFolder(self: MobBase)
+	self._model.Parent = workspace.IgnoreInstances.DeadMobs
 
-	local zombieHitbox = self._model:FindFirstChild("ZombieHitbox")
-	if zombieHitbox then
-		zombieHitbox:Destroy()
+	local mobHitbox = self._model:FindFirstChild("MobHitbox")
+	if mobHitbox then
+		mobHitbox:Destroy()
 	end
 
 	-- Destroy combat hitboxes; the dead body shouldn't deal or receive damage.
@@ -1719,13 +1848,17 @@ function MobBase:_relocateToDeadFolder()
 	self:_setBaseWalkSpeed(0)
 
 	-- Stop locomotion tracks regardless of death style.
-	for _, animation in self._humanoid:GetPlayingAnimationTracks() do
+	for _, animation in self._animator:GetPlayingAnimationTracks() do
 		animation:Stop()
 	end
 
 	if self:_ragdollOnDeath() then
-		-- Trigger the ragdoll AFTER the collision group is locked in.
-		self._model[ValueNames.RagdollTrigger].Value = true
+		-- Trigger the ragdoll AFTER the collision group is locked in. A
+		-- model torn down mid-death has no trigger left; nothing to ragdoll.
+		local ragdollTrigger = self._model:FindFirstChild(ValueNames.RagdollTrigger)
+		if ragdollTrigger and ragdollTrigger:IsA("BoolValue") then
+			ragdollTrigger.Value = true
+		end
 	else
 		-- Non-ragdoll death (minibosses / bosses): stay upright in place and
 		-- play a death animation instead of collapsing. The existing
@@ -1735,11 +1868,10 @@ function MobBase:_relocateToDeadFolder()
 	end
 end
 
-function MobBase:_scheduleDespawn()
+function MobBase._scheduleDespawn(self: MobBase)
 	-- Minibosses + bosses use the long despawn so the corpse survives its
-	-- outro cinematic (the camera holds on it) AND the deferred coin/gear
-	-- drops fire while _rootPart is still a valid origin (_deferEncounterRewards).
-	local longDespawn = self._model:GetAttribute(Attributes.BattleTask) or self:_isEncounterMob()
+	-- outro cinematic (the camera holds on it).
+	local longDespawn = self:_isEncounterMob()
 	local timer = if longDespawn then BOSS_DESPAWN_TIMER else DESPAWN_TIMER
 
 	task.delay(timer, function()
@@ -1747,19 +1879,21 @@ function MobBase:_scheduleDespawn()
 			return
 		end
 
+		-- Emitters stop here (one replicated bool each); the dissolve itself
+		-- runs on every client off ONE cue (Combat.MobFade -> MobController)
+		-- instead of a server tween per part. The server only waits it out.
 		for _, descendant in self._model:GetDescendants() do
-			if descendant:IsA("BasePart") or descendant:IsA("Decal") then
-				TweenService:Create(
-					descendant,
-					TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
-					{ Transparency = 1 }
-				):Play()
-			elseif descendant:IsA("ParticleEmitter") then
+			if descendant:IsA("ParticleEmitter") then
 				descendant.Enabled = false
 			end
 		end
+		CombatNetwork.MobFade.FireAll({
+			Mob = self._model,
+			Phase = "Out",
+			Duration = MobFadeData.DespawnFadeSeconds,
+		})
 
-		task.wait(1.5)
+		task.wait(MobFadeData.DespawnFadeSeconds)
 		if self._model then
 			self._model:Destroy()
 		end

@@ -13,14 +13,16 @@ local UserInputService = game:GetService("UserInputService")
 
 --[ Exports & Types & Defaults ]--
 
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local warmSwordSlashTextures = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.warmSwordSlashTextures)
--- local VFXData = require(ReplicatedStorage.Submodules.Core.Shared.Data.VFXData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local InterfaceManagerController =
+	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
+local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 
 -- Sub-registry: per-projectile modules for MOB ranged attacks. Keyed
--- by projectileName (matches ZombieData[name].genericAttacks[i].projectileName).
+-- by projectileName (matches MobData[name].genericAttacks[i].projectileName).
 -- Required as a child folder so adding a new ranged-mob projectile is
 -- just dropping a ModuleScript in MobProjectiles/ — no edits here.
 local MobProjectiles = require(script:WaitForChild("MobProjectiles"))
@@ -46,7 +48,7 @@ local VFXController = {
 -- Sword slash texture warming around a cast (warmSwordSlashTextures):
 -- a spell's own textures are what evict the slash flipbook's frames, so
 -- the frames are kept drawn for the spell's length plus this margin.
--- The fallback covers a spell MagicData has no duration for.
+-- The fallback covers a spell ArcaneData has no duration for.
 local SLASH_WARM_MARGIN_SECONDS = 1
 local SLASH_WARM_FALLBACK_SECONDS = 3
 
@@ -68,13 +70,13 @@ function VFXController._startAuraAttack(self: typeof(VFXController))
 	local char = Players.LocalPlayer.Character
 
 	if char and char:GetAttribute(Attributes.SusanooEnabled) then
-		Magic.AuraAttackStart.Fire()
+		Arcane.AuraAttackStart.Fire()
 	end
 end
 
 function VFXController._stopAuraAttack(self: typeof(VFXController))
 	self._auraHeld = false
-	Magic.AuraAttackStop.Fire()
+	Arcane.AuraAttackStop.Fire()
 end
 
 -- The other edge: Susanoo comes up while the button is already held.
@@ -84,7 +86,7 @@ function VFXController._watchAuraRisingEdge(self: typeof(VFXController))
 	local function bind(character: Model)
 		character:GetAttributeChangedSignal(Attributes.SusanooEnabled):Connect(function()
 			if self._auraHeld and character:GetAttribute(Attributes.SusanooEnabled) == true then
-				Magic.AuraAttackStart.Fire()
+				Arcane.AuraAttackStart.Fire()
 			end
 		end)
 	end
@@ -119,7 +121,7 @@ end
 -- anyone's -- so the spell's textures do not push them off the GPU and
 -- the next swing does not flicker. See SLASH_WARM_MARGIN_SECONDS.
 function VFXController._warmSlashForCast(_self: typeof(VFXController), vfxName: string)
-	local data = (MagicData :: any)[vfxName]
+	local data = (ArcaneData :: any)[vfxName]
 	local seconds = (data and data.duration) or SLASH_WARM_FALLBACK_SECONDS
 	if data and data.cutscene and data.cutscene.enabled then
 		seconds += data.cutscene.duration or 0
@@ -137,7 +139,7 @@ end
 -- authoritative work: every module gates its hitbox requests on
 -- `player == Players.LocalPlayer`, so running it here does exactly what it
 -- did before, just earlier. Mana, cooldown and ownership are still checked
--- on the server; MagicController mirrors those checks before it gets here,
+-- on the server; ArcaneController mirrors those checks before it gets here,
 -- so a rejected cast (a desync) is the only way to see an effect that did
 -- not land.
 function VFXController.PlayVFX(self: typeof(VFXController), vfxName: string)
@@ -145,22 +147,22 @@ function VFXController.PlayVFX(self: typeof(VFXController), vfxName: string)
 	task.spawn(function()
 		self:_runVFXModule(Players.LocalPlayer, vfxName, cframe)
 	end)
-	Magic.CastRequested.Fire({ MagicName = vfxName, CFrame = cframe })
+	Arcane.CastRequested.Fire({ ArcaneName = vfxName, CFrame = cframe })
 end
 
--- Mob ranged-attack projectile dispatch. Called by ZombieController
--- when ZombieService.OnReplicateMobRangedAttack fires. Delegates to
+-- Mob ranged-attack projectile dispatch. Called by MobController
+-- when MobService.OnReplicateMobRangedAttack fires. Delegates to
 -- the per-projectile module under MobProjectiles/ keyed by name.
 function VFXController.RunMobProjectile(
 	_self: typeof(VFXController),
 	projectileName: string,
-	zombieModel: Model,
+	mobModel: Model,
 	originCFrame: CFrame,
 	targetPosition: Vector3,
 	castUuid: string,
 	attackConfig: { speed: number, lifetime: number, hitRadius: number }
 )
-	MobProjectiles.Run(projectileName, zombieModel, originCFrame, targetPosition, castUuid, attackConfig)
+	MobProjectiles.Run(projectileName, mobModel, originCFrame, targetPosition, castUuid, attackConfig)
 end
 
 --[ Initializers ]--
@@ -181,12 +183,12 @@ function VFXController.Start(self: typeof(VFXController))
 	-- (the cast dialogue strip) need the caster's own cast too -- but the
 	-- caster's effect module already ran locally in PlayVFX, so THIS client
 	-- skips its own cast here rather than playing it twice.
-	Magic.CastReplicated.On(function(payload)
+	Arcane.CastReplicated.On(function(payload)
 		local player = payload.Caster
 		if not player then
 			return
 		end
-		local vfxName = payload.MagicName
+		local vfxName = payload.ArcaneName
 		local cframe = payload.CFrame
 		if player == Players.LocalPlayer then
 			return
@@ -195,7 +197,9 @@ function VFXController.Start(self: typeof(VFXController))
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
-		if gameProcessedEvent then
+		-- No aura swings while a window covers the screen (the HUD is held
+		-- closed by the bag, the forge, the run bag, a relic offer ...).
+		if gameProcessedEvent or not InterfaceManagerController:IsScopeOpen(InterfaceScopes.HUD) then
 			return
 		end
 
@@ -219,9 +223,9 @@ function VFXController.Init(self: typeof(VFXController))
 	for _, vfxModule in script:GetChildren() do
 		-- Skip the MobProjectiles sub-folder — it's its own dispatch
 		-- (required at the top of this file) and isn't a per-player-
-		-- magic spell module. Folders containing init.lua surface as
+		-- arcane spell module. Folders containing init.lua surface as
 		-- ModuleScripts in Roblox, so without this filter MobProjectiles
-		-- would accidentally get registered as a magic spell named
+		-- would accidentally get registered as a arcane spell named
 		-- "MobProjectiles".
 		if vfxModule:IsA("ModuleScript") and vfxModule.Name ~= "MobProjectiles" then
 			local vfxName = vfxModule.Name

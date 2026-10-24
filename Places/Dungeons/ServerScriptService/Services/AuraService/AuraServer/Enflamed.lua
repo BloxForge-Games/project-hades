@@ -1,5 +1,5 @@
--- Enflamed (Blaze): +30% Weapon Damage while up (AuraData owns the
--- magnitude; DamageService reads the marker). Standard rig — see
+-- Enflamed (Blaze): more Weapon Damage while up (AuraData owns the
+-- magnitude -- 0.30 after the 2026-10 shift; DamageService reads the marker). Standard rig — see
 -- GenericAura for the recipe and lifecycle.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

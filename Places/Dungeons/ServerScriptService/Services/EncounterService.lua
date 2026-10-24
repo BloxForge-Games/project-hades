@@ -17,36 +17,21 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local DungeonService = require(ServerScriptService.Services.DungeonService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local IsometricCameraService = require(ServerScriptService.Submodules.Core.Source.Services.IsometricCameraService)
-local chestService = require(ServerScriptService.Services.EncounterChestService)
 local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
+local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local dungeonContent = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonContent)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
-
--- DungeonService's room record, reached through the lazy `any` getter
--- above. A structural mirror of the fields this side reads keeps the
--- rooms typed without recreating the require cycle.
-type Room = {
-	id: number,
-	model: Model,
-	roomType: string,
-	segmentId: number,
-}
+type Room = DungeonService.Room
 
 -- "NextDungeon" is the run-loop VOTE: same pad / timers / HUD as an
 -- encounter lobby, but expiry advances the run instead of starting a fight.
@@ -79,7 +64,13 @@ export type PhaseCutsceneOptions = { duration: number?, onCutsceneBeat: (() -> (
 
 local EncounterService = {
 	Name = "EncounterService",
-	Dependencies = { ZombieSpawnService, IsometricCameraService, chestService, EncounterChestService } :: { any },
+	Dependencies = {
+		DungeonService,
+		MobSpawnService,
+		IsometricCameraService,
+		EncounterChestService,
+		InvulnerabilityService,
+	} :: { any },
 }
 
 -- Active encounter HUD data, nil when no encounter is active (was a replicated
@@ -106,7 +97,23 @@ local ROOM_TYPES = {
 -- Teleport offset: how many studs forward of the gate (along LookVector) the
 -- party lands at when the cinematic fades to black.
 local ENCOUNTER_TELEPORT_FORWARD_OFFSET = 6
-local ENCOUNTER_LEVEL_PLACEHOLDER = 1 -- TODO: derive from difficulty / mob data
+
+-- The level on the encounter bar: the top of the run's Item Level range for
+-- this dungeon and difficulty, plus Ascension's growth. 1 outside a run.
+local function encounterLevel(): number
+	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+	if not dungeon then
+		return 1
+	end
+	local config = DungeonData[dungeon.id]
+	local tier = config and config.difficulties[dungeon.difficulty]
+	if not tier then
+		return 1
+	end
+	local base = DifficultyData.Tiers[dungeon.difficulty]
+	local growth = if base then DungeonService:GetDifficultyScale().levelRange.max - base.levelRange.max else 0
+	return tier.levelRange.max + growth
+end
 
 -- Cinematic intro timings. The server orchestrates the whole sequence; clients
 -- run their local fade / walk / control-lock logic in response to the
@@ -114,7 +121,7 @@ local ENCOUNTER_LEVEL_PLACEHOLDER = 1 -- TODO: derive from difficulty / mob data
 local ENCOUNTER_INTRO_FADE_DURATION = 1
 local ENCOUNTER_INTRO_WALK_UP_STUDS = 20
 -- Party spread on arrival: the same fan the dungeon landing uses
--- (DungeonService's LANDING_SPREAD_STUDS), so a party walks into the
+-- (LandingService's LANDING_SPREAD_STUDS), so a party walks into the
 -- arena as a LINE instead of arriving in one overlapping pile and
 -- shoving each other apart on the first physics step.
 local ENCOUNTER_INTRO_SPREAD_STUDS = 5
@@ -138,7 +145,7 @@ local ENCOUNTER_OUTRO_HOLD_DURATION = 3 -- seconds the camera holds on the defea
 
 -- Boss phase-change cinematic. CUTSCENE_DURATION is the hold-on-boss beat —
 -- the configurable "length of each cutscene" the boss applies its phase change
--- under. A per-phase `cutsceneDuration` in ZombieData overrides it. The camera
+-- under. A per-phase `cutsceneDuration` in MobData overrides it. The camera
 -- pan in/out reuses the intro/outro tween duration.
 local ENCOUNTER_PHASE_CUTSCENE_DURATION = 3
 local ENCOUNTER_PHASE_CAMERA_TWEEN_DURATION = ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION
@@ -167,7 +174,7 @@ local LOBBY_MARKER_SIZE = 0.06
 local LOBBY_MARKER_Y_OFFSET = 3
 
 -- Color override for the DungeonDone particles fired on the encounter-approach
--- gate (miniboss / boss). Passed to DungeonService:_emitDungeonDoneEffect so
+-- gate (miniboss / boss). Passed to DungeonService:EmitDungeonDoneEffect so
 -- that specific gate's celebration plays in encounter purple instead of the
 -- prefab-authored color.
 local ENCOUNTER_GATE_PARTICLE_COLOR = Color3.fromRGB(170, 85, 255)
@@ -232,6 +239,11 @@ EncounterService.OnEncounterIntroEnded = Signal.new() -- (kind: EncounterKind, r
 EncounterService._floorGeneration = 0
 EncounterService._cutsceneDepth = 0
 EncounterService._cutsceneMob = nil :: Model?
+-- The InvulnerabilityService windows the open cutscene holds: one per
+-- player character (opened by every _beginCutscene, all closed by the last
+-- _endCutscene) and the encounter mob's.
+EncounterService._cutsceneWindows = {} :: { InvulnerabilityService.WindowHandle }
+EncounterService._cutsceneMobWindow = nil :: InvulnerabilityService.WindowHandle?
 
 EncounterService._activeEncounter = nil :: {
 	kind: EncounterKind,
@@ -259,18 +271,19 @@ EncounterService._activeLobby = nil :: {
 -- Pulls the mob asset name for a kind from the active dungeon's config.
 -- Returns nil if no dungeon is active or the kind isn't configured.
 function EncounterService._getMobNameForKind(_self: typeof(EncounterService), kind: EncounterKind): string?
-	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
+	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
 	if not dungeon then
 		return nil
 	end
-	local config = DungeonData[dungeon.id]
-	if not config then
+	-- The FLOOR's row (DungeonData floors[n], merged over floor 1).
+	local content = dungeonContent.FloorContent(dungeon.id, DungeonService:GetFloor())
+	if not content then
 		return nil
 	end
 	if kind == ROOM_TYPES.Miniboss then
-		return config.miniboss
+		return content.miniboss
 	elseif kind == ROOM_TYPES.Boss then
-		return config.boss
+		return content.boss
 	end
 	return nil
 end
@@ -395,7 +408,7 @@ function EncounterService._countPlayersOnLobbyPad(
 		end
 		-- Run loop: a player who walked into the ExitPortal is out of the
 		-- count (they're leaving / gone), so the vote can complete without them.
-		if getDungeonService() and getDungeonService():IsPlayerExited(player) then
+		if DungeonService and DungeonService:IsPlayerExited(player) then
 			continue
 		end
 		totalAlive += 1
@@ -484,15 +497,15 @@ function EncounterService._onLobbyExpired(self: typeof(EncounterService))
 	-- Run-loop vote: no fight -- hand off to DungeonService for the
 	-- fade / teardown / next-dungeon generation.
 	if kind == NEXT_DUNGEON_KIND then
-		if getDungeonService() then
-			getDungeonService():AdvanceRun()
+		if DungeonService then
+			DungeonService:AdvanceRun()
 		end
 		return
 	end
 
-	if getDungeonService() then
+	if DungeonService then
 		for _, p in Players:GetPlayers() do
-			getDungeonService():SetPlayerRoom(p, room.id)
+			DungeonService:SetPlayerRoom(p, room.id)
 		end
 	end
 
@@ -531,21 +544,21 @@ function EncounterService._startLobby(
 	}
 	self._activeLobby = lobby
 
-	if getDungeonService() then
-		getDungeonService():_destroyNextGateMarker()
+	if DungeonService then
+		DungeonService:DestroyNextGateMarker()
 
 		-- Lobby-trigger celebration: play the DungeonDone particles + Unlock
 		-- sound on the cleared room's exit gate (the gate the players just
 		-- walked up to). Same FX used for normal segment opens, just fired
 		-- here at queue-start instead of at gate-open, and tinted encounter
 		-- purple to visually mark the approach gate.
-		local dungeon = getDungeonService():GetActiveDungeon()
+		local dungeon = DungeonService:GetActiveDungeon()
 
 		-- (Vote lobbies sit IN the boss room; the boss branch already fired
 		-- the dungeon-done effect there, so only encounter lobbies celebrate.)
 		local clearedRoom = kind ~= NEXT_DUNGEON_KIND and dungeon and dungeon.rooms[room.id - 1] or nil
 		if clearedRoom then
-			getDungeonService():_emitDungeonDoneEffect(clearedRoom.model, ENCOUNTER_GATE_PARTICLE_COLOR)
+			DungeonService:EmitDungeonDoneEffect(clearedRoom.model, ENCOUNTER_GATE_PARTICLE_COLOR)
 		end
 	end
 
@@ -634,34 +647,43 @@ function EncounterService.IsCutsceneActive(self: typeof(EncounterService)): bool
 	return self._cutsceneDepth > 0
 end
 
--- Direct writes, not InvulnerabilityService: the window is the cutscene's
--- own length, opened and closed by the same depth counter. The REASON
--- rides along so every client (teammates' screens included) leaves the
--- white invulnerable highlight off for the cinematic. Written before the
--- flag on open and cleared after it on close, so a client reacting to
--- Invulnerable never reads a stale reason.
-local function setCharactersInvulnerable(invulnerable: boolean)
+-- Through InvulnerabilityService, never a direct attribute write: each
+-- cutscene opens a "Cutscene" WINDOW on every player character (and the
+-- encounter mob) and closes exactly those windows when it ends. The
+-- service unions the open windows, so a revive grace or a Jetpack flight
+-- that overlaps the cinematic keeps its own protection when the cutscene
+-- closes -- the old direct `Invulnerable = false` on every character
+-- clobbered them. The "Cutscene" reason is what keeps the white
+-- invulnerable highlight off on every client for the cinematic.
+type WindowHandle = InvulnerabilityService.WindowHandle
+
+-- Opens a cutscene window on every player character, appending the
+-- handles to `into` (the caller closes them).
+local function openCharacterWindows(into: { WindowHandle })
 	for _, player in Players:GetPlayers() do
 		local character = player.Character
 		if character then
-			if invulnerable then
-				character:SetAttribute(Attributes.InvulnerableReason, "Cutscene")
-			end
-			character:SetAttribute(Attributes.Invulnerable, invulnerable)
-			if not invulnerable then
-				character:SetAttribute(Attributes.InvulnerableReason, nil)
+			local handle = InvulnerabilityService:OpenWindow(character, "Cutscene")
+			if handle then
+				table.insert(into, handle)
 			end
 		end
 	end
 end
 
+local function closeWindows(handles: { WindowHandle })
+	for _, handle in handles do
+		InvulnerabilityService:CloseWindow(handle)
+	end
+	table.clear(handles)
+end
+
 -- Opens a cutscene window: players (and `mob`, if given) become invulnerable.
 function EncounterService._beginCutscene(self: typeof(EncounterService), mob: Model?)
 	self._cutsceneDepth += 1
-	setCharactersInvulnerable(true)
+	openCharacterWindows(self._cutsceneWindows)
 	if mob then
-		self._cutsceneMob = mob
-		mob:SetAttribute(Attributes.Invulnerable, true)
+		self:_addCutsceneMob(mob)
 	end
 end
 
@@ -670,22 +692,23 @@ function EncounterService._addCutsceneMob(self: typeof(EncounterService), mob: M
 	if not mob or self._cutsceneDepth <= 0 then
 		return
 	end
+	-- One mob window at a time: a previous mob's (a failed spawn's) closes.
+	InvulnerabilityService:CloseWindow(self._cutsceneMobWindow)
 	self._cutsceneMob = mob
-	mob:SetAttribute(Attributes.Invulnerable, true)
+	self._cutsceneMobWindow = InvulnerabilityService:OpenWindow(mob, "Cutscene")
 end
 
--- Closes a window; the LAST close releases everyone.
+-- Closes a window; the LAST close releases everyone -- from the cutscene
+-- windows only, never from anything else they earned meanwhile.
 function EncounterService._endCutscene(self: typeof(EncounterService))
 	self._cutsceneDepth = math.max(0, self._cutsceneDepth - 1)
 	if self._cutsceneDepth > 0 then
 		return
 	end
-	setCharactersInvulnerable(false)
-	local mob = self._cutsceneMob
+	closeWindows(self._cutsceneWindows)
 	self._cutsceneMob = nil
-	if mob and mob.Parent then
-		mob:SetAttribute(Attributes.Invulnerable, false)
-	end
+	InvulnerabilityService:CloseWindow(self._cutsceneMobWindow)
+	self._cutsceneMobWindow = nil
 end
 
 function EncounterService._startFight(
@@ -694,7 +717,7 @@ function EncounterService._startFight(
 	room: Room,
 	gateCFrame: CFrame
 )
-	if not room or not room.model or not ZombieSpawnService then
+	if not room or not room.model or not MobSpawnService then
 		return
 	end
 
@@ -704,8 +727,8 @@ function EncounterService._startFight(
 		return
 	end
 
-	if getDungeonService() then
-		getDungeonService():_destroyNextGateMarker()
+	if DungeonService then
+		DungeonService:DestroyNextGateMarker()
 	end
 
 	-- Gate convention in the project's prefabs: gateCFrame.LookVector points
@@ -800,7 +823,7 @@ function EncounterService._startFight(
 
 		task.wait(1)
 
-		local mob = ZombieSpawnService:SpawnMinibossInRoom(room, mobName, kind == ROOM_TYPES.Boss)
+		local mob = MobSpawnService:SpawnMinibossInRoom(room, mobName, kind == ROOM_TYPES.Boss)
 		self:_addCutsceneMob(mob)
 		if not mob then
 			warn(("[EncounterService] Failed to spawn %s '%s' in room %s"):format(kind, mobName, room.model.Name))
@@ -808,8 +831,8 @@ function EncounterService._startFight(
 			DungeonNetwork.EncounterIntroFade.FireAll({ Phase = "out", Duration = ENCOUNTER_INTRO_FADE_DURATION })
 			DungeonNetwork.EncounterIntroEnd.FireAll()
 			self:_endCutscene()
-			if getDungeonService() then
-				getDungeonService():_updateNextGateMarker()
+			if DungeonService then
+				DungeonService:UpdateNextGateMarker()
 			end
 			return
 		end
@@ -882,7 +905,7 @@ function EncounterService._startFight(
 			local healthData: EncounterData = {
 				kind = kind,
 				name = mobName,
-				level = ENCOUNTER_LEVEL_PLACEHOLDER,
+				level = encounterLevel(),
 				currentHP = newHealth,
 				maxHP = humanoid.MaxHealth,
 			}
@@ -916,7 +939,7 @@ function EncounterService._startFight(
 		local revealData: EncounterData = {
 			kind = kind,
 			name = mobName,
-			level = ENCOUNTER_LEVEL_PLACEHOLDER,
+			level = encounterLevel(),
 			currentHP = humanoid.Health,
 			maxHP = humanoid.MaxHealth,
 		}
@@ -933,7 +956,7 @@ function EncounterService._startFight(
 
 		-- Defensive: skip starting waves if the mob died during the cinematic.
 		if humanoid.Health > 0 then
-			ZombieSpawnService:StartMinibossWaves(room)
+			MobSpawnService:StartMinibossWaves(room)
 		end
 	end)
 end
@@ -947,7 +970,7 @@ end
 -- despawn, gate open) proceeds in parallel — those happen "off-camera" while
 -- the player watches the boss, and are there when the camera returns. `mob` is
 -- captured by the caller BEFORE _activeEncounter is cleared; it may already be
--- in the dead-zombie folder but its HumanoidRootPart still exists, which is all
+-- in the dead-mob folder but its HumanoidRootPart still exists, which is all
 -- the camera needs as an origin part. When the cinematic finishes it releases
 -- the held rewards (coins + gear + vending machine) via _dropEncounterRewards.
 function EncounterService._playOutroCinematic(
@@ -1033,21 +1056,21 @@ function EncounterService._openEncounterGate(_self: typeof(EncounterService), ro
 	-- ACTIVE dungeon is exact: a stale room can never match, and a live
 	-- one always does. Cheaper and stricter than comparing ids, which are
 	-- reused floor to floor.
-	if not getDungeonService() or not room then
+	if not DungeonService or not room then
 		return
 	end
-	local dungeon = getDungeonService():GetActiveDungeon()
+	local dungeon = DungeonService:GetActiveDungeon()
 	local roomsById = dungeon and dungeon.roomsById
 	if not roomsById or roomsById[room.id] ~= room then
 		return
 	end
 
-	getDungeonService():OpenSegmentGate(room.segmentId, true, {
+	DungeonService:OpenSegmentGate(room.segmentId, true, {
 		seconds = ENCOUNTER_GATE_WAIT_SECONDS,
 		openDelaySeconds = ENCOUNTER_GATE_OPEN_DELAY_SECONDS,
 		-- Early open: every living player has opened their chest.
 		isDone = function(player: Player): boolean
-			return chestService == nil or chestService:HasPlayerOpenedChest(player)
+			return EncounterChestService == nil or EncounterChestService:HasPlayerOpenedChest(player)
 		end,
 	})
 end
@@ -1075,12 +1098,12 @@ function EncounterService._dropEncounterRewards(
 	task.wait(CHEST_DROP_DELAY_SECONDS)
 
 	local enemyType = if kind == ROOM_TYPES.Boss then EnemyTypes.Boss else EnemyTypes.Miniboss
-	if chestService then
+	if EncounterChestService then
 		-- onAllOpened still funnels into _openEncounterGate (idempotent):
 		-- for the Boss it is the "everyone opened" early edge of the timer
 		-- below; for a Miniboss the running gate cycle already handles the
 		-- early open and this is a no-op.
-		chestService:DropChestsForEncounter(enemyType, mob, function()
+		EncounterChestService:DropChestsForEncounter(enemyType, mob, function()
 			self:_openEncounterGate(room)
 		end)
 
@@ -1113,7 +1136,7 @@ end
 -- the sequence's final room). Gates the vending-machine drop off the
 -- dungeon-ending encounter.
 function EncounterService._isLastRoomInSequence(_self: typeof(EncounterService), room: Room): boolean
-	local dungeon = getDungeonService() and getDungeonService():GetActiveDungeon()
+	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
 	if not dungeon or not dungeon.rooms or not room then
 		return false
 	end
@@ -1122,7 +1145,7 @@ function EncounterService._isLastRoomInSequence(_self: typeof(EncounterService),
 end
 
 function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: EncounterKind, room: Room)
-	if not room or not ZombieSpawnService then
+	if not room or not MobSpawnService then
 		return
 	end
 
@@ -1131,14 +1154,20 @@ function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: E
 	-- + vending machine) when it finishes, via _dropEncounterRewards.
 	self:_playOutroCinematic(kind, room, mob)
 
-	ZombieSpawnService:StopMinibossWaves(room)
-	ZombieSpawnService:DespawnZombiesInRoom(room)
+	MobSpawnService:StopMinibossWaves(room)
+	MobSpawnService:DespawnMobsInRoom(room)
 
 	self._dataProperty:Set(nil)
 
-	if getDungeonService() then
-		getDungeonService():_emitDungeonDoneEffect(room.model)
-		getDungeonService():_updateNextGateMarker()
+	if DungeonService then
+		-- The final floor's boss: the run is WON here, so the next-gate
+		-- marker below is destroyed rather than re-placed on the ExitGate
+		-- (the players have completed the dungeon; the portal is the way out).
+		if kind == ROOM_TYPES.Boss and DungeonService:IsFinalDungeon() then
+			DungeonService:MarkRunCleared()
+		end
+		DungeonService:EmitDungeonDoneEffect(room.model)
+		DungeonService:UpdateNextGateMarker()
 
 		-- The gate NO LONGER opens on the kill. It opens once every player
 		-- has opened their reward chest (wired in _dropEncounterRewards),
@@ -1199,21 +1228,15 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	self:_beginCutscene(mob)
 
 	-- Players invulnerable for the cutscene (controls are locked anyway; this
-	-- also nullifies any boss attack still in flight).
-	local frozenCharacters = {}
-	for _, player in Players:GetPlayers() do
-		local character = player.Character
-		if character then
-			character:SetAttribute(Attributes.InvulnerableReason, "Cutscene")
-			character:SetAttribute(Attributes.Invulnerable, true)
-			table.insert(frozenCharacters, character)
-		end
-	end
+	-- also nullifies any boss attack still in flight). Windows of this
+	-- cutscene's own, closed at its end.
+	local phaseWindows: { WindowHandle } = {}
+	openCharacterWindows(phaseWindows)
 
 	-- Freeze the boss. Enabled=false idles its AI loop; WalkSpeed/AutoRotate
 	-- pin it in place; anims stop; Invulnerable shields it.
 	mob:SetAttribute(Attributes.Enabled, false)
-	mob:SetAttribute(Attributes.Invulnerable, true)
+	local phaseMobWindow = InvulnerabilityService:OpenWindow(mob, "Cutscene")
 	if humanoid then
 		humanoid.WalkSpeed = 0
 		humanoid.AutoRotate = false
@@ -1227,9 +1250,9 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	-- Clean slate: instakill every OTHER live mob in the room, and freeze the
 	-- wave spawner so no new adds appear (or finish appearing) during the
 	-- cutscene. Resumed at the end.
-	if room and ZombieSpawnService then
-		ZombieSpawnService:PauseMinibossWaves(room)
-		ZombieSpawnService:DespawnZombiesInRoom(room, mob)
+	if room and MobSpawnService then
+		MobSpawnService:PauseMinibossWaves(room)
+		MobSpawnService:DespawnMobsInRoom(room, mob)
 	end
 
 	-- Pan the camera onto the boss.
@@ -1264,24 +1287,19 @@ function EncounterService.PlayPhaseCutscene(self: typeof(EncounterService), mob:
 	-- Un-freeze the boss (WalkSpeed is restored by the boss's _enterChase
 	-- once this returns).
 	mob:SetAttribute(Attributes.Enabled, true)
-	mob:SetAttribute(Attributes.Invulnerable, false)
+	InvulnerabilityService:CloseWindow(phaseMobWindow)
 	if humanoid then
 		humanoid.AutoRotate = true
 	end
 
-	-- Clear player invulnerability + release controls.
-	for _, character in frozenCharacters do
-		if character.Parent then
-			character:SetAttribute(Attributes.Invulnerable, false)
-			character:SetAttribute(Attributes.InvulnerableReason, nil)
-		end
-	end
+	-- Close this cutscene's player windows + release controls.
+	closeWindows(phaseWindows)
 	self:_endCutscene()
 	DungeonNetwork.EncounterPhaseEnd.FireAll()
 
 	-- Resume the wave spawner for the (harder) new phase.
-	if room and ZombieSpawnService then
-		ZombieSpawnService:ResumeMinibossWaves(room)
+	if room and MobSpawnService then
+		MobSpawnService:ResumeMinibossWaves(room)
 	end
 end
 
@@ -1293,16 +1311,23 @@ end
 -- client-side from `label`).
 function EncounterService._lobbyLabel(_self: typeof(EncounterService), kind: string): string
 	if kind == NEXT_DUNGEON_KIND then
+		-- Floors of one dungeon (the normal run): "Descend to Floor N".
+		-- A chain of different dungeons would read "Next Dungeon".
+		local run = DungeonService:GetRun()
+		local nextId = run and run.sequence[run.index + 1]
+		if run and nextId == run.sequence[run.index] then
+			return ("Descend to Floor %d"):format(DungeonService:GetFloor() + 1)
+		end
 		return "Next Dungeon"
 	end
 	return kind .. " Room"
 end
 
--- Run-loop VOTE after a non-final boss: the encounter-lobby pad + timers,
--- placed in front of the boss room's exit gate. Standing on it = voting to
--- descend; expiry (30s, or 3s once everyone remaining is on) ->
--- DungeonService:AdvanceRun. Players who take the ExitPortal are excluded
--- from the required count.
+-- The DESCEND pad after a non-final floor's boss: the encounter-lobby pad
+-- + timers, placed in front of the boss room's exit gate. Standing on it =
+-- ready to descend; expiry (30s, or 3s once everyone remaining is on) ->
+-- DungeonService:AdvanceRun, which tears the floor down and generates the
+-- next one. There is no portal mid-run (no extraction).
 function EncounterService.StartNextDungeonVote(self: typeof(EncounterService), room: Room, gateCFrame: CFrame)
 	self:_startLobby(NEXT_DUNGEON_KIND, room, gateCFrame)
 end
@@ -1320,9 +1345,28 @@ function EncounterService.StartEncounter(
 	self:_startLobby(kind, room, gateCFrame)
 end
 
--- Tear down any in-flight lobby + clear the encounter HUD. Called by
--- DungeonService when the dungeon regenerates so a mid-encounter regen
--- doesn't leave a phantom pad / HUD.
+-- True while a pre-fight lobby (or the next-dungeon vote) is running.
+function EncounterService.IsLobbyActive(self: typeof(EncounterService)): boolean
+	return self._activeLobby ~= nil
+end
+
+-- Publishes `data` (nil = clear) through the replicated lobby property the
+-- encounter HUD draws -- for a system that wants the same countdown widget
+-- outside an encounter lobby (CoffinEventService's challenge tally).
+-- Refused while a real lobby is running: its ticker owns the property and
+-- would fight the caller for it. Returns whether it was published.
+function EncounterService.PublishLobbyData(self: typeof(EncounterService), data: EncounterLobbyData?): boolean
+	if self._activeLobby ~= nil then
+		return false
+	end
+	self._lobbyProperty:Set(data)
+	return true
+end
+
+-- Tear down any in-flight lobby + clear the encounter HUD. Runs on every
+-- floor teardown (DungeonService.Signals.OnFloorTeardown) and again when a
+-- floor is wired, so a mid-encounter regen doesn't leave a phantom pad /
+-- HUD.
 function EncounterService.CleanupAll(self: typeof(EncounterService))
 	-- Invalidate everything the last floor scheduled (see _floorGeneration).
 	self._floorGeneration += 1
@@ -1335,5 +1379,13 @@ function EncounterService.CleanupAll(self: typeof(EncounterService))
 end
 
 --[ Initializers ]--
+
+function EncounterService.Start(self: typeof(EncounterService))
+	-- The floor is going: every lobby, encounter and floor-scheduled timer
+	-- with it (see _floorGeneration).
+	DungeonService.Signals.OnFloorTeardown:Connect(function()
+		self:CleanupAll()
+	end)
+end
 
 return EncounterService

@@ -7,7 +7,7 @@
 
                   Hit accounting:
                     - Weapon hit (melee or projectile) = 1 count, breaks at 5
-                    - Magic spell hit = instant break
+                    - Arcane spell hit = instant break
 
                   Break effect mirrors VFXService's Destructable path:
                   darken color, reparent + unanchor for physics, outward
@@ -67,7 +67,7 @@ function Breakable:_applyBreakImpulse(part: BasePart)
 
 	-- Per-part random horizontal direction with a fixed upward kick. Decoupled
 	-- from the hit origin so the explosion strength is constant regardless of
-	-- how close the attacker was or whether they used melee, ranged, or magic.
+	-- how close the attacker was or whether they used melee, ranged, or arcane.
 	local angle = math.random() * math.pi * 2
 	local direction = Vector3.new(math.cos(angle), UPWARD_KICK, math.sin(angle))
 	local mass = part.AssemblyMass
@@ -122,7 +122,7 @@ function Breakable:_break(_origin: Vector3?, _player: Player?)
 		end
 	end
 
-	self.Instance.Parent = workspace.IgnoreInstances.MagicSpells
+	self.Instance.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	for _, part in pieces do
 		self:_applyBreakImpulse(part)
@@ -136,7 +136,7 @@ end
 
 --[ Public Functions ]--
 
--- Register a hit on this breakable. Magic hits break instantly; weapon hits
+-- Register a hit on this breakable. Arcane hits break instantly; weapon hits
 -- accumulate up to MAX_WEAPON_HITS. `origin` is the world position of the
 -- attacker / spell (used to compute outward impulse direction).
 -- `hitPosition` is where the weapon actually met the model, for the
@@ -158,7 +158,7 @@ function Breakable:Hit(isMagic: boolean, isMelee: boolean, origin: Vector3, play
 	self._hitCount += if isMelee then 1 else 0.5
 
 	-- `isMelee` rides along so the client can pick its impact feedback: a
-	-- bullet already draws its own BulletImpact where it landed. Magic
+	-- bullet already draws its own BulletImpact where it landed. Arcane
 	-- never reaches here -- it broke the model above.
 	Combat.BreakableDamaged.FireAll({
 		Breakable = self.Instance,

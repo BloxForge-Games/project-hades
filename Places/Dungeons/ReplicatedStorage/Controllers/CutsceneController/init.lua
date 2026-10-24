@@ -19,9 +19,9 @@ local CinematicInterfaceController =
 local IsometricCameraController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.IsometricCameraController)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local AmbientGradientInterfaceController = require(ReplicatedStorage.Interfaces.AmbientGradientInterfaceController)
-local ZombieController = require(ReplicatedStorage.Controllers.ZombieController)
+local MobController = require(ReplicatedStorage.Controllers.MobController)
 
 local CutsceneController = {
 	Name = "CutsceneController",
@@ -29,11 +29,11 @@ local CutsceneController = {
 		CinematicInterfaceController,
 		IsometricCameraController,
 		AmbientGradientInterfaceController,
-		ZombieController,
+		MobController,
 	} :: { any },
-	-- Magic-cutscene exposure drop: nesting depth and the value to restore.
-	_magicExposureDepth = 0 :: number,
-	_magicExposureBase = 0 :: number,
+	-- Arcane-cutscene exposure drop: nesting depth and the value to restore.
+	_arcaneExposureDepth = 0 :: number,
+	_arcaneExposureBase = 0 :: number,
 }
 
 --[ Constants ]--
@@ -42,13 +42,13 @@ local BOB_OFFSET_STRENGTH = 0.25
 local BOB_ROLL_STRENGTH = 1.5
 local BOB_SPEED = 0.5
 
--- A magic entry that opts in (MagicData.cutscene.enabled) without giving
+-- A arcane entry that opts in (ArcaneData.cutscene.enabled) without giving
 -- a duration gets this.
--- How long past a magic cutscene's own length a repeat request for the
--- SAME magic is treated as the same cast (see PlayMagicCutscene).
-local MAGIC_CUTSCENE_GUARD_EXTRA_SECONDS = 1
+-- How long past a arcane cutscene's own length a repeat request for the
+-- SAME arcane is treated as the same cast (see PlayArcaneCutscene).
+local ARCANE_CUTSCENE_GUARD_EXTRA_SECONDS = 1
 
-local DEFAULT_MAGIC_CUTSCENE_SECONDS = 2
+local DEFAULT_ARCANE_CUTSCENE_SECONDS = 2
 
 -- Animation names belonging to cutscene abilities (Susanoo, Domain Expansion,
 -- etc.). CancelActiveAbility stops any of these currently playing on the
@@ -76,9 +76,9 @@ CutsceneController._bobTime = 0
 -- cutscene to :Stop. nil when no cutscene is running.
 CutsceneController._activeCutscene = nil :: any
 
--- PlayMagicCutscene's per-magic guard: [magicName] = os.clock() deadline
--- until which a repeat request for the same magic is the same cast.
-CutsceneController._magicCutsceneGuard = nil :: { [string]: number }?
+-- PlayArcaneCutscene's per-arcane guard: [arcaneName] = os.clock() deadline
+-- until which a repeat request for the same arcane is the same cast.
+CutsceneController._arcaneCutsceneGuard = nil :: { [string]: number }?
 
 -- Set by CancelActive(preserveLock=true). When true, PlayCutscene's cleanup
 -- skips releasing CutscenePlaying / firing OnCinematicEnd, so the entity that
@@ -134,44 +134,6 @@ function CutsceneController._stopCinematicBob(self: typeof(CutsceneController))
 end
 
 --[ Public Functions ]--
-
-function CutsceneController.Shake(self: typeof(CutsceneController), strength: number, speed: number, duration: number)
-	self._shakeTime = 0
-	self._shakeStrength = strength
-	self._shakeSpeed = speed
-	self._currentShakeOffset = CFrame.new()
-
-	local SMOOTHNESS = 15 -- higher = smoother
-
-	local shakeConnection
-
-	shakeConnection = RunService.RenderStepped:Connect(function(dt)
-		self._shakeTime += dt
-
-		local camera = workspace.CurrentCamera
-		local baseCFrame = camera.CFrame
-
-		local t = self._shakeTime * self._shakeSpeed
-
-		local offsetX = math.noise(t, 1, 0) * self._shakeStrength
-		local offsetY = math.noise(0, t, 1) * self._shakeStrength
-		local roll = math.noise(1, 0, t) * self._shakeStrength * 2
-
-		local targetOffset = CFrame.new(offsetX, offsetY, 0) * CFrame.Angles(0, 0, math.rad(roll))
-
-		-- Smooth interpolation
-		self._currentShakeOffset = self._currentShakeOffset:Lerp(targetOffset, dt * SMOOTHNESS)
-
-		camera.CFrame = baseCFrame * self._currentShakeOffset
-	end)
-
-	task.delay(duration, function()
-		if shakeConnection then
-			shakeConnection:Disconnect()
-			shakeConnection = nil
-		end
-	end)
-end
 
 function CutsceneController.PlayCutscene(self: typeof(CutsceneController), cutsceneName: string)
 	local cutscene = self._cutscenes[cutsceneName]
@@ -249,7 +211,7 @@ local function newCinematicBeat(duration: number)
 	return beat
 end
 
--- The cast cutscene for a magic that opts in through MagicData.cutscene
+-- The cast cutscene for a arcane that opts in through ArcaneData.cutscene
 -- ({ enabled, duration, path }) — the ONE entry point for both kinds, so
 -- a caster's invulnerability window (VFXService reads the same index)
 -- cannot disagree with what actually plays.
@@ -263,82 +225,82 @@ end
 --
 -- Ownership and unlock rules are PlayCutscene's, verbatim — an external
 -- owner of the lock (an encounter intro) keeps it, and CancelActive(true)
--- leaves it held on exit. No-op for magic without the index.
+-- leaves it held on exit. No-op for arcane without the index.
 --
--- Either branch also raises Attributes.MagicCutscenePlaying for its whole
+-- Either branch also raises Attributes.ArcaneCutscenePlaying for its whole
 -- length: that is what empties the world of billboards
 -- (CutsceneBillboardController) and swallows damage / text indicators, and
 -- it is deliberately NOT CutscenePlaying, which every other cinematic
 -- takes and which dresses the screen differently. Over the same window
 -- every mob is held semi-transparent on this client
--- (ZombieController.SetCutsceneDim), bracketed here rather than keyed off
+-- (MobController.SetCutsceneDim), bracketed here rather than keyed off
 -- the attribute so the dim is reference-counted across an overlap.
--- Magic cutscenes darken the frame a touch: Lighting.ExposureCompensation
+-- Arcane cutscenes darken the frame a touch: Lighting.ExposureCompensation
 -- drops by this much for the cutscene's length (client-local, so only the
 -- caster sees it). Reference-counted like the mob dim, so overlapping casts
 -- apply it once and the LAST one to end restores the value that was there.
-local MAGIC_CUTSCENE_EXPOSURE_DROP = 0.1
+local ARCANE_CUTSCENE_EXPOSURE_DROP = 0.1
 
-function CutsceneController._setMagicExposure(self: typeof(CutsceneController), active: boolean)
+function CutsceneController._setArcaneExposure(self: typeof(CutsceneController), active: boolean)
 	if active then
-		self._magicExposureDepth += 1
-		if self._magicExposureDepth == 1 then
-			self._magicExposureBase = Lighting.ExposureCompensation
-			Lighting.ExposureCompensation = self._magicExposureBase - MAGIC_CUTSCENE_EXPOSURE_DROP
+		self._arcaneExposureDepth += 1
+		if self._arcaneExposureDepth == 1 then
+			self._arcaneExposureBase = Lighting.ExposureCompensation
+			Lighting.ExposureCompensation = self._arcaneExposureBase - ARCANE_CUTSCENE_EXPOSURE_DROP
 		end
 		return
 	end
-	if self._magicExposureDepth == 0 then
+	if self._arcaneExposureDepth == 0 then
 		return
 	end
-	self._magicExposureDepth -= 1
-	if self._magicExposureDepth == 0 then
-		Lighting.ExposureCompensation = self._magicExposureBase
+	self._arcaneExposureDepth -= 1
+	if self._arcaneExposureDepth == 0 then
+		Lighting.ExposureCompensation = self._arcaneExposureBase
 	end
 end
 
-function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), magicName: string)
-	local data = MagicData[magicName]
+function CutsceneController.PlayArcaneCutscene(self: typeof(CutsceneController), arcaneName: string)
+	local data = ArcaneData[arcaneName]
 	local config = data and data.cutscene
 	if not config or config.enabled ~= true then
 		return
 	end
 
 	-- ONE cutscene per cast. The caster starts this LOCALLY the moment they
-	-- cast (MagicController, so the cinematic is not held for a server
+	-- cast (ArcaneController, so the cinematic is not held for a server
 	-- round trip), and the effect module asks again when the cast
 	-- replicates back -- the second ask must no-op. The guard window is the
-	-- cutscene's own length plus a beat, far below any cutscene magic's
+	-- cutscene's own length plus a beat, far below any cutscene arcane's
 	-- cooldown, so a legitimate re-cast is never swallowed.
 	local now = os.clock()
-	local guardUntil = self._magicCutsceneGuard and self._magicCutsceneGuard[magicName]
+	local guardUntil = self._arcaneCutsceneGuard and self._arcaneCutsceneGuard[arcaneName]
 	local guardWindow = (
-		if typeof(config.duration) == "number" then config.duration else DEFAULT_MAGIC_CUTSCENE_SECONDS
-	) + MAGIC_CUTSCENE_GUARD_EXTRA_SECONDS
+		if typeof(config.duration) == "number" then config.duration else DEFAULT_ARCANE_CUTSCENE_SECONDS
+	) + ARCANE_CUTSCENE_GUARD_EXTRA_SECONDS
 	if guardUntil and now < guardUntil then
 		return
 	end
-	local guard = self._magicCutsceneGuard or {}
-	self._magicCutsceneGuard = guard
-	guard[magicName] = now + guardWindow
+	local guard = self._arcaneCutsceneGuard or {}
+	self._arcaneCutsceneGuard = guard
+	guard[arcaneName] = now + guardWindow
 
 	local character = Players.LocalPlayer.Character
 	if not character then
 		return
 	end
 
-	character:SetAttribute(Attributes.MagicCutscenePlaying, true)
-	ZombieController:SetCutsceneDim(true)
-	self:_setMagicExposure(true)
+	character:SetAttribute(Attributes.ArcaneCutscenePlaying, true)
+	MobController:SetCutsceneDim(true)
+	self:_setArcaneExposure(true)
 	if typeof(config.path) == "string" then
 		-- PlayCutscene yields for the whole camera path.
 		self:PlayCutscene(config.path)
-		ZombieController:SetCutsceneDim(false)
-		self:_setMagicExposure(false)
-		character:SetAttribute(Attributes.MagicCutscenePlaying, false)
+		MobController:SetCutsceneDim(false)
+		self:_setArcaneExposure(false)
+		character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 		return
 	end
-	local duration = if typeof(config.duration) == "number" then config.duration else DEFAULT_MAGIC_CUTSCENE_SECONDS
+	local duration = if typeof(config.duration) == "number" then config.duration else DEFAULT_ARCANE_CUTSCENE_SECONDS
 
 	local externallyOwned = character:GetAttribute(Attributes.CutscenePlaying) == true
 	if not externallyOwned then
@@ -359,9 +321,9 @@ function CutsceneController.PlayMagicCutscene(self: typeof(CutsceneController), 
 		character:SetAttribute(Attributes.CutscenePlaying, false)
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
-	ZombieController:SetCutsceneDim(false)
-	self:_setMagicExposure(false)
-	character:SetAttribute(Attributes.MagicCutscenePlaying, false)
+	MobController:SetCutsceneDim(false)
+	self:_setArcaneExposure(false)
+	character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 end
 
 -- Cancels whatever cutscene is currently inside PlayCutscene's yield. No-op
@@ -440,7 +402,7 @@ function CutsceneController.Start(self: typeof(CutsceneController))
 	Players.LocalPlayer.Character:SetAttribute(Attributes.CutscenePlaying, false)
 	-- The world UI comes back with it: a hard clear must not leave the
 	-- screen stripped of billboards and swallowing indicators.
-	Players.LocalPlayer.Character:SetAttribute(Attributes.MagicCutscenePlaying, false)
+	Players.LocalPlayer.Character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 end
 
 return CutsceneController

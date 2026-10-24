@@ -29,8 +29,8 @@ local function getStatusConditionService(): any
 	end
 	return statusConditionServiceLazy
 end
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
@@ -104,7 +104,7 @@ function GhostDragon.InvokeGhostDragon(self: GhostDragonFields)
 	local baseDamage = math.round(ratePerLevel * getPlayerLevel(self._player))
 
 	self._vfxService:CreateHitbox(
-		MagicNames["Ghost Dragon"],
+		ArcaneNames["Ghost Dragon"],
 		self._player,
 		(character:FindFirstChild("HumanoidRootPart") :: BasePart).CFrame,
 		TagList.Zombie,
@@ -116,17 +116,17 @@ function GhostDragon.InvokeGhostDragon(self: GhostDragonFields)
 			end
 
 			-- UNTYPED relic lane: amplified by unqualified Damage bonuses
-			-- (was the raw path with a magic flag — neither was right).
+			-- (was the raw path with a arcane flag — neither was right).
 			getDamageService():TakeDamage(self._player, mobHumanoid, baseDamage, false, false, false, true, true)
 
-			-- Ghost Dragon damage IS relic magic damage, so each aura tick
-			-- rolls the magic-hit applier hub per mob (the status Epics'
-			-- "+10% on all damage" rows and the magic-side Rares). Status
+			-- Ghost Dragon damage IS relic arcane damage, so each aura tick
+			-- rolls the arcane-hit applier hub per mob (the status Epics'
+			-- "+10% on all damage" rows and the arcane-side Rares). Status
 			-- DoT ticks never route through the hubs — only real damage
 			-- events like this one.
-			getStatusConditionService():ApplyMagicOnHitStatuses(self._player, model)
+			getStatusConditionService():ApplyArcaneOnHitStatuses(self._player, model)
 		end,
-		MagicData[MagicNames["Ghost Dragon"]].hitboxSize.X * HITBOX_SIZE_MULTIPLIER
+		ArcaneData[ArcaneNames["Ghost Dragon"]].hitboxSize.X * HITBOX_SIZE_MULTIPLIER
 	)
 end
 

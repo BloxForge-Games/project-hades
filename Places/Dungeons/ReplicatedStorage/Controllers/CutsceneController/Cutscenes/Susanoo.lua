@@ -36,7 +36,7 @@ SusanooExecutable.CutsceneHashmap = {
 function SusanooExecutable:Play()
 	local waypointModel = ReplicatedStorage.GameAssets.CutsceneWaypoints.SusanooWaypoints:Clone()
 	waypointModel:PivotTo(Players.LocalPlayer.Character.HumanoidRootPart.CFrame)
-	waypointModel.Parent = workspace.IgnoreInstances.MagicSpells
+	waypointModel.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	SusanooExecutable.Enabled = true
 
@@ -86,7 +86,7 @@ function SusanooExecutable:Play()
 	workspace.CurrentCamera.FieldOfView = previousCameraFieldOfView
 
 	-- The waypoint rig is only needed while the tweens read it; without this
-	-- every play left one more clone in MagicSpells.
+	-- every play left one more clone in ArcaneSpells.
 	waypointModel:Destroy()
 end
 

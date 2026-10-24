@@ -12,7 +12,6 @@ local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local RunService = game:GetService("RunService")
-local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
@@ -28,16 +27,14 @@ local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTyp
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
 
 --[ Constants ]--
 
@@ -60,7 +57,7 @@ local LANDING_ATTEMPTS = 6 -- scatter re-rolls before falling back to straight b
 -- Constant regardless of mob size — the previous version added a
 -- fixed Y offset to the mob's HRP, which floated drops way up for
 -- tall mobs (minibosses, bosses sit higher off the ground than
--- normal zombies). _pickLandingPosition raycasts down to the dungeon
+-- normal mobs). _pickLandingPosition raycasts down to the dungeon
 -- floor and stacks LANDING_Y_ABOVE_GROUND on top of the floor hit Y.
 local LANDING_Y_ABOVE_GROUND = 2
 
@@ -130,8 +127,6 @@ local RARITY_TO_PARTICLE: { [string]: string } = {
 	[ItemRarity.Rare] = "RareRelicParticles",
 	[ItemRarity.Epic] = "EpicRelicParticles",
 	[ItemRarity.Legendary] = "LegendaryRelicParticles",
-	[ItemRarity.Mythic] = "LegendaryRelicParticles",
-	[ItemRarity.Shiny] = "LegendaryRelicParticles",
 }
 
 -- Pickup-burst attachment names — match prefabs in
@@ -177,10 +172,11 @@ end
 -- and .perEnemyType sub-tables), or nil if no dungeon is active OR the
 -- difficulty doesn't have one defined.
 function GearDropService._getActiveDropConfig(_self: typeof(GearDropService))
-	if not getDungeonService() then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
 		return nil
 	end
-	local active = getDungeonService():GetActiveDungeon()
+	local active = dungeonService:GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -194,10 +190,11 @@ end
 -- Shape: { [ItemRarity.Common] = N, [ItemRarity.Uncommon] = N, ... }
 -- See DungeonData[id].difficulties[diff].rarityWeights for authoring.
 function GearDropService._getActiveRarityWeights(_self: typeof(GearDropService))
-	if not getDungeonService() then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
 		return nil
 	end
-	local active = getDungeonService():GetActiveDungeon()
+	local active = dungeonService:GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -211,10 +208,11 @@ end
 -- Shape: `{ min = N, max = N }` (named keys, matches DungeonData
 -- authoring convention).
 function GearDropService._getActiveLevelRange(_self: typeof(GearDropService))
-	if not getDungeonService() then
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
 		return nil
 	end
-	local active = getDungeonService():GetActiveDungeon()
+	local active = dungeonService:GetActiveDungeon()
 	if not active then
 		return nil
 	end
@@ -319,7 +317,7 @@ end
 -- ends up exactly LANDING_Y_ABOVE_GROUND above the actual floor. This
 -- replaces the old "origin.Y + fixed offset" approach, which floated
 -- drops way up for tall mobs (the mob's HRP sits ~3 studs above ground
--- for a normal zombie but much higher for minibosses / bosses).
+-- for a normal mob but much higher for minibosses / bosses).
 --
 -- If the raycast misses (room geometry edge case, drop happened outside
 -- of a tagged room, IgnoreInstances.Map.DungeonRooms not present yet)
@@ -878,7 +876,8 @@ function GearDropService._fireSingleDrop(
 	player: Player,
 	originPosition: Vector3,
 	entry: { name: string, type: string, weight: number },
-	fromChest: boolean?
+	fromChest: boolean?,
+	rolledRarity: string?
 ): string?
 	local gearData = self:_getGearData(entry.name, entry.type)
 
@@ -902,11 +901,14 @@ function GearDropService._fireSingleDrop(
 	-- vending-machine relic and gear drops roll the authored weights only.)
 	--
 	--   Applies to both Weapon and Armor drops (the only two GearTypes
-	--   that flow through this service). Magic spells drop via a
+	--   that flow through this service). Arcane spells drop via a
 	--   different path and are unaffected — matches the spec.
 	local rarity
 	if gearData and gearData.rarity then
 		rarity = gearData.rarity
+	elseif rolledRarity then
+		-- DropGear rolled it before choosing the pool (the Legendary gate).
+		rarity = rolledRarity
 	else
 		local weights = self:_getActiveRarityWeights()
 		rarity = rollItemRarity(weights or {}, ItemRarity.Common)
@@ -1002,21 +1004,30 @@ function GearDropService.DropGear(
 	local uuids: { string } = {}
 	for slot = 1, dropCount do
 		if fromChest then
-			-- Yielding is safe here: the only chest caller is
-			-- EncounterChestService:_openChest, which runs inside a
-			-- ProximityPrompt.Triggered handler and so has its own coroutine.
-			-- The coin payout that follows it is delayed by the same total,
-			-- which reads as gear first, then coins.
 			task.wait(CHEST_DROP_STAGGER_SECONDS)
 		end
-		local candidates = table.clone(pool)
+		-- Rarity FIRST, then the pool it selects from: a Legendary roll draws
+		-- from the dungeon's own legendaryPool (its uniques, pinned
+		-- Legendary in their data), never from the common pool -- a
+		-- Legendary Steel Sword cannot exist (GDD). A dungeon with no uniques
+		-- yet downgrades the roll to Epic rather than dropping nothing.
+		local rolledRarity = rollItemRarity(self:_getActiveRarityWeights() or {}, ItemRarity.Common)
+		local slotPool = pool
+		if rolledRarity == ItemRarity.Legendary then
+			if dropConfig.legendaryPool and #dropConfig.legendaryPool > 0 then
+				slotPool = dropConfig.legendaryPool
+			else
+				rolledRarity = ItemRarity.Epic
+			end
+		end
+		local candidates = table.clone(slotPool)
 		local uuid: string? = nil
-		for _ = 1, #pool do
+		for _ = 1, #slotPool do
 			local entry = self:_rollFromPool(candidates)
 			if not entry then
 				break
 			end
-			uuid = self:_fireSingleDrop(player, originPosition, entry, fromChest)
+			uuid = self:_fireSingleDrop(player, originPosition, entry, fromChest, rolledRarity)
 			if uuid then
 				break
 			end

@@ -3,10 +3,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DropService = require(ServerScriptService.Services.DropService)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local ChestCoinData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ChestCoinData)
-local PlaceIdData = require(ReplicatedStorage.Submodules.Core.Shared.Data.PlaceIdData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local getPlaceDungeonId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.getPlaceDungeonId)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local LifeService = require(ServerScriptService.Services.LifeService)
 
@@ -20,21 +22,25 @@ local INTERACT_PROXIMITY_PROMPT_DURATION = 0
 -- for the rest of the floor (a fade-out was tried and removed).
 local OPENED_ATTRIBUTE = "Opened"
 
--- Treasure chests cough up orbs alongside their coins: 1-5 Health and 1-5
--- Mana, both GUARANTEED (a chest is a deliberate, rare reward, so a dud
--- roll would read as a bug). SHARED loot -- the count does NOT scale with
--- party size, matching the chest's coin drop, so a chest stays a fixed
--- prize rather than a per-head payout.
---
--- Value is 1/1 like every mob-dropped orb: the restore is a FRACTION of the
--- collector's max (DropService's pickup branch -- 10% mana, 5% health), so
--- DropValue goes unused for these types. Collector-side relic effects (Gear
--- Recycler's +50% mana, Regeneration Coil's +50% heal, Lightblox Jar's
--- Overcharged proc) all resolve at pickup, so they apply to chest orbs for
--- free. The bezier scatter is likewise automatic -- Client/Components/Drop
--- animates every Drop-tagged instance the same way.
-local MIN_ORB_DROP = 1
-local MAX_ORB_DROP = 3
+-- A treasure chest is Gold first and a few Gems second. The Gold is the
+-- TIER's: DifficultyData.TreasureChestPayout, the treasure slice of the
+-- run's chestCoins on this floor over the chests a floor places, split
+-- into ChestCoinData's pickup count -- so a run's Gold lands on the
+-- Blacksmith's anchors whatever it finds. No Health / Mana orbs (design
+-- call, 2026-10-21): the chest is a purse, not a fountain. The scatter is
+-- SHARED loot -- the counts do NOT scale with party size, so a chest
+-- stays a fixed prize rather than a per-head payout; the bezier scatter
+-- is automatic (Client/Components/Drop).
+
+-- The run's tier and floor, for the payout (1 / Normal with no run).
+local function treasurePayout(): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local tier = if dungeonService
+		then dungeonService:GetDifficultyScale()
+		else DifficultyData.Resolve(DifficultyData.Order[1])
+	local floor = if dungeonService then dungeonService:GetFloor() else 1
+	return DifficultyData.TreasureChestPayout(tier, floor)
+end
 
 local Chest = Component.new({
 	Tag = TagList.Chest,
@@ -78,7 +84,7 @@ function Chest:Start()
 		-- Every client's Chest component swings the lid off this edge.
 		self.Instance:SetAttribute(OPENED_ATTRIBUTE, true)
 
-		local coinData = ChestCoinData[PlaceIdData[game.PlaceId]]
+		local coinData = ChestCoinData[getPlaceDungeonId()] or ChestCoinData.Default
 
 		if not coinData then
 			return warn("[Chest] Indexed `coinData` returned as incorrect datatype.")
@@ -87,38 +93,38 @@ function Chest:Start()
 		DropService.OnChestCoinsRequested:Fire(playerWhoTriggered)
 
 		-- Shared party loot, so no ownerId — but the coins still blip out
-		-- one at a time (the trailing `true`).
+		-- one at a time (the trailing `true`). The payout splits into the
+		-- row's pickup count, rounded up so it never pays under the tier.
+		local pickups = math.random(coinData.minDropRate, coinData.maxDropRate)
+		local coinValue = math.max(1, math.ceil(treasurePayout() / pickups))
 		DropService.OnDropRequested:Fire(
 			self.Instance.PrimaryPart,
 			DropTypes.Coins,
-			coinData.minDropRate,
-			coinData.maxDropRate,
-			coinData.minCoins,
-			coinData.maxCoins,
+			pickups,
+			pickups,
+			coinValue,
+			coinValue,
 			false,
 			nil,
 			true
 		)
 
-		DropService.OnDropRequested:Fire(
-			self.Instance.PrimaryPart,
-			DropTypes.Health,
-			MIN_ORB_DROP,
-			MAX_ORB_DROP,
-			1,
-			1,
-			false
-		)
-
-		DropService.OnDropRequested:Fire(
-			self.Instance.PrimaryPart,
-			DropTypes.Mana,
-			MIN_ORB_DROP,
-			MAX_ORB_DROP,
-			1,
-			1,
-			false
-		)
+		-- A few Gems, the run currency, from the entry's own row (ChestCoinData
+		-- `gems`), the same shared, blip-per-pickup scatter as the coins.
+		local gemData = coinData.gems
+		if gemData then
+			DropService.OnDropRequested:Fire(
+				self.Instance.PrimaryPart,
+				DropTypes.Gems,
+				gemData.minDropRate,
+				gemData.maxDropRate,
+				gemData.minGems,
+				gemData.maxGems,
+				false,
+				nil,
+				true
+			)
+		end
 	end)
 end
 

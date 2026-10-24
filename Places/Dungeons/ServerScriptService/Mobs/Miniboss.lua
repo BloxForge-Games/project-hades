@@ -1,4 +1,3 @@
-local TweenService = game:GetService("TweenService")
 --[[
 	Module: Miniboss.lua
 	Description: Miniboss mob — MobBase with two behavioral changes, nothing
@@ -16,20 +15,25 @@ local TweenService = game:GetService("TweenService")
 	     the spot. The death knockback + killer-directed impulse are
 	     suppressed so the upright body doesn't slide.
 
-	Per-attack behavior still lives entirely in ZombieData[name].genericAttacks
+	Per-attack behavior still lives entirely in MobData[name].genericAttacks
 	/ uniqueAttacks — this class only changes lifecycle cadence + death style.
 
 	Bosses extend THIS class (see Boss.lua) and add HP-threshold phase changes.
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+
 local MobBase = require(script.Parent.MobBase)
+local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
 
 local Miniboss = setmetatable({}, MobBase)
 Miniboss.__index = Miniboss
 
 -- Breather between attacks (seconds) before re-entering Chase. Replaces
 -- MobBase's 2-4s Roaming cooldown so the miniboss attacks more often. The
--- per-attack recoveryDuration in ZombieData still runs BEFORE this.
+-- per-attack recoveryDuration in MobData still runs BEFORE this.
 local ATTACK_COOLDOWN = 0.75
 
 function Miniboss.new(model: Model)
@@ -59,8 +63,6 @@ end
 function Miniboss:_onDeathAnimation()
 	-- TODO: load + play the miniboss/boss death animation track here.
 	-- Placeholder until the animation asset exists.
-	print(("[Miniboss] %s death animation placeholder"):format(self._model.Name))
-
 	task.wait(7)
 
 	self._model.PrimaryPart.Anchored = true
@@ -71,17 +73,14 @@ function Miniboss:_onDeathAnimation()
 		end
 	end
 
-	for _, descendant in self._model:GetDescendants() do
-		if descendant:IsA("BasePart") or descendant:IsA("Decal") then
-			TweenService:Create(
-				descendant,
-				TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
-				{ Transparency = 1 }
-			):Play()
-		elseif descendant:IsA("ParticleEmitter") or descendant:IsA("Beam") then
-			descendant.Enabled = false
-		end
-	end
+	-- The dissolve runs on every client off one cue (Combat.MobFade ->
+	-- MobController) rather than a server tween per part; the server
+	-- only waits it out, then destroys the body.
+	CombatNetwork.MobFade.FireAll({
+		Mob = self._model,
+		Phase = "Out",
+		Duration = MobFadeData.EncounterDespawnFadeSeconds,
+	})
 
 	task.wait(5)
 

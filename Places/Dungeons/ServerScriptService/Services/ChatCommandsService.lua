@@ -44,8 +44,10 @@
 
 --[ Roblox Services ]--
 
+local GroupService = game:GetService("GroupService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
@@ -56,8 +58,35 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local LifeService = require(ServerScriptService.Services.LifeService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local CurrencyService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
+local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
+local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
+local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+
+-- The spells the profile now has equipped, for the /wipedata reply. It
+-- reads the WIPED profile, so it shows what this server's template holds:
+-- an unexpected spell here means this server runs an older build.
+local function describeEquippedArcane(player: Player): string
+	local inventory = DataService:GetProfileData(player).Inventory
+	local arcane = if type(inventory) == "table" then inventory[InventoryType.Arcane] else nil
+	local equipped = {}
+	if type(arcane) == "table" then
+		for _, entry in arcane do
+			if type(entry) == "table" and type(entry.equipSlot) == "number" and entry.equipSlot >= 3 then
+				table.insert(equipped, ("%d: %s"):format(entry.equipSlot, tostring(entry.name)))
+			end
+		end
+	end
+	table.sort(equipped)
+	return if #equipped > 0 then table.concat(equipped, ", ") else "none"
+end
+
+-- [player] = their group rank, looked up ONCE per session (GetRankInGroup
+-- is a web call). Weak keys: a leaver takes their entry with it.
+local groupRankCache: { [Player]: number } = setmetatable({}, { __mode = "k" }) :: any
 
 --[ Constants ]--
 
@@ -122,7 +151,7 @@ local DROP_TARGETS: { [string]: DropTarget } = {
 		end,
 	},
 	-- Encounter reward chests, minus the encounter. The mob-name string
-	-- feeds the coin row (ZombieData); Dungeon1's pair is used as the
+	-- feeds the coin row (MobData); Dungeon1's pair is used as the
 	-- debug stand-in since there is no corpse to read — gear still
 	-- rolls off the ACTIVE dungeon's own dungeonDrops table either way.
 	MinibossChest = {
@@ -218,26 +247,41 @@ COMMANDS = {
 	},
 
 	give = {
-		usage = "/give gold <amount>",
-		description = "Gives YOU <amount> run gold (the coins the Merchant Shop spends).",
+		usage = "/give <gems|gold|ore> <amount>",
+		description = "gems: the run currency (escrow). gold / ore: straight into YOUR profile, for the Blacksmith.",
 		handler = function(player: Player, args: { string }): string?
 			local what = args[1] and string.lower(args[1])
-			if what ~= "gold" then
-				return ("Usage: %s"):format(COMMANDS.give.usage)
-			end
 			local amount = math.floor(tonumber(args[2]) or 0)
 			if amount <= 0 then
 				return ("Usage: %s -- amount must be a positive number"):format(COMMANDS.give.usage)
 			end
 			amount = math.min(amount, MAX_GIVE_GOLD)
-			if not RunEscrowService then
-				return "RunEscrowService is unavailable."
+			if what == "gems" then
+				if not RunEscrowService then
+					return "RunEscrowService is unavailable."
+				end
+				-- The run currency: what the shop and the Relic Slot stand
+				-- spend; gone when the run ends.
+				RunEscrowService:AddGems(player, amount)
+				return ("Gave you %d Gems (now %d)."):format(amount, RunEscrowService:GetGems(player))
+			elseif what == "gold" or what == "ore" then
+				-- PROFILE currency, which is what the Blacksmith spends.
+				if not CurrencyService then
+					return "CurrencyService is unavailable."
+				end
+				local currency = if what == "ore" then CurrencyTypes.ForgeOre else CurrencyTypes.Gold
+				CurrencyService:SetCurrencyValue(
+					player,
+					currency,
+					CurrencyService:GetCurrencyValue(player, currency) + amount
+				)
+				return ("Gave you %d %s (profile now %d)."):format(
+					amount,
+					currency,
+					CurrencyService:GetCurrencyValue(player, currency)
+				)
 			end
-			-- Run coins (the escrow), not banked profile coins: this is
-			-- what the shop and the Relic Slot stand spend, and it rides
-			-- the same risk as the rest of the run.
-			RunEscrowService:AddCoins(player, amount)
-			return ("Gave you %d gold (now %d)."):format(amount, RunEscrowService:GetCoins(player))
+			return ("Usage: %s"):format(COMMANDS.give.usage)
 		end,
 	},
 
@@ -301,7 +345,8 @@ COMMANDS = {
 				end
 			end)
 
-			return "Data wiped. Kicking you so it reloads..."
+			local equipped = describeEquippedArcane(player)
+			return ("Data wiped (arcane %s). Kicking you so it reloads..."):format(equipped)
 		end,
 	},
 
@@ -321,10 +366,32 @@ COMMANDS = {
 
 --[ Private ]--
 
--- Single permission seam. Open to everyone today; restrict HERE if that
--- ever changes, so no individual command has to care.
-function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), _player: Player, _commandName: string): boolean
-	return true
+-- Single permission seam, so no individual command has to care: anyone
+-- in Studio, else members of the game's group at
+-- Constants.COMMAND_MIN_GROUP_RANK or above. The rank is fetched once per
+-- player and cached (GroupService:GetGroupsAsync is a web call); a failed lookup (no group id yet, web error) reads
+-- as rank 0, so commands fail CLOSED.
+function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player: Player, _commandName: string): boolean
+	if RunService:IsStudio() then
+		return true
+	end
+	local rank = groupRankCache[player]
+	if rank == nil then
+		local ok, groups = pcall(function()
+			return GroupService:GetGroupsAsync(player.UserId)
+		end)
+		rank = 0
+		if ok and typeof(groups) == "table" then
+			for _, group in groups :: { any } do
+				if group.Id == Constants.GROUP_ID then
+					rank = tonumber(group.Rank) or 0
+					break
+				end
+			end
+		end
+		groupRankCache[player] = rank
+	end
+	return rank >= Constants.COMMAND_MIN_GROUP_RANK
 end
 
 -- Echoes command feedback back to the caller. Uses the same floating

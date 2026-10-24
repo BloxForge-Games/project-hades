@@ -10,11 +10,14 @@
 	trust the client with an outcome, only with a request.
 
 	--- WIRING ---
-	Rooms arrive from getDungeonService().Signals.OnDungeonGenerated. Every
-	Event room is recognised by its PREFAB NAME (SwordStone, MerchantShop,
-	CursedShrine — the clone keeps it), and its interactables are wired
-	here at runtime: NPC tag + DialogueGraph attribute, plus a server-side
-	registry entry so a client can never hand us a model we didn't bless.
+	Rooms arrive from DungeonService.Signals.OnFloorReady (reached by name
+	through Blitz.OptionalService; this module is never allowed to require
+	DungeonService). Every Event room is recognised by its PREFAB NAME
+	(SwordStone, MerchantShop, CursedShrine — the clone keeps it), and its
+	interactables are wired here at runtime: NPC tag + DialogueGraph
+	attribute, plus a server-side registry entry so a client can never hand
+	us a model we didn't bless. The per-floor state is dropped on
+	OnFloorTeardown, before the old room models are destroyed.
 
 	--- PER-PLAYER, EVERYTHING ---
 	Success state, merchant stock, and drops are all keyed per player.
@@ -41,6 +44,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local RelicService = require(ServerScriptService.Services.RelicService)
+local RelicOfferService = require(ServerScriptService.Services.RelicOfferService)
 local DropService = require(ServerScriptService.Services.DropService)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
@@ -58,16 +62,15 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+-- DungeonService is never required here: consumers reach it through
+-- Blitz.OptionalService at call time or its signals (the service graph runs
+-- one way; see Docs/Architecture.md),
+-- and only the Dungeons place mounts it, so every use asks Blitz for it
+-- by name at call time (Blitz.OptionalService) and skips the work when it
+-- is absent.
 
 -- CoffinEventService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -116,8 +119,8 @@ local GREATER_BLESSING_HIGHLIGHT_B = 69
 -- BonusHealthPercent, every HP scaler sees it, and it stacks with a
 -- fountain found in a later dungeon. Server-lifetime = run-lifetime, so
 -- the bonus naturally lasts the whole run.
-local FOUNTAIN_HEAL_FRACTION = 0.50
-local FOUNTAIN_ATTUNE_HP_FRACTION = 0.15
+local FOUNTAIN_HEAL_FRACTION = 0.40
+local FOUNTAIN_ATTUNE_HP_FRACTION = 0.20
 
 -- Forge. How many offers the anvil fans out for one sacrificed relic.
 -- Three, not one: a single random swap was a lateral trade with no
@@ -128,19 +131,29 @@ local FORGE_OFFER_COUNT = 3
 
 -- Merchant.
 local MERCHANT_STOCK_SIZE = 5
--- Sell values are FLAT per rarity; buy prices roll uniformly in-range,
--- once per pedestal per player, so two players see different tags.
-local SELL_PRICES = {
-	[ItemRarity.Rare] = 200,
-	[ItemRarity.Epic] = 400,
-	[ItemRarity.Legendary] = 800,
-	[ItemRarity.Cursed] = 800,
+-- RELIC PRICES ARE FIXED, IN GEMS (design call, 2026-10). Gems are the
+-- run currency, and a run's take is authored per tier (DifficultyData
+-- `gems`: 350 / 650 / 950 / 950 solo, before relic bonuses), so a price
+-- means the same thing wherever the shop appears: an Easy run buys two
+-- Rares, a Nightmare run six. Each pedestal rolls its tag
+-- within -PRICE_MARKUP_MAX..+PRICE_MARKUP_MAX of the base, once per
+-- player, so a stall can be a bargain or a rip-off (design call, 2026-10).
+local BUY_PRICES = {
+	[ItemRarity.Rare] = 150,
+	[ItemRarity.Epic] = 200,
+	[ItemRarity.Legendary] = 300,
+	-- No Cursed row: the shop never stocks or buys them.
 }
-local BUY_PRICE_RANGES = {
-	[ItemRarity.Rare] = { 300, 400 },
-	[ItemRarity.Epic] = { 600, 800 },
-	[ItemRarity.Legendary] = { 1200, 1600 },
-}
+-- The random swing on a stocked relic's tag: -this..+this, uniform.
+local PRICE_MARKUP_MAX = 0.1
+-- Selling a relic back pays this share of its BASE buy price (no swing)
+-- -- always below the cheapest tag, so buy-then-sell can never profit.
+local SELL_BACK_FRACTION = 0.5
+
+-- A relic's buy price, in Gems, before the pedestal's markup.
+local function relicBuyPrice(rarity: string): number?
+	return BUY_PRICES[rarity]
+end
 
 -- How far from the event model a client request is still honoured. Loose
 -- on purpose — the dialogue leash already keeps players close; this only
@@ -169,9 +182,10 @@ local DROP_SLOT_ORDER: { [number]: { number } } = {
 -- high on its stone.
 local DROP_GROUND_RAY_UP = 8
 local DROP_GROUND_RAY_DOWN = 100
--- Beat between drops on a STAGGERED fan (the Shrine and the Forge). The
--- Sword pays out a single relic, so it has nothing to stagger.
-local DROP_STAGGER_SECONDS = 0.25
+-- The pick-one hands (RelicOfferService) dealt as cards on the player's
+-- screen: the source label under the cards' title.
+local OFFER_SOURCE_FORGE = "Forge"
+local OFFER_SOURCE_SHRINE = "Shrine"
 
 -- The vending machine's dispense sting. It is authored as a child of the
 -- machine's PrimaryPart (Server/Components/RelicMachine plays it once per
@@ -185,6 +199,8 @@ local DROP_POP_SOUND_PATH = { "VendingMachines", "Default" }
 local DROP_POP_SOUND_NAME = "Pop"
 
 local NOT_ENOUGH_COINS_COLOR = Color3.fromRGB(255, 92, 92)
+-- The relic-cap refusal, the same red the vending pickup's pop uses.
+local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
 local SOLD_COLOR = Color3.fromRGB(85, 255, 127)
 
 --[ Service ]--
@@ -193,6 +209,7 @@ local EventService = {
 	Name = "EventService",
 	Dependencies = {
 		RelicService,
+		RelicOfferService,
 		DropService,
 		LifeService,
 		TextIndicatorService,
@@ -224,11 +241,13 @@ local EventService = {
 	_greaterShrinePending = {},
 	_forgeDone = {},
 
-	-- [userId] = { model = Model, relics = { string } } — a WON sword
-	-- pull, or an accepted shrine bargain, whose relic fan is DEFERRED
-	-- until the conversation ends; the close-path MarkEventInteracted
-	-- releases it. Costs always land immediately — only the REWARD
-	-- waits for the bars to come down.
+	-- [userId] = { model = Model, relics = { string }, offer = boolean?,
+	--              source = string? } — a WON sword pull, an accepted
+	-- shrine bargain or a reforge, whose reward is DEFERRED until the
+	-- conversation ends; the close-path MarkEventInteracted releases it.
+	-- Costs always land immediately — only the REWARD waits for the bars
+	-- to come down. `offer` = a pick-one hand dealt as cards on the
+	-- player's screen (RelicOfferService); otherwise a physical fan.
 	_pendingRelicFans = {},
 
 	-- [userId] = { [roomId] = { { relicName, price, sold } } }
@@ -650,7 +669,7 @@ function EventService._wireDungeon(self: typeof(EventService), dungeon)
 		wired += 1
 	end
 
-	print(("[EventService] Wired %d event interactable(s) this floor"):format(wired))
+	Log.debug(("[EventService] Wired %d event interactable(s) this floor"):format(wired))
 end
 
 -- DungeonService polls this during the event exit-door hold.
@@ -710,12 +729,19 @@ function EventService._onMarkEventInteracted(_self: typeof(EventService), player
 		EventService:NotifyWishesToContinue(player)
 	end
 
-	-- A WON sword pull or an accepted shrine bargain queued its relic
-	-- fan for this moment — the conversation is over, pop the rewards.
+	-- A WON sword pull, an accepted shrine bargain or a reforge queued
+	-- its reward for this moment — the conversation is over, pay out.
+	-- The pick-one hands (Shrine, Forge) are dealt as cards on the
+	-- player's screen; the Sword's single Legendary still pops out of the
+	-- stone, since there is nothing to choose.
 	local pending = EventService._pendingRelicFans[player.UserId]
 	if pending and pending.model == model then
 		EventService._pendingRelicFans[player.UserId] = nil
-		EventService:_spawnRelicFan(player, pending.model, pending.relics, pending.inFront, pending.stagger)
+		if pending.offer then
+			RelicOfferService:Offer(player, pending.relics, pending.source)
+		else
+			EventService:_spawnRelicFan(player, pending.model, pending.relics, pending.inFront, pending.stagger)
+		end
 	end
 end
 
@@ -794,9 +820,9 @@ function EventService._onAcceptCurse(_self: typeof(EventService), player: Player
 	-- Completely random among unowned Cursed relics — no usability gate,
 	-- matching the merchant's anything-goes rule.
 	local curses = EventService:_rollUsableRelics(player, ItemRarity.Cursed, SHRINE_CURSE_COUNT, true)
-	-- DEFERRED: the cost just landed; the fan pops at conversation end.
+	-- DEFERRED: the cost just landed; the hand is dealt at conversation end.
 	EventService._pendingRelicFans[player.UserId] =
-		{ model = shrineModel :: Model, relics = curses, stagger = DROP_STAGGER_SECONDS }
+		{ model = shrineModel :: Model, relics = curses, offer = true, source = OFFER_SOURCE_SHRINE }
 
 	return "struck"
 end
@@ -1168,11 +1194,9 @@ function EventService._onReforgeRelic(
 	EventService._forgeDone[player.UserId] = EventService._forgeDone[player.UserId] or {}
 	EventService._forgeDone[player.UserId][forgeModel] = true
 
-	-- DEFERRED: pops from the blacksmith once the dialogue closes.
-	-- inFront: the blacksmith faces the player, so its reward has to land
-	-- on the anvil side rather than in the wall behind it.
+	-- DEFERRED: dealt as cards once the dialogue closes.
 	EventService._pendingRelicFans[player.UserId] =
-		{ model = forgeModel :: Model, relics = offers, inFront = true, stagger = DROP_STAGGER_SECONDS }
+		{ model = forgeModel :: Model, relics = offers, offer = true, source = OFFER_SOURCE_FORGE }
 	return "reforged"
 end
 
@@ -1200,7 +1224,7 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 	-- rarity, then takes the next unowned relic of it".
 	local byRarity: { [string]: { string } } = {}
 	for relicName, data in RelicData do
-		if BUY_PRICE_RANGES[data.rarity] and RelicService:GetSpecificRelicRegistry(player, relicName) == 0 then
+		if BUY_PRICES[data.rarity] and RelicService:GetSpecificRelicRegistry(player, relicName) == 0 then
 			local bucket = byRarity[data.rarity]
 			if not bucket then
 				bucket = {}
@@ -1223,10 +1247,9 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 		if not relicName then
 			return false
 		end
-		local range = BUY_PRICE_RANGES[rarity]
 		table.insert(stock, {
 			relicName = relicName,
-			price = math.random(range[1], range[2]),
+			price = math.round((relicBuyPrice(rarity) or 0) * (1 + (math.random() * 2 - 1) * PRICE_MARKUP_MAX)),
 			sold = false,
 		})
 		return true
@@ -1347,7 +1370,7 @@ end
 
 -- Buys stock slot `index` of merchant room `roomId`. Grants the relic
 -- DIRECTLY (no physical drop) and empties the pedestal for this player
--- only. Returns "bought" | "poor" | "sold" | "invalid".
+-- only. Returns "bought" | "poor" | "full" | "sold" | "invalid".
 -- DungeonNetwork.BuyMerchantRelic handler (was a client-callable method).
 function EventService._onBuyMerchantRelic(
 	_self: typeof(EventService),
@@ -1388,11 +1411,28 @@ function EventService._onBuyMerchantRelic(
 		return "sold"
 	end
 
-	if not RunEscrowService:SpendCoins(player, slot.price) then
-		-- Server-side feedback so the "Not enough coins" pop can't be
+	-- Relic cap: the shop sells only unowned relics, so any buy fills a
+	-- slot. Refused BEFORE the coins move, with the vending pickup's own
+	-- refusal pop, so a capped player wastes nothing by trying.
+	if not RelicService:CanAcceptRelic(player, slot.relicName) then
+		if TextIndicatorService and hrp then
+			TextIndicatorService:ShowIndicator(
+				player,
+				hrp,
+				("Reached Maximum Relics! (%d)"):format(RelicService:GetRelicSlots(player)),
+				RELIC_CAP_COLOR,
+				true
+			)
+		end
+		playFeedbackSound(hrp, "Error")
+		return "full"
+	end
+
+	if not RunEscrowService:SpendGems(player, slot.price) then
+		-- Server-side feedback so the "Not enough Gems" pop can't be
 		-- suppressed or spoofed client-side.
 		if TextIndicatorService and hrp then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough coins", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough Gems", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"
@@ -1453,9 +1493,9 @@ function EventService._onBuyRelicSlot(_self: typeof(EventService), player: Playe
 	if soldOut then
 		return "sold"
 	end
-	if not RunEscrowService:SpendCoins(player, price) then
+	if not RunEscrowService:SpendGems(player, price) then
 		if TextIndicatorService then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough coins", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, "Not enough Gems", NOT_ENOUGH_COINS_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"
@@ -1478,22 +1518,64 @@ end
 -- Sells one owned relic at the flat rarity price. The relic and its
 -- effects leave immediately (RemoveRelicsRegistry replicates; stats
 -- recompute off the registry). Returns the coins paid, or 0.
+-- True when the player stands within INTERACT_RANGE of the merchant NPC
+-- of a shop room that has unlocked for them: the same physical-presence
+-- gate the buy paths enforce, for the sell path.
+function EventService._isAtUnlockedMerchant(self: typeof(EventService), player: Player): boolean
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if not hrp or not hrp:IsA("BasePart") then
+		return false
+	end
+	for roomId, entry in self._merchantRooms do
+		local merchant = entry.merchant
+		if merchant and merchant.Parent and self:_isMerchantUnlockedFor(player, roomId) then
+			if (hrp.Position - merchant:GetPivot().Position).Magnitude <= INTERACT_RANGE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 -- DungeonNetwork.SellRelic handler (was a client-callable method).
-function EventService._onSellRelic(_self: typeof(EventService), player: Player, relicName: string): number
+-- Gated like the buys: an unlocked merchant room, in range of its
+-- merchant. A Cursed relic is refused outright -- its drawback is the
+-- price of its payoff (the tray refuses to drop one for the same
+-- reason), so the shop is not a way to shed it for coins.
+function EventService._onSellRelic(self: typeof(EventService), player: Player, relicName: string): number
 	if typeof(relicName) ~= "string" or not RelicData[relicName] then
+		return 0
+	end
+	if not self:_isAtUnlockedMerchant(player) then
 		return 0
 	end
 	if RelicService:GetSpecificRelicRegistry(player, relicName) <= 0 then
 		return 0
 	end
 
-	local price = SELL_PRICES[RelicData[relicName].rarity]
-	if not price then
+	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if RelicData[relicName].rarity == ItemRarity.Cursed then
+		if TextIndicatorService and hrp then
+			TextIndicatorService:ShowIndicator(
+				player,
+				hrp,
+				"Cursed relics cannot be sold",
+				NOT_ENOUGH_COINS_COLOR,
+				true
+			)
+		end
+		playFeedbackSound(hrp, "Error")
 		return 0
 	end
 
+	local buyPrice = relicBuyPrice(RelicData[relicName].rarity)
+	if not buyPrice then
+		return 0
+	end
+	local price = math.round(buyPrice * SELL_BACK_FRACTION)
+
 	RelicService:RemoveRelicsRegistry(player, relicName, 1)
-	RunEscrowService:AddCoins(player, price)
+	RunEscrowService:AddGems(player, price)
 
 	-- Full sale presentation: green receipt over the head, the Buy
 	-- chime, and the everyone-visible removed-relic shockwave.
@@ -1504,6 +1586,33 @@ function EventService._onSellRelic(_self: typeof(EventService), player: Player, 
 	playFeedbackSound(sellerHrp, "Buy")
 	RelicService:PlayRelicRemovedFX(player)
 	return price
+end
+
+-- Drops everything keyed on this floor's rooms and models: the old room
+-- models are destroyed with the floor, so a wholesale reset both drops
+-- the dead Instance keys and re-arms the per-player latches for the next
+-- floor's events. Runs on OnFloorTeardown, BEFORE the models go.
+function EventService._resetFloorState(self: typeof(EventService))
+	self._eventModels = {}
+	self._swordDone = {}
+	self._pendingRelicFans = {}
+	self._shrineDone = {}
+	self._fountainDone = {}
+	self._greaterShrineDone = {}
+	self._greaterShrinePending = {}
+	-- Offers are keyed on statue models, which die with the floor.
+	-- _greaterShrineTaken is NOT reset here: exclusion is run-scoped.
+	self._greaterShrineOffers = {}
+	self._forgeDone = {}
+	self._merchantStock = {}
+	self._merchantRooms = {}
+	self._merchantUnlocked = {}
+	self._interactions = {}
+	-- The coffin's per-floor state goes with ours, so the next floor's
+	-- wiring registers its coffin into a clean slate.
+	if getCoffinEventService() then
+		getCoffinEventService():ResetForFloor()
+	end
 end
 
 --[ Lifecycle ]--
@@ -1555,44 +1664,31 @@ function EventService.Start(self: typeof(EventService))
 		return self:_onSellRelic(player, relicName)
 	end)
 
-	getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
-		-- Fresh floor: everything here is per-floor state — old room
-		-- models are destroyed with the floor, so wholesale reset both
-		-- drops the dead Instance keys and re-arms the per-player
-		-- latches for the new floor's events.
-		self._eventModels = {}
-		self._swordDone = {}
-		self._pendingRelicFans = {}
-		self._shrineDone = {}
-		self._fountainDone = {}
-		self._greaterShrineDone = {}
-		self._greaterShrinePending = {}
-		-- Offers are keyed on statue models, which die with the floor.
-		-- _greaterShrineTaken is NOT reset here: exclusion is run-scoped.
-		self._greaterShrineOffers = {}
-		self._forgeDone = {}
-		self._merchantStock = {}
-		self._merchantRooms = {}
-		self._merchantUnlocked = {}
-		self._interactions = {}
-		-- The coffin's per-floor state goes with ours, BEFORE the wiring
-		-- below registers the new floor's coffin with it.
-		if getCoffinEventService() then
-			getCoffinEventService():ResetForFloor()
-		end
-		self:_wireDungeon(dungeon)
+	-- Floor lifecycle. Every generation after the first is preceded by a
+	-- teardown, so the two hooks pair up: TEARDOWN drops the per-floor
+	-- state while the old room models still exist (no dead Instance key
+	-- ever lingers), READY wires the new floor's rooms.
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if dungeonService then
+		dungeonService.Signals.OnFloorTeardown:Connect(function(_dungeon)
+			self:_resetFloorState()
+		end)
 
-		-- (A first-room shop used to be pre-unlocked here because it had
-		-- no fight to unlock it. Entry-time unlock covers it: walking out
-		-- of the Start area into it fires OnRoomEntered like any room.)
-	end)
+		dungeonService.Signals.OnFloorReady:Connect(function(dungeon)
+			self:_wireDungeon(dungeon)
 
-	-- Merchant stock unlocks when a player first ENTERS the shop — see
-	-- _unlockMerchantRoom for why nothing earlier is safe. Per player:
-	-- each party member unlocks it by walking in themselves.
-	getDungeonService().Signals.OnRoomEntered:Connect(function(player: Player, room)
-		self:_unlockMerchantRoom(player, room)
-	end)
+			-- (A first-room shop used to be pre-unlocked here because it had
+			-- no fight to unlock it. Entry-time unlock covers it: walking out
+			-- of the Start area into it fires OnRoomEntered like any room.)
+		end)
+
+		-- Merchant stock unlocks when a player first ENTERS the shop — see
+		-- _unlockMerchantRoom for why nothing earlier is safe. Per player:
+		-- each party member unlocks it by walking in themselves.
+		dungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
+			self:_unlockMerchantRoom(player, room)
+		end)
+	end
 
 	game:GetService("Players").PlayerRemoving:Connect(function(player)
 		self._swordDone[player.UserId] = nil

@@ -32,8 +32,6 @@
 	                        StatusConditionData entry with the fields its
 	                        DoT loop needs; redirect statuses carry their
 	                        display names.
-	  8. Runes              every RuneNames value has a RuneData entry with
-	                        all three rarity tiers.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -47,8 +45,6 @@ local ElementTreeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.El
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
-local RuneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RuneNames)
-local RuneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RuneData)
 
 local RelicAudit = {}
 
@@ -218,21 +214,7 @@ function RelicAudit.Run(): (number, number)
 		end
 	end
 
-	-- 8) runes
-	for _, runeName in RuneNames do
-		local rune = RuneData[runeName]
-		if not rune then
-			problem(runeName, "RuneNames value has NO RuneData entry")
-		else
-			for _, rarity in { ItemRarity.Rare, ItemRarity.Epic, ItemRarity.Legendary } do
-				if rune.effects[rarity] == nil then
-					problem(runeName, ("rune missing its %s tier"):format(rarity))
-				end
-			end
-		end
-	end
-
-	-- 9) grants <-> description agreement, and 10) conditional gating.
+	-- 8) grants <-> description agreement, and 10) conditional gating.
 	--
 	-- Both parse the CARD TEXT, because descriptions are the source of
 	-- truth. Born from the 2026-08 audit that found 16 grants wrong by

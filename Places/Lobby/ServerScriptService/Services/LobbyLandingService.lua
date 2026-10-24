@@ -36,6 +36,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local ScreenSweepData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ScreenSweepData)
 
 --[ Constants ]--
 
@@ -46,12 +47,18 @@ local IGNORE_INSTANCES_NAME = "IgnoreInstances"
 local SPAWN_POINT_NAME = "LobbySpawnPoint"
 
 -- Same values as DungeonService's join landing.
-local LANDING_START_DELAY = 1 -- armor / weapons finish welding before the pose
+local LANDING_START_DELAY = 0 -- armor / weapons finish welding before the pose
 local LANDING_POSE_SETTLE = 0.2 -- frozen pose replicates before the teleport
 local LANDING_POSE_HOLD_SECONDS = 0.5 -- pose is rendered everywhere before the reveal
 local LANDING_DROP_SPEED = 0.75
 local LANDING_IMPACT_DELAY = 1.6
 local LANDING_DURATION = 1.7
+-- Join landing: the drop waits until the screen is fully revealed (the
+-- loader fade, then the cascade, both started by the landing cue) and a
+-- further beat, so the player SEES themselves fall rather than landing
+-- under the tiles.
+local LANDING_DROP_AFTER_REVEAL_SECONDS = 0.35
+local JOIN_DROP_DELAY_SECONDS = ScreenSweepData.JoinRevealSeconds + LANDING_DROP_AFTER_REVEAL_SECONDS
 local LANDING_SPREAD_STUDS = 5
 local LANDING_HOLD_TOLERANCE_STUDS = 2 -- see _holdLandingPosition
 
@@ -147,7 +154,7 @@ function LobbyLandingService._holdLandingPosition(
 end
 
 -- Same dust + sound as DungeonService:_onLandingImpact. The Dungeons place
--- parents the clone under IgnoreInstances.MagicSpells; the Lobby may not
+-- parents the clone under IgnoreInstances.ArcaneSpells; the Lobby may not
 -- have that folder, so fall back to IgnoreInstances, then workspace.
 function LobbyLandingService._onLandingImpact(_self: typeof(LobbyLandingService), player: Player)
 	local character = player.Character
@@ -164,7 +171,7 @@ function LobbyLandingService._onLandingImpact(_self: typeof(LobbyLandingService)
 	end
 
 	local ignoreInstances = workspace:FindFirstChild(IGNORE_INSTANCES_NAME)
-	local parent = (ignoreInstances and ignoreInstances:FindFirstChild("MagicSpells")) or ignoreInstances or workspace
+	local parent = (ignoreInstances and ignoreInstances:FindFirstChild("ArcaneSpells")) or ignoreInstances or workspace
 
 	local dodgeVFX = template:Clone()
 	dodgeVFX:PivotTo(CFrame.new(root.Position) - Vector3.new(0, 3, 0))
@@ -250,7 +257,12 @@ function LobbyLandingService._runPlayerLanding(self: typeof(LobbyLandingService)
 		-- Teleport in. The character arrives already in the +25 pose.
 		local targetCFrame = self:_teleportPlayerToSpawnPoint(player)
 		if targetCFrame then
-			self:_holdLandingPosition(character, hrp, targetCFrame, LANDING_POSE_HOLD_SECONDS + LANDING_DURATION)
+			self:_holdLandingPosition(
+				character,
+				hrp,
+				targetCFrame,
+				LANDING_POSE_HOLD_SECONDS + JOIN_DROP_DELAY_SECONDS + LANDING_DURATION
+			)
 		end
 
 		-- Hold the frozen frame in place, still behind the loading screen, so
@@ -265,6 +277,15 @@ function LobbyLandingService._runPlayerLanding(self: typeof(LobbyLandingService)
 
 		-- Reveal: drop the joiner's loading screen + lock controls.
 		DungeonNetwork.LandingStart.Fire(player, targetCFrame)
+
+		-- Hold the frozen pose until the screen has revealed.
+		task.wait(JOIN_DROP_DELAY_SECONDS)
+		if not character.Parent or not hrp.Parent then
+			if character.Parent then
+				character:SetAttribute(Attributes.Landing, nil)
+			end
+			return
+		end
 
 		-- Drop: resume the animation from the frozen pose down to the ground.
 		if landAnimationTrack then

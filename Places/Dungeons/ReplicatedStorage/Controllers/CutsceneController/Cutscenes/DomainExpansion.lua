@@ -57,7 +57,7 @@ DomainExpansionExecutable.CutsceneHashmap = {
 function DomainExpansionExecutable:Play()
 	local waypointModel = ReplicatedStorage.GameAssets.CutsceneWaypoints.DomainExpansionWaypoints:Clone()
 	waypointModel:PivotTo(Players.LocalPlayer.Character.HumanoidRootPart.CFrame)
-	waypointModel.Parent = workspace.IgnoreInstances.MagicSpells
+	waypointModel.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	DomainExpansionExecutable.Enabled = true
 
@@ -108,7 +108,7 @@ function DomainExpansionExecutable:Play()
 	workspace.CurrentCamera.FieldOfView = previousCameraFieldOfView
 
 	-- The waypoint rig is only needed while the tweens read it; without this
-	-- every play left one more clone in MagicSpells.
+	-- every play left one more clone in ArcaneSpells.
 	waypointModel:Destroy()
 end
 

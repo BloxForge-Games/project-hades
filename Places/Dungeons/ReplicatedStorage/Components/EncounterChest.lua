@@ -309,7 +309,7 @@ function EncounterChest:Start()
 		return
 	end
 
-	local startTime = tick()
+	local startTime = os.clock()
 	local driver
 	driver = RunService.Heartbeat:Connect(function()
 		if not self.Instance.Parent or not self.Instance.PrimaryPart then
@@ -325,7 +325,7 @@ function EncounterChest:Start()
 		local y = seatedY + DROP_HEIGHT_STUDS * (1 - fallAlpha.Value)
 		self.Instance:PivotTo(CFrame.new(restPivot.Position.X, y, restPivot.Position.Z) * restRotation)
 
-		if tick() - startTime >= DRIVER_LIFETIME_SECONDS then
+		if os.clock() - startTime >= DRIVER_LIFETIME_SECONDS then
 			-- Snap the exact replicated rest pose and stop — from here the
 			-- local view and the server's truth are identical.
 			self.Instance:ScaleTo(self._baseScale)

@@ -4,10 +4,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
 
 local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
-local Magic = require(ReplicatedStorage.Submodules.Core.Source.Network.Magic)
+local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
-local MagicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MagicNames)
-local MagicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MagicData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
@@ -45,7 +45,7 @@ return function(player: Player, preload: boolean?)
 		end)
 	end
 
-	local windbombVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Wind Bomb"]].CastFX:Clone()
+	local windbombVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Wind Bomb"]].CastFX:Clone()
 	windbombVFX.Parent = character:FindFirstChild("Right Arm")
 
 	if not preload then
@@ -63,16 +63,16 @@ return function(player: Player, preload: boolean?)
 
 	task.delay(0.75, function()
 		local hitboxCFrame = getRootPart(character).CFrame
-			+ getRootPart(character).CFrame.LookVector * MagicData[MagicNames["Wind Bomb"]].range
+			+ getRootPart(character).CFrame.LookVector * ArcaneData[ArcaneNames["Wind Bomb"]].range
 		impactCFrame = hitboxCFrame
 		if player == Players.LocalPlayer and not preload then
-			Magic.HitboxRequested.Fire({ MagicName = MagicNames["Wind Bomb"], CFrame = hitboxCFrame })
+			Arcane.HitboxRequested.Fire({ ArcaneName = ArcaneNames["Wind Bomb"], CFrame = hitboxCFrame })
 		end
 	end)
 
 	task.delay(0.85, function()
-		local windbombExplosionVFX = ReplicatedStorage.GameAssets.VFX[MagicNames["Wind Bomb"]].ExplosionFX:Clone()
-		windbombExplosionVFX.Parent = workspace.IgnoreInstances.MagicSpells
+		local windbombExplosionVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Wind Bomb"]].ExplosionFX:Clone()
+		windbombExplosionVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 		windbombExplosionVFX.CFrame = getRootPart(character).CFrame + getRootPart(character).CFrame.LookVector * 5
 
 		if not preload then

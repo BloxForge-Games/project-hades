@@ -2,8 +2,8 @@
 --[[
 	Module: AuraServer/Blighted.lua
 	Description:
-	Blighted (Venom): +15% Status Chance while up (AuraData owns the
-	magnitude; StatusConditionService reads the marker).
+	Blighted (Venom): bonus damage per distinct Status on the target while
+	up (AuraData owns the rate; DamageService reads the marker).
 
 	CUSTOM rig, per the authored asset (GameAssets.Auras.Blighted holds
 	five particles):
@@ -24,6 +24,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -47,7 +48,7 @@ local function awaitExpiry(marker: Instance)
 end
 
 return function(player: Player, character: Model, duration: number?)
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	local hrp = getRoot(character)
 	if not hrp or hrp:FindFirstChild(AuraNames.Blighted) ~= nil then
 		return
 	end

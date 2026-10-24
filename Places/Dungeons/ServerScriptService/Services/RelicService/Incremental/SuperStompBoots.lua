@@ -98,13 +98,13 @@ function SuperStompBoots.InvokeStomp(self: SuperStompBootsFields)
 	local level = getPlayerLevel(self._player)
 	local baseDamage = self._damagePerLevel * level
 
-	-- Hit every zombie in the stomp radius. Tag-based lookup mirrors
+	-- Hit every mob in the stomp radius. Tag-based lookup mirrors
 	-- the hitbox pattern VFXService:CreateHitbox uses so behavior is
-	-- consistent with magic spells. OverlapParams keeps the cost
+	-- consistent with arcane spells. OverlapParams keeps the cost
 	-- bounded to the radius volume.
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Include
-	overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Zombies }
+	overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Mobs }
 
 	local hitMobs: { [Model]: boolean } = {}
 	for _, part in workspace:GetPartBoundsInRadius(self._landingPosition, STOMP_RADIUS, overlapParams) do
@@ -132,10 +132,10 @@ function SuperStompBoots.InvokeStomp(self: SuperStompBootsFields)
 
 		-- TakeDamage does NOT roll the status applier tables — the hit
 		-- paths own that (melee/projectile → weapon hub, onHitboxDamage
-		-- → magic hub). The stomp bypasses those paths, so roll the
+		-- → arcane hub). The stomp bypasses those paths, so roll the
 		-- weapon hub here per mob (the stomp is weapon-flavored:
 		-- isMagic=false, isMelee=true), matching how GhostDragon calls
-		-- the magic hub for its aura ticks.
+		-- the arcane hub for its aura ticks.
 		getStatusConditionService():ApplyWeaponOnHitStatuses(self._player, nil, model, false)
 	end
 

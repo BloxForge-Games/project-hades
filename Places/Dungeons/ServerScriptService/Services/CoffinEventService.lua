@@ -35,10 +35,10 @@
 	    and any open coffin conversation is closed.
 
 	--- QUEUE ---
-	One wave = one zombie per SpawnPoint attachment in the room; the wave
+	One wave = one mob per SpawnPoint attachment in the room; the wave
 	count rolls in DungeonData.coffinEvent.waves. Poured in continuously
 	under the combat concurrency rule (CONCURRENT_* below) by
-	ZombieSpawnService:StartChallengeQueue, from the dungeon's own pool.
+	MobSpawnService:StartChallengeQueue, from the dungeon's own pool.
 ]]
 
 --[ Roblox Services ]--
@@ -54,19 +54,21 @@ local DungeonService = require(ServerScriptService.Services.DungeonService)
 local EventService = require(ServerScriptService.Services.EventService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local MusicService = require(ServerScriptService.Submodules.Core.Source.Services.MusicService)
-local ZombieSpawnService = require(ServerScriptService.Services.ZombieSpawnService)
+local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 --[ Constants ]--
 
 -- Fallbacks when a difficulty has no coffinEvent block.
 local DEFAULT_CHALLENGE_SECONDS = 60
 local DEFAULT_WAVES = { 5, 6 }
--- The combat concurrency rule (mirrors ZombieSpawnService's defaults).
+-- The combat concurrency rule (mirrors MobSpawnService's defaults).
 local CONCURRENT_BASE = 4
 local CONCURRENT_PER_PLAYER = 2
 local CONCURRENT_MAX = 12
@@ -147,7 +149,7 @@ local CoffinEventService = {
 		EventService,
 		EncounterService,
 		MusicService,
-		ZombieSpawnService,
+		MobSpawnService,
 		EncounterChestService,
 		UserNotificationService,
 	} :: { any },
@@ -228,7 +230,7 @@ end
 
 -- An emitter that belongs to a TORCH: it sits beside a Light, or anywhere
 -- under a folder named Torches. Spawn-point particles (emitted per spawn
--- by ZombieSpawnService) and the gate's DungeonDone burst (emitted on a
+-- by MobSpawnService) and the gate's DungeonDone burst (emitted on a
 -- win) are neither, and must not be switched on here.
 local function isTorchEffect(instance: Instance): boolean
 	local parent = instance.Parent
@@ -431,22 +433,22 @@ end
 -- Publishes the countdown through EncounterService's lobby property, so
 -- the miniboss / boss approach widget counts this down too. Refuses to
 -- clobber a live encounter lobby (cannot happen inside an event room;
--- guarded anyway). `readyLabel` replaces the widget's pad count with
--- the kill tally.
+-- guarded anyway -- PublishLobbyData refuses it too). `readyLabel`
+-- replaces the widget's pad count with the kill tally.
 function CoffinEventService._publishLobby(_self: typeof(CoffinEventService), state: CoffinState, remaining: number?)
-	if not EncounterService or EncounterService._activeLobby ~= nil then
+	if not EncounterService or EncounterService:IsLobbyActive() then
 		return
 	end
 	if remaining == nil then
-		EncounterService._lobbyProperty:Set(nil)
+		EncounterService:PublishLobbyData(nil)
 		return
 	end
 	local total = state.total or 0
-	local queued = ZombieSpawnService:GetRoomQueueRemaining(state.room)
-	local alive = #ZombieSpawnService:GetZombiesInRoom(state.room)
+	local queued = MobSpawnService:GetRoomQueueRemaining(state.room)
+	local alive = #MobSpawnService:GetMobsInRoom(state.room)
 	local slain = math.max(0, total - queued - alive)
 	local anchor = state.coffin.PrimaryPart
-	EncounterService._lobbyProperty:Set({
+	EncounterService:PublishLobbyData({
 		kind = "Coffin",
 		label = LOBBY_LABEL,
 		remainingSeconds = remaining,
@@ -468,7 +470,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 	local playerCount = math.max(#Players:GetPlayers(), 1)
 	local concurrentCap = math.min(CONCURRENT_BASE + playerCount * CONCURRENT_PER_PLAYER, CONCURRENT_MAX)
 
-	local total = ZombieSpawnService:StartChallengeQueue(state.room, waves, concurrentCap)
+	local total = MobSpawnService:StartChallengeQueue(state.room, waves, concurrentCap)
 	if not total or total <= 0 then
 		warn("[CoffinEventService] Challenge could not start (no spawn points) — treating as won")
 		state.status = STATUS.Running
@@ -499,8 +501,8 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 	end
 	self:_publishLobby(state, seconds)
 	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name), NOTIFY_TITLE_COLOR)
-	print(
-		("[CoffinEventService] Challenge started by %s: %d zombies, cap %d, %ds"):format(
+	Log.debug(
+		("[CoffinEventService] Challenge started by %s: %d mobs, cap %d, %ds"):format(
 			player.Name,
 			total,
 			concurrentCap,
@@ -519,10 +521,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 				self:_finish(state, false)
 				return
 			end
-			if
-				ZombieSpawnService:IsRoomQueueExhausted(state.room)
-				and #ZombieSpawnService:GetZombiesInRoom(state.room) == 0
-			then
+			if MobSpawnService:IsRoomQueueExhausted(state.room) and #MobSpawnService:GetMobsInRoom(state.room) == 0 then
 				self:_finish(state, true)
 				return
 			end
@@ -573,22 +572,22 @@ function CoffinEventService._finish(self: typeof(CoffinEventService), state: Cof
 				return
 			end
 			released = true
-			print("[CoffinEventService] Rewards collected / reward clock done: releasing the exit")
+			Log.debug("[CoffinEventService] Rewards collected / reward clock done: releasing the exit")
 			DungeonService:ReleaseEventHold(state.room.id)
 		end
 		task.delay(REWARD_HOLD_SECONDS, release)
 		-- The room's own clear celebration, same as a combat segment.
-		DungeonService:_emitDungeonDoneEffect(state.room.model)
+		DungeonService:EmitDungeonDoneEffect(state.room.model)
 		-- A beat, then the chests fall.
 		task.delay(CHEST_DROP_DELAY_SECONDS, function()
-			print("[CoffinEventService] Dropping Event Chests")
+			Log.debug("[CoffinEventService] Dropping Event Chests")
 			if not self:DropRewardChests(release) then
 				release()
 			end
 		end)
 	else
 		notifyAll("Event Failed", "Defeat. The reward is lost.", NOTIFY_FAIL_COLOR)
-		ZombieSpawnService:DespawnZombiesInRoom(state.room)
+		MobSpawnService:DespawnMobsInRoom(state.room)
 		DungeonService:ReleaseEventHold(state.room.id)
 	end
 end
@@ -605,14 +604,14 @@ end
 --[ Public ]--
 
 -- Drops the Event Chest batch (one per living player) with the active
--- difficulty's coffin coin row. Shared by the win path and the /drop
+-- difficulty's coffin Gems row. Shared by the win path and the /drop
 -- eventchest debug command. Returns false when the chest service is
 -- unavailable, so the caller can open the door itself.
 function CoffinEventService.DropRewardChests(_self: typeof(CoffinEventService), onAllOpened: (() -> ())?): boolean
 	if not EncounterChestService then
 		return false
 	end
-	EncounterChestService:DropChestsForEncounter(EnemyTypes.Event, CHEST_MOB_NAME, onAllOpened, activeTuning().coins)
+	EncounterChestService:DropChestsForEncounter(EnemyTypes.Event, CHEST_MOB_NAME, onAllOpened, activeTuning().gems)
 	return true
 end
 
@@ -635,8 +634,8 @@ function CoffinEventService.RegisterRoom(self: typeof(CoffinEventService), room:
 	-- whose door never opens.
 	local gate = room.model and room.model:FindFirstChild("ExitGate")
 	if gate then
-		gate:GetAttributeChangedSignal("GateState"):Connect(function()
-			if gate:GetAttribute("GateState") == "open" then
+		gate:GetAttributeChangedSignal(Attributes.GateState):Connect(function()
+			if gate:GetAttribute(Attributes.GateState) == "open" then
 				self:_expire(state)
 			end
 		end)
@@ -649,7 +648,7 @@ end
 -- loop closed over its own `state`, so dropping the table it was
 -- indexed under left it spinning on a state that still read Running —
 -- and on the next floor the old room's queue reads exhausted and its
--- zombie list empty, which is exactly the WIN condition. A floor-one
+-- mob list empty, which is exactly the WIN condition. A floor-one
 -- coffin event would announce "Event Successful" minutes into floor
 -- two and hang a reward clock on a room that no longer exists.
 --
@@ -724,6 +723,12 @@ function CoffinEventService.Start(self: typeof(CoffinEventService))
 		if state then
 			self:_expire(state)
 		end
+	end)
+
+	-- The floor is being torn down: every live challenge ends here (see
+	-- ResetForFloor).
+	DungeonService.Signals.OnFloorTeardown:Connect(function()
+		self:ResetForFloor()
 	end)
 end
 

@@ -46,7 +46,7 @@ function Volleyball:PlayEffect()
 		end
 	end
 
-	volleyball.Parent = workspace.IgnoreInstances.MagicSpells
+	volleyball.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	local connection
 

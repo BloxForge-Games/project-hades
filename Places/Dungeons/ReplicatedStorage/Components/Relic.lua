@@ -2,25 +2,26 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local DropFloatController = require(ReplicatedStorage.Controllers.DropFloatController)
 local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
 local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
-local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
 local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
-local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
+local dressRelicDisplay = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.dressRelicDisplay)
+local buildPromptCard = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.buildPromptCard)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
-local applyOwnerLabel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.applyOwnerLabel)
+local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 
@@ -42,20 +43,28 @@ local COLLECT_RELIC_CHARACTER_VFX_NAME = "CollectRelicVFXCharacter"
 -- more than the relic one.
 local COLLECT_RELIC_VFX_LIFETIME_SCALE = 1.5
 local COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE = 2
+-- The landed float (DropFloatController): a slow tumble about this axis
+-- (in the relic's own frame) at ROTATION_SPEED degrees per second along
+-- it, and a gentle bob about the landing pose. The bob used to be a
+-- PER-FRAME increment of 0.01-0.015 added to wherever the relic already
+-- was, which integrated to roughly a third of a stud at 60 fps (and less
+-- at lower frame rates); these are the studs the fixed bob actually
+-- travels, sized to read the same.
 local ROTATION_SPEED = 20
+local ROTATION_AXIS = Vector3.new(1, 1.5, 0.5)
+local BOB_AMPLITUDE_MIN = 0.15
+local BOB_AMPLITUDE_MAX = 0.35
+local BOB_CYCLE_MIN = 2
+local BOB_CYCLE_MAX = 3.5
 -- How long Construct waits for a streamed-in descendant before giving up.
 local STREAM_WAIT_SECONDS = 10
 
--- GROUND-relic glow. Lives here rather than on the model template on
--- purpose: this component only runs on relics tagged TagList.Relic — the
--- ones a vending machine drops — while the copies orbiting a player are
--- clones tagged "FloatingRelic" that never mount this component. Putting
--- the light in the template would light up every orbiting relic too.
-local GLOW_BRIGHTNESS = 0.25
-local GLOW_RANGE = 8
-local GLOW_NAME = "RarityGlow"
 -- Mirrors the server's PICKUP_FADE_SECONDS, which times the destroy.
 local PICKUP_FADE_SECONDS = 0.75
+-- The fade-in on spawn, and the (zero-length) hide of someone else's
+-- owner-locked relic.
+local FADE_IN_INFO = TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+local HIDE_INFO = TweenInfo.new(0, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 
 -- The prompt card's UserText line: "(name)" of the player who DROPPED this
 -- item from their tray (DroppedByName, stamped by DropService /
@@ -77,29 +86,10 @@ local Relic = Component.new({
 	Extensions = { JanitorAdder } :: { any },
 })
 
-function Relic:_onHeartbeat(deltaTime: number)
-	-- Bob + rotation folded into ONE PivotTo so multi-handle relics
-	-- (Handle + Handle2 + …) move and rotate together. The previous
-	-- impl bobbed via PivotTo (OK — moves all parts) but rotated via
-	-- `Handle.CFrame *= angles` (BAD — only rotates Handle). Result on
-	-- a multi-handle relic: Handle spun in place while Handle2 sat
-	-- still, visibly detaching the two pieces every frame.
-	--
-	-- Composing in pivot-space: translation around the model's pivot
-	-- followed by rotation around the same pivot. Order matters —
-	-- `CFrame.new(bob) * CFrame.Angles(...)` translates first then
-	-- rotates, which keeps the rotation centered on the bobbed pivot.
-	local bobY = self._amplitude * math.sin((tick() * 2) * (math.pi / self._durationPerCycle))
-	local rotation = math.rad(ROTATION_SPEED * deltaTime)
-	self.Instance:PivotTo(
-		self.Instance:GetPivot() * CFrame.new(0, bobY, 0) * CFrame.Angles(rotation, rotation * 1.5, rotation / 2)
-	)
-end
-
 function Relic:Construct()
 	self._gone = false
-	self._amplitude = Random.new():NextNumber(0.01, 0.015)
-	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
+	self._amplitude = Random.new():NextNumber(BOB_AMPLITUDE_MIN, BOB_AMPLITUDE_MAX)
+	self._durationPerCycle = Random.new():NextNumber(BOB_CYCLE_MIN, BOB_CYCLE_MAX)
 	-- The parts can stream in after the tagged Model does; wait for them.
 	-- PrimaryPart is the invisible anchor (billboard adornee, particle
 	-- rig); the Handle is the visible mesh Start flies and fades.
@@ -138,13 +128,6 @@ function Relic:Construct()
 		return
 	end
 	self._primaryPart = handle
-	self._overlapParams = OverlapParams.new()
-	-- Set overlap params
-	self._overlapParams.FilterDescendantsInstances = {
-		Players.LocalPlayer.Character,
-	}
-	self._overlapParams.FilterType = Enum.RaycastFilterType.Include
-	self._canPickup = false
 	self._consumed = false
 	self._isBoss = self.Instance:GetAttribute(Attributes.IsBoss)
 	self._originPosition = self.Instance:GetPivot().Position
@@ -183,33 +166,22 @@ function Relic:_playCollectedFade()
 	end
 	self._consumed = true
 
-	-- PASS 1, instant: everything that reads as "you can still take this",
-	-- plus the effects that do not ride Transparency and would otherwise
+	-- AT ONCE: everything that reads as "you can still take this", plus
+	-- the effects that do not ride Transparency and would otherwise
 	-- outlive the mesh (a Light leaves a lit patch of floor under an
 	-- invisible relic; emitters keep spitting particles from nothing).
 	-- Disabling a SHOWN prompt fires PromptHidden, which is what takes the
 	-- description card and RelicRenderController's hover down; a relic not
 	-- yet landed has no prompt here, and its landing checks _consumed so it
 	-- never grows one.
-	for _, descendant in self.Instance:GetDescendants() do
-		if
-			descendant:IsA("ProximityPrompt")
-			or descendant:IsA("BillboardGui")
-			or descendant:IsA("ParticleEmitter")
-			or descendant:IsA("Trail")
-			or descendant:IsA("Light")
-		then
-			descendant.Enabled = false
-		end
-	end
-
-	-- PASS 2, over PICKUP_FADE_SECONDS: the visible geometry, 0 -> 1. The
-	-- HANDLE is the relic's visible mesh (Construct aliases it as
-	-- _primaryPart, confusingly) and PrimaryPart is a separate invisible
-	-- anchor that only hosts the billboard. So every BasePart fades
-	-- (MeshPart and UnionOperation are BaseParts too) — the Handle, the
-	-- parts nested under it, and the extra handles a multi-part relic
-	-- carries, all together.
+	--
+	-- Over PICKUP_FADE_SECONDS: the visible geometry, 0 -> 1. The HANDLE
+	-- is the relic's visible mesh (Construct aliases it as _primaryPart,
+	-- confusingly) and PrimaryPart is a separate invisible anchor that
+	-- only hosts the billboard. So every BasePart fades (MeshPart and
+	-- UnionOperation are BaseParts too) — the Handle, the parts nested
+	-- under it, and the extra handles a multi-part relic carries, all
+	-- together.
 	--
 	-- The anchor is skipped ONLY when it is genuinely a separate part. If
 	-- a relic's PrimaryPart IS its Handle, skipping it would leave the
@@ -219,13 +191,14 @@ function Relic:_playCollectedFade()
 	if anchor == self.Instance:FindFirstChild("Handle") then
 		anchor = nil
 	end
-
-	local tweenInfo = TweenInfo.new(PICKUP_FADE_SECONDS)
-	for _, descendant in self.Instance:GetDescendants() do
-		if descendant:IsA("BasePart") and descendant ~= anchor then
-			TweenService:Create(descendant, tweenInfo, { Transparency = 1 }):Play()
-		end
-	end
+	fadeSubtree(self.Instance, {
+		targetTransparency = 1,
+		tweenInfo = TweenInfo.new(PICKUP_FADE_SECONDS),
+		skip = function(descendant)
+			return descendant == anchor
+		end,
+		disable = { "ProximityPrompt", "BillboardGui", "ParticleEmitter", "Trail", "Light" },
+	})
 
 	-- THE PICKUP BURSTS, on every screen, only for the relic actually
 	-- taken: the rest of a claim-one pull is Collected but carries no
@@ -249,9 +222,8 @@ function Relic:_playCollectedFade()
 		Color = burstColor,
 		LifetimeScale = COLLECT_RELIC_VFX_LIFETIME_SCALE,
 	})
-	local character = collector.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
+	local root = getRoot.fromPlayer(collector)
+	if root then
 		emitVFXPart(COLLECT_RELIC_CHARACTER_VFX_NAME, root.CFrame, nil, {
 			Color = burstColor,
 			LifetimeScale = COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE,
@@ -302,22 +274,18 @@ function Relic:Start()
 	-- Already invisible from the server; the local hide below is only the
 	-- fallback for a spawn path that forgot to pre-hide.
 	if not isOwner then
-		warn("Local player is not the owner of this relic. Cannot enable pickup.")
-
 		-- Every BasePart in the model EXCEPT PrimaryPart. Without the
 		-- skip, the prior multi-handle fix made PrimaryPart visible as an
 		-- orange box (it tweened to Transparency=1 here but other code
 		-- paths re-tweened it visible — and tweening it 1→1 also briefly
 		-- overwrites the enforced 1 above).
-		for _, descendant in self.Instance:GetDescendants() do
-			if descendant:IsA("BasePart") and descendant ~= self.Instance.PrimaryPart then
-				TweenService:Create(
-					descendant,
-					TweenInfo.new(0, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-					{ Transparency = 1 }
-				):Play()
-			end
-		end
+		fadeSubtree(self.Instance, {
+			targetTransparency = 1,
+			tweenInfo = HIDE_INFO,
+			skip = function(descendant)
+				return descendant == self.Instance.PrimaryPart
+			end,
+		})
 
 		for _, particle in self._relicParticleAttachment:GetChildren() do
 			if particle.Name == "Shine" then
@@ -338,15 +306,13 @@ function Relic:Start()
 	-- Multi-handle relics get all their VISIBLE handles tweened in
 	-- together — PrimaryPart was the orange-cube culprit before this
 	-- skip was added.
-	for _, descendant in self.Instance:GetDescendants() do
-		if descendant:IsA("BasePart") and descendant ~= self.Instance.PrimaryPart then
-			TweenService:Create(
-				descendant,
-				TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
-				{ Transparency = 0 }
-			):Play()
-		end
-	end
+	fadeSubtree(self.Instance, {
+		targetTransparency = 0,
+		tweenInfo = FADE_IN_INFO,
+		skip = function(descendant)
+			return descendant == self.Instance.PrimaryPart
+		end,
+	})
 
 	self.startTime = workspace:GetServerTimeNow()
 	-- Stretched for a ricochet (arcPath's durationScale) so the longer
@@ -364,49 +330,38 @@ function Relic:Start()
 		then SkipRelicData.DisplayRarity
 		else RelicData[self.Instance.Name] and RelicData[self.Instance.Name].rarity
 
-	local relicBillboardGui = ReplicatedStorage.GameAssets.BillboardGuis.RelicName:Clone()
-	relicBillboardGui.Adornee = self.Instance.PrimaryPart
-	relicBillboardGui.Frame.NameText.Text = self.Instance.Name
-	relicBillboardGui.Frame.RarityText.Text = rarity
-
-	-- Owner line: "(PlayerName)" under the rarity, and ONLY on a relic a
-	-- player dropped from their tray. A vending-machine offer, an event
-	-- reward or a Skip carries no DroppedByName, and the shared helper
-	-- hides the label for them (the prefab authors placeholder text).
-	applyOwnerLabel(relicBillboardGui.Frame, self.Instance:GetAttribute(Attributes.DroppedByName))
-
 	local rarityColor = if isSkip then SkipRelicData.Color else RarityColors:Get(rarity)
-
-	relicBillboardGui.Frame.RarityText.TextColor3 = rarityColor
 
 	self._dropParticles.Color = ColorSequence.new(rarityColor)
 
-	-- One light on the primary Handle, tinted via the glow-specific
-	-- palette (RarityColors:GetGlow — purer hues than the text tint; the
-	-- Skip offer keeps its own colour). ONE, not one per handle: a
-	-- multi-handle relic would otherwise stack brightness and read far
-	-- hotter than a single-handle one.
-	local glow = Instance.new("PointLight")
-	glow.Name = GLOW_NAME
-	glow.Color = if isSkip then rarityColor else RarityColors:GetGlow(rarity)
-	glow.Brightness = GLOW_BRIGHTNESS
-	glow.Range = GLOW_RANGE
-	glow.Shadows = true
-	glow.Parent = self._primaryPart
-
-	relicBillboardGui.Parent = self.Instance.PrimaryPart
-
-	if ScreenSizeController:GetScreenSizeData().name == ScreenSizes.Mobile then
-		relicBillboardGui.Frame.NameText.TextSize = 12
-		relicBillboardGui.Frame.RarityText.TextSize = 10
-	end
+	-- The nameplate and the GROUND-relic glow (shared dressing). The
+	-- owner line is "(PlayerName)" ONLY on a relic a player dropped from
+	-- their tray: a vending-machine offer, an event reward or a Skip
+	-- carries no DroppedByName and the label hides. The light sits on the
+	-- primary Handle, tinted via the glow-specific palette (the Skip offer
+	-- keeps its own colour) -- and it lives HERE rather than on the model
+	-- template on purpose: this component only runs on relics tagged
+	-- TagList.Relic, while the copies orbiting a player are clones tagged
+	-- "FloatingRelic" that never mount it. A light in the template would
+	-- light up every orbiting relic too.
+	dressRelicDisplay(self.Instance.PrimaryPart, {
+		name = self.Instance.Name,
+		rarity = rarity,
+		rarityColor = rarityColor,
+		droppedByName = self.Instance:GetAttribute(Attributes.DroppedByName),
+		glowColor = if isSkip then rarityColor else RarityColors:GetGlow(rarity),
+		glowParent = self._primaryPart,
+	})
 
 	-- Thrown: the pop, on the Handle so it rides the arc. Every relic
 	-- source reaches this same flight, so a machine, a mob, a chest, an
 	-- event and a player's own tray drop all sound alike.
 	lootSound:PlayPop(self.Instance:FindFirstChild("Handle"))
 
-	self._connection = RunService.RenderStepped:Connect(function(_: number)
+	-- In the janitor: a relic claimed mid-flight (the Collected fade runs
+	-- and the server destroys it) used to leave this per-frame connection
+	-- behind, since only the landing below ever disconnected it.
+	self._connection = self._janitor:Add(RunService.RenderStepped:Connect(function(_: number)
 		local now = workspace:GetServerTimeNow()
 		local alpha = math.clamp((now - self.startTime) / self.duration, 0, 1)
 
@@ -439,9 +394,21 @@ function Relic:Start()
 			self._relicParticles:Emit(15)
 			lootSound:PlayLanding()
 
-			self._janitor:Add(RunService.Heartbeat:Connect(function(deltaTime: number)
-				self:_onHeartbeat(deltaTime)
-			end))
+			-- The float: one shared Heartbeat (DropFloatController) poses
+			-- the whole model -- every handle of a multi-handle relic
+			-- together -- from the landing pose. Out with the janitor on
+			-- pickup / destroy.
+			DropFloatController:Register(self.Instance, {
+				base = self.Instance:GetPivot(),
+				bobAmplitude = self._amplitude,
+				bobCycle = self._durationPerCycle,
+				phase = math.random() * 2 * math.pi,
+				spinAxis = ROTATION_AXIS,
+				spinRate = math.rad(ROTATION_SPEED) * ROTATION_AXIS.Magnitude,
+			})
+			self._janitor:Add(function()
+				DropFloatController:Unregister(self.Instance)
+			end, true)
 
 			local relicName = self.Instance.Name
 
@@ -449,27 +416,18 @@ function Relic:Start()
 				then SkipRelicData.Description
 				else getRelicDescription(localPlayer, relicName) or "No description available."
 			local proximityPrompt = Instance.new("ProximityPrompt")
-			proximityPrompt.ActionText = relicName
-			proximityPrompt.ObjectText = relicDescription
 			proximityPrompt.KeyboardKeyCode = Enum.KeyCode.F
 			proximityPrompt.RequiresLineOfSight = false
 			proximityPrompt.MaxActivationDistance = 6
-			proximityPrompt.Style = Enum.ProximityPromptStyle.Custom
-			proximityPrompt.UIOffset = Vector2.new(0, 60)
 			proximityPrompt.Enabled = false
-
-			local promptStyle = "RelicSmall"
-			local descriptionLength = string.len((string.gsub(relicDescription, "<[^>]+>", "")))
-
-			if descriptionLength > 34 and descriptionLength <= 62 then
-				promptStyle = "RelicMedium"
-			elseif descriptionLength > 62 then
-				promptStyle = "RelicLarge"
-			end
-
-			proximityPrompt:SetAttribute("Rarity", rarity)
-			proximityPrompt:SetAttribute("Style", promptStyle)
-			proximityPrompt:SetAttribute("UserText", ownerUserText(self.Instance))
+			-- The shared card: name + rich description, sized by the
+			-- description's length and tinted by the rarity.
+			buildPromptCard(proximityPrompt, {
+				name = relicName,
+				description = relicDescription,
+				rarity = rarity,
+				userText = ownerUserText(self.Instance),
+			})
 
 			proximityPrompt.Parent = self.Instance.Handle
 
@@ -501,7 +459,7 @@ function Relic:Start()
 				ScreenGradientInterfaceController.Signals.OnPulseGradient:Fire(rarityColor)
 			end))
 		end
-	end)
+	end))
 
 	self._relicParticleAttachment.Parent = self._primaryPart
 end

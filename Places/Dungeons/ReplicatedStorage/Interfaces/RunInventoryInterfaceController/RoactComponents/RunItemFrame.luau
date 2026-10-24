@@ -29,7 +29,6 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
@@ -70,25 +69,21 @@ local PULSE_UP_TWEEN_INFO = TweenInfo.new(CLICK_PULSE_UP_DURATION, Enum.EasingSt
 local PULSE_DOWN_TWEEN_INFO = TweenInfo.new(CLICK_PULSE_DOWN_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local OUTLINE_SPEED = 50
-local OUTLINE_SIZE_DESKTOP = 3.5
-local OUTLINE_SIZE_MOBILE = 1.5
+-- The tile outline (the EasyVisuals rarity outline and the empty slot's
+-- static stroke alike) is a SCALED stroke, the 2026-10-22 export's 0.03,
+-- so it keeps its weight on every tile size and needs no touch switch.
+local OUTLINE_THICKNESS = 0.03
 
--- Outline thickness in PIXELS (both the EasyVisuals rarity outline and the
--- empty slot's static stroke are FixedSize), so it has to be stepped down on
--- touch or it swamps the smaller tiles. Read live rather than cached at
--- require time — Studio's device emulator flips TouchEnabled after this
--- module is already loaded.
-local function getOutlineSize(): number
-	return if UserInputService.TouchEnabled then OUTLINE_SIZE_MOBILE else OUTLINE_SIZE_DESKTOP
-end
 local SHIMMER_TIME = 5
-local TOP_RARITY = ItemRarity.Mythic
+local TOP_RARITY = ItemRarity.Legendary
 
--- Empty-slot palette, matching the authored Empty frame: flat grey
--- body with a static grey outline gradient (no rarity animation).
-local EMPTY_TILE_COLOR = Color3.fromRGB(80, 80, 80)
-local EMPTY_STROKE_COLOR = Color3.fromRGB(152, 152, 152)
-local EMPTY_OUTLINE_COLOR = Color3.fromRGB(148, 148, 148)
+-- Empty-slot palette (the bag's 2026-10-22 blues): a muted blue-grey
+-- body with a static, slightly lighter outline (no rarity animation).
+local EMPTY_TILE_COLOR = Color3.fromRGB(42, 66, 85)
+-- The stroke's own colour is darker than the gradient laid over it
+-- (the 2026-10-22 export).
+local EMPTY_STROKE_COLOR = Color3.fromRGB(40, 59, 74)
+local EMPTY_OUTLINE_COLOR = Color3.fromRGB(70, 104, 130)
 
 -- Icon geometry: full-bleed, inherited from InventoryItemFrame (where the
 -- icon rode directly on the ImageButton). Drop icons are authored to fill
@@ -191,11 +186,17 @@ local function RunItemFrame(props: any)
 			return
 		end
 
-		local outlineSize = getOutlineSize()
 		local outlinePreset = if rarity == TOP_RARITY then "RainbowOutline" else "ShineOutline"
 
 		local outlineEffect =
-			EasyVisuals.new(outlineAnchor, outlinePreset, OUTLINE_SPEED, outlineSize, false, rarityColor)
+			EasyVisuals.new(outlineAnchor, outlinePreset, OUTLINE_SPEED, OUTLINE_THICKNESS, false, rarityColor)
+		-- EasyVisuals holds Thickness at OUTLINE_THICKNESS every frame in
+		-- whatever sizing mode the stroke has; scaled is what makes 0.03 a
+		-- fraction of the tile rather than a hairline of pixels.
+		local outlineStroke = outlineAnchor:FindFirstChildWhichIsA("UIStroke")
+		if outlineStroke then
+			outlineStroke.StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize
+		end
 
 		-- Shime spawns a "UIShimmer" frame inside the tile (inheriting its
 		-- corner radius). It has no :Destroy(), so cancel the tween and drop
@@ -268,7 +269,8 @@ local function RunItemFrame(props: any)
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				BackgroundTransparency = 1,
 				Image = "rbxassetid://96152661142870",
-				ImageTransparency = 0.25,
+				-- The 2026-10-22 export: an empty slot casts a fainter shadow.
+				ImageTransparency = if isEmpty then 0.75 else 0.25,
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromScale(1.75, 1.75),
 				ZIndex = 0,
@@ -298,14 +300,12 @@ local function RunItemFrame(props: any)
 					TopRightRadius = UDim.new(0.05, 0),
 				}),
 
-				-- Thickness comes off the SAME touch switch EasyVisuals gets
-				-- for filled tiles below. It's FixedSize (pixels), so a flat
-				-- 3.5 here would read roughly twice as heavy as the filled
-				-- tile sitting next to it on a phone.
+				-- The same scaled weight as the filled tiles' rarity outline.
 				UIStroke = if isEmpty
 					then React.createElement("UIStroke", {
 						Color = EMPTY_STROKE_COLOR,
-						Thickness = getOutlineSize(),
+						StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
+						Thickness = OUTLINE_THICKNESS,
 					}, {
 						UIGradient = React.createElement("UIGradient", {
 							Color = ColorSequence.new({
@@ -453,7 +453,7 @@ local function RunItemFrame(props: any)
 			LevelTextLabel = React.createElement("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0),
 				BackgroundColor3 = Color3.new(),
-				BackgroundTransparency = 0.4,
+				BackgroundTransparency = 0.25,
 				FontFace = Font.new(
 					"rbxasset://fonts/families/Montserrat.json",
 					Enum.FontWeight.ExtraBold,

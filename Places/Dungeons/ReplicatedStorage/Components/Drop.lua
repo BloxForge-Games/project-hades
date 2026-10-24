@@ -9,32 +9,24 @@ local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Func
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentExtensions.JanitorAdder)
 local DropIndicatorController = require(ReplicatedStorage.Controllers.DropIndicatorController)
+local DropFloatController = require(ReplicatedStorage.Controllers.DropFloatController)
+local DropPickupSweepController = require(ReplicatedStorage.Controllers.DropPickupSweepController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
-local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
-local RelicController = require(ReplicatedStorage.Controllers.RelicController)
 
-local MAX_STUD_RAYCAST_DIST = 8
+-- Studs from the local player's root within which a landed drop is
+-- collected (DropPickupSweepController tests it). Pot Of Gold owners skip
+-- the gate for coins and orbs; that rule lives in the sweep.
+local PICKUP_RADIUS = 10
 
 -- Set by the server on loot that came out of a chest (Miniboss, Boss
 -- or Treasure). Those drops get a blip each as they pop; mob death
 -- loot deliberately does not.
 local CHEST_DROP_ATTRIBUTE = "ChestDrop"
 
--- Pot Of Gold: these drop types are collected from ANY distance for owners --
--- the 8-stud proximity gate is skipped and the existing fly-to-player tween
--- runs from wherever the drop sits. Gear drops are deliberately absent:
--- they are a deliberate choice the player should walk to.
-local COMPASS_DROP_TYPES = {
-	[DropTypes.Coins] = true,
-	[DropTypes.Health] = true,
-	[DropTypes.Mana] = true,
-	[DropTypes.SuperMana] = true,
-}
 local PICKUP_DELAY = 0.25
 local DEFAULT_X_Z_DISTANCE = 8
 local BOSS_X_Z_DISTANCE = 20
@@ -42,42 +34,26 @@ local Y_POS_OFFSET = -1
 -- How long Construct waits for a streamed-in descendant before giving up.
 local STREAM_WAIT_SECONDS = 10
 
+-- The landed float (DropFloatController): a gentle sine bob about the
+-- landing pose. The old 0.01-0.015 was a PER-FRAME increment added to
+-- wherever the coin already was, which integrated to roughly a third of a
+-- stud at 60 fps (and less at lower frame rates); these are the studs the
+-- fixed bob actually travels, sized to read the same.
+local BOB_AMPLITUDE_MIN = 0.15
+local BOB_AMPLITUDE_MAX = 0.35
+local BOB_CYCLE_MIN = 2
+local BOB_CYCLE_MAX = 3.5
+
 local Drop = Component.new({
 	Tag = TagList.Drop,
 	Extensions = { JanitorAdder } :: { any },
 })
 
--- True when Pot Of Gold should pull THIS drop in regardless of distance.
--- Reads the replicated relic registry, so it costs no round trip; a missing
--- controller (pre-Start) simply falls back to the normal radius.
-local function potOfGoldCollects(dropType: string?): boolean
-	if not dropType or not COMPASS_DROP_TYPES[dropType] then
-		return false
-	end
-	local controller = RelicController
-	local owned = controller:GetRelicsFromUserId(Players.LocalPlayer.UserId)
-	return owned ~= nil and (owned[RelicNames["Pot Of Gold"]] or 0) > 0
-end
-
-function Drop:_onHeartbeat()
-	self.Instance:PivotTo(
-		self.Instance:GetPivot()
-			+ Vector3.new(0, self._amplitude * math.sin((tick() * 2) * (math.pi / self._durationPerCycle)), 0)
-	)
-
-	-- Pot Of Gold owners skip the proximity check entirely for Coins / Orbs;
-	-- everything else still needs the character inside MAX_STUD_RAYCAST_DIST.
-	local inRange = potOfGoldCollects(self.Instance:GetAttribute(Attributes.DropType))
-	if not inRange then
-		local partsBoundArray =
-			workspace:GetPartBoundsInRadius(self._primaryPart.Position, MAX_STUD_RAYCAST_DIST, self._overlapParams)
-		inRange = #partsBoundArray > 0
-	end
-
-	if not inRange or not self._canPickup or not self._isMine then
-		return
-	end
-
+-- The pickup. Runs once, from the shared sweep, with the root that walked
+-- into range (resolved on that tick, so a respawned character collects
+-- just like the first one did).
+function Drop:_collect(root: BasePart)
+	-- Takes the drop out of the float (and the sweep, if it is still there).
 	self._janitor:Cleanup()
 
 	DropIndicatorController.OnDropIndicatorRequested:Fire(
@@ -96,11 +72,7 @@ function Drop:_onHeartbeat()
 		v:Emit(1)
 	end
 
-	local coinCFrameTween = TweenService:Create(
-		self.Instance.PrimaryPart,
-		TweenInfo.new(0.5),
-		{ CFrame = Players.LocalPlayer.Character.HumanoidRootPart.CFrame }
-	)
+	local coinCFrameTween = TweenService:Create(self.Instance.PrimaryPart, TweenInfo.new(0.5), { CFrame = root.CFrame })
 
 	local coinImageTransparencyTween = TweenService:Create(
 		self._billboardImage,
@@ -120,8 +92,8 @@ end
 
 function Drop:Construct()
 	self._gone = false
-	self._amplitude = Random.new():NextNumber(0.01, 0.015)
-	self._durationPerCycle = Random.new():NextNumber(2, 3.5)
+	self._amplitude = Random.new():NextNumber(BOB_AMPLITUDE_MIN, BOB_AMPLITUDE_MAX)
+	self._durationPerCycle = Random.new():NextNumber(BOB_CYCLE_MIN, BOB_CYCLE_MAX)
 	-- The parts can stream in after the tagged Model does; wait for them.
 	self._primaryPart = waitForPrimaryPart(self.Instance)
 	if not self._primaryPart then
@@ -157,13 +129,6 @@ function Drop:Construct()
 	if self._gone then
 		return
 	end
-	self._overlapParams = OverlapParams.new()
-	-- Set overlap params
-	self._overlapParams.FilterDescendantsInstances = {
-		Players.LocalPlayer.Character,
-	}
-	self._overlapParams.FilterType = Enum.RaycastFilterType.Include
-	self._canPickup = false
 	-- A drop with no OwnerId is SHARED (mob death loot — everyone
 	-- collects it). One WITH an OwnerId is private chest loot: only that
 	-- player sees it or can pick it up.
@@ -237,13 +202,35 @@ function Drop:Start()
 
 	self._dropParticles.Enabled = false
 
-	task.delay(PICKUP_DELAY, function()
-		self._canPickup = true
-	end)
+	-- Settled. The float (one shared Heartbeat, DropFloatController) runs
+	-- from the landing pose at once; the pickup sweep takes the drop after
+	-- the grace delay. Both leave with the janitor: a collect, an expire or
+	-- a destroy unregisters them.
+	DropFloatController:Register(self.Instance, {
+		base = self.Instance:GetPivot(),
+		bobAmplitude = self._amplitude,
+		bobCycle = self._durationPerCycle,
+		phase = math.random() * 2 * math.pi,
+	})
+	self._janitor:Add(function()
+		DropFloatController:Unregister(self.Instance)
+		DropPickupSweepController:Unregister(self.Instance)
+	end, true)
 
-	self._janitor:Add(RunService.Heartbeat:Connect(function()
-		self:_onHeartbeat()
-	end))
+	task.delay(PICKUP_DELAY, function()
+		-- Gone during the delay (destroyed / expired): nothing to sweep.
+		if self._gone or not self.Instance.Parent then
+			return
+		end
+		DropPickupSweepController:Register(self.Instance, {
+			part = self._primaryPart,
+			radius = PICKUP_RADIUS,
+			dropType = self.Instance:GetAttribute(Attributes.DropType) :: string?,
+			onPickup = function(root: BasePart)
+				self:_collect(root)
+			end,
+		})
+	end)
 end
 
 return Drop

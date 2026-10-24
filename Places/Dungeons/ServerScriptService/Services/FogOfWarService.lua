@@ -19,7 +19,7 @@
 	    a tween back to the authored look.
 
 	PARTY-WIDE, SERVER-DRIVEN: reveal is one shared state, not a per-player
-	view — getDungeonService() advances every cursor on the first crossing, so
+	view — GateService's first-crossing trigger advances every cursor, so
 	OnRoomEntered is exactly "the party is in this chunk now". The server
 	writes the properties and Roblox replicates the tweens, which also
 	means a late joiner sees the correct state with no catch-up logic.
@@ -62,18 +62,10 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local DungeonService = require(ServerScriptService.Services.DungeonService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local fogHideables = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.fogHideables)
-
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 --[ Constants ]--
 
@@ -88,25 +80,22 @@ local FOG_BOOLEAN_ATTRIBUTE = "FogEnabled"
 
 -- Stamped on the ROOM MODEL. Clients read it to know whether a chunk's
 -- contents are live yet — EventController's pedestal wiring waits on it
--- so a merchant prompt cannot light up inside an unrevealed shop.
-local ROOM_REVEALED_ATTRIBUTE = "FogRevealed"
+-- so a merchant prompt cannot light up inside an unrevealed shop. Written
+-- ONLY by _setRevealed below.
+local ROOM_REVEALED_ATTRIBUTE = Attributes.FogRevealed
 
 --[ Service ]--
 
--- DungeonService's room record, reached through the lazy getter above:
--- the fields this side reads.
-type Room = {
-	id: number,
-	model: Model,
-	branch: Room?,
-	buildings: { Model }?,
-}
+type Room = DungeonService.Room
 
 local FogOfWarService = {
 	Name = "FogOfWarService",
+	Dependencies = { DungeonService } :: { any },
 
-	-- [roomId] = true once revealed. Rebuilt per floor; the guard that
-	-- makes OnRoomEntered's per-player fan-out reveal exactly once.
+	-- [roomId] = true once revealed: THE truth about reveal state (the
+	-- FogRevealed attribute is its published mirror). Rebuilt per floor;
+	-- the guard that makes OnRoomEntered's per-player fan-out reveal
+	-- exactly once.
 	_revealed = {} :: { [number]: boolean },
 }
 
@@ -166,13 +155,29 @@ function FogOfWarService._collectHideables(_self: typeof(FogOfWarService), roomM
 	return fogHideables.collectRoomHideables(roomModel)
 end
 
+-- THE one writer of reveal state: `_revealed` (the truth) and the
+-- FogRevealed attribute on the room model (its replicated mirror) change
+-- together, here and nowhere else. Anything that wants a room revealed or
+-- hidden goes through RevealRoom / HideRoom.
+function FogOfWarService._setRevealed(self: typeof(FogOfWarService), room: Room, revealed: boolean)
+	if not room.model then
+		return
+	end
+	if revealed then
+		self._revealed[room.id] = true
+	else
+		self._revealed[room.id] = nil
+	end
+	room.model:SetAttribute(ROOM_REVEALED_ATTRIBUTE, revealed)
+end
+
 -- Hides one chunk (and its Treasure branch, which hangs off the same
 -- room and is revealed with it).
 function FogOfWarService._hideRoom(self: typeof(FogOfWarService), room: Room?)
 	if not room or not room.model then
 		return
 	end
-	room.model:SetAttribute(ROOM_REVEALED_ATTRIBUTE, false)
+	self:_setRevealed(room, false)
 	for _, instance in self:_collectHideables(room.model) do
 		hideInstance(instance)
 	end
@@ -196,6 +201,19 @@ end
 
 --[ Public ]--
 
+-- True once `room` has been revealed this floor (the server-side truth
+-- behind the FogRevealed attribute).
+function FogOfWarService.IsRevealed(self: typeof(FogOfWarService), room: Room?): boolean
+	return room ~= nil and self._revealed[room.id] == true
+end
+
+-- Hides one chunk again (with its Treasure branch and relocated
+-- buildings): the public face of the per-floor hide, for anything that
+-- needs a room re-fogged server-side. Idempotent.
+function FogOfWarService.HideRoom(self: typeof(FogOfWarService), room: Room?)
+	self:_hideRoom(room)
+end
+
 -- Reveals one chunk for EVERYONE, once. Safe to call repeatedly — the
 -- `_revealed` latch and the cache-attribute checks both no-op on a second
 -- pass.
@@ -203,7 +221,6 @@ function FogOfWarService.RevealRoom(self: typeof(FogOfWarService), room: Room?)
 	if not room or not room.model or self._revealed[room.id] then
 		return
 	end
-	self._revealed[room.id] = true
 
 	-- GetDescendants covers direct children too; anything without a
 	-- cache attribute (the structural shell) is a no-op.
@@ -221,7 +238,7 @@ function FogOfWarService.RevealRoom(self: typeof(FogOfWarService), room: Room?)
 			end
 		end
 	end
-	room.model:SetAttribute(ROOM_REVEALED_ATTRIBUTE, true)
+	self:_setRevealed(room, true)
 
 	if room.branch then
 		-- The Treasure branch opens off this chunk with no gate of its
@@ -231,15 +248,9 @@ function FogOfWarService.RevealRoom(self: typeof(FogOfWarService), room: Room?)
 			for _, instance in branch.model:GetDescendants() do
 				revealInstance(instance)
 			end
-			branch.model:SetAttribute(ROOM_REVEALED_ATTRIBUTE, true)
+			self:_setRevealed(branch, true)
 		end
 	end
-end
-
--- Whether a chunk's contents are live yet. Server-side readers (the
--- client reads the room model's attribute instead).
-function FogOfWarService.IsRoomRevealed(self: typeof(FogOfWarService), roomId: number): boolean
-	return self._revealed[roomId] == true
 end
 
 -- Tells `target` (one player, or everyone when nil) that `rooms` are
@@ -290,10 +301,16 @@ end
 --[ Lifecycle ]--
 
 function FogOfWarService.Start(self: typeof(FogOfWarService))
-	-- Hide the whole floor the moment it exists. The Start room is not in
-	-- `rooms` (it is the dungeon's startModel), so the room players
+	-- The floor is going: its reveal state goes with it (room ids restart
+	-- on every floor).
+	DungeonService.Signals.OnFloorTeardown:Connect(function()
+		table.clear(self._revealed)
+	end)
+
+	-- Hide the whole floor the moment it is wired. The Start room is not
+	-- in `rooms` (it is the dungeon's startModel), so the room players
 	-- actually stand in is never fogged.
-	getDungeonService().Signals.OnDungeonGenerated:Connect(function(dungeon)
+	DungeonService.Signals.OnFloorReady:Connect(function(dungeon: DungeonService.Dungeon)
 		table.clear(self._revealed)
 		for _, room in dungeon.rooms do
 			self:_hideRoom(room)
@@ -304,7 +321,7 @@ function FogOfWarService.Start(self: typeof(FogOfWarService))
 	-- per player for the same chunk — `_revealed` collapses that to one
 	-- reveal. Encounter starts route through SetPlayerRoom too, so a
 	-- Miniboss / Boss arena lights up as its intro begins.
-	getDungeonService().Signals.OnRoomEntered:Connect(function(_player: Player, room)
+	DungeonService.Signals.OnRoomEntered:Connect(function(_player: Player, room: Room)
 		self:RevealRoom(room)
 	end)
 end

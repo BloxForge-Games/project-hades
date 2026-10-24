@@ -21,10 +21,10 @@
 	       - Local player hit OR projectile lifetime expired OR wall hit
 	         → impact this frame.
 	  5. On impact (LOCAL player only): call
-	     ZombieService:OnMobProjectileHitRequested(castUuid, projectile.CFrame)
+	     MobService:OnMobProjectileHitRequested(castUuid, projectile.CFrame)
 	  6. Spawn .ExplosionFX at impact, Debris-clean both.
 
-	Why the LOCAL player gates the impact callback: ZombieService's
+	Why the LOCAL player gates the impact callback: MobService's
 	registry is keyed by castUuid + targetPlayer. Only the targeted
 	player's client should report — every client renders the projectile
 	(replicated visual), but only the target triggers damage.
@@ -66,7 +66,7 @@ local TICK_INTERVAL = 0.01
 local MUZZLE_CLEARANCE_DISTANCE = 5
 
 return function(
-	_zombieModel: Model,
+	_mobModel: Model,
 	originCFrame: CFrame,
 	targetPosition: Vector3,
 	castUuid: string,
@@ -113,14 +113,14 @@ return function(
 		end
 	end
 
-	projectile.Parent = workspace.IgnoreInstances.MagicSpells
+	projectile.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Optional muzzle flash at the cast origin. Cheap and adds polish.
 	local castFXTemplate = vfxFolder:FindFirstChild("CastFX")
 	if castFXTemplate then
 		local castFX = castFXTemplate:Clone()
 		castFX:PivotTo(originCFrame)
-		castFX.Parent = workspace.IgnoreInstances.MagicSpells
+		castFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 		for _, descendant in castFX:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") then
 				descendant:Emit(25)
@@ -224,7 +224,7 @@ return function(
 		end
 
 		-- Move forward by speed * tickInterval along the initial
-		-- direction. Straight-line, no drop — this is a magic
+		-- direction. Straight-line, no drop — this is a arcane
 		-- fireball, not a thrown rock.
 		local previousPosition = projectile:GetPivot().Position
 		local moveStep = direction * speed * TICK_INTERVAL
@@ -288,7 +288,7 @@ return function(
 					-- TextIndicator broadcast) ONCE per cast. The
 					-- server validates castUuid + target + IsDodging
 					-- server-side before doing anything — see
-					-- ZombieService.Client:OnMobProjectilePerfectDodgedRequested.
+					-- MobService.Client:OnMobProjectilePerfectDodgedRequested.
 					-- Server does NOT clear the cast registry, so the
 					-- projectile keeps flying past us and a later overlap
 					-- (after our i-frames end) can still apply damage if
@@ -335,7 +335,7 @@ return function(
 	-- if explosionTemplate then
 	-- 	local explosion = explosionTemplate:Clone()
 	-- 	explosion:PivotTo(CFrame.new(impactPosition))
-	-- 	explosion.Parent = workspace.IgnoreInstances.MagicSpells
+	-- 	explosion.Parent = workspace.IgnoreInstances.ArcaneSpells
 	-- 	for _, descendant in explosion:GetDescendants() do
 	-- 		if descendant:IsA("ParticleEmitter") then
 	-- 			descendant:Emit(25)

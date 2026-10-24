@@ -49,7 +49,7 @@
                                                  back to true lets Humanoid:MoveTo
                                                  rotate the character toward the
                                                  walk target.
-       - Attributes.CutscenePlaying = true     → blocks aim / general / magic
+       - Attributes.CutscenePlaying = true     → blocks aim / general / arcane
                                                  actions via PlayerStateController.
 
      WalkSpeed / JumpPower are intentionally left untouched: the cinematic walk

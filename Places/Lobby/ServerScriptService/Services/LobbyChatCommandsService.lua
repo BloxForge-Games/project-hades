@@ -7,8 +7,10 @@
 	a new row), kept separate because the two places share no commands: the
 	Dungeons set drives run systems that do not exist here.
 
-	Open to EVERY player today (dev / playtest convenience). Restrict in
-	`_canRun` if that ever changes.
+	Open to every player EXCEPT /tp (and its aliases), which only a member
+	of the dev group at TP_GROUP_MIN_RANK or above may run (2026-10-23);
+	Studio is exempt so it can be exercised locally. `_canRun` is the one
+	permission seam.
 
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
 	                                      commands are ignored silently
@@ -20,13 +22,16 @@
 	rebuilds from the fresh profile on rejoin. Same command as the Dungeons
 	place's; the Lobby is where a fresh start is usually wanted.
 
-	--- /tp (aliases /dungeon, /dungeons) ---
+	--- /tp [dungeon] [difficulty] [ascension] ---
 
-	Reserves ONE private server of the Dungeons place
-	(Constants.DUNGEONS_PLACE_ID) and teleports EVERY player in this lobby
-	server into it together, so the party lands in the same instance. A
-	second /tp while one is in flight is ignored (the first reservation is
-	the party's). ReserveServer / TeleportAsync are unavailable in Studio
+	A TEST stand-in for the hub's queue. Reserves ONE private server of the
+	named dungeon's place (DungeonData placeId) and teleports EVERY player in
+	this lobby server into it together, carrying the same teleport data the
+	queue will send: { partyLeaderUserId, Difficulty, Ascension }. The
+	dungeon server clamps that difficulty to the leader's unlocks.
+	Defaults: Runegrove, Normal. The dungeon matches an id or the start of a
+	display name ("/tp ember hard"). A second /tp while one is in flight is
+	ignored (the first reservation is the party's). ReserveServer / TeleportAsync are unavailable in Studio
 	and throw for an unpublished place, so both are pcall'd and the failure
 	echoed back instead of killing the Chatted connection.
 ]]
@@ -43,7 +48,29 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
-local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DungeonIds)
+local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
+local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
+
+-- The spells the profile now has equipped, for the /wipedata reply. It
+-- reads the WIPED profile, so it shows what this server's template holds:
+-- an unexpected spell here means this server runs an older build.
+local function describeEquippedArcane(player: Player): string
+	local inventory = DataService:GetProfileData(player).Inventory
+	local arcane = if type(inventory) == "table" then inventory[InventoryType.Arcane] else nil
+	local equipped = {}
+	if type(arcane) == "table" then
+		for _, entry in arcane do
+			if type(entry) == "table" and type(entry.equipSlot) == "number" and entry.equipSlot >= 3 then
+				table.insert(equipped, ("%d: %s"):format(entry.equipSlot, tostring(entry.name)))
+			end
+		end
+	end
+	table.sort(equipped)
+	return if #equipped > 0 then table.concat(equipped, ", ") else "none"
+end
 
 --[ Constants ]--
 
@@ -54,6 +81,44 @@ local TELEPORT_RETRY_GRACE_SECONDS = 15
 -- /wipedata: the reply gets this long on screen before the kick.
 local WIPE_KICK_DELAY_SECONDS = 2
 local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
+
+-- /tp is for the team: the Roblox group whose members at this rank or
+-- above may run it. Ranks are the group's role ranks (0..255).
+local TP_GROUP_ID = 33936009
+local TP_GROUP_MIN_RANK = 100
+-- Commands behind the group gate (aliases included below).
+local TP_GATED_COMMANDS: { [string]: boolean } = { tp = true, dungeon = true, dungeons = true }
+
+-- /tp defaults when no argument names them.
+local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
+local DEFAULT_TP_DIFFICULTY = Difficulty.Normal
+
+-- A dungeon id from an id or the start of a display name, case-insensitive.
+local function matchDungeon(arg: string?): string?
+	if not arg or arg == "" then
+		return DEFAULT_TP_DUNGEON
+	end
+	local lowered = string.lower(arg)
+	for id, config in DungeonData do
+		if string.lower(id) == lowered or string.sub(string.lower(config.displayName), 1, #lowered) == lowered then
+			return id
+		end
+	end
+	return nil
+end
+
+-- A Difficulty value from its name, case-insensitive.
+local function matchDifficulty(arg: string?): string?
+	if not arg or arg == "" then
+		return DEFAULT_TP_DIFFICULTY
+	end
+	for _, difficulty: string in Difficulty :: { [string]: string } do
+		if string.lower(difficulty) == string.lower(arg) then
+			return difficulty
+		end
+	end
+	return nil
+end
 
 -- True while a party teleport is being reserved / issued.
 local teleportInFlight = false
@@ -70,9 +135,20 @@ local LobbyChatCommandsService = {
 local COMMANDS: { [string]: { usage: string, description: string, handler: (Player, { string }) -> string? } }
 COMMANDS = {
 	tp = {
-		usage = "/tp",
-		description = "Teleport EVERYONE here into one reserved Dungeons server.",
-		handler = function(player: Player, _args: { string }): string?
+		usage = "/tp [dungeon] [difficulty] [ascension]",
+		description = "Teleport EVERYONE here into one reserved server of a dungeon (test stand-in for the queue).",
+		handler = function(player: Player, args: { string }): string?
+			local dungeonId = matchDungeon(args[1])
+			if not dungeonId then
+				return ("Unknown dungeon %q."):format(tostring(args[1]))
+			end
+			local difficulty = matchDifficulty(args[2])
+			if not difficulty then
+				return ("Unknown difficulty %q."):format(tostring(args[2]))
+			end
+			local ascension = math.clamp(tonumber(args[3]) or 1, 1, DifficultyData.MaxAscension)
+			local placeId = DungeonData[dungeonId].placeId
+
 			if RunService:IsStudio() then
 				return "Studio: teleports are unavailable here (TeleportAsync). Publish and test in a live server."
 			end
@@ -83,7 +159,7 @@ COMMANDS = {
 
 			-- One reservation for the whole party.
 			local reserveOk, accessCode = pcall(function()
-				return TeleportService:ReserveServer(Constants.DUNGEONS_PLACE_ID)
+				return TeleportService:ReserveServer(placeId)
 			end)
 			if not reserveOk then
 				teleportInFlight = false
@@ -93,11 +169,15 @@ COMMANDS = {
 
 			local options = Instance.new("TeleportOptions")
 			options.ReservedServerAccessCode = accessCode
-			options:SetTeleportData({ partyLeaderUserId = player.UserId })
+			options:SetTeleportData({
+				partyLeaderUserId = player.UserId,
+				Difficulty = difficulty,
+				Ascension = if difficulty == Difficulty.Ascension then ascension else nil,
+			})
 
 			local players = Players:GetPlayers()
 			local ok, err = pcall(function()
-				TeleportService:TeleportAsync(Constants.DUNGEONS_PLACE_ID, players, options)
+				TeleportService:TeleportAsync(placeId, players, options)
 			end)
 			if not ok then
 				teleportInFlight = false
@@ -110,7 +190,11 @@ COMMANDS = {
 			task.delay(TELEPORT_RETRY_GRACE_SECONDS, function()
 				teleportInFlight = false
 			end)
-			return ("Teleporting %d player(s) to a reserved Dungeons server..."):format(#players)
+			return ("Teleporting %d player(s) to %s (%s)..."):format(
+				#players,
+				DungeonData[dungeonId].displayName,
+				difficulty
+			)
 		end,
 	},
 	wipedata = {
@@ -132,7 +216,8 @@ COMMANDS = {
 				end
 			end)
 
-			return "Data wiped. Kicking you so it reloads..."
+			local equipped = describeEquippedArcane(player)
+			return ("Data wiped (arcane %s). Kicking you so it reloads..."):format(equipped)
 		end,
 	},
 	help = {
@@ -154,14 +239,28 @@ COMMANDS.dungeons = COMMANDS.tp
 
 --[ Private ]--
 
--- Single permission seam. Open to everyone today; restrict HERE if that
--- ever changes, so no individual command has to care.
+-- Single permission seam. Everything is open except the gated commands,
+-- which need the dev group rank; Studio is exempt. GetRankInGroup is a
+-- web call, so it is pcall'd and a failure refuses (never grants).
 function LobbyChatCommandsService._canRun(
 	_self: typeof(LobbyChatCommandsService),
-	_player: Player,
-	_commandName: string
+	player: Player,
+	commandName: string
 ): boolean
-	return true
+	if not TP_GATED_COMMANDS[commandName] then
+		return true
+	end
+	if RunService:IsStudio() then
+		return true
+	end
+	local ok, rank = pcall(function()
+		return player:GetRankInGroup(TP_GROUP_ID)
+	end)
+	if not ok then
+		warn(("[LobbyChatCommands] GetRankInGroup failed for %s: %s"):format(player.Name, tostring(rank)))
+		return false
+	end
+	return (tonumber(rank) or 0) >= TP_GROUP_MIN_RANK
 end
 
 -- Echoes command feedback back to the caller: the floating indicator when

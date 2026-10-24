@@ -9,6 +9,7 @@
 
 --[ Roblox Services ]--
 
+local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -16,15 +17,15 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local DropService = require(ServerScriptService.Services.DropService)
 local RelicService = require(ServerScriptService.Services.RelicService)
+local RelicOfferService = require(ServerScriptService.Services.RelicOfferService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
-local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local LifeService = require(ServerScriptService.Services.LifeService)
@@ -41,9 +42,46 @@ local RelicMachine = Component.new({
 
 --[ Constants ]--
 
+-- RELIC CAP (design call, 2026-10-21): a machine never opens for an
+-- owner holding as many relics as they have slots. The pull would only
+-- ever end in a Skip, so the prompt refuses instead -- the shop's own
+-- red pop over the player and its Error sound -- and the machine stays
+-- intact. A capped owner's choice is marked MADE the moment the machine
+-- lands (and again on every refused tap), so the segment gate does not
+-- hold its full countdown for a pull nobody can take.
+local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
+local RELIC_CAP_TEXT = "Reached Maximum Relics! (%d)"
+local RELIC_CAP_LABEL = "Vending Machine (Relics Full)"
+local ERROR_SOUND_NAME = "Error"
+local ERROR_SOUND_LIFETIME = 3
+
 --[ Properties ]--
 
 --[ Private Functions ]--
+
+-- The shop's refusal pop and sound, over the player's root.
+local function refuseAtRelicCap(player: Player)
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not (hrp and hrp:IsA("BasePart")) then
+		return
+	end
+	TextIndicatorService:ShowIndicator(
+		player,
+		hrp,
+		RELIC_CAP_TEXT:format(RelicService:GetRelicSlots(player)),
+		RELIC_CAP_COLOR,
+		true
+	)
+	local sounds = ReplicatedStorage.GameAssets:FindFirstChild("Sounds")
+	local template = sounds and sounds:FindFirstChild(ERROR_SOUND_NAME)
+	if template and template:IsA("Sound") then
+		local clone = template:Clone()
+		clone.Parent = hrp
+		clone:Play()
+		Debris:AddItem(clone, ERROR_SOUND_LIFETIME)
+	end
+end
 
 -- Picks the next relic for this machine via RelicService:RollRandomRelicFromPool,
 -- which buckets the per-player available pool by rarity and rolls using the
@@ -71,16 +109,12 @@ local RelicMachine = Component.new({
 --
 -- After picking, the chosen name is removed from the local pool so the same
 -- machine can't roll duplicates across its three offers either.
--- Relic fan geometry: slots spread symmetrically around the machine's
--- centre line, with the true middle slot (odd counts only) stepping
--- forward -- the authored left / middle-forward / right silhouette.
-local FAN_SPACING_STUDS = 5.5
-local FAN_BASE_Z = 6
-local FAN_FORWARD_Z = 7
-
--- The Skip offer is NOT part of the fan: it drops alone, centred and
--- further out, so it reads as "decline" rather than another relic.
-local SKIP_OFFER_Z_OFFSET = 14
+--
+-- The pull is dealt as CARDS on the owner's screen (RelicOfferService),
+-- not dropped on the floor: the machine only rolls the hand and plays its
+-- own dispense flourish. The Skip option and the 30 s auto-pick are the
+-- offer service's.
+local OFFER_SOURCE = "Vending"
 
 -- Starter machine only: how many of its offers are FORCED to be an ungated
 -- relic from a random element tree. Anything past this rolls normally, so
@@ -221,15 +255,31 @@ function RelicMachine:Start()
 
 	self.Instance.PrimaryPart.Idle:Play()
 
-	self._relics = RelicService:GetPlayerAvailableRelics(Players:GetPlayerByUserId(self._ownerId))
+	local owner = Players:GetPlayerByUserId(self._ownerId)
+	self._relics = RelicService:GetPlayerAvailableRelics(owner)
 
-	promptRouter:Bind(self.Instance, function(player: Player, payload: { CFrame: CFrame })
+	-- A capped owner (see RELIC_CAP_COLOR): the label says so from the
+	-- landing, and their choice is already made for the gate.
+	if owner and RelicService:IsAtRelicCap(owner) then
+		self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.Text = RELIC_CAP_LABEL
+		self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.TextColor3 = RELIC_CAP_COLOR
+		RelicService:MarkRelicChoiceMade(owner)
+	end
+
+	promptRouter:Bind(self.Instance, function(player: Player, _payload: { CFrame: CFrame })
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
 		if LifeService:IsDeathState(player) then
 			return
 		end
-		local cframe = payload.CFrame
+		-- At the relic cap the machine refuses and stays whole (the client
+		-- keeps its prompt up for the same reason): red pop, Error sound,
+		-- choice marked made so the gate never waits on it.
+		if self._ownerId == player.UserId and RelicService:IsAtRelicCap(player) then
+			refuseAtRelicCap(player)
+			RelicService:MarkRelicChoiceMade(player)
+			return
+		end
 		if self._ownerId == player.UserId and self._canClick then
 			self._proximityPrompt.Enabled = false
 			self._canClick = false
@@ -273,10 +323,6 @@ function RelicMachine:Start()
 			--   First machine: all Neutral. Nothing is owned yet, so Synergy
 			--     and Wildcard would both be no-ops; its archetype allowlist +
 			--     diversity rules do the shaping instead.
-			local centerIndex = (offerCount + 1) / 2
-			local halfHeight = self.Instance.PrimaryPart.Size.Y / 2
-			local origin = cframe.Position + Vector3.new(0, halfHeight, 0)
-
 			-- STARTER MACHINE: STARTER_GUARANTEED_ELEMENTS slots (currently
 			-- ZERO — the opening pull is completely random) are forced to an
 			-- ungated relic from a random element tree; the rest roll
@@ -318,6 +364,7 @@ function RelicMachine:Start()
 				end
 			end
 
+			local offers = {}
 			for i = 1, offerCount do
 				local relicData
 				local tree = starterTrees and starterTrees[i]
@@ -325,46 +372,18 @@ function RelicMachine:Start()
 					relicData = self:_getStarterRelicData(tree)
 				end
 				relicData = relicData or self:_getRandomRelicData(ownsPinata)
-
-				-- Only a TRUE middle slot steps forward, so the 3-offer pull keeps
-				-- its left / middle-forward / right shape and Pinata's pair sits
-				-- level.
-				local xOffset = (i - centerIndex) * FAN_SPACING_STUDS
-				local zOffset = if math.abs(i - centerIndex) < 0.01 then FAN_FORWARD_Z else FAN_BASE_Z
-				local position = cframe * CFrame.new(xOffset, -halfHeight, zOffset)
-
 				if relicData then
-					DropService.OnRelicDropRequested:Fire(
-						player,
-						relicData.rarity,
-						relicData.name,
-						origin,
-						position.Position
-					)
+					table.insert(offers, relicData.name)
 				end
-
-				self.Instance.PrimaryPart.Pop:Play()
-
-				task.wait(0.25)
 			end
 
-			-- Skip offer -- dispensed LAST and ALONE, centred in front of the
-			-- machine rather than inside the fan. Only when the owner is at the
-			-- relic cap: below it they can always claim something, so a decline
-			-- option would be noise; at the cap every relic on offer is
-			-- unclaimable and this is their only way to clear the pull and open
-			-- the gate. `Folder` rides in the rarity slot so the drop path's
-			-- GameAssets.Relics[rarity][name] lookup resolves it unchanged.
-			if RelicService:IsAtRelicCap(player) then
-				local skipPosition = cframe * CFrame.new(0, -halfHeight, SKIP_OFFER_Z_OFFSET)
-				DropService.OnRelicDropRequested:Fire(
-					player,
-					SkipRelicData.Folder,
-					SkipRelicData.Name,
-					origin,
-					skipPosition.Position
-				)
-				self.Instance.PrimaryPart.Pop:Play()
+			self.Instance.PrimaryPart.Pop:Play()
+
+			-- The hand goes to the owner's screen. An EMPTY hand (the pool is
+			-- exhausted) still counts as the owner's choice, so the gate's
+			-- countdown does not wait on a pull that had nothing to give.
+			if not RelicOfferService:Offer(player, offers, OFFER_SOURCE) then
+				RelicService:MarkRelicChoiceMade(player)
 			end
 		end
 	end)

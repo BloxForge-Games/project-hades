@@ -4,7 +4,7 @@
 	Description:
 	Client half of the join "landing" sequence. The player spawns at a hidden,
 	off-map staging SpawnLocation and stays behind the loading screen while their
-	character + assets load. The server (DungeonService) then teleports them to
+	character + assets load. The server (LandingService) then teleports them to
 	the dungeon start, anchors them, plays the landing animation, and drives this
 	controller through three signals:
 
@@ -19,7 +19,7 @@
 	  OnLandingEnd    → restore controls.
 
 	Control-lock mirrors EncounterIntroController: disable the ControlScript,
-	zero residual movement, set CutscenePlaying (blocks aim / magic / abilities).
+	zero residual movement, set CutscenePlaying (blocks aim / arcane / abilities).
 	The server also anchors the HRP for the duration, so this is belt-and-
 	suspenders against stray input.
 
@@ -40,6 +40,7 @@ local InterfaceManagerController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
 local PreloadInterface = require(ReplicatedStorage.Submodules.Core.Source.Interfaces.PreloadInterface)
 local PreloadController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PreloadController)
+local ScreenSweepController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSweepController)
 local CinematicInterfaceController =
 	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.CinematicInterfaceController)
 local ScreenFadeInterfaceController =
@@ -158,7 +159,7 @@ function LandingController._lockControls(self: typeof(LandingController), barsDe
 			-- while the ControlScript is disabled.
 			humanoid:Move(Vector3.zero, false)
 		end
-		-- Blocks aim / general / magic actions via PlayerStateController.
+		-- Blocks aim / general / arcane actions via PlayerStateController.
 		character:SetAttribute(Attributes.CutscenePlaying, true)
 	end
 end
@@ -212,16 +213,19 @@ function LandingController._snapToLanding(_self: typeof(LandingController), targ
 	end
 end
 
--- Dismisses the loading screen. Idempotent — safe to call from both the server
--- cue and the fallback.
+-- Reveals the world: the loading text and bar fade out over the tiles
+-- that have covered the screen since boot (ScreenSweepController.Init),
+-- then the tiles cascade off. Idempotent — safe to call from both the
+-- server cue and the fallback.
 function LandingController._reveal(self: typeof(LandingController))
 	if self._revealed then
 		return
 	end
 	self._revealed = true
-	if PreloadInterface then
-		PreloadInterface:ToggleInterface(false)
-	end
+	PreloadInterface:ToggleInterface(false)
+	task.delay(PreloadInterface.FADE_OUT_SECONDS, function()
+		ScreenSweepController:Reveal("Cascade")
+	end)
 end
 
 --[ Lifecycle ]--

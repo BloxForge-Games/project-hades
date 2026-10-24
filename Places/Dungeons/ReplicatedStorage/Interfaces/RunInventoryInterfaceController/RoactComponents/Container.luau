@@ -46,6 +46,7 @@ local ItemViewport = require(
 
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+local UpgradeCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.UpgradeCapData)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
@@ -59,6 +60,7 @@ local getItemDescription = require(ReplicatedStorage.Submodules.Core.Shared.Func
 local getItemImageId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.getItemImageId)
 local INTRO_POP_SECONDS = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.useIntroPop).INTRO_POP_SECONDS
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
+local ShineRing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.ShineRing)
 
 --[ Constants ]--
 
@@ -76,10 +78,13 @@ local INTRO_TILE_SWEEP_SECONDS = 0.75
 local GRID_COLUMNS = 5
 local INTRO_TILE_SPREAD_SECONDS = INTRO_TILE_SWEEP_SECONDS - INTRO_POP_SECONDS
 
--- The single category pill's palette, in the ACTIVE state it never leaves.
-local CATEGORY_ACTIVE_COLOR = Color3.fromRGB(217, 121, 4)
-local CATEGORY_ACTIVE_STROKE_COLOR = Color3.fromRGB(74, 40, 1)
-local CATEGORY_SELECTED_OVERLAY_T = 0.75
+-- The bag's 2026-10-22 palette: dark blue panels, blue-grey border and rows.
+local PANEL_COLOR = Color3.fromRGB(20, 31, 40)
+local PANEL_STROKE_COLOR = Color3.fromRGB(43, 65, 85)
+local PANEL_STROKE_THICKNESS = 0.005
+-- The detail panel's stroke and ring, a hair heavier than the bag's (2026-10-22).
+local DETAIL_STROKE_THICKNESS = 0.006
+local ROW_COLOR = Color3.fromRGB(45, 70, 90)
 
 -- Timings / easing — identical to the Inventory's.
 local INFO_PANE_FADE_DURATION = 0.12
@@ -95,24 +100,6 @@ local PANEL_OPEN_POSITION = UDim2.fromScale(0.5, 0.5)
 local PANEL_CLOSED_POSITION = UDim2.fromScale(0.5, 0.6)
 local PANEL_OPEN_TRANSPARENCY = 0
 local PANEL_CLOSED_TRANSPARENCY = 1
-
-local BUTTON_HOVER_TWEEN_INFO = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local BUTTON_PULSE_UP_TWEEN_INFO = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local BUTTON_PULSE_DOWN_TWEEN_INFO = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local BUTTON_PULSE_UP_DURATION = 0.08
-local BUTTON_HOVER_SCALE = 1.075
-local BUTTON_PEAK_SCALE = 1.15
-
--- "Close" button. A wide pill hanging BELOW the panel body (it lives in
--- InnerContainerFrame, which doesn't clip), not the Inventory's square X.
--- Authored Size = (0.23191, 0.0821221); hover / peak are re-derived from
--- that so the motion beat matches the tiles and category tabs.
-local EXIT_BUTTON_BASE_SIZE = UDim2.fromScale(0.23191, 0.0821221)
-local EXIT_BUTTON_HOVER_SIZE = UDim2.fromScale(0.23191 * BUTTON_HOVER_SCALE, 0.0821221 * BUTTON_HOVER_SCALE)
-local EXIT_BUTTON_PEAK_SIZE = UDim2.fromScale(0.23191 * BUTTON_PEAK_SCALE, 0.0821221 * BUTTON_PEAK_SCALE)
-
-local BUTTON_SELECTED_OVERLAY_VISIBLE_T = 0.75
-local BUTTON_SELECTED_OVERLAY_HIDDEN_T = 1
 
 local STAT_COLOR_NEUTRAL = Color3.fromRGB(200, 200, 200)
 local STAT_COLOR_INACTIVE = Color3.fromRGB(150, 150, 150)
@@ -244,7 +231,7 @@ local function DropGrid(props: any)
 	local tileChildren = {
 		IGridLayout = React.createElement("UIGridLayout", {
 			CellPadding = UDim2.fromScale(-0.05, -0.03),
-			CellSize = UDim2.fromScale(0.24, 0.32),
+			CellSize = UDim2.fromScale(0.24, 0.35),
 			FillDirectionMaxCells = GRID_COLUMNS,
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
@@ -284,8 +271,8 @@ local function DropGrid(props: any)
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Position = UDim2.fromScale(0.151426, 0.587545),
-		Size = UDim2.fromScale(0.96631, 0.822984),
+		Position = UDim2.fromScale(0.170534, 0.482694),
+		Size = UDim2.fromScale(0.993, 0.706212),
 	}, {
 		ScrollingFrame = React.createElement("ScrollingFrame", {
 			Active = true,
@@ -307,7 +294,6 @@ end
 
 local function Container(props: any)
 	local EscrowData = props.EscrowData
-	local onClose = props.onClose
 
 	-- Opening-sweep generation, derived DURING RENDER from the Visible prop
 	-- flipping true (refs, not state) so the tiles see it in the same
@@ -332,11 +318,6 @@ local function Container(props: any)
 	local wrapperRef = React.useRef(nil)
 	-- Fade-timeline generation token; stale timelines self-cancel.
 	local fadeGenerationRef = React.useRef(0)
-
-	local exitButtonHovered, setExitButtonHovered = React.useState(false)
-	local exitButtonClickToken, setExitButtonClickToken = React.useState(0)
-	local exitButtonFrameRef = React.useRef(nil)
-	local exitButtonSelectedFrameRef = React.useRef(nil)
 
 	React.useEffect(function()
 		if not EscrowData then
@@ -427,43 +408,6 @@ local function Container(props: any)
 		end
 	end, {})
 
-	React.useEffect(function()
-		local instance = exitButtonFrameRef.current
-		if not instance then
-			return
-		end
-		local target = if exitButtonHovered then EXIT_BUTTON_HOVER_SIZE else EXIT_BUTTON_BASE_SIZE
-		TweenService:Create(instance, BUTTON_HOVER_TWEEN_INFO, { Size = target }):Play()
-	end, { exitButtonHovered })
-
-	React.useEffect(function()
-		local instance = exitButtonSelectedFrameRef.current
-		if not instance then
-			return
-		end
-		local target = if exitButtonHovered then BUTTON_SELECTED_OVERLAY_VISIBLE_T else BUTTON_SELECTED_OVERLAY_HIDDEN_T
-		TweenService:Create(instance, BUTTON_HOVER_TWEEN_INFO, { BackgroundTransparency = target }):Play()
-	end, { exitButtonHovered })
-
-	React.useEffect(function()
-		if exitButtonClickToken == 0 then
-			return
-		end
-		local instance = exitButtonFrameRef.current
-		if not instance then
-			return
-		end
-		local resting = if exitButtonHovered then EXIT_BUTTON_HOVER_SIZE else EXIT_BUTTON_BASE_SIZE
-		task.spawn(function()
-			TweenService:Create(instance, BUTTON_PULSE_UP_TWEEN_INFO, { Size = EXIT_BUTTON_PEAK_SIZE }):Play()
-			task.wait(BUTTON_PULSE_UP_DURATION)
-			if not exitButtonFrameRef.current then
-				return
-			end
-			TweenService:Create(exitButtonFrameRef.current, BUTTON_PULSE_DOWN_TWEEN_INFO, { Size = resting }):Play()
-		end)
-	end, { exitButtonClickToken })
-
 	--[ Detail-pane derived state ]--
 
 	-- The pane renders from displayedSelectedUuid, NOT selectedUuid, so
@@ -494,10 +438,14 @@ local function Container(props: any)
 		local upgrades = selectedItem.upgrades or 0
 		local upgradeSuffix = if upgrades > 0 then string.format(" (+%d)", upgrades) else ""
 		detailNameText = tostring(selectedItem.name) .. upgradeSuffix
+		-- The upgrade level rides on the rarity line, clamped to the
+		-- rarity's cap like the stat is. The cap itself is deliberately
+		-- not shown here (design call) -- the Blacksmith is where it matters.
 		detailLevelRarityText = string.format(
-			"Level %d  •  %s",
+			"Level %d  •  %s  •  +%d",
 			selectedItem.level or 1,
-			tostring(selectedItem.rarity or ItemRarity.Common)
+			tostring(selectedItem.rarity or ItemRarity.Common),
+			UpgradeCapData.Clamp(upgrades, selectedItem.rarity)
 		)
 		detailDescription = getItemDescription(selectedItem.name)
 
@@ -620,14 +568,45 @@ local function Container(props: any)
 				AspectRatio = 1.25,
 			}),
 
+			-- Active: a click on the plate stops here instead of reaching the
+			-- backdrop button behind the window (which closes it).
 			InventoryBackgroundFrame = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(20, 20, 20),
-				Interactable = false,
-				Position = UDim2.fromScale(0.165, 0.493324),
-				Size = UDim2.fromScale(0.993, 0.89),
+				BackgroundColor3 = PANEL_COLOR,
+				Active = true,
+				-- No tab strip above it any more; the 2026-10-23 export's geometry.
+				Position = UDim2.fromScale(0.170534, 0.483909),
+				Size = UDim2.fromScale(0.993, 0.731853),
 				ZIndex = 0,
 			}, {
+				-- A GuiButton swallows the click (a Frame, Active or not, lets it
+				-- through to the backdrop button behind the window, which closes
+				-- it). No handler: it only exists so clicks on the panel stop here.
+				-- Lowest in the plate, so every real button above still wins.
+				ClickSink = React.createElement("TextButton", {
+					AutoButtonColor = false,
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Text = "",
+					ZIndex = 0,
+				}),
+				-- A soft top-down shade on the plate (the 2026-10-22 export).
+				PlateGradient = React.createElement("UIGradient", {
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(0.468048, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 140, 140)),
+					}),
+					Rotation = 90,
+				}),
+
+				-- The animated shine ring (ShineRing), over the static stroke.
+				ShineRing = React.createElement(ShineRing, {
+					color = PANEL_STROKE_COLOR,
+					thickness = PANEL_STROKE_THICKNESS,
+					cornerRadius = UDim.new(0.015, 0),
+					active = props.Visible == true,
+				}),
 				ICorner1 = React.createElement("UICorner", {
 					BottomLeftRadius = UDim.new(0.015, 0),
 					BottomRightRadius = UDim.new(0.015, 0),
@@ -636,8 +615,9 @@ local function Container(props: any)
 				}),
 
 				UIStroke = React.createElement("UIStroke", {
+					Color = PANEL_STROKE_COLOR,
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.007,
+					Thickness = PANEL_STROKE_THICKNESS,
 				}, {
 					UIGradient = React.createElement("UIGradient", {
 						Color = ColorSequence.new({
@@ -657,29 +637,29 @@ local function Container(props: any)
 				}),
 			}),
 
-			ScrollingGradientFrame = React.createElement("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(20, 20, 20),
-				LayoutOrder = 6,
-				Position = UDim2.fromScale(0.171955, 0.881224),
-				Size = UDim2.fromScale(0.97, 0.0728559),
-				ZIndex = 2,
-			}, {
-				ICorner1 = React.createElement("UICorner", {
-					BottomLeftRadius = UDim.new(0.08, 0),
-					BottomRightRadius = UDim.new(0.08, 0),
-					TopLeftRadius = UDim.new(0.08, 0),
-					TopRightRadius = UDim.new(0.08, 0),
-				}),
+			-- ScrollingGradientFrame = React.createElement("Frame", {
+			-- 	AnchorPoint = Vector2.new(0.5, 0.5),
+			-- 	BackgroundColor3 = PANEL_STROKE_COLOR,
+			-- 	LayoutOrder = 6,
+			-- 	Position = UDim2.fromScale(0.165, 0.89156),
+			-- 	Size = UDim2.fromScale(0.993, 0.0935278),
+			-- 	ZIndex = 2,
+			-- }, {
+			-- 	ICorner1 = React.createElement("UICorner", {
+			-- 		BottomLeftRadius = UDim.new(0.08, 0),
+			-- 		BottomRightRadius = UDim.new(0.08, 0),
+			-- 		TopLeftRadius = UDim.new(0.08, 0),
+			-- 		TopRightRadius = UDim.new(0.08, 0),
+			-- 	}),
 
-				IGradient = React.createElement("UIGradient", {
-					Rotation = -90,
-					Transparency = NumberSequence.new({
-						NumberSequenceKeypoint.new(0, 0),
-						NumberSequenceKeypoint.new(1, 1),
-					}),
-				}),
-			}),
+			-- 	IGradient = React.createElement("UIGradient", {
+			-- 		Rotation = -90,
+			-- 		Transparency = NumberSequence.new({
+			-- 			NumberSequenceKeypoint.new(0, 0),
+			-- 			NumberSequenceKeypoint.new(1, 1),
+			-- 		}),
+			-- 	}),
+			-- }),
 
 			DropGrid = React.createElement(DropGrid, {
 				dropItems = dropItems,
@@ -699,101 +679,32 @@ local function Container(props: any)
 			-- and no detector -- a tab that reacts to the cursor but does
 			-- nothing reads as broken.
 			--
-			-- Centered rather than left-aligned now that it's a lone heading:
-			-- the strip was sized and offset for two pills, so a single one
-			-- pinned left read as lopsided.
-			CategoryContainerFrame = React.createElement("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundTransparency = 1,
-				Position = UDim2.fromScale(0.151426, 0.123028),
-				Size = UDim2.fromScale(0.892409, 0.1),
-			}, {
-				UIListLayout = React.createElement("UIListLayout", {
-					FillDirection = Enum.FillDirection.Horizontal,
-					HorizontalAlignment = Enum.HorizontalAlignment.Center,
-					Padding = UDim.new(0.025, 0),
-					SortOrder = Enum.SortOrder.LayoutOrder,
-				}),
-
-				UIPadding = React.createElement("UIPadding", {
-					PaddingBottom = UDim.new(0.1, 0),
-					PaddingLeft = UDim.new(0.015, 0),
-					PaddingRight = UDim.new(0.015, 0),
-					PaddingTop = UDim.new(0.1, 0),
-				}),
-
-				DungeonDrops = React.createElement("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					BackgroundTransparency = 1,
-					LayoutOrder = 1,
-					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(0.175, 1),
-				}, {
-					InnerFrame = React.createElement("Frame", {
-						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = CATEGORY_ACTIVE_COLOR,
-						Position = UDim2.fromScale(0.5, 0.5),
-						Size = UDim2.fromScale(1.69655, 1),
-					}, {
-						UICorner = React.createElement("UICorner", {
-							BottomLeftRadius = UDim.new(0.08, 0),
-							BottomRightRadius = UDim.new(0.08, 0),
-							TopLeftRadius = UDim.new(0.08, 0),
-							TopRightRadius = UDim.new(0.08, 0),
-						}),
-
-						-- Pinned at the selected wash rather than tweened, since
-						-- it can never be deselected.
-						SelectedFrame = React.createElement("Frame", {
-							AnchorPoint = Vector2.new(0.5, 0.5),
-							BackgroundColor3 = Color3.new(1, 1, 1),
-							BackgroundTransparency = CATEGORY_SELECTED_OVERLAY_T,
-							Position = UDim2.fromScale(0.5, 0.5),
-							Size = UDim2.fromScale(1, 1),
-							ZIndex = 5,
-						}, {
-							UICorner = React.createElement("UICorner", {
-								BottomLeftRadius = UDim.new(0.08, 0),
-								BottomRightRadius = UDim.new(0.08, 0),
-								TopLeftRadius = UDim.new(0.08, 0),
-								TopRightRadius = UDim.new(0.08, 0),
-							}),
-						}),
-
-						TextLabel = React.createElement("TextLabel", {
-							AnchorPoint = Vector2.new(0.5, 0.5),
-							BackgroundTransparency = 1,
-							FontFace = Font.new(
-								"rbxasset://fonts/families/Montserrat.json",
-								Enum.FontWeight.ExtraBold,
-								Enum.FontStyle.Normal
-							),
-							Position = UDim2.fromScale(0.5, 0.5),
-							Size = UDim2.fromScale(1, 0.5),
-							Text = "Spire's Bounty",
-							TextColor3 = Color3.new(1, 1, 1),
-							TextScaled = true,
-						}, {
-							UIStroke = React.createElement("UIStroke", {
-								Color = CATEGORY_ACTIVE_STROKE_COLOR,
-								StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-								Thickness = 0.05,
-							}),
-						}),
-					}),
-				}),
-			}),
-
 			-- Shorter than the grid's background: with MainStatFrame hidden the
 			-- detail pane needs less height, and the Close button moved out of
 			-- here to InnerContainerFrame. Static now that there's only one
 			-- layout -- nothing resizes it at runtime any more.
-			ItemInfoContainerBackground = React.createElement("CanvasGroup", {
+			-- The detail panel's shine ring: a SIBLING of the panel, not a child,
+			-- because the panel is a CanvasGroup and would clip the stroke.
+			ItemInfoRing = React.createElement(ShineRing, {
+				color = PANEL_STROKE_COLOR,
+				thickness = DETAIL_STROKE_THICKNESS,
+				cornerRadius = UDim.new(0.015, 0),
+				active = props.Visible == true,
+				position = DROP_INFO_BACKGROUND_POSITION,
+				size = DROP_INFO_BACKGROUND_SIZE,
+				zIndex = 0,
+			}),
+
+			-- The detail panel's static stroke lives on this SIBLING, not on the
+			-- panel: the panel is a CanvasGroup and clips its own UIStroke to the
+			-- plate's bounds, so a stroke placed there never shows. Non-Active, so
+			-- clicks fall through to the content and the plate below.
+			ItemInfoBorder = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+				BackgroundTransparency = 1,
 				Position = DROP_INFO_BACKGROUND_POSITION,
 				Size = DROP_INFO_BACKGROUND_SIZE,
-				ZIndex = -1,
+				ZIndex = 0,
 			}, {
 				ICorner1 = React.createElement("UICorner", {
 					BottomLeftRadius = UDim.new(0.015, 0),
@@ -801,10 +712,10 @@ local function Container(props: any)
 					TopLeftRadius = UDim.new(0.015, 0),
 					TopRightRadius = UDim.new(0.015, 0),
 				}),
-
 				UIStroke = React.createElement("UIStroke", {
+					Color = PANEL_STROKE_COLOR,
 					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.007,
+					Thickness = DETAIL_STROKE_THICKNESS,
 				}, {
 					UIGradient = React.createElement("UIGradient", {
 						Color = ColorSequence.new({
@@ -824,120 +735,43 @@ local function Container(props: any)
 				}),
 			}),
 
-			-- Close pill. Parented to InnerContainerFrame (not the info-pane
-			-- background) and positioned past Y = 1, so it hangs BELOW the whole
-			-- panel — InnerContainerFrame doesn't clip. Living out here also
-			-- keeps it clear of ItemInfoContainer's per-selection fade; it only
-			-- fades with the panel's own open/close tween.
-			ExitButtonFrame = React.createElement("Frame", {
-				ref = exitButtonFrameRef,
+			-- Active so a click on the plate stops here instead of reaching the
+			-- backdrop button behind the window (which closes it).
+			ItemInfoContainerBackground = React.createElement("CanvasGroup", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundColor3 = Color3.fromRGB(217, 90, 90),
-				LayoutOrder = 6,
-				Position = UDim2.fromScale(0.518777, 1.04726),
-				-- Hardcoded BASE_SIZE constant: React's diff sees the same
-				-- value across renders and won't re-apply, so TweenService
-				-- stays the sole runtime writer (no mid-tween snap-back).
-				Size = EXIT_BUTTON_BASE_SIZE,
-				ZIndex = 2,
+				BackgroundColor3 = PANEL_COLOR,
+				Active = true,
+				Position = DROP_INFO_BACKGROUND_POSITION,
+				Size = DROP_INFO_BACKGROUND_SIZE,
+				ZIndex = -1,
 			}, {
-				ICorner1 = React.createElement("UICorner", {
-					BottomLeftRadius = UDim.new(0.08, 0),
-					BottomRightRadius = UDim.new(0.08, 0),
-					TopLeftRadius = UDim.new(0.08, 0),
-					TopRightRadius = UDim.new(0.08, 0),
-				}),
-
-				-- White hover overlay at ZIndex 2, with the label bumped to
-				-- ZIndex 3 so the wash never paints over the text.
-				SelectedFrame = React.createElement("Frame", {
-					ref = exitButtonSelectedFrameRef,
-					Active = false,
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					BackgroundColor3 = Color3.new(1, 1, 1),
-					BackgroundTransparency = BUTTON_SELECTED_OVERLAY_HIDDEN_T,
-					BorderSizePixel = 0,
-					Position = UDim2.fromScale(0.503935, 0.513531),
-					Size = UDim2.fromScale(1.00787, 0.973074),
-					ZIndex = 2,
-				}, {
-					UICorner = React.createElement("UICorner", {
-						CornerRadius = UDim.new(0.08, 0),
-					}),
-				}),
-
-				ExitButton = React.createElement("TextLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
+				-- A GuiButton swallows the click (a Frame, Active or not, lets it
+				-- through to the backdrop button behind the window, which closes
+				-- it). No handler: it only exists so clicks on the panel stop here.
+				-- Lowest in the plate, so every real button above still wins.
+				ClickSink = React.createElement("TextButton", {
+					AutoButtonColor = false,
 					BackgroundTransparency = 1,
-					FontFace = Font.new(
-						"rbxasset://fonts/families/Montserrat.json",
-						Enum.FontWeight.ExtraBold,
-						Enum.FontStyle.Normal
-					),
-					Position = UDim2.fromScale(0.508321, 0.513531),
-					Size = UDim2.fromScale(1.01664, 0.632498),
-					Text = "Close",
-					TextColor3 = Color3.fromRGB(255, 245, 234),
-					TextScaled = true,
-					ZIndex = 3,
-				}, {
-					IStroke2 = React.createElement("UIStroke", {
-						Color = Color3.fromRGB(25, 25, 25),
-						LineJoinMode = Enum.LineJoinMode.Bevel,
-						StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-						Thickness = 0.05,
+					Size = UDim2.fromScale(1, 1),
+					Text = "",
+					ZIndex = 0,
+				}),
+				-- A soft top-down shade on the plate (the 2026-10-22 export).
+				PlateGradient = React.createElement("UIGradient", {
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(0.468048, Color3.new(1, 1, 1)),
+						ColorSequenceKeypoint.new(1, Color3.fromRGB(140, 140, 140)),
 					}),
+					Rotation = 90,
 				}),
 
-				UIStroke = React.createElement("UIStroke", {
-					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.04,
-				}, {
-					UIGradient = React.createElement("UIGradient", {
-						Color = ColorSequence.new({
-							ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-							ColorSequenceKeypoint.new(0.141623, Color3.fromRGB(206, 206, 206)),
-							ColorSequenceKeypoint.new(0.499136, Color3.fromRGB(211, 211, 211)),
-							ColorSequenceKeypoint.new(0.777202, Color3.fromRGB(206, 206, 206)),
-							ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1)),
-						}),
-						Rotation = 45,
-						Transparency = NumberSequence.new({
-							NumberSequenceKeypoint.new(0, 0),
-							NumberSequenceKeypoint.new(0.625156, 0),
-							NumberSequenceKeypoint.new(1, 0),
-						}),
-					}),
+				ICorner1 = React.createElement("UICorner", {
+					BottomLeftRadius = UDim.new(0.015, 0),
+					BottomRightRadius = UDim.new(0.015, 0),
+					TopLeftRadius = UDim.new(0.015, 0),
+					TopRightRadius = UDim.new(0.015, 0),
 				}),
-			}),
-
-			ExitButtonDetector = React.createElement("ImageButton", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				BackgroundTransparency = 1,
-				ImageTransparency = 1,
-				Position = UDim2.fromScale(0.518871, 1.04727),
-				Size = UDim2.fromScale(0.231541, 0.0825226),
-				ZIndex = 10,
-
-				[React.Event.Activated] = function()
-					uiSound:PlayClick()
-					-- Bump the click token BEFORE closing so the pulse has
-					-- a chance to start; it runs in a task.spawn and
-					-- self-cancels once the ref clears.
-					setExitButtonClickToken(function(t)
-						return t + 1
-					end)
-					if onClose then
-						onClose()
-					end
-				end,
-				[React.Event.MouseEnter] = function()
-					uiSound:PlayHover()
-					setExitButtonHovered(true)
-				end,
-				[React.Event.MouseLeave] = function()
-					setExitButtonHovered(false)
-				end,
 			}),
 
 			ItemInfoContainer = React.createElement("CanvasGroup", {
@@ -1016,7 +850,7 @@ local function Container(props: any)
 
 				LineFrame = React.createElement("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0),
-					BackgroundColor3 = Color3.fromRGB(75, 75, 75),
+					BackgroundColor3 = ROW_COLOR,
 					Position = DROP_LINE_POSITION,
 					Size = DROP_LINE_SIZE,
 				}, {
@@ -1139,7 +973,7 @@ local function Container(props: any)
 					-- children, so QualityFrame slides up into slot 1.
 					MainStatFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 1,
 						Position = UDim2.fromScale(0.467157, 2.36716),
 						Size = UDim2.fromScale(0.737, 0.686),
@@ -1188,7 +1022,7 @@ local function Container(props: any)
 
 					QualityFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 2,
 						Position = UDim2.fromScale(0.467157, 2.36716),
 						Size = UDim2.fromScale(0.737, 0.686),
@@ -1236,7 +1070,7 @@ local function Container(props: any)
 
 					EnchantmentFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 3,
 						Position = UDim2.fromScale(0.467157, 3.36644),
 						Size = UDim2.fromScale(0.737, 0.686),
@@ -1287,7 +1121,7 @@ local function Container(props: any)
 					-- ONLY FOR ARMOR PIECES
 					ArmorSetBonusFrame = React.createElement("Frame", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
-						BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+						BackgroundColor3 = ROW_COLOR,
 						LayoutOrder = 3,
 						Position = UDim2.fromScale(0.467157, 3.36644),
 						Size = UDim2.fromScale(0.737, 0.686),

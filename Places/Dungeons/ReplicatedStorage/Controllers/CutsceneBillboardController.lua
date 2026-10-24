@@ -2,8 +2,8 @@
 --[[
 	Module: CutsceneBillboardController.lua
 	Description:
-	Empties the world of FLOATING UI for the length of a magic cutscene
-	(Susanoo, Domain Expansion, any magic with a MagicData.cutscene index).
+	Empties the world of FLOATING UI for the length of a arcane cutscene
+	(Susanoo, Domain Expansion, any arcane with a ArcaneData.cutscene index).
 	A cinematic framed on your character reads as a cinematic right up until
 	a relic label, a mob health bar and three damage numbers drift across it.
 
@@ -15,7 +15,7 @@
 
 	Indicators are NOT swept: damage numbers and text indicators are
 	suppressed at their source instead (DamageIndicatorController /
-	TextIndicatorController both check isMagicCutscenePlaying), because a
+	TextIndicatorController both check isArcaneCutscenePlaying), because a
 	number that spawned hidden and reappeared at the end would pop into
 	view halfway through an arc it had already flown.
 
@@ -139,13 +139,13 @@ function CutsceneBillboardController.Start(self: typeof(CutsceneBillboardControl
 
 	local function bind(character: Model)
 		local function refresh()
-			if character:GetAttribute(Attributes.MagicCutscenePlaying) == true then
+			if character:GetAttribute(Attributes.ArcaneCutscenePlaying) == true then
 				self:_start()
 			else
 				self:_stop()
 			end
 		end
-		character:GetAttributeChangedSignal(Attributes.MagicCutscenePlaying):Connect(refresh)
+		character:GetAttributeChangedSignal(Attributes.ArcaneCutscenePlaying):Connect(refresh)
 		refresh()
 	end
 

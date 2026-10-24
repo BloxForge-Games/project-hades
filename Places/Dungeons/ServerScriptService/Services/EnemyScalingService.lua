@@ -2,7 +2,7 @@
 --[[
 	Module: Services/EnemyScalingService.lua
 	Description:
-	LIVE mob HP scaling. ZombieData holds each mob's BASE health; this
+	LIVE mob HP scaling. MobData holds each mob's BASE health; this
 	service owns the player multiplier and applies it twice over:
 
 	  * ApplyToMob, at spawn (MobBase:_applyHumanoidProperties): stamps
@@ -14,9 +14,11 @@
 	    mob at 5% stays at 5% and never dies (or heals to full) because the
 	    party changed shape.
 
-	The multiplier is 1 + active players (solo 2x base, duo 3x, ...), the
-	curve the base numbers were tuned against; the same curve applies to
-	zombies, minibosses and bosses alike. "Active" is LifeService's count:
+	The multiplier is (1 + 0.5 x (active players - 1)) x the run's
+	difficulty health x the floor's growth (DifficultyData): solo Normal
+	floor 1 is 1x base, duo 1.5x, trio 2x, a full party 2.5x (design call,
+	2026-10: each extra player adds half a mob's worth). The same curve
+	applies to mobs, minibosses and bosses alike. "Active" is LifeService's count:
 	alive or DOWNED (a downed player may yet buy a revive); fully dead
 	players no longer count, which is why a party of two fighting a boss
 	sees it shrink the moment one of them is truly gone.
@@ -28,6 +30,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local LifeService = require(ServerScriptService.Services.LifeService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 local EnemyScalingService = {
 	Name = "EnemyScalingService",
@@ -38,20 +42,36 @@ local EnemyScalingService = {
 
 -- The live mob container. Nil before the map has built it; a rescale then
 -- has nothing to walk.
-local function getZombiesFolder(): Instance?
+local function getMobsFolder(): Instance?
 	local ignore = workspace:FindFirstChild("IgnoreInstances")
-	return ignore and ignore:FindFirstChild("Zombies")
+	return ignore and ignore:FindFirstChild("Mobs")
 end
 
 --[ Public API ]--
 
--- 1 + active players. `excluding` is a player mid PlayerRemoving, still
--- listed by Players:GetPlayers() while its handlers run.
-function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingService), excluding: Player?): number
-	return 1 + LifeService:GetActivePlayerCount(excluding)
+-- The run's difficulty health multiplier; 1 outside a run. DungeonService
+-- is reached at call time (this service is a consumer of it).
+local function difficultyHealthMultiplier(): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService then
+		return 1
+	end
+	-- The tier's multiplier x the floor's (+10% per floor past the first).
+	return dungeonService:GetDifficultyScale().enemyHealth * dungeonService:GetFloorMultiplier()
 end
 
--- Spawn-time scaling. `baseHealth` is the ZombieData number (already
+-- Health added per active player past the first, as a fraction of base.
+local HEALTH_PER_EXTRA_PLAYER = 0.5
+
+-- (1 + 0.5 x (active players - 1)) x difficulty x floor. `excluding` is a
+-- player mid PlayerRemoving, still listed by Players:GetPlayers() while
+-- its handlers run.
+function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingService), excluding: Player?): number
+	local extraPlayers = math.max(LifeService:GetActivePlayerCount(excluding) - 1, 0)
+	return (1 + HEALTH_PER_EXTRA_PLAYER * extraPlayers) * difficultyHealthMultiplier()
+end
+
+-- Spawn-time scaling. `baseHealth` is the MobData number (already
 -- resolved if it was a function). Stamps the two attributes RescaleAll
 -- keys off and fills the mob to its scaled maximum.
 function EnemyScalingService.ApplyToMob(
@@ -74,14 +94,14 @@ end
 -- BEFORE Health so the HealthChanged listeners (overhead bar,
 -- EncounterService's HP stream) read a consistent pair. Mobs already at
 -- this multiplier are skipped, so a no-op trigger touches nothing.
-function EnemyScalingService.RescaleAll(_self: typeof(EnemyScalingService), excluding: Player?)
+function EnemyScalingService.RescaleAll(self: typeof(EnemyScalingService), excluding: Player?)
 	local activePlayers = LifeService:GetActivePlayerCount(excluding)
-	local multiplier = 1 + activePlayers
+	local multiplier = self:GetHealthMultiplier(excluding)
 
 	local rescaled = 0
-	local zombies = getZombiesFolder()
-	if zombies then
-		for _, model in zombies:GetChildren() do
+	local mobs = getMobsFolder()
+	if mobs then
+		for _, model in mobs:GetChildren() do
 			if not model:IsA("Model") then
 				continue
 			end
@@ -111,8 +131,8 @@ function EnemyScalingService.RescaleAll(_self: typeof(EnemyScalingService), excl
 		end
 	end
 
-	print(
-		("[EnemyScalingService] x%d for %d active players; %d mobs rescaled"):format(
+	Log.debug(
+		("[EnemyScalingService] x%.2f for %d active players; %d mobs rescaled"):format(
 			multiplier,
 			activePlayers,
 			rescaled

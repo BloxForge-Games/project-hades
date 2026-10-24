@@ -18,11 +18,17 @@
 	          DungeonData.dungeonDrops (its `pool` plus the `perEnemyType`
 	          row for Miniboss / Boss). Rolled PER PLAYER, exactly as the
 	          corpse drop did.
-	  * COINS ZombieData[<the dead mob>]'s minDropRate / maxDropRate (how
-	          many pickups) and minCoins / maxCoins (value per pickup) —
-	          the same four fields every other mob's coin scatter uses, read
-	          off the encounter mob's own row so a Shadow boss pays what its
-	          row says.
+	  * COINS + FORGE ORE  the tier's chestCoins / chestOre totals
+	          (DifficultyData, per EnemyType), split into the encounter
+	          mob's MobData `chestPickups` counts. These are the run's ONLY
+	          source of permanent currency (design call, 2026-10); grunts
+	          drop Gems, the run currency, and the Event Chest pays Gems.
+	  * GEMS  an encounter mob with a MobData `gems` row pays that purse
+	          from its chest too, on top of the Coins + Ore (the Miniboss:
+	          ~50 a floor before the tier's GemScale; the Boss has no row).
+	  * EVENT CHEST  the Coffin's: its Gem row plus half a Boss chest's
+	          Coins for the tier and floor (EVENT_CHEST_COIN_SHARE_OF_BOSS),
+	          an unbalanced bonus by design.
 
 	PER PLAYER, OWNER-LOCKED: a chest carries its owner's UserId and only
 	that player can open it, so nobody can take a teammate's reward. This
@@ -39,6 +45,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local DungeonService = require(ServerScriptService.Services.DungeonService)
 local DropService = require(ServerScriptService.Services.DropService)
 local GearDropService = require(ServerScriptService.Services.GearDropService)
 local RelicMachineService = require(ServerScriptService.Services.RelicMachineService)
@@ -46,7 +53,8 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
-local ZombieData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ZombieData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 
 --[ Constants ]--
 
@@ -111,14 +119,22 @@ local OWNER_ATTRIBUTE = "OwnerId"
 -- timeout is a backstop rather than the normal path.
 local BATCH_TIMEOUT_SECONDS = 90
 
--- One chest batch (see BATCH_TIMEOUT_SECONDS). `coins` is an optional
--- ZombieData-shaped coin row every chest in the batch pays instead of the
--- dead mob's own.
+-- The EVENT chest (the Laughing Coffin) pays this share of a BOSS chest's
+-- Coins for the run's tier and floor, on top of its Gem row (design call,
+-- 2026-10-21): a lucky find, not part of the balanced take, scaling with
+-- the tier so it stays worth the fight on Nightmare. No Ore.
+local EVENT_CHEST_COIN_SHARE_OF_BOSS = 0.5
+local EVENT_CHEST_COIN_PICKUPS = { 8, 12 }
+
+-- One chest batch (see BATCH_TIMEOUT_SECONDS). `gems` is an optional
+-- MobData `gems`-shaped row the Event Chest pays (the run currency);
+-- encounter chests pay the tier's Coins + Ore (DifficultyData) plus the
+-- encounter mob's own `gems` row when it has one (the Miniboss purse).
 type ChestBatch = {
 	pending: number,
 	done: boolean,
 	onAllOpened: (() -> ())?,
-	coins: { [string]: number }?,
+	gems: { [string]: number }?,
 	-- [userId] = true for every player who got a chest / who opened it.
 	owners: { [number]: boolean },
 	opened: { [number]: boolean },
@@ -128,7 +144,7 @@ type ChestBatch = {
 
 local EncounterChestService = {
 	Name = "EncounterChestService",
-	Dependencies = { DropService, GearDropService, RelicMachineService } :: { any },
+	Dependencies = { DungeonService, DropService, GearDropService, RelicMachineService } :: { any },
 	_batchByChest = {} :: { [Model]: ChestBatch },
 	_activeBatch = nil :: ChestBatch?,
 }
@@ -148,7 +164,7 @@ local function completeBatch(batch: ChestBatch)
 	end
 end
 
--- The chest's own coin scatter, read off the DEAD MOB's ZombieData row so a
+-- The chest's own coin scatter, read off the DEAD MOB's MobData row so a
 -- tier's boss pays what its row says. Same four fields the corpse drop used.
 -- The vending machine template's PrimaryPart, source of the grafted FX.
 local function machineTemplatePrimary(): BasePart?
@@ -264,7 +280,7 @@ local function placeChestAtRest(player: Player, chest: Model): boolean
 
 	local extents = chest:GetExtentsSize()
 	local footprintRadius = math.max(extents.X, extents.Z) / 2
-	local frontXZ, groundY, _floorPart = RelicMachineService:_pickMachineLanding(hrp, footprintRadius)
+	local frontXZ, groundY, _floorPart = RelicMachineService:PickMachineLanding(hrp, footprintRadius)
 
 	-- Seat the BOTTOM on the ground: pivot height above the model's
 	-- lowest point, preserved.
@@ -291,12 +307,44 @@ local function placeChestAtRest(player: Player, chest: Model): boolean
 	return true
 end
 
-local function coinConfigFor(mobName: string?)
-	local data = mobName and ZombieData[mobName]
-	if not data or not data.minDropRate then
-		return nil
+-- How many pickups a chest splits its payout into (MobData `chestPickups`
+-- on the encounter mob), { min, max } per currency. A sane default for a
+-- chest with no row behind it.
+local DEFAULT_PICKUPS = { coins = { 5, 7 }, ore = { 3, 4 } }
+local function pickupCountsFor(mobName: string?): { coins: { number }, ore: { number } }
+	local data = mobName and MobData[mobName]
+	return (data and data.chestPickups) or DEFAULT_PICKUPS
+end
+
+-- Fires a MobData `gems`-shaped row (pickup count range x value range)
+-- from `origin`, private to `player`, chest-style (a blip per pickup).
+local function dropGems(origin: BasePart, gems: { [string]: number }, player: Player)
+	if not DropService then
+		return
 	end
-	return data
+	DropService.OnDropRequested:Fire(
+		origin,
+		DropTypes.Gems,
+		gems.minDropRate,
+		gems.maxDropRate,
+		gems.minGems,
+		gems.maxGems,
+		false,
+		player.UserId,
+		true
+	)
+end
+
+-- Fires `total` of `dropType` as `count` pickups from `origin`, private to
+-- `player`, chest-style (a blip per pickup). Rounds the per-pickup value
+-- up so the chest never pays less than its row.
+local function dropSplit(origin: BasePart, dropType: string, total: number, countRange: { number }, player: Player)
+	if not DropService or total <= 0 then
+		return
+	end
+	local count = math.random(countRange[1], countRange[2])
+	local value = math.max(1, math.ceil(total / count))
+	DropService.OnDropRequested:Fire(origin, dropType, count, count, value, value, false, player.UserId, true)
 end
 
 -- Resolves ONE chest against its batch: opened, destroyed, or its owner
@@ -339,7 +387,7 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 	end
 
 	-- Read BEFORE resolving: resolving drops the chest from the batch map,
-	-- and the batch may carry a coin row of its own (the Event Chest).
+	-- and the batch may carry a Gems row of its own (the Event Chest).
 	local batch = self._batchByChest[chest]
 	if batch and batch.opened then
 		batch.opened[player.UserId] = true
@@ -364,30 +412,54 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		GearDropService:DropGear(player, origin.Position, enemyType, true)
 	end
 
-	-- COINS: the batch's own row when it has one (the Event Chest pays
-	-- out of DungeonData.coffinEvent.coins — there is no corpse), else
-	-- the dead mob's ZombieData row (count range x value range).
-	local coins = (batch and batch.coins) or coinConfigFor(mobName)
-	if DropService and coins then
-		DropService.OnDropRequested:Fire(
-			origin,
-			DropTypes.Coins,
-			coins.minDropRate,
-			coins.maxDropRate,
-			coins.minCoins,
-			coins.maxCoins,
-			-- SCATTER RADIUS, not a loot flag: the client Drop component
-			-- reads this as IsBoss and throws the coins over ±20 studs
-			-- instead of ±8. A boss CORPSE wants that wide spray; chest
-			-- coins pour out of one spot the player is already standing at,
-			-- so both tiers use the tight miniboss radius.
-			false,
-			-- PRIVATE to the chest's owner. Chests are per-player, so shared
-			-- coins meant everybody banked everybody else's chest.
-			player.UserId,
-			-- Chest loot: one blip per coin as it pops out.
-			true
-		)
+	-- CURRENCY (design call, 2026-10). An ENCOUNTER chest pays its share
+	-- of the tier's permanent take -- Coins and Forge Ore, run totals from
+	-- DifficultyData `chestCoins` / `chestOre` split by floor and by
+	-- miniboss / boss (ChestPayout), then into MobData `chestPickups`
+	-- pickups -- plus the encounter mob's own Gem purse when its MobData
+	-- row has `gems` (the Miniboss, ~50 a floor; DropService applies the
+	-- tier's GemScale at collect time). The EVENT chest
+	-- (Laughing Coffin) pays Gems from the batch's own row instead.
+	-- Everything is PRIVATE to the chest's owner: chests are per player,
+	-- so shared pickups meant everybody banked everybody else's chest.
+	-- DropService applies the dungeon's rewardScale to the Coins and Ore
+	-- at collect time.
+	if enemyType == EnemyTypes.Event then
+		local gems = batch and batch.gems
+		if gems then
+			dropGems(origin, gems, player)
+		end
+		local tier = DungeonService:GetDifficultyScale()
+		local floor = DungeonService:GetFloor()
+		local bossCoins = DifficultyData.ChestPayout(tier, floor, EnemyTypes.Boss, "chestCoins")
+		if bossCoins then
+			dropSplit(
+				origin,
+				DropTypes.Coins,
+				math.round(bossCoins * EVENT_CHEST_COIN_SHARE_OF_BOSS),
+				EVENT_CHEST_COIN_PICKUPS,
+				player
+			)
+		end
+	elseif enemyType then
+		-- The tier's run total, split across floors (back-loaded) and
+		-- between the floor's miniboss and boss (DifficultyData.ChestPayout).
+		local tier = DungeonService:GetDifficultyScale()
+		local floor = DungeonService:GetFloor()
+		local pickups = pickupCountsFor(mobName)
+		local coins = DifficultyData.ChestPayout(tier, floor, enemyType, "chestCoins")
+		if coins then
+			dropSplit(origin, DropTypes.Coins, coins, pickups.coins, player)
+		end
+		local ore = DifficultyData.ChestPayout(tier, floor, enemyType, "chestOre")
+		if ore then
+			dropSplit(origin, DropTypes.ForgeOre, ore, pickups.ore, player)
+		end
+		local mobData = mobName and MobData[mobName]
+		local purse = mobData and mobData.gems
+		if purse then
+			dropGems(origin, purse, player)
+		end
 	end
 
 	-- The opened chest stays in the world as scenery, collidable — the
@@ -397,11 +469,11 @@ end
 --[ Public ]--
 
 -- Drops one chest per living player for a finished encounter. `mob` is the
--- corpse: its NAME is the ZombieData key the coin scatter reads, so the
+-- corpse: its NAME is the MobData key the coin scatter reads, so the
 -- chest pays what that specific mob's row says.
--- `mob` may also be a plain ZombieData KEY (a string) — the /drop debug
+-- `mob` may also be a plain MobData KEY (a string) — the /drop debug
 -- command has no corpse to hand over, only a name for the coin row.
--- `coinsOverride` (optional): a coin row shaped like a ZombieData mob's
+-- `coinsOverride` (optional): a coin row shaped like a MobData mob's
 -- ({ minDropRate, maxDropRate, minCoins, maxCoins }) that every chest in
 -- this batch pays instead of `mob`'s row — the Event Chest, which has no
 -- mob behind it.
@@ -410,7 +482,7 @@ function EncounterChestService.DropChestsForEncounter(
 	enemyType: string,
 	mob: (Model | string)?,
 	onAllOpened: (() -> ())?,
-	coinsOverride: { [string]: number }?
+	gemsOverride: { [string]: number }?
 )
 	-- The batch exists BEFORE the first bail-out: every early return has
 	-- to complete it, or a missing prefab would leave the gate shut and
@@ -419,7 +491,7 @@ function EncounterChestService.DropChestsForEncounter(
 		pending = 0,
 		done = false,
 		onAllOpened = onAllOpened,
-		coins = coinsOverride,
+		gems = gemsOverride,
 		-- [userId] = true for every player who got a chest / who opened it.
 		-- The encounter gate's countdown reads these (HasPlayerOpenedChest).
 		owners = {},
@@ -588,11 +660,24 @@ function EncounterChestService.HasPlayerOpenedChest(self: typeof(EncounterChestS
 	return batch.opened[player.UserId] == true
 end
 
--- True once the current batch has fully resolved (every chest opened,
--- its owner gone, or the backstop timeout).
-function EncounterChestService.AllChestsOpened(self: typeof(EncounterChestService)): boolean
-	local batch = self._activeBatch
-	return batch == nil or batch.done == true or batch.pending <= 0
+-- The floor is being replaced. Batches are per encounter and their chests
+-- die with the floor's rooms, but the two lookups only ever emptied at
+-- boot: the previous floor's batch stayed the ACTIVE one, so
+-- HasPlayerOpenedChest on the new floor answered from
+-- stale state until its first encounter, and a still-pending batch's
+-- BATCH_TIMEOUT could fire its callback into a floor that no longer
+-- existed. Every live batch is retired (done, so neither the timeout
+-- nor a chest's teardown-destroy can complete it) and both lookups are
+-- cleared. Mirrors CoffinEventService.ResetForFloor.
+function EncounterChestService.ResetForFloor(self: typeof(EncounterChestService))
+	for _, batch in self._batchByChest do
+		batch.done = true
+	end
+	if self._activeBatch then
+		self._activeBatch.done = true
+	end
+	table.clear(self._batchByChest)
+	self._activeBatch = nil
 end
 
 --[ Lifecycle ]--
@@ -611,6 +696,13 @@ function EncounterChestService.Start(self: typeof(EncounterChestService))
 				self:_resolveChest(chest)
 			end
 		end
+	end)
+
+	-- Floor reset (see ResetForFloor). OnFloorTeardown fires at the START
+	-- of the teardown, before it destroys the old chests, so their batch is
+	-- already retired when those Destroying signals fire.
+	DungeonService.Signals.OnFloorTeardown:Connect(function()
+		self:ResetForFloor()
 	end)
 end
 

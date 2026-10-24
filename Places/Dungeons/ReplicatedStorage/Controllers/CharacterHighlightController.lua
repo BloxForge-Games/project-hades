@@ -3,7 +3,7 @@
 	Module: CharacterHighlightController.lua
 	Description:
 	Single client-side Highlight renderer for the local player AND
-	every zombie in workspace.IgnoreInstances.Zombies. Per zombie there
+	every mob in workspace.IgnoreInstances.Mobs. Per mob there
 	is exactly ONE Highlight Instance — the server-replicated
 	"MobHighlight" created by MobBase. This controller mutates its
 	visual properties via a per-frame priority resolver so multiple
@@ -11,9 +11,9 @@
 	same slot instead of stacking new Highlights.
 
 	Why a single highlight: Roblox enforces a HARD 255 active-Highlight
-	cap. The previous design created one Highlight per effect per zombie
+	cap. The previous design created one Highlight per effect per mob
 	(AttackHighlightIndicator + DamageIndicatorHighlight +
-	CharacterHighlight ≈ 3 per mob). With 50 zombies + waves of dying
+	CharacterHighlight ≈ 3 per mob). With 50 mobs + waves of dying
 	bodies you cleared the cap and new Highlight Instances silently
 	failed to render — that was the root cause of the "wizard's cast
 	highlight sometimes doesn't appear" bug.
@@ -26,8 +26,11 @@
 	                     overrides everything because combat feedback
 	                     is the most readable signal.
 	  2. OUTLINE       — white, partly transparent, AlwaysOnTop. Active
-	                     whenever the zombie's head is occluded by
+	                     whenever the mob's head is occluded by
 	                     terrain so you can read threats through walls.
+	                     The occlusion answer is OcclusionController's
+	                     (one shared pass per tick; this used to query
+	                     the camera once per mob per tick).
 	  3. ATTACK WINDUP — white, transparent, AlwaysOnTop. Server-driven
 	                     via the MobHighlightAttackActive attribute on
 	                     the model. Client tweens local intensity over
@@ -38,7 +41,7 @@
 	model — and resolves FIVE layers through the same single Instance,
 	highest first: DEATH flash (red, LifeController), DAMAGE flash (red),
 	DODGE flash (white, perfect dodge), INVULNERABLE (white fill, on while
-	Attributes.Invulnerable is true -- jetpack, life loss, cutscene magic
+	Attributes.Invulnerable is true -- jetpack, life loss, cutscene arcane
 	-- ramped over INVULN_FADE_DURATION) and the occlusion outline. Every
 	one of those used to be its OWN Highlight parented to the character,
 	and Roblox renders one per adornee -- the most recently added -- so a
@@ -62,7 +65,7 @@
 	  CharacterHighlightController:RequestDamageFlash(model)
 	    Flips the damage-flash state for `model` so the per-frame
 	    resolver renders red for DAMAGE_FLASH_DURATION. Safe to call
-	    on any model; no-ops if not in the zombie registry.
+	    on any model; no-ops if not in the mob registry.
 ]]
 
 local Players = game:GetService("Players")
@@ -73,17 +76,16 @@ local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
-
-local camera: Camera = workspace.CurrentCamera
+local OcclusionController = require(ReplicatedStorage.Controllers.OcclusionController)
 
 local MOB_HIGHLIGHT_NAME = "MobHighlight"
 local MOB_ATTACK_ATTRIBUTE = "MobHighlightAttackActive"
 local PLAYER_HIGHLIGHT_NAME = "CharacterHighlight"
 
 -- Per-frame loop cadence. 0.025s ≈ 40Hz — matches the legacy tick
--- this controller used. Trade-off: lower = smoother windup tweens,
--- higher = cheaper raycast budget. 40Hz is the sweet spot for
--- 30-50 live zombies.
+-- this controller used. Only property writes and the local ramps
+-- (windup, invulnerable) run here now; the occlusion queries are
+-- OcclusionController's, on its own clock.
 local TICK_INTERVAL = 0.025
 
 -- Damage flash: 0.25s fade from peak transparency 0.4 → 1, red.
@@ -180,12 +182,12 @@ local WINDUP_FADE_DURATION = 0.35
 local WINDUP_COLOR = Color3.fromRGB(255, 255, 255)
 
 -- How long to wait for the server-replicated MobHighlight to arrive
--- on a freshly-spawned zombie. Generous because spawn replication can
--- be slow under load. If it never arrives we just skip the zombie.
+-- on a freshly-spawned mob. Generous because spawn replication can
+-- be slow under load. If it never arrives we just skip the mob.
 local MOB_HIGHLIGHT_WAIT_TIMEOUT = 5
 
--- Per-zombie state for the priority resolver (see _RegisterZombie).
-type ZombieHighlightData = {
+-- Per-mob state for the priority resolver (see _RegisterMob).
+type MobHighlightData = {
 	head: BasePart,
 	highlight: Highlight,
 	-- Damage flash state: nil if not flashing, else the os.clock()
@@ -197,13 +199,13 @@ type ZombieHighlightData = {
 
 local CharacterHighlightController = {
 	Name = "CharacterHighlightController",
-	Dependencies = { PlayerEventController } :: { any },
+	Dependencies = { PlayerEventController, OcclusionController } :: { any },
 
-	-- Both built in Init.
+	-- Built in Init. Holds the local character's loop thread and highlight
+	-- (see _initHighlightThread).
 	_janitor = nil :: typeof(Janitor.new())?,
-	_ignoreList = {} :: { Instance },
 
-	_zombieRegistry = {} :: { [Model]: ZombieHighlightData },
+	_mobRegistry = {} :: { [Model]: MobHighlightData },
 
 	-- Local player highlight state (see _InitHighlightThread).
 	_playerHighlight = nil :: Highlight?,
@@ -212,14 +214,13 @@ local CharacterHighlightController = {
 	_playerDodgeStartAt = nil :: number?,
 	_playerDeathStartAt = nil :: number?,
 	_playerDownedStartAt = nil :: number?,
-	_threadGeneration = 0,
 }
 
 --------------------------------------------------
 -- INTERNAL
 --------------------------------------------------
 
--- Used only for the LOCAL player highlight. Zombies don't get a
+-- Used only for the LOCAL player highlight. Mobs don't get a
 -- client-created Highlight — they use the server-replicated MobHighlight.
 function CharacterHighlightController._createPlayerHighlightInstance(
 	_self: typeof(CharacterHighlightController),
@@ -250,34 +251,35 @@ function CharacterHighlightController._createPlayerHighlightInstance(
 	return highlight
 end
 
--- Register a zombie. Finds the server-replicated MobHighlight (waits
--- up to MOB_HIGHLIGHT_WAIT_TIMEOUT seconds), then seeds per-zombie
+-- Register a mob. Finds the server-replicated MobHighlight (waits
+-- up to MOB_HIGHLIGHT_WAIT_TIMEOUT seconds), then seeds per-mob
 -- state for the priority resolver. NO new Highlight Instance is
 -- created here — that's the whole point.
-function CharacterHighlightController._registerZombie(self: typeof(CharacterHighlightController), zombie: Model)
-	if not zombie:FindFirstChild("Head") then
+function CharacterHighlightController._registerMob(self: typeof(CharacterHighlightController), mob: Model)
+	if not mob:FindFirstChild("Head") then
 		return
 	end
-	if self._zombieRegistry[zombie] then
+	if self._mobRegistry[mob] then
 		return
 	end
 
 	-- Wait in a separate task so a slow-replicating MobHighlight
-	-- doesn't block ChildAdded for the next zombie.
+	-- doesn't block ChildAdded for the next mob.
 	task.spawn(function()
-		local highlight = zombie:WaitForChild(MOB_HIGHLIGHT_NAME, MOB_HIGHLIGHT_WAIT_TIMEOUT)
-		if not highlight or not zombie.Parent then
+		local highlight = mob:WaitForChild(MOB_HIGHLIGHT_NAME, MOB_HIGHLIGHT_WAIT_TIMEOUT)
+		if not highlight or not mob.Parent then
 			-- Either the server never created one (shouldn't happen
-			-- given MobBase always does) or the zombie was removed
+			-- given MobBase always does) or the mob was removed
 			-- before it arrived. Either way: bail silently.
 			return
 		end
-		if self._zombieRegistry[zombie] then
-			return -- raced with another _RegisterZombie call
+		if self._mobRegistry[mob] then
+			return -- raced with another _RegisterMob call
 		end
 
-		self._zombieRegistry[zombie] = {
-			head = zombie:FindFirstChild("Head") :: BasePart,
+		local head = mob:FindFirstChild("Head") :: BasePart
+		self._mobRegistry[mob] = {
+			head = head,
 			highlight = highlight :: Highlight,
 
 			-- Damage flash state: nil if not flashing, else tick()
@@ -290,23 +292,26 @@ function CharacterHighlightController._registerZombie(self: typeof(CharacterHigh
 			-- of snapping.
 			windupIntensity = 0,
 		}
+		-- Into the shared occlusion pass, on the head.
+		OcclusionController:Track(mob, head)
 
 		-- AncestryChanged fires on ANY parent change. We want to drop
-		-- the registry entry the moment the zombie leaves the live-
-		-- zombies folder (e.g. moved to DeadZombies on death, or
+		-- the registry entry the moment the mob leaves the live-
+		-- mobs folder (e.g. moved to DeadMobs on death, or
 		-- destroyed outright). Without this we'd keep poking dead
-		-- zombies in the per-frame loop forever — which was the
+		-- mobs in the per-frame loop forever — which was the
 		-- original CharacterHighlight leak path.
-		zombie.AncestryChanged:Connect(function(_, parent)
-			if parent ~= workspace.IgnoreInstances.Zombies then
-				self._zombieRegistry[zombie] = nil
+		mob.AncestryChanged:Connect(function(_, parent)
+			if parent ~= workspace.IgnoreInstances.Mobs then
+				self._mobRegistry[mob] = nil
+				OcclusionController:Untrack(mob)
 			end
 		end)
 	end)
 end
 
 -- Public: request a damage flash for `model`. Called by
--- DamageIndicatorController when the local player damages a zombie, and
+-- DamageIndicatorController when the local player damages a mob, and
 -- HumanoidStateController when the LOCAL PLAYER takes damage. No-ops for
 -- any other model (those go through the legacy onDamageIndicator path).
 function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterHighlightController), model: Model)
@@ -315,7 +320,7 @@ function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterH
 		ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
 		return
 	end
-	local data = self._zombieRegistry[model]
+	local data = self._mobRegistry[model]
 	if not data then
 		return
 	end
@@ -341,7 +346,7 @@ function CharacterHighlightController.RequestDeathFlash(self: typeof(CharacterHi
 end
 
 -- Per-frame resolver for the LOCAL player's single highlight. Same shape
--- as the zombie resolver, highest layer wins: death, damage, dodge,
+-- as the mob resolver, highest layer wins: death, damage, dodge,
 -- invulnerable, then the through-wall outline, then nothing.
 function CharacterHighlightController._resolvePlayerHighlight(
 	self: typeof(CharacterHighlightController),
@@ -355,7 +360,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 
 	-- Ramp the invulnerable intensity toward the attribute (1 / 0). NOT
 	-- during ANY cutscene: a cinematic framed on your character should not
-	-- also paint it white. That covers the magic casts (Susanoo, Domain
+	-- also paint it white. That covers the arcane casts (Susanoo, Domain
 	-- Expansion), whose own presentation is the feedback, and the encounter
 	-- intro / landing / event beats, which grant no i-frames but can
 	-- overlap one. The glow comes up as the cutscene ends and covers the
@@ -363,7 +368,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	-- Highlight) applies the same rule to windows this client cannot see
 	-- locally; the local checks stay as the extra guard.
 	local inCutscene = character:GetAttribute(Attributes.CutscenePlaying) == true
-		or character:GetAttribute(Attributes.MagicCutscenePlaying) == true
+		or character:GetAttribute(Attributes.ArcaneCutscenePlaying) == true
 	local jetpackInvuln = character:GetAttribute(Attributes.Invulnerable) == true
 		and character:GetAttribute(Attributes.InvulnerableReason) == INVULN_REASON_JETPACK
 	local invulnTarget = if wantsInvulnerableHighlight(character) and (jetpackInvuln or not inCutscene) then 1 else 0
@@ -423,8 +428,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	end
 	self._playerDamageFlashEndAt = nil
 
-	local head = character:FindFirstChild("Head") :: BasePart?
-	local occluded = head ~= nil and self:_isOccluded(head.Position)
+	local occluded = OcclusionController:IsOccluded(character)
 
 	-- Priority 1.5: perfect dodge (white: 1 -> peak over the attack, then
 	-- peak -> 1 over the decay).
@@ -561,19 +565,14 @@ function CharacterHighlightController._watchOtherPlayers(self: typeof(CharacterH
 	Players.PlayerAdded:Connect(bind)
 end
 
-function CharacterHighlightController._isOccluded(self: typeof(CharacterHighlightController), point: Vector3)
-	local hit = camera:GetPartsObscuringTarget({ point }, self._ignoreList)
-	return hit and #hit > 0
-end
-
--- Per-frame priority resolver for a single zombie. Picks the highest
+-- Per-frame priority resolver for a single mob. Picks the highest
 -- priority active layer and writes its color/transparency to the
 -- single MobHighlight Instance. Lower-priority layers are NOT
 -- additive — only the winner is rendered.
-function CharacterHighlightController._resolveZombieHighlight(
-	self: typeof(CharacterHighlightController),
-	zombie: Model,
-	data: ZombieHighlightData,
+function CharacterHighlightController._resolveMobHighlight(
+	_self: typeof(CharacterHighlightController),
+	mob: Model,
+	data: MobHighlightData,
 	deltaTime: number
 )
 	local highlight = data.highlight
@@ -592,7 +591,7 @@ function CharacterHighlightController._resolveZombieHighlight(
 	-- target (1 when attribute is true, 0 when false). Linear ramp
 	-- over WINDUP_FADE_DURATION matches the previous TweenInfo curve
 	-- closely enough that the visual is indistinguishable.
-	local targetIntensity = if zombie:GetAttribute(MOB_ATTACK_ATTRIBUTE) then 1 else 0
+	local targetIntensity = if mob:GetAttribute(MOB_ATTACK_ATTRIBUTE) then 1 else 0
 	local step = deltaTime / WINDUP_FADE_DURATION
 	local diff = targetIntensity - data.windupIntensity
 	if math.abs(diff) <= step then
@@ -621,7 +620,7 @@ function CharacterHighlightController._resolveZombieHighlight(
 	end
 
 	-- Priority 2: occlusion outline (white, 0.65, AlwaysOnTop).
-	local occluded = self:_isOccluded(head.Position)
+	local occluded = OcclusionController:IsOccluded(mob)
 	if occluded then
 		highlight.FillColor = OUTLINE_COLOR
 		highlight.FillTransparency = OUTLINE_TRANSPARENCY
@@ -651,62 +650,51 @@ end
 
 function CharacterHighlightController._initHighlightThread(self: typeof(CharacterHighlightController))
 	local janitor = assert(self._janitor, "[CharacterHighlightController] Init has not run")
+	-- RE-ENTRANT. OnCharacterLoaded can fire more than once for one
+	-- character (the initial load and CharacterAdded both fire it), and
+	-- again on every respawn. The previous loop thread and its highlight
+	-- are the janitor's, so this cancels them before building the next
+	-- pair, instead of two loops driving two highlights on one model.
 	janitor:Cleanup()
 
 	local player = Players.LocalPlayer
 	local character = player.Character
+	if not character then
+		return
+	end
 
-	-- RE-ENTRANT. OnCharacterLoaded can fire more than once for one
-	-- character (the initial load and CharacterAdded both fire it); the
-	-- generation lets the previous loop notice it has been superseded and
-	-- stop, instead of two loops driving two highlights on one model.
-	self._threadGeneration = (self._threadGeneration or 0) + 1
-	local generation = self._threadGeneration
-
-	self._playerHighlight = self:_createPlayerHighlightInstance(character)
+	self._playerHighlight = janitor:Add(self:_createPlayerHighlightInstance(character))
 	self._playerDamageFlashEndAt = nil
 	self._playerDodgeStartAt = nil
 	self._playerDeathStartAt = nil
 	self._playerDownedStartAt = nil
 	self._playerInvulnIntensity = 0
 
-	local lastTick = os.clock()
-	while task.wait(TICK_INTERVAL) do
-		if self._threadGeneration ~= generation then
-			return
-		end
-		local now = os.clock()
-		local deltaTime = now - lastTick
-		lastTick = now
+	janitor:Add(
+		task.spawn(function()
+			local lastTick = os.clock()
+			while task.wait(TICK_INTERVAL) do
+				local now = os.clock()
+				local deltaTime = now - lastTick
+				lastTick = now
 
-		self:_resolvePlayerHighlight(character, deltaTime)
+				self:_resolvePlayerHighlight(character, deltaTime)
 
-		-- Resolve priority for every registered zombie. AncestryChanged
-		-- has already scrubbed entries for dead/destroyed zombies, so
-		-- this iteration is over live mobs only.
-		for zombie, data in pairs(self._zombieRegistry) do
-			self:_resolveZombieHighlight(zombie, data, deltaTime)
-		end
-	end
+				-- Resolve priority for every registered mob. AncestryChanged
+				-- has already scrubbed entries for dead/destroyed mobs, so
+				-- this iteration is over live mobs only.
+				for mob, data in pairs(self._mobRegistry) do
+					self:_resolveMobHighlight(mob, data, deltaTime)
+				end
+			end
+		end),
+		true
+	)
 end
 
 function CharacterHighlightController.Init(self: typeof(CharacterHighlightController))
 	self._janitor = Janitor.new()
-	self._zombieRegistry = {}
-
-	self._ignoreList = {
-		Players.LocalPlayer.Character,
-		workspace.IgnoreInstances.Terrain,
-		workspace.IgnoreInstances.Boundaries,
-		workspace.Terrain,
-		workspace.CurrentCamera,
-		workspace.IgnoreInstances.MapMarkers,
-		workspace.IgnoreInstances.MagicSpells,
-		workspace.PlayerBaseplates,
-		workspace.IgnoreInstances.Drops,
-		workspace.IgnoreInstances.Zombies,
-		workspace.IgnoreInstances.DeadZombies,
-	}
+	self._mobRegistry = {}
 end
 
 function CharacterHighlightController.Start(self: typeof(CharacterHighlightController))
@@ -716,12 +704,12 @@ function CharacterHighlightController.Start(self: typeof(CharacterHighlightContr
 
 	self:_watchOtherPlayers()
 
-	for _, zombie in ipairs(workspace.IgnoreInstances.Zombies:GetChildren()) do
-		self:_registerZombie(zombie)
+	for _, mob in ipairs(workspace.IgnoreInstances.Mobs:GetChildren()) do
+		self:_registerMob(mob)
 	end
 
-	workspace.IgnoreInstances.Zombies.ChildAdded:Connect(function(zombie)
-		self:_registerZombie(zombie)
+	workspace.IgnoreInstances.Mobs.ChildAdded:Connect(function(mob)
+		self:_registerMob(mob)
 	end)
 end
 

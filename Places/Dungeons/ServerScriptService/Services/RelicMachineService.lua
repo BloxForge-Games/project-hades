@@ -18,19 +18,12 @@ local TweenService = game:GetService("TweenService")
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
-
--- DungeonService requires this module at load, so this side reaches it
--- lazily: required on first use, once both modules exist.
-local dungeonServiceLazy: any = nil
-local function getDungeonService(): any
-	if dungeonServiceLazy == nil then
-		dungeonServiceLazy = (require :: any)(ServerScriptService.Services.DungeonService)
-	end
-	return dungeonServiceLazy
-end
+local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
+local DungeonService = require(ServerScriptService.Services.DungeonService)
 
 local RelicMachineService = {
 	Name = "RelicMachineService",
+	Dependencies = { DungeonService } :: { any },
 }
 
 --[ Imports ]--
@@ -40,7 +33,7 @@ local RelicMachineService = {
 -- Studs in front of the player the machine lands, along their own facing.
 -- Close: the machine faces THEM (see DropModelOnPlayer), so a player who
 -- does not move has it squarely in front of them.
-local FORWARD_OFFSET = 6
+local FORWARD_OFFSET = 4
 -- Extra clearance kept between the machine's footprint and the floor edge,
 -- so a clamped machine never overhangs the lip of the slab.
 local FLOOR_EDGE_MARGIN = 1.5
@@ -62,6 +55,18 @@ local RAYCAST_DEPTH = 200 -- max studs to search downward for ground
 -- a wall where nobody can reach it.
 function RelicMachineService._findGroundY(_self: typeof(RelicMachineService), originXZ: Vector3): number?
 	local hit = findFloorBelow(originXZ.X, originXZ.Z, originXZ.Y + RAYCAST_HEIGHT, RAYCAST_DEPTH)
+	return hit and hit.Y or nil
+end
+
+-- ANY-Map ground find: the first Map part under the point, Floor or not
+-- (snapToGround's mapOnly filter). The fallback for a point the Floor
+-- test rejects, so a machine still lands in front of the player on a prop
+-- top or on ground that is not a named Floor slab, rather than on them.
+function RelicMachineService._findAnyGroundY(_self: typeof(RelicMachineService), originXZ: Vector3): number?
+	local hit = snapToGround(
+		Vector3.new(originXZ.X, originXZ.Y + RAYCAST_HEIGHT, originXZ.Z),
+		{ mapOnly = true, maxDistance = RAYCAST_HEIGHT + RAYCAST_DEPTH }
+	)
 	return hit and hit.Y or nil
 end
 
@@ -92,7 +97,10 @@ end
 --      sitting on top, would still fail the Floor test) and fall back to the
 --      player's own feet, which are on floor by definition.
 -- Returns (position, groundY, floorPart).
-function RelicMachineService._pickMachineLanding(
+--
+-- Public: EncounterChestService seats the reward chests with the same pick,
+-- so a chest can never land anywhere a machine could not.
+function RelicMachineService.PickMachineLanding(
 	self: typeof(RelicMachineService),
 	hrp: BasePart,
 	footprintRadius: number
@@ -100,23 +108,26 @@ function RelicMachineService._pickMachineLanding(
 	local feetY = hrp.Position.Y - (hrp.Size.Y / 2) - 2
 	local _, standingFloor =
 		findFloorBelow(hrp.Position.X, hrp.Position.Z, hrp.Position.Y + RAYCAST_HEIGHT, RAYCAST_DEPTH)
+	local look = hrp.CFrame.LookVector
+	local desired = hrp.Position + (look * FORWARD_OFFSET)
 
 	if not standingFloor then
-		-- Not over a Floor at all (mid-jump over a gap, off-grid spawn).
-		-- Fall back to the old step-back walk rather than dropping nothing.
-		local look = hrp.CFrame.LookVector
+		-- Not over a named Floor slab at all: mid-jump over a gap, an
+		-- off-grid spawn, or a place whose ground is not a "Floor" part
+		-- under Map.DungeonRooms (terrain, a hub, a test place). Landing ON
+		-- the player is the last resort, not the first: try the forward
+		-- point against any Map geometry, then walk it back toward them.
 		local step = FORWARD_OFFSET / LANDING_STEPS
-		for i = LANDING_STEPS, 0, -1 do
+		for i = LANDING_STEPS, 1, -1 do
 			local candidate = hrp.Position + look * (step * i)
-			local groundY = self:_findGroundY(candidate)
+			local groundY = self:_findGroundY(candidate) or self:_findAnyGroundY(candidate)
 			if groundY then
 				return candidate, groundY, nil
 			end
 		end
-		return hrp.Position, feetY, nil
+		return hrp.Position, self:_findAnyGroundY(hrp.Position) or feetY, nil
 	end
 
-	local desired = hrp.Position + (hrp.CFrame.LookVector * FORWARD_OFFSET)
 	local clamped = clampToFloorBounds(standingFloor, desired, footprintRadius + FLOOR_EDGE_MARGIN)
 
 	local groundY = self:_findGroundY(clamped)
@@ -124,8 +135,14 @@ function RelicMachineService._pickMachineLanding(
 		return clamped, groundY, standingFloor
 	end
 
-	-- Clamped point is over a hole / prop. The player's own position is on
-	-- this slab, so use that.
+	-- Clamped point is over a hole / prop: a prop's top is still ground the
+	-- machine can sit on and the player can reach, and it keeps the
+	-- machine in FRONT of them. Only a point over nothing at all falls
+	-- back to the player's own position, which is on this slab.
+	local anyGroundY = self:_findAnyGroundY(clamped)
+	if anyGroundY then
+		return clamped, anyGroundY, standingFloor
+	end
 	local ownGroundY = self:_findGroundY(hrp.Position)
 	return hrp.Position, ownGroundY or feetY, standingFloor
 end
@@ -219,7 +236,7 @@ function RelicMachineService.DropModelOnPlayer(
 	-- bounds, on a neighbouring chunk, or half-off a ledge.
 	local extents = model:GetExtentsSize()
 	local footprintRadius = math.max(extents.X, extents.Z) / 2
-	local frontXZ, groundY = self:_pickMachineLanding(hrp, footprintRadius)
+	local frontXZ, groundY = self:PickMachineLanding(hrp, footprintRadius)
 
 	local landingPosition = Vector3.new(frontXZ.X, groundY + (extents.Y / 2), frontXZ.Z)
 
@@ -268,15 +285,14 @@ function RelicMachineService.Start(_self: typeof(RelicMachineService))
 
 	-- Drop a vending machine on every player when a Combat segment is cleared.
 	-- Miniboss/other segment types are ignored — opt them in here if desired.
-	getDungeonService().Signals.OnSegmentCleared:Connect(function(_dungeon, lastChunk)
+	DungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, lastChunk)
 		if lastChunk.roomType ~= RoomTypes.Combat then
 			return
 		end
 
 		-- EVERY cleared Combat segment drops a relic machine: relic pickups
 		-- are the single reward cadence, so the element-affinity snowball
-		-- gets a chance to compound every room. (Rune machines, which used
-		-- to alternate with these, are gone with the rune drop path.)
+		-- gets a chance to compound every room.
 		for _, player in Players:GetPlayers() do
 			task.wait(0.25)
 			RelicMachineService:DropMachineOnPlayer(player)

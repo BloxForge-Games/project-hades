@@ -53,6 +53,10 @@ export type RelicList = {
 local RelicInterfaceController = {
 	Name = "RelicInterfaceController",
 	Dependencies = { RelicController, InterfaceManagerController } :: { any },
+
+	-- Whether the tray is open, by any path (its own toggle, the scope,
+	-- the signals). Read through IsOpen.
+	_isOpen = false,
 }
 
 RelicInterfaceController.Signals = {
@@ -71,7 +75,15 @@ RelicInterfaceController.Signals = {
 	-- SetSellMode: true lights the tray's Reforge button, and Container
 	-- clears it itself whenever the tray closes.
 	SetReforgeMode = Signal.new(),
+	-- (open: boolean) -- the tray opened or closed, by any path. The relic
+	-- offer (RelicOfferInterfaceController) stops taking card picks while
+	-- the tray is open.
+	OnVisibilityChanged = Signal.new(),
 }
+
+function RelicInterfaceController.IsOpen(self: typeof(RelicInterfaceController)): boolean
+	return self._isOpen
+end
 
 function RelicInterfaceController._render(_self: typeof(RelicInterfaceController))
 	return function()
@@ -116,6 +128,10 @@ function RelicInterfaceController._render(_self: typeof(RelicInterfaceController
 			Name = INTERFACE_ID,
 			ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
 			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+			-- Above the relic offer overlay (RelicOfferInterfaceController,
+			-- 50), so the tray opens in front of the cards mid-offer: read
+			-- your relics, or drop one to free a slot for a pick.
+			DisplayOrder = 60,
 		}, {
 			Container = React.createElement(Container, {
 				Visible = true,
@@ -149,6 +165,13 @@ function RelicInterfaceController._render(_self: typeof(RelicInterfaceController
 				end,
 				onBlockedAction = function()
 					getEventController():ShowBlockedActionNotification()
+				end,
+				onVisibilityChanged = function(open: boolean)
+					if RelicInterfaceController._isOpen == open then
+						return
+					end
+					RelicInterfaceController._isOpen = open
+					RelicInterfaceController.Signals.OnVisibilityChanged:Fire(open)
 				end,
 			}),
 		})

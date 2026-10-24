@@ -7,7 +7,7 @@
 
 	ONE RUNTIME KNOB, and only one: SetStrong(true / false) tweens the
 	vignette between its resting transparency and a stronger one, for
-	cutscene beats (CutsceneController:PlayMagicCutscene). Otherwise it
+	cutscene beats (CutsceneController:PlayArcaneCutscene). Otherwise it
 	stays as it was: no props, mounted once at Init — which is also
 	why the whole interface is a single file.
 	ALWAYS VISIBLE, deliberately: it is NOT registered with

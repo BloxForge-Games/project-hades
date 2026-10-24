@@ -53,6 +53,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local SignalTypes = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 local Container = require(script.RoactComponents.Container)
 
@@ -62,7 +63,7 @@ local TOGGLE_KEY = Enum.KeyCode.C
 -- Dim backdrop tween targets. Same reasoning as the Inventory's: the
 -- 2x2 Frame lives at this level so it's a SIBLING of the Container's
 -- CanvasGroup and doesn't get chopped to the wrapper's bounds.
-local BACKGROUND_OPEN_TRANSPARENCY = 0.25
+local BACKGROUND_OPEN_TRANSPARENCY = 0.5
 local BACKGROUND_CLOSED_TRANSPARENCY = 1
 local BACKGROUND_TWEEN_DURATION = 0.3
 local BACKGROUND_TWEEN_INFO = TweenInfo.new(BACKGROUND_TWEEN_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -120,6 +121,12 @@ function RunInventoryInterfaceController.Open(self: typeof(RunInventoryInterface
 		return
 	end
 	if self._visible then
+		return
+	end
+	-- Not over the relic tray: while it is open, C and the toolbar button
+	-- do nothing. Resolved at call time (both are place interfaces).
+	local relicInterface = Blitz.OptionalController("RelicInterfaceController")
+	if relicInterface and relicInterface:IsOpen() then
 		return
 	end
 	self._visible = true
@@ -196,21 +203,28 @@ local function App(props: any)
 	-- the ScreenGui. ZIndexBehavior = Sibling means the backdrop's
 	-- ZIndex = -1 reliably renders behind the panel.
 	return React.createElement(React.Fragment, nil, {
-		BackgroundFrame = React.createElement("Frame", {
+		-- A button, not a Frame: a click anywhere on the dimmed backdrop closes
+		-- the window (the X button is gone, 2026-10-22). The panel's plates are
+		-- Active so clicks on the window itself stop there. Interactable only
+		-- while open -- the faded-out backdrop must not eat world clicks.
+		BackgroundFrame = React.createElement("TextButton", {
 			ref = backgroundFrameRef,
 			AnchorPoint = Vector2.new(0.5, 0.5),
+			AutoButtonColor = false,
 			BackgroundColor3 = Color3.fromRGB(25, 25, 25),
+			Interactable = visible,
 			Position = UDim2.fromScale(0.5, 0.5),
 			Size = UDim2.fromScale(2, 2),
+			Text = "",
 			ZIndex = -1,
+			[React.Event.Activated] = function()
+				controller:Close()
+			end,
 		}),
 
 		Container = React.createElement(Container, {
 			Visible = visible,
 			EscrowData = props.EscrowData,
-			onClose = function()
-				controller:Close()
-			end,
 		}),
 	})
 end

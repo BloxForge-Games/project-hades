@@ -27,11 +27,6 @@
                         "$path": "bfg-core/Packages"
                     },
 
-                    "ServerPackages": {
-                        "$className": "Folder",
-                        "$path": "bfg-core/ServerPackages"
-                    },
-                    
                     "Libraries": {
                         "$className": "Folder",
                         "$path": "bfg-core/Libraries"
@@ -42,11 +37,7 @@
                         "$path": "bfg-core/Source/Shared"
                     }
 
-                },
-
-				"DebugTools": {
-					"$path": "bfg-debug/Source/DebugTools"
-				}
+                }
 
             }
         },

@@ -1,5 +1,5 @@
--- Stormcharged (Storm/Lightning): +15% Critical Hit Chance and +15%
--- Critical Damage while up (AuraData owns both; DamageService reads
+-- Stormcharged (Storm/Lightning): more Critical Hit Chance and Critical
+-- Damage while up (AuraData owns both -- +30 points / +0.50 after 2026-10; DamageService reads
 -- them in GetCritParameters). Standard rig — the authored asset is the
 -- whole GameAssets.Auras.Stormcharged model (the old Overcharged
 -- shape), which GenericAura clones wholesale. Expiry ALSO ramps the
