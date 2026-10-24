@@ -51,6 +51,11 @@ local MobComponent = Component.new({
 
 function MobComponent:Construct()
 	local model = self.Instance
+	-- A client-simulated mob's proxy carries the Zombie tag so every hit
+	-- query finds it, but MobSimService drives it; there is no rig here.
+	if model:GetAttribute(Attributes.MobSimId) ~= nil then
+		return
+	end
 	local Class
 	if model:GetAttribute(Attributes.IsBoss) then
 		Class = Boss
@@ -63,7 +68,9 @@ function MobComponent:Construct()
 end
 
 function MobComponent:Start()
-	self._mob:Start()
+	if self._mob then
+		self._mob:Start()
+	end
 end
 
 function MobComponent:Stop()

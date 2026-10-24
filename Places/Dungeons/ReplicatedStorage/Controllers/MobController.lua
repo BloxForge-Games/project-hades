@@ -707,6 +707,11 @@ function MobController.Start(self: typeof(MobController))
 		if isLocalDeathCinematicPlaying() then
 			return
 		end
+		-- A client-simulated mob's proxy is invisible; MobRenderController
+		-- lunges the rig it draws.
+		if mobModel:GetAttribute(Attributes.MobSimId) ~= nil then
+			return
+		end
 
 		local root = getRoot(mobModel)
 		if not root then

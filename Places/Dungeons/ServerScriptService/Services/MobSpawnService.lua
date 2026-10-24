@@ -1,6 +1,7 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
@@ -378,10 +379,57 @@ function MobSpawnService._getOccupiedChunks(_self: typeof(MobSpawnService), prev
 	return occupied
 end
 
+-- Spawns one REGULAR mob at `attachment`, tagged with the room's id and
+-- registered under _mobsByRoom[room.id] so :GetMobsInRoom returns it in
+-- O(1). A MobData row with `useMobSim` spawns through MobSimService (an
+-- invisible proxy every client draws its own rig for); everything else is
+-- the template cloned and handed to the Mob component (MobBase).
+function MobSpawnService._spawnMobAt(
+	self: typeof(MobSpawnService),
+	room,
+	mobName: string,
+	template: Model,
+	attachment: Attachment
+): Model?
+	local position = attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0)
+
+	-- Required at call time: MobSimService requires this module for its
+	-- spawn / despawn signals.
+	local MobSimService = require(ServerScriptService.Services.MobSimService) :: any
+	local mob: Model?
+	if MobSimService:UsesSim(mobName) then
+		mob = MobSimService:Spawn(template, mobName, position, room.id)
+	else
+		local clone = template:Clone()
+		clone:SetAttribute(ROOM_ATTRIBUTE, room.id)
+		local hrp = clone:FindFirstChild("HumanoidRootPart")
+		if hrp and hrp:IsA("BasePart") then
+			hrp.CFrame = CFrame.new(position)
+		end
+		clone.Parent = workspace.IgnoreInstances.Mobs
+		mob = clone
+	end
+	if not mob then
+		return nil
+	end
+
+	task.delay(0.5, function()
+		if attachment.Parent then
+			local particle = attachment:FindFirstChild("SpawnParticle") :: ParticleEmitter?
+			if particle then
+				particle:Emit(35)
+			end
+		end
+	end)
+
+	self._mobsByRoom[room.id] = self._mobsByRoom[room.id] or {}
+	table.insert(self._mobsByRoom[room.id], mob)
+	return mob
+end
+
 -- Spawns one queued mob at a random SpawnPoints attachment (pure
 -- random reuse — attachments host any number of spawns over the room's
--- lifetime). Tagged with the room's id and registered under
--- _mobsByRoom[room.id] so :GetMobsInRoom returns them in O(1).
+-- lifetime).
 function MobSpawnService._spawnQueuedMob(self: typeof(MobSpawnService), room, spawnPoints: { Attachment })
 	local attachment = spawnPoints[math.random(#spawnPoints)]
 
@@ -390,24 +438,7 @@ function MobSpawnService._spawnQueuedMob(self: typeof(MobSpawnService), room, sp
 	if not template then
 		return
 	end
-	local mob = template:Clone()
-	mob:SetAttribute(ROOM_ATTRIBUTE, room.id)
-
-	local hrp = mob:FindFirstChild("HumanoidRootPart")
-	if hrp then
-		hrp.CFrame = CFrame.new(attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0))
-	end
-
-	task.delay(0.5, function()
-		local particle = attachment:FindFirstChild("SpawnParticle") :: ParticleEmitter?
-		if particle then
-			particle:Emit(35)
-		end
-	end)
-
-	mob.Parent = workspace.IgnoreInstances.Mobs
-
-	table.insert(self._mobsByRoom[room.id], mob)
+	self:_spawnMobAt(room, mobName, template, attachment)
 end
 
 -- Activates a combat room's mob QUEUE. Snapshots the player count
@@ -793,25 +824,7 @@ function MobSpawnService.StartMinibossWaves(self: typeof(MobSpawnService), room)
 				if not waveTemplate then
 					continue
 				end
-				local mob = waveTemplate:Clone()
-				mob:SetAttribute(ROOM_ATTRIBUTE, room.id)
-
-				local hrp = mob:FindFirstChild("HumanoidRootPart")
-				if hrp then
-					hrp.CFrame = CFrame.new(attachment.WorldPosition + Vector3.new(0, ROOM_SPAWN_HEIGHT_OFFSET, 0))
-				end
-
-				task.delay(0.5, function()
-					if attachment.Parent then
-						local particle = attachment:FindFirstChild("SpawnParticle") :: ParticleEmitter?
-						if particle then
-							particle:Emit(35)
-						end
-					end
-				end)
-
-				mob.Parent = workspace.IgnoreInstances.Mobs
-				table.insert(self._mobsByRoom[room.id], mob)
+				self:_spawnMobAt(room, mobName, waveTemplate, attachment)
 				task.wait(SPAWN_DELAY)
 			end
 
