@@ -106,6 +106,14 @@ local PATH_RECOMPUTE_INTERVAL = 1
 -- A live path is only recomputed once the target has moved this far from
 -- where the path was computed to; the 1 s interval above still applies.
 local PATH_RECOMPUTE_MOVE_STUDS = 4
+-- QA 2026-10-21 #22 (MobSimService has the same numbers): one waypoint
+-- per 4 studs, not per stud; Plastic strongly avoided rather than
+-- impassable, which failed every compute on an all-Plastic floor; and
+-- after a failed compute the next one waits PATH_RECOMPUTE_INTERVAL x 2^n
+-- (capped at PATH_FAILURE_BACKOFF_MAX) instead of every second.
+local PATH_WAYPOINT_SPACING = 4
+local PATH_PLASTIC_COST = 25
+local PATH_FAILURE_BACKOFF_MAX = 8
 local STUCK_DETECTION_WINDOW = 1
 local STUCK_MOVE_THRESHOLD = 0.5
 local STATE_ROAMING = "roaming"
@@ -277,6 +285,10 @@ type Fields = {
 	_blockedConnection: RBXScriptConnection?,
 	_lastPathComputeAt: number,
 	_lastPathDestination: Vector3?,
+	-- Failed computes in a row, and when the next compute is allowed after
+	-- one (the stuck / Blocked throttle reset does not skip this).
+	_pathFailures: number,
+	_pathRetryAt: number,
 
 	-- Stuck detection
 	_lastStuckSamplePos: Vector3,
@@ -370,6 +382,8 @@ function MobBase.new(model: Model): MobBase
 	self._blockedConnection = nil
 	self._lastPathComputeAt = 0
 	self._lastPathDestination = nil :: Vector3?
+	self._pathFailures = 0
+	self._pathRetryAt = 0
 
 	-- Stuck detection
 	self._lastStuckSamplePos = self._rootPart and self._rootPart.Position or Vector3.zero
@@ -799,10 +813,10 @@ function MobBase._ensurePath(self: MobBase): Path
 		AgentRadius = self._agentRadius or 2,
 		AgentHeight = 5,
 		AgentCanJump = false,
-		WaypointSpacing = 1,
+		WaypointSpacing = PATH_WAYPOINT_SPACING,
 		Costs = {
 			SmoothPlastic = 1,
-			Plastic = math.huge,
+			Plastic = PATH_PLASTIC_COST,
 		},
 	})
 	self._path = path
@@ -812,6 +826,12 @@ end
 
 function MobBase._followPath(self: MobBase, destination: Vector3)
 	local now = tick()
+	-- Backing off after a failed compute: keep walking straight at the
+	-- target (the failure path's own fallback) rather than re-pathing.
+	if now < self._pathRetryAt then
+		self._humanoid:MoveTo(destination, self._currentTargetHRP)
+		return
+	end
 	if now - self._lastPathComputeAt < PATH_RECOMPUTE_INTERVAL then
 		return
 	end
@@ -836,15 +856,16 @@ function MobBase._followPath(self: MobBase, destination: Vector3)
 	if not ok or path.Status ~= Enum.PathStatus.Success then
 		-- No path (the navmesh does not reach the spawn point, a Plastic
 		-- prop walls the goal off, the target is on another chunk's
-		-- floor): walk straight at the target instead of standing still.
-		-- A mob that gets stuck on the way is caught by _checkStuck and
-		-- retries the pathfinder next second; a mob that never moves is
-		-- the bug this replaces.
+		-- floor): walk straight at the target instead of standing still,
+		-- and back off before the next compute.
+		self._pathFailures += 1
+		self._pathRetryAt = now + math.min(PATH_RECOMPUTE_INTERVAL * 2 ^ self._pathFailures, PATH_FAILURE_BACKOFF_MAX)
 		self:_cleanupPathConnections()
 		self._waypoints = nil
 		self._humanoid:MoveTo(destination, self._currentTargetHRP)
 		return
 	end
+	self._pathFailures = 0
 
 	local waypoints = path:GetWaypoints()
 	self._waypoints = waypoints
@@ -956,6 +977,8 @@ function MobBase._enterChase(self: MobBase)
 	self._state = STATE_CHASE
 	self._chosenAttack = self:_pickAttack()
 	self._lastPathComputeAt = 0 -- allow first recompute immediately
+	self._pathFailures = 0
+	self._pathRetryAt = 0
 	self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 end
 
