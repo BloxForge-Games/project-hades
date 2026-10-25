@@ -115,9 +115,8 @@ local function RunItemFrame(props: any)
 	local selectedFrameRef = React.useRef(nil)
 	local equipStrokeRef = React.useRef(nil)
 	local outlineAnchorRef = React.useRef(nil)
-	local introScaleRef = React.useRef(nil)
 	local introGroupRef = React.useRef(nil)
-	useIntroPop(introScaleRef, introGroupRef, introGeneration, introDelay)
+	useIntroPop(introGroupRef, introGeneration, introDelay)
 
 	-- Hover grow. Empty slots never enter hover state (the handlers
 	-- below early-return), so this rests at BASE for them permanently.
@@ -252,11 +251,9 @@ local function RunItemFrame(props: any)
 			Size = BASE_TILE_SIZE,
 			ZIndex = 6,
 		}, {
-			-- Opening-sweep scale; Scale left undeclared so only the hook
-			-- writes it.
-			introScale = React.createElement("UIScale", {
-				ref = introScaleRef,
-			}),
+			-- Inert, and part of the authored export. The opening sweep is
+			-- fade-only (2026-10-24), so nothing writes Scale any more.
+			Scale = React.createElement("UIScale"),
 
 			ICorner2 = React.createElement("UICorner", {
 				BottomLeftRadius = UDim.new(0.05, 0),
