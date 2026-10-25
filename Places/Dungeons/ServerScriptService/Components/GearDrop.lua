@@ -53,9 +53,12 @@ local ENCHANTMENT_POOL = {
 
 --[ Constants ]--
 
--- scalarMultiplier roll range for granted inventory items. Range agreed
--- with the user — DataTemplate's hand-authored entries sit in
--- [0.85, 1.15]; runtime drops roll wider variance per spec.
+-- scalarMultiplier (Quality) roll range for granted inventory items. Range
+-- agreed with the user — DataTemplate's hand-authored entries sit in
+-- [0.85, 1.15]; runtime drops roll wider variance per spec. The TOP of the
+-- range is the run difficulty's DifficultyData.qualityMax (70% Easy, 80%
+-- Normal, 90% Hard, 100% Nightmare), stamped on the drop by GearDropService;
+-- SCALAR_MULTIPLIER_MAX is the fallback for a drop without one.
 local SCALAR_MULTIPLIER_MIN = 0.5
 local SCALAR_MULTIPLIER_MAX = 1
 
@@ -64,6 +67,7 @@ local SCALAR_MULTIPLIER_MAX = 1
 local ATTR_NAME = "GearName"
 local ATTR_TYPE = "GearType"
 local ATTR_LEVEL = "GearLevel"
+local ATTR_QUALITY_MAX = "GearQualityMax"
 local ATTR_RARITY = "GearRarity"
 local ATTR_OWNER_ID = "OwnerId"
 -- Raised on pickup. Every client watches it to kill the prompt + label
@@ -130,11 +134,12 @@ function GearDrop:_buildInventoryEntry(
 	gearType: string,
 	level: number,
 	rarity: string,
-	uuid: string
+	uuid: string,
+	qualityMax: number?
 ): { [string]: any }
-	local scalarMultiplier = math.round(
-		(SCALAR_MULTIPLIER_MIN + math.random() * (SCALAR_MULTIPLIER_MAX - SCALAR_MULTIPLIER_MIN)) * 100
-	) / 100
+	local top = math.clamp(qualityMax or SCALAR_MULTIPLIER_MAX, SCALAR_MULTIPLIER_MIN, SCALAR_MULTIPLIER_MAX)
+	local scalarMultiplier = math.round((SCALAR_MULTIPLIER_MIN + math.random() * (top - SCALAR_MULTIPLIER_MIN)) * 100)
+		/ 100
 
 	if gearType == GearTypes.Weapon then
 		local enchantment = EnchantmentNames.None
@@ -228,7 +233,15 @@ function GearDrop:_grantInventory(
 		return true
 	end
 
-	local item = self:_buildInventoryEntry(gearName, gearType, level, rarity, uuid)
+	local qualityMax = self.Instance:GetAttribute(ATTR_QUALITY_MAX)
+	local item = self:_buildInventoryEntry(
+		gearName,
+		gearType,
+		level,
+		rarity,
+		uuid,
+		if type(qualityMax) == "number" then qualityMax else nil
+	)
 
 	return RunEscrowService:AddItem(player, {
 		gearType = gearType,

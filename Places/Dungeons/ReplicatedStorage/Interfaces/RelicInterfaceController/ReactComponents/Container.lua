@@ -101,6 +101,22 @@ local function Container(props: any)
 	-- is the only way to close it, so hiding it there trapped the player
 	-- in the conversation (the first cut of this did exactly that).
 	local cutscenePlaying, setCutscenePlaying = React.useState(false)
+	-- The toggle also hides while the local player is downed or dead
+	-- (LifeController's death HUD hide, through toggleVisibleSignal).
+	local toggleAllowed, setToggleAllowed = React.useState(true)
+
+	React.useEffect(function()
+		local signal = props.toggleVisibleSignal
+		if not signal then
+			return nil
+		end
+		local connection = signal:Connect(function(allowed: boolean)
+			setToggleAllowed(allowed)
+		end)
+		return function()
+			connection:Disconnect()
+		end
+	end, {})
 
 	React.useEffect(function()
 		local connections: { RBXScriptConnection } = {}
@@ -882,7 +898,7 @@ local function Container(props: any)
 			Position = TOGGLE_SHOWN_POSITION,
 			Size = UDim2.fromScale(0.035, 0.062),
 			BackgroundTransparency = 1,
-			Visible = not cutscenePlaying or sellMode or reforgeMode,
+			Visible = toggleAllowed and (not cutscenePlaying or sellMode or reforgeMode),
 			ZIndex = 1,
 		}, {
 			UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {

@@ -221,10 +221,23 @@ function PlayerStateController.GeneralActionEnabled(_self: typeof(PlayerStateCon
 	return true
 end
 
+-- Weapon handling: swapping weapons (keys 1 / 2, a toolbar click, the
+-- mobile swap button), reloading (R and the auto-reload at an empty
+-- magazine), the spell keys and the bag key. Refused mid-cast, dead, during
+-- any cutscene (boss intros, phase changes and outros, the scripted arcane
+-- cutscenes), mid-dialogue and while ragdolled.
 function PlayerStateController.ToolBarActionEnabled(_self: typeof(PlayerStateController)): boolean
+	local character = Players.LocalPlayer.Character
+	if not character then
+		return false
+	end
+	local ragdollTrigger = character:FindFirstChild(ValueNames.RagdollTrigger)
 	if
-		Players.LocalPlayer.Character:GetAttribute(Attributes.ArcaneEnabled) == true
-		or Players.LocalPlayer.Character:GetAttribute(Attributes.Death) == true
+		character:GetAttribute(Attributes.ArcaneEnabled) == true
+		or character:GetAttribute(Attributes.Death) == true
+		or character:GetAttribute(Attributes.CutscenePlaying) == true
+		or character:GetAttribute(Attributes.TalkingToNPC) == true
+		or (ragdollTrigger ~= nil and ragdollTrigger:IsA("BoolValue") and ragdollTrigger.Value == true)
 	then
 		return false
 	end

@@ -7,10 +7,10 @@
 	a new row), kept separate because the two places share no commands: the
 	Dungeons set drives run systems that do not exist here.
 
-	Open to every player EXCEPT /tp (and its aliases), which only a member
-	of the dev group at TP_GROUP_MIN_RANK or above may run (2026-10-23);
-	Studio is exempt so it can be exercised locally. `_canRun` is the one
-	permission seam.
+	EVERY command needs a member of the game's group at
+	Constants.COMMAND_MIN_GROUP_RANK (250) or above (2026-10-24), the same
+	gate the Dungeons place's commands use; Studio is exempt so they can be
+	exercised locally. `_canRun` is the one permission seam.
 
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
 	                                      commands are ignored silently
@@ -39,6 +39,7 @@
 --[ Roblox Services ]--
 
 local Players = game:GetService("Players")
+local GroupService = game:GetService("GroupService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
@@ -72,6 +73,8 @@ local function describeEquippedArcane(player: Player): string
 	return if #equipped > 0 then table.concat(equipped, ", ") else "none"
 end
 
+local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+
 --[ Constants ]--
 
 local COMMAND_PREFIX = "/"
@@ -81,13 +84,6 @@ local TELEPORT_RETRY_GRACE_SECONDS = 15
 -- /wipedata: the reply gets this long on screen before the kick.
 local WIPE_KICK_DELAY_SECONDS = 2
 local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
-
--- /tp is for the team: the Roblox group whose members at this rank or
--- above may run it. Ranks are the group's role ranks (0..255).
-local TP_GROUP_ID = 33936009
-local TP_GROUP_MIN_RANK = 100
--- Commands behind the group gate (aliases included below).
-local TP_GATED_COMMANDS: { [string]: boolean } = { tp = true, dungeon = true, dungeons = true }
 
 -- /tp defaults when no argument names them.
 local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
@@ -136,17 +132,34 @@ local COMMANDS: { [string]: { usage: string, description: string, handler: (Play
 COMMANDS = {
 	tp = {
 		usage = "/tp [dungeon] [difficulty] [ascension]",
-		description = "Teleport EVERYONE here into one reserved server of a dungeon (test stand-in for the queue).",
+		description = "Teleport EVERYONE here into one reserved server of a dungeon at EXACTLY that difficulty (no unlock / level clamp; test stand-in for the queue).",
 		handler = function(player: Player, args: { string }): string?
-			local dungeonId = matchDungeon(args[1])
-			if not dungeonId then
-				return ("Unknown dungeon %q."):format(tostring(args[1]))
+			-- Any order: each word is a dungeon, a difficulty or the
+			-- Ascension level (`/tp hard`, `/tp runegrove hard`,
+			-- `/tp ascension 3`). Missing ones take the defaults.
+			local dungeonId: string? = nil
+			local difficulty: string? = nil
+			local ascensionArg: number? = nil
+			for _, arg in args do
+				local asNumber = tonumber(arg)
+				local asDifficulty = if asNumber then nil else matchDifficulty(arg)
+				local asDungeon = if asNumber or asDifficulty then nil else matchDungeon(arg)
+				if asNumber then
+					ascensionArg = asNumber
+				elseif asDifficulty then
+					difficulty = asDifficulty
+				elseif asDungeon then
+					dungeonId = asDungeon
+				else
+					return ("Unknown dungeon or difficulty %q."):format(arg)
+				end
 			end
-			local difficulty = matchDifficulty(args[2])
-			if not difficulty then
-				return ("Unknown difficulty %q."):format(tostring(args[2]))
+			dungeonId = dungeonId or matchDungeon(nil)
+			difficulty = difficulty or matchDifficulty(nil)
+			if not dungeonId or not difficulty then
+				return "Usage: /tp [dungeon] [difficulty] [ascension]"
 			end
-			local ascension = math.clamp(tonumber(args[3]) or 1, 1, DifficultyData.MaxAscension)
+			local ascension = math.clamp(ascensionArg or 1, 1, DifficultyData.MaxAscension)
 			local placeId = DungeonData[dungeonId].placeId
 
 			if RunService:IsStudio() then
@@ -173,6 +186,10 @@ COMMANDS = {
 				partyLeaderUserId = player.UserId,
 				Difficulty = difficulty,
 				Ascension = if difficulty == Difficulty.Ascension then ascension else nil,
+				-- Play exactly what was asked: the dungeon skips the unlock and
+				-- player-level clamps, but only for a leader its own command
+				-- check also allows (RunFlowService._resolveRunDifficulty).
+				Unclamped = true,
 			})
 
 			local players = Players:GetPlayers()
@@ -239,28 +256,32 @@ COMMANDS.dungeons = COMMANDS.tp
 
 --[ Private ]--
 
--- Single permission seam. Everything is open except the gated commands,
--- which need the dev group rank; Studio is exempt. GetRankInGroup is a
--- web call, so it is pcall'd and a failure refuses (never grants).
+-- Single permission seam: every command needs the game's group at
+-- Constants.COMMAND_MIN_GROUP_RANK or above (the Dungeons place's gate);
+-- Studio is exempt. The rank is read the way the Dungeons place reads it
+-- (GroupService:GetGroupsAsync, a web call): pcall'd, and a failure
+-- refuses (never grants).
 function LobbyChatCommandsService._canRun(
 	_self: typeof(LobbyChatCommandsService),
 	player: Player,
-	commandName: string
+	_commandName: string
 ): boolean
-	if not TP_GATED_COMMANDS[commandName] then
-		return true
-	end
 	if RunService:IsStudio() then
 		return true
 	end
-	local ok, rank = pcall(function()
-		return player:GetRankInGroup(TP_GROUP_ID)
+	local ok, groups = pcall(function()
+		return GroupService:GetGroupsAsync(player.UserId)
 	end)
-	if not ok then
-		warn(("[LobbyChatCommands] GetRankInGroup failed for %s: %s"):format(player.Name, tostring(rank)))
+	if not ok or typeof(groups) ~= "table" then
+		warn(("[LobbyChatCommands] GetGroupsAsync failed for %s: %s"):format(player.Name, tostring(groups)))
 		return false
 	end
-	return (tonumber(rank) or 0) >= TP_GROUP_MIN_RANK
+	for _, group in groups :: { any } do
+		if group.Id == Constants.GROUP_ID then
+			return (tonumber(group.Rank) or 0) >= Constants.COMMAND_MIN_GROUP_RANK
+		end
+	end
+	return false
 end
 
 -- Echoes command feedback back to the caller: the floating indicator when

@@ -6,8 +6,9 @@
 	registry below -- adding one is a new row, never a new listener and never
 	a new `if` in some other service.
 
-	Currently open to EVERY player (this is a dev/playtest convenience). If
-	that ever needs restricting, gate it in one place: `_canRun` below.
+	Only members of the game's group at Constants.COMMAND_MIN_GROUP_RANK
+	(250) or above may run them in a live server; Studio is exempt. The one
+	gate is `_canRun` below.
 
 	--- ANATOMY ---
 
@@ -65,6 +66,7 @@ local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Inv
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
+local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 
 -- The spells the profile now has equipped, for the /wipedata reply. It
 -- reads the WIPED profile, so it shows what this server's template holds:
@@ -159,7 +161,7 @@ local DROP_TARGETS: { [string]: DropTarget } = {
 		label = "miniboss chest",
 		drop = function()
 			if EncounterChestService then
-				EncounterChestService:DropChestsForEncounter(EnemyTypes.Miniboss, "The Undead Brute")
+				EncounterChestService:DropChestsForEncounter(EnemyTypes.Miniboss, "Runic Executioner")
 			end
 		end,
 	},
@@ -179,7 +181,7 @@ local DROP_TARGETS: { [string]: DropTarget } = {
 		label = "boss chest",
 		drop = function()
 			if EncounterChestService then
-				EncounterChestService:DropChestsForEncounter(EnemyTypes.Boss, "The Undead King")
+				EncounterChestService:DropChestsForEncounter(EnemyTypes.Boss, "Nine Tailed Beast")
 			end
 		end,
 	},
@@ -216,6 +218,24 @@ type Command = {
 
 local COMMANDS: { [string]: Command }
 COMMANDS = {
+	fight = {
+		usage = "/fight [miniboss|boss]",
+		description = "Teleports everyone into this floor's miniboss (default) or boss fight and starts it.",
+		handler = function(_player: Player, args: { string }): string?
+			local which = args[1] or "miniboss"
+			local kind = if which == "boss"
+				then RoomTypes.Boss
+				elseif which == "miniboss" or which == "mini" then RoomTypes.Miniboss
+				else nil
+			if not kind then
+				return ("Usage: %s"):format(COMMANDS.fight.usage)
+			end
+			-- Required at call time: EncounterService sits deep in the
+			-- dungeon cluster, and this debug path is its only use here.
+			local EncounterService = require(ServerScriptService.Services.EncounterService) :: any
+			return EncounterService:DebugStartEncounter(kind)
+		end,
+	},
 	drop = {
 		usage = "/drop <thing> [count]",
 		description = "Drops <thing> on every player, [count] times (default 1).",
@@ -392,6 +412,13 @@ function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player:
 		groupRankCache[player] = rank
 	end
 	return rank >= Constants.COMMAND_MIN_GROUP_RANK
+end
+
+-- Public form of the command gate: may `player` run debug commands (Studio,
+-- or the group rank). RunFlowService asks it before honouring a /tp
+-- teleport's Unclamped flag, which arrives in client-settable TeleportData.
+function ChatCommandsService.IsAuthorized(self: typeof(ChatCommandsService), player: Player): boolean
+	return self:_canRun(player, "")
 end
 
 -- Echoes command feedback back to the caller. Uses the same floating

@@ -49,6 +49,7 @@ local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneControl
 local InterfaceManagerController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
 local LivesInterfaceController = require(ReplicatedStorage.Interfaces.LivesInterfaceController)
+local RelicInterfaceController = require(ReplicatedStorage.Interfaces.RelicInterfaceController)
 local PlayerNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Player)
 local ScreenSweepController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSweepController)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
@@ -476,6 +477,11 @@ function LifeController._setHudVisible(_self: typeof(LifeController), visible: b
 
 	if LivesInterfaceController then
 		LivesInterfaceController.Signals.SetVisible:Fire(visible)
+	end
+	-- The relic tray's toggle button (the tray itself is a Windows-scope
+	-- window and closes with it).
+	if RelicInterfaceController then
+		RelicInterfaceController.Signals.SetToggleVisible:Fire(visible)
 	end
 	-- Mobile bundle (custom mobile buttons + Roblox-instanced TouchGui
 	-- with the thumbstick / jump button). MobileActionButtonInterface

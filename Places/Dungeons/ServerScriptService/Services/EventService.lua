@@ -1029,11 +1029,12 @@ function EventService._onChooseGreaterBlessing(
 	PlayerStatsService:AddGreaterShrineEffect(player, config.effect, config.amount)
 
 	-- Tell EVERYONE what was taken: a blessing is a party-wide moment, and
-	-- the same line lands on every screen. White body, with the blessing
-	-- and the word "Blessing" in green (rich text; the body label renders
-	-- the markup only when asked to).
+	-- the same line lands on every screen ("X has been strengthened by the
+	-- Power Greater Blessing!"). White body, with the blessing's full name
+	-- in green (rich text; the body label renders the markup only when
+	-- asked to).
 	if UserNotificationService then
-		local line = ('%s chose the <font color="rgb(%d,%d,%d)">%s Blessing</font>!'):format(
+		local line = ('%s has been strengthened by the <font color="rgb(%d,%d,%d)">%s Greater Blessing</font>!'):format(
 			player.Name,
 			GREATER_BLESSING_HIGHLIGHT_R,
 			GREATER_BLESSING_HIGHLIGHT_G,

@@ -71,8 +71,12 @@ local TweenService = game:GetService("TweenService")
 local VFXController = require(ReplicatedStorage.Controllers.VFXController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
+local MobNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Mob)
+local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
+local attachCorruptVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.attachCorruptVFX)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
@@ -367,14 +371,40 @@ local function abortAllHitboxFlashes()
 	end
 end
 
--- Per-event entry point. Clones the Hitbox Model the server names,
--- places it at the world CFrame the server computed, runs the
--- telegraph→fade chain over (windUpDuration + hitFrameDuration).
--- Aborts cleanly if the local player dies during the flash window.
+-- Y jitter: per-clone random nudge to break depth ties when multiple mobs
+-- swing on the same floor. Sub-visible offset (0-0.05 studs), but enough to
+-- give each telegraph a distinct Y so the depth test resolves consistently
+-- per-frame instead of flickering. See HITBOX_Y_JITTER_MAX comment for why.
+local function jittered(hitboxCFrame: CFrame): CFrame
+	return hitboxCFrame + Vector3.new(0, math.random() * HITBOX_Y_JITTER_MAX, 0)
+end
+
+-- The telegraph Model for a TEMPLATE hitbox (Combat.MobAttack): the
+-- GameAssets.Hitboxes Model the server names, placed where it computed.
+local function cloneHitboxTemplate(hitboxName: string, hitboxCFrame: CFrame): Model?
+	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
+	if not hitboxesFolder then
+		warn("[MobController] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
+		return nil
+	end
+	local template = hitboxesFolder:FindFirstChild(hitboxName)
+	if not template or not template:IsA("Model") then
+		warn(("[MobController] Hitbox template '%s' missing or not a Model"):format(hitboxName))
+		return nil
+	end
+	local clonedHitbox = template:Clone()
+	clonedHitbox:PivotTo(jittered(hitboxCFrame))
+	return clonedHitbox
+end
+
+-- Per-event entry point. Takes the telegraph Model -- a template clone
+-- (Combat.MobAttack) or a data hitbox built locally (Mob.MobTelegraph,
+-- Shared/Functions/Mob/mobHitbox) -- already placed, and runs the
+-- telegraph→fade chain over (windUpDuration + hitFrameDuration). Aborts
+-- cleanly if the local player dies during the flash window.
 local function spawnHitboxFlash(
 	mobModel: Model,
-	hitboxName: string,
-	hitboxCFrame: CFrame,
+	buildHitbox: () -> Model?,
 	windUpDuration: number,
 	hitFrameDuration: number
 )
@@ -385,24 +415,10 @@ local function spawnHitboxFlash(
 		return
 	end
 
-	local hitboxesFolder = ReplicatedStorage.GameAssets:FindFirstChild("Hitboxes")
-	if not hitboxesFolder then
-		warn("[MobController] Missing ReplicatedStorage.GameAssets.Hitboxes folder")
+	local clonedHitbox = buildHitbox()
+	if not clonedHitbox then
 		return
 	end
-	local template = hitboxesFolder:FindFirstChild(hitboxName)
-	if not template or not template:IsA("Model") then
-		warn(("[MobController] Hitbox template '%s' missing or not a Model"):format(hitboxName))
-		return
-	end
-
-	local clonedHitbox = template:Clone()
-	-- Y jitter: per-clone random nudge to break depth ties when
-	-- multiple mobs swing on the same floor. Sub-visible offset
-	-- (0-0.05 studs), but enough to give each clone a distinct
-	-- Y so the depth test resolves consistently per-frame instead
-	-- of flickering. See HITBOX_Y_JITTER_MAX comment for why.
-	clonedHitbox:PivotTo(hitboxCFrame + Vector3.new(0, math.random() * HITBOX_Y_JITTER_MAX, 0))
 	clonedHitbox.Parent = HITBOX_PARENT
 
 	-- Collect every BasePart upfront so the flash + death-fade loops
@@ -463,19 +479,42 @@ end
 -- list mirrors MobBase._fadeInOnSpawn); Out covers every part and decal,
 -- like the corpse dissolve always did. Emitters are already off (the
 -- server flips them, one replicated bool each).
+-- An Out fade's restore, per mob, for an In that brings the SAME body
+-- back (the Runic Executioner's Hidden Mist Ambush): everything returns to
+-- exactly how it looked, particles included. Weak keys: a despawned mob's
+-- entry goes with it.
+local fadeRestores: { [Model]: (TweenInfo?) -> () } = setmetatable({} :: any, { __mode = "k" })
+
 local function runMobFade(mob: Model, phase: "In" | "Out", duration: number)
 	local tweenInfo = TweenInfo.new(duration, MobFadeData.EasingStyle, MobFadeData.EasingDirection)
 	if phase == "In" then
+		local restore = fadeRestores[mob]
+		if restore then
+			fadeRestores[mob] = nil
+			restore(tweenInfo)
+			return
+		end
+		-- The spawn bloom. The corruption aura's parts are emitter carriers,
+		-- invisible by design, and stay that way.
+		local aura = mob:FindFirstChild(CorruptionData.VFXName)
 		fadeSubtree(mob, {
 			targetTransparency = 0,
 			tweenInfo = tweenInfo,
 			skip = function(part)
 				return MobFadeData.SpawnFadeExcludedParts[part.Name] == true
+					or (aura ~= nil and part:IsDescendantOf(aura))
 			end,
 		})
 		return
 	end
-	fadeSubtree(mob, { targetTransparency = 1, tweenInfo = tweenInfo, includeDecals = true })
+	-- Out hides the body AND everything it emits (status flames, the
+	-- corruption aura, trails), so a vanished mob gives nothing away.
+	fadeRestores[mob] = fadeSubtree(mob, {
+		targetTransparency = 1,
+		tweenInfo = tweenInfo,
+		includeDecals = true,
+		disable = { "ParticleEmitter", "Trail", "Beam" },
+	})
 end
 
 --[ Health bar ]--
@@ -536,6 +575,43 @@ function MobController._watchMobHealth(self: typeof(MobController), mob: Instanc
 		if watch then
 			watch:Disconnect()
 			self._healthWatches[mob] = nil
+		end
+	end)
+end
+
+--[ Corruption aura ]--
+
+-- A CORRUPTED server rig (a miniboss / boss, MobBase) gets its aura here,
+-- locally (Shared/Functions/Mob/attachCorruptVFX, scaled to the rig).
+-- Client-simulated mobs get theirs from MobRenderController, on the rig it
+-- draws. The Corrupted attribute is stamped before the spawner parents
+-- the mob, so it is readable on arrival. The flames go out on death.
+function MobController._dressCorruption(_self: typeof(MobController), mob: Instance)
+	if not mob:IsA("Model") or mob:GetAttribute(Attributes.MobSimId) ~= nil then
+		return
+	end
+	if mob:GetAttribute(Attributes.Corrupted) ~= true or mob:FindFirstChild(CorruptionData.VFXName) then
+		return
+	end
+	local root = mob:WaitForChild("HumanoidRootPart", HUMANOID_WAIT_SECONDS)
+	if not root or not root:IsA("BasePart") or not mob.Parent then
+		return
+	end
+	local vfx = attachCorruptVFX(mob, root)
+	local humanoid = mob:FindFirstChildOfClass("Humanoid")
+	if not vfx or not humanoid then
+		return
+	end
+	local connection: RBXScriptConnection
+	connection = humanoid.HealthChanged:Connect(function(health: number)
+		if health > 0 then
+			return
+		end
+		connection:Disconnect()
+		for _, emitter in vfx:GetDescendants() do
+			if emitter:IsA("ParticleEmitter") then
+				emitter.Enabled = false
+			end
 		end
 	end)
 end
@@ -679,13 +755,37 @@ function MobController.Start(self: typeof(MobController))
 		if not payload.Mob then
 			return
 		end
-		spawnHitboxFlash(
-			payload.Mob,
-			payload.HitboxName,
-			payload.CFrame,
-			payload.WindUpDuration,
-			payload.HitFrameDuration
-		)
+		spawnHitboxFlash(payload.Mob, function()
+			return cloneHitboxTemplate(payload.HitboxName, payload.CFrame)
+		end, payload.WindUpDuration, payload.HitFrameDuration)
+	end)
+
+	-- Data hitboxes (MobData `hitbox`): the same flash on a telegraph this
+	-- client builds from the shape the server is about to query.
+	MobNetwork.MobTelegraph.On(function(payload)
+		if not payload.Mob then
+			return
+		end
+		local spec: mobHitbox.Spec = {
+			shape = if payload.Shape == "Circle" then "circle" else "box",
+			size = payload.Size,
+		}
+		-- On the server's clock: the wind-up started when the server sent
+		-- this, so the flash gives up however late it arrived and peaks when
+		-- the server tests the hit. Nothing left to show past the hit frame.
+		local late = math.max(workspace:GetServerTimeNow() - payload.StartTime, 0)
+		local windUp = payload.WindUpDuration - late
+		local hitFrame = payload.HitFrameDuration
+		if windUp < 0 then
+			hitFrame += windUp
+			windUp = 0
+		end
+		if hitFrame <= 0 then
+			return
+		end
+		spawnHitboxFlash(payload.Mob, function()
+			return mobHitbox.build(jittered(payload.CFrame), spec)
+		end, windUp, hitFrame)
 	end)
 
 	-- Abort any lingering hitbox telegraphs when a boss phase change / outro
@@ -705,6 +805,11 @@ function MobController.Start(self: typeof(MobController))
 			return
 		end
 		if isLocalDeathCinematicPlaying() then
+			return
+		end
+		-- A client-simulated mob's proxy is invisible; MobRenderController
+		-- lunges the rig it draws.
+		if mobModel:GetAttribute(Attributes.MobSimId) ~= nil then
 			return
 		end
 
@@ -730,11 +835,14 @@ function MobController.Start(self: typeof(MobController))
 
 	-- Health bars: every live mob now, and every one that arrives. The
 	-- Humanoid wait yields, so each registration runs in its own thread.
+	-- The corruption aura rides along for the server rigs.
 	for _, mob in MOBS_FOLDER:GetChildren() do
 		task.spawn(self._watchMobHealth, self, mob)
+		task.spawn(self._dressCorruption, self, mob)
 	end
 	MOBS_FOLDER.ChildAdded:Connect(function(mob: Instance)
 		task.spawn(self._watchMobHealth, self, mob)
+		task.spawn(self._dressCorruption, self, mob)
 	end)
 
 	-- Ranged projectile cast. Delegates to VFXController's

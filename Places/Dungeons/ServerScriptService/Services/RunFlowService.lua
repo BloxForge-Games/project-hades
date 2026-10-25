@@ -557,11 +557,12 @@ end
 -- to arrive (yields until someone does). Returns the request and the
 -- leader whose unlocks bound it (the first arrival when the leader is not
 -- here yet or none was named).
-function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string, number, Player)
+function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string, number, Player, boolean)
 	local first = Players:GetPlayers()[1] or Players.PlayerAdded:Wait()
 	local difficulty = DEFAULT_DIFFICULTY
 	local ascension = 1
 	local leader = first
+	local unclamped = false
 	local joinData = first:GetJoinData()
 	local data = if type(joinData) == "table" then joinData.TeleportData else nil
 	if type(data) == "table" then
@@ -574,8 +575,10 @@ function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string,
 		if type(data.partyLeaderUserId) == "number" then
 			leader = Players:GetPlayerByUserId(data.partyLeaderUserId) or leader
 		end
+		-- The lobby's /tp asks for its difficulty as-is (see below).
+		unclamped = data.Unclamped == true
 	end
-	return difficulty, ascension, leader
+	return difficulty, ascension, leader, unclamped
 end
 
 -- The difficulty this run plays: the request, clamped DOWN to the highest
@@ -583,7 +586,7 @@ end
 -- Studio uses the DebugDifficulty / DebugAscension workspace attributes,
 -- or the default, and skips the clamp.
 function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dungeonId: string): (string, number)
-	local requested, ascension, leader = self:_readRunRequest()
+	local requested, ascension, leader, unclamped = self:_readRunRequest()
 
 	if RunService:IsStudio() then
 		local debugDifficulty = workspace:GetAttribute(DEBUG_DIFFICULTY_ATTRIBUTE)
@@ -591,12 +594,24 @@ function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dung
 			requested = debugDifficulty
 			ascension = tonumber(workspace:GetAttribute(DEBUG_ASCENSION_ATTRIBUTE)) or 1
 		else
-			-- No DebugDifficulty attribute: Studio plays EASY, the tier a
-			-- fresh test character is for (live keeps DEFAULT_DIFFICULTY).
+			-- No DebugDifficulty attribute: Studio plays NORMAL.
 			requested = Difficulty.Normal
 			ascension = 1
 		end
 		return requested, ascension
+	end
+
+	-- The lobby's /tp: exactly the requested difficulty, no unlock or level
+	-- clamp. TeleportData is client-settable, so the flag only counts for a
+	-- leader the command gate allows (ChatCommandsService.IsAuthorized);
+	-- anyone else is clamped as usual.
+	if unclamped then
+		local commands = Blitz.OptionalService("ChatCommandsService")
+		if commands and commands:IsAuthorized(leader) then
+			Log.debug(("[RunFlowService] /tp run: %s unclamped for %s"):format(requested, leader.Name))
+			return requested, ascension
+		end
+		warn(("[RunFlowService] Ignoring Unclamped from %s (not authorised)"):format(leader.Name))
 	end
 
 	local rank = DifficultyData.Rank(requested, ascension) or 1
