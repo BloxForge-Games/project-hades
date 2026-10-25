@@ -59,12 +59,14 @@ end
 --[ Public ]--
 
 -- A player killed a mob of `enemyType`: pay the whole living party.
-function ExpRewardService.GrantKill(self: typeof(ExpRewardService), enemyType: string?)
+-- `bonus` scales this one kill on top of the run multiplier (a corrupted
+-- mob's CorruptionData.RewardMultiplier); default 1.
+function ExpRewardService.GrantKill(self: typeof(ExpRewardService), enemyType: string?, bonus: number?)
 	local base = enemyType and ExpRewardData.PerKill[enemyType]
 	if not base then
 		return
 	end
-	local amount = math.round(base * self:_multiplier())
+	local amount = math.round(base * self:_multiplier() * (bonus or 1))
 	for _, player in Players:GetPlayers() do
 		if self:_isLiving(player) then
 			ExperienceService:GrantExp(player, amount)

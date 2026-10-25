@@ -66,8 +66,12 @@ local RelicService = require(ServerScriptService.Services.RelicService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local DamageService = require(ServerScriptService.Services.DamageService)
 local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local MobNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Mob)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
+local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 
 local MobService = {
 	Name = "MobService",
@@ -207,7 +211,13 @@ end
 --
 -- One damage application per (player, attack) — players who walk
 -- through multiple zones within one swing aren't multi-hit.
-function MobService._runHitDetection(self: typeof(MobService), mobModel: Model, attack, hitboxModel: Model)
+function MobService._runHitDetection(
+	self: typeof(MobService),
+	mobModel: Model,
+	attack,
+	queryParts: () -> { BasePart },
+	hitboxModel: Model?
+)
 	local hitRegistry: { [Player]: boolean } = {}
 	local hitCount = 0
 	local frameIndex = 0
@@ -215,18 +225,12 @@ function MobService._runHitDetection(self: typeof(MobService), mobModel: Model, 
 	-- Cache the mob's humanoid so the per-tick alive-check below
 	-- doesn't pay a FindFirstChildOfClass lookup every Heartbeat.
 	local mobHumanoid = mobModel:FindFirstChildOfClass("Humanoid")
-	local hitParts = {}
-	for _, descendant in hitboxModel:GetDescendants() do
-		if descendant:IsA("BasePart") then
-			table.insert(hitParts, descendant)
-		end
-	end
 
 	while os.clock() - startTime < attack.hitFrameDuration do
 		if not mobModel.Parent then
 			return
 		end
-		if not hitboxModel.Parent then
+		if hitboxModel and not hitboxModel.Parent then
 			return
 		end
 		-- Bail if the mob died mid-hitframe. Without this the loop
@@ -261,9 +265,8 @@ function MobService._runHitDetection(self: typeof(MobService), mobModel: Model, 
 			continue
 		end
 
-		for _, hitboxPart in hitParts do
-			local touched = workspace:GetPartBoundsInBox(hitboxPart.CFrame, hitboxPart.Size, overlapParams)
-			for _, part in touched do
+		do
+			for _, part in queryParts() do
 				local model = part:FindFirstAncestorWhichIsA("Model")
 				if not model then
 					continue
@@ -314,12 +317,17 @@ end
 
 -- Computes the lunge goal CFrame for an attack with lungeDistance > 0.
 -- Raycasts forward — if a wall is in the way, the goal is clipped to
--- just before the wall so the mob doesn't tween THROUGH geometry.
+-- LUNGE_WALL_MARGIN short of the wall so the mob neither tweens THROUGH
+-- geometry nor ends with its body half inside it. (A Humanoid rig used to
+-- be pushed back out by physics; a client-simulated mob has no physics,
+-- and one left inside a wall could walk out of the room through it.)
+local LUNGE_WALL_MARGIN = 2.5
+
 function MobService._computeLungeGoalCFrame(_self: typeof(MobService), root: BasePart, lungeDistance: number): CFrame
 	local goalCFrame = root.CFrame + root.CFrame.LookVector * lungeDistance
 
 	local rayOrigin = root.Position - Vector3.new(0, root.Size.Y, 0)
-	local rayDirection = root.CFrame.LookVector * lungeDistance
+	local rayDirection = root.CFrame.LookVector * (lungeDistance + LUNGE_WALL_MARGIN)
 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
@@ -330,10 +338,19 @@ function MobService._computeLungeGoalCFrame(_self: typeof(MobService), root: Bas
 
 	local raycastResult = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
 	if raycastResult then
-		goalCFrame = CFrame.new(raycastResult.Position + Vector3.new(0, root.Size.Y, 0))
+		-- Back off the wall along the lunge, never behind where it started,
+		-- and keep the mob's facing.
+		local travel = math.max(raycastResult.Distance - LUNGE_WALL_MARGIN, 0)
+		goalCFrame = root.CFrame + root.CFrame.LookVector * travel
 	end
 
 	return goalCFrame
+end
+
+-- Every hit a CORRUPTED mob lands on a player scales by this
+-- (Shared/Data/CorruptionData).
+local function damageMultiplier(mobModel: Model): number
+	return if mobModel:GetAttribute(Attributes.Corrupted) == true then CorruptionData.DamageMultiplier else 1
 end
 
 --[ Public API ]--
@@ -350,11 +367,16 @@ end
 --   2. Block windUpDuration (telegraph showing, no damage).
 --   3. Interrupt gate (death / phase change stamped "AttackInterrupted").
 --   4. Lunge (opt-in via lungeDistance) — synced to hit-frame start.
---   5. Clone the server-side hitbox Model + hit detection for hitFrameDuration.
---   6. Destroy the hitbox.
+--   5. Hit detection for hitFrameDuration: a data hitbox is queried in
+--      place; a template is cloned server-side, queried, then destroyed.
+--   6. Returns once a lunge has landed, so a follow-up strike starts from
+--      where the mob ended up.
 --
--- config fields:
---   hitboxName       : string                — GameAssets.Hitboxes.<name> (visual + damage volume)
+-- config fields (one of hitbox / hitboxName):
+--   hitbox           : mobHitbox.Spec?        — DATA hitbox (Shared/Functions/Mob/mobHitbox):
+--                                               queried directly, telegraphed via Mob.MobTelegraph.
+--                                               Preferred: nothing is cloned or replicated per swing.
+--   hitboxName       : string?               — GameAssets.Hitboxes.<name> template (older attacks)
 --   cframe           : CFrame | (mob) -> CFrame  — world placement, resolved ONCE so the client
 --                                                  visual + server hitbox land identically
 --   damage           : number
@@ -385,6 +407,8 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 
 	local windUpDuration = config.windUpDuration or 0
 	local hitFrameDuration = config.hitFrameDuration or 0
+	-- Set while this hitbox's lunge has fired but not landed (Phase 3).
+	local lungePending = false
 
 	-- ============================================================
 	-- Phase 1: telegraph (visual flash + optional VFX hook) at windup start
@@ -394,13 +418,26 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 	-- it DOWN over hitFrameDuration so the visual peaks at impact and clears as
 	-- the damage window closes. Firing at windup START (not hit-frame start) is
 	-- what gives the player time to react.
-	Combat.MobAttack.FireAll({
-		Mob = mobModel,
-		HitboxName = config.hitboxName,
-		CFrame = cframe,
-		WindUpDuration = windUpDuration,
-		HitFrameDuration = hitFrameDuration,
-	})
+	local spec = config.hitbox
+	if spec then
+		MobNetwork.MobTelegraph.FireAll({
+			Mob = mobModel,
+			Shape = if spec.shape == "circle" then "Circle" else "Box",
+			Size = spec.size,
+			CFrame = cframe,
+			StartTime = workspace:GetServerTimeNow(),
+			WindUpDuration = windUpDuration,
+			HitFrameDuration = hitFrameDuration,
+		})
+	else
+		Combat.MobAttack.FireAll({
+			Mob = mobModel,
+			HitboxName = config.hitboxName,
+			CFrame = cframe,
+			WindUpDuration = windUpDuration,
+			HitFrameDuration = hitFrameDuration,
+		})
+	end
 	if config.onTelegraph then
 		-- Spawned so a yielding / erroring hook can't stall or break the
 		-- hit-frame timeline. The hook owns its own client replication.
@@ -445,52 +482,220 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 		-- Server-side: tween the mob to the goal mid-hitframe. Without this the
 		-- server-authoritative position lags and the next AI tick's distance
 		-- check sees stale data.
+		lungePending = true
 		task.delay(hitFrameDuration * 0.5, function()
 			if mobModel.Parent and not mobModel:GetAttribute("AttackInterrupted") then
 				mobModel:PivotTo(goalCFrame)
 			end
+			lungePending = false
 		end)
 	end
 
 	-- ============================================================
-	-- Phase 4: clone server-side hitbox + run hit detection
+	-- Phase 4: hit detection
 	-- ============================================================
-	local hitboxTemplate = config.hitboxName and self:_resolveHitboxTemplate(config.hitboxName)
-	if not hitboxTemplate then
-		return -- no / invalid hitboxName → telegraph-only (already fired)
+	-- _runHitDetection only reads hitFrameDuration / damage / canRagdoll.
+	local attackInfo = {
+		hitFrameDuration = hitFrameDuration,
+		damage = (config.damage :: number) * damageMultiplier(mobModel),
+		canRagdoll = config.canRagdoll,
+	}
+	if spec then
+		-- Data hitbox: each player is tested by where they STAND (their root's
+		-- footprint, mobHitbox.contains), exactly against the shape. Their
+		-- root is handed to the shared loop as the part that was hit.
+		self:_runHitDetection(mobModel, attackInfo, function()
+			local inside = {}
+			for _, player in Players:GetPlayers() do
+				local root = getRoot.fromPlayer(player)
+				if root and mobHitbox.contains(cframe, spec, root.Position) then
+					table.insert(inside, root)
+				end
+			end
+			return inside
+		end)
+	else
+		-- No / invalid hitboxName: telegraph-only (already fired).
+		local hitboxTemplate = config.hitboxName and self:_resolveHitboxTemplate(config.hitboxName)
+		if hitboxTemplate then
+			local hitboxModel = hitboxTemplate:Clone()
+			hitboxModel:PivotTo(cframe)
+			hitboxModel.Parent = HITBOX_PARENT
+			local hitParts = {}
+			for _, descendant in hitboxModel:GetDescendants() do
+				if descendant:IsA("BasePart") then
+					table.insert(hitParts, descendant)
+				end
+			end
+			self:_runHitDetection(mobModel, attackInfo, function()
+				local touched = {}
+				for _, hitboxPart in hitParts do
+					for _, part in workspace:GetPartBoundsInBox(hitboxPart.CFrame, hitboxPart.Size, overlapParams) do
+						table.insert(touched, part)
+					end
+				end
+				return touched
+			end, hitboxModel)
+			if hitboxModel.Parent then
+				hitboxModel:Destroy()
+			end
+		end
 	end
 
-	local hitboxModel = hitboxTemplate:Clone()
-	hitboxModel:PivotTo(cframe)
-	hitboxModel.Parent = HITBOX_PARENT
-
-	-- _runHitDetection only reads hitFrameDuration / damage / canRagdoll.
-	self:_runHitDetection(mobModel, {
-		hitFrameDuration = hitFrameDuration,
-		damage = config.damage,
-		canRagdoll = config.canRagdoll,
-	}, hitboxModel)
-
-	if hitboxModel.Parent then
-		hitboxModel:Destroy()
+	-- A detection that ended early (everyone already hit) must not hand a
+	-- follow-up strike a mob that has not finished its lunge.
+	while lungePending do
+		RunService.Heartbeat:Wait()
 	end
 end
 
--- Called by MobBase at WIND-UP START for kind="melee" generic attacks. Thin
--- adapter mapping one MobData genericAttacks entry onto SpawnHitbox (the
--- shared primitive that owns the visual + damage timeline). Blocks for
--- (windUpDuration + hitFrameDuration); MobBase owns recoveryDuration after.
-function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, attack)
+-- Called at WIND-UP START for kind="melee" generic attacks (MobBase, and
+-- MobSimService for client-simulated mobs). Thin adapter mapping one MobData
+-- genericAttacks entry onto SpawnHitbox (the shared primitive that owns the
+-- visual + damage timeline). Blocks for (wind-up + hitFrameDuration); the
+-- caller owns recoveryDuration after. `windUpOverride` is a follow-up
+-- strike's shorter wind-up (MobData `strikes` / `followUpWindUpDuration`).
+function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, attack, windUpOverride: number?)
 	self:SpawnHitbox(mobModel, {
+		hitbox = attack.hitbox,
 		hitboxName = attack.hitboxName,
 		cframe = attack.hitboxCFrame,
 		damage = attack.damage,
 		canRagdoll = attack.canRagdoll,
-		windUpDuration = attack.windUpDuration,
+		windUpDuration = windUpOverride or attack.windUpDuration,
 		hitFrameDuration = attack.hitFrameDuration,
 		lungeDistance = attack.lungeDistance,
 		onTelegraph = attack.onTelegraph,
 	})
+end
+
+--[ Hidden Mist Ambush (Runic Executioner) ]--
+
+-- How long the body takes to dissolve into the mist, and to come back out.
+local MIST_FADE_OUT_SECONDS = 0.3
+local MIST_FADE_IN_SECONDS = 0.2
+
+-- Where around the target the mob reappears: behind them first (relative
+-- to the way they face), then either side, then in front. The first spot
+-- with a clear line from the target and a floor under it wins.
+local MIST_REAPPEAR_SIDES = { 0, 90, -90, 180 }
+
+-- A floor spot `distance` studs from the target in each MIST_REAPPEAR_SIDES
+-- direction, or the target's own floor when every side is walled off.
+local function mistReappearGround(targetRoot: BasePart, distance: number): Vector3?
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { workspace.IgnoreInstances, targetRoot.Parent :: Instance }
+	local behind = -targetRoot.CFrame.LookVector
+	behind = Vector3.new(behind.X, 0, behind.Z)
+	behind = if behind.Magnitude > 0.01 then behind.Unit else Vector3.zAxis
+	for _, degrees in MIST_REAPPEAR_SIDES do
+		local direction = CFrame.Angles(0, math.rad(degrees), 0):VectorToWorldSpace(behind) * distance
+		if not workspace:Raycast(targetRoot.Position, direction, params) then
+			local ground = snapToGround(targetRoot.Position + direction)
+			if ground then
+				return ground
+			end
+		end
+	end
+	return snapToGround(targetRoot.Position)
+end
+
+-- The Runic Executioner's signature (MobData uniqueAttacks): a short cue,
+-- the body dissolves into mist and turns untargetable, then reappears
+-- beside the target and cleaves a circle around itself. Blocks for the
+-- whole move; MobBase applies the recovery after.
+--
+-- config:
+--   cueDuration       seconds of wind-up before he vanishes
+--   vanishDuration    seconds spent vanished (invulnerable, unseen)
+--   reappearDistance  studs from the target he reappears
+--   hitbox            the cleave's data hitbox (centred on him)
+--   damage, windUpDuration, hitFrameDuration   the cleave (SpawnHitbox)
+--   animation         the swing played as he reappears (Animation?); every
+--                     other track stops first, and MobBase settles him into
+--                     idle once the move is done
+--
+-- Untargetable through InvulnerabilityService (the Invulnerable attribute
+-- every damage path refuses), with the CUTSCENE reason so no white
+-- invulnerable outline gives his position away. Unseen through the same
+-- Combat.MobFade cue a despawn uses, run on every client.
+function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, target: Model, config)
+	local root = getRoot(mobModel)
+	local humanoid = mobModel:FindFirstChildOfClass("Humanoid")
+	local targetRoot = getRoot(target)
+	if not root or not humanoid or not targetRoot then
+		return
+	end
+	local function cancelled(): boolean
+		return not mobModel.Parent
+			or humanoid.Health <= 0
+			or mobModel:GetAttribute("AttackInterrupted") == true
+			or mobModel:GetAttribute(Attributes.Jailed) == true
+	end
+
+	-- Kept so he reappears at the same height over the floor he left.
+	local startGround = snapToGround(root.Position) or (root.Position - Vector3.new(0, 3, 0))
+	local rootHeight = root.Position.Y - startGround.Y
+
+	task.wait(config.cueDuration)
+	if cancelled() then
+		return
+	end
+
+	-- Vanish: dissolve on every client, untargetable on the server.
+	local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService) :: any
+	local window = InvulnerabilityService:OpenWindow(mobModel, "Cutscene")
+	Combat.MobFade.FireAll({ Mob = mobModel, Phase = "Out", Duration = MIST_FADE_OUT_SECONDS })
+	local function reveal()
+		Combat.MobFade.FireAll({ Mob = mobModel, Phase = "In", Duration = MIST_FADE_IN_SECONDS })
+		InvulnerabilityService:CloseWindow(window)
+	end
+
+	task.wait(config.vanishDuration)
+	if cancelled() then
+		reveal()
+		return
+	end
+
+	-- Reappear beside where the target is NOW, facing them.
+	local liveTargetRoot = getRoot(target)
+	if liveTargetRoot then
+		local ground = mistReappearGround(liveTargetRoot, config.reappearDistance)
+		if ground then
+			local rootPosition = ground + Vector3.new(0, rootHeight, 0)
+			local flatTarget = Vector3.new(liveTargetRoot.Position.X, rootPosition.Y, liveTargetRoot.Position.Z)
+			local facing = if (flatTarget - rootPosition).Magnitude > 0.05
+				then CFrame.lookAt(rootPosition, flatTarget)
+				else CFrame.new(rootPosition) * root.CFrame.Rotation
+			mobModel:PivotTo(facing)
+		end
+	end
+	reveal()
+
+	-- Out of the mist mid-swing: nothing else plays (no walk carried over
+	-- from the chase), only the attack.
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if animator then
+		for _, track in animator:GetPlayingAnimationTracks() do
+			track:Stop(0)
+		end
+		if config.animation then
+			animator:LoadAnimation(config.animation):Play()
+		end
+	end
+
+	-- The cleave: a circle round where he stands, telegraphed at once.
+	local cleaveGround = snapToGround(root.Position) or (root.Position - Vector3.new(0, rootHeight, 0))
+	local cleave: any = {
+		hitbox = config.hitbox,
+		cframe = CFrame.new(cleaveGround) * root.CFrame.Rotation,
+		damage = config.damage,
+		canRagdoll = false,
+		windUpDuration = config.windUpDuration,
+		hitFrameDuration = config.hitFrameDuration,
+	}
+	self:SpawnHitbox(mobModel, cleave)
 end
 
 --[ Ranged attack pipeline ]--
@@ -526,7 +731,7 @@ function MobService.FireMobRangedAttack(self: typeof(MobService), mobModel: Mode
 	self._pendingRangedCasts[castUuid] = {
 		mob = mobModel,
 		target = target,
-		damage = attack.damage,
+		damage = (attack.damage :: number) * damageMultiplier(mobModel),
 		canRagdoll = attack.canRagdoll,
 		hitRadius = attack.hitRadius or 4,
 		explosionRadius = attack.explosionRadius or 10,

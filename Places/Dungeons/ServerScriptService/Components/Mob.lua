@@ -41,6 +41,7 @@ local MOB_CLASSES: { [string]: any } = {
 	[MobNames.Robombie] = Mob,
 	[MobNames.PotHead] = Mob,
 	[MobNames["The Undead Brute"]] = Mob,
+	[MobNames["Runic Executioner"]] = Mob,
 }
 
 local DEFAULT_MOB_CLASS = Mob

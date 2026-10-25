@@ -9,11 +9,14 @@
 
 	Owns, in OnDeath order:
 	  * GrantKill            party EXP for a player kill
-	  * RunKillerRewards     lobbed bombs (Trick Or Trap, Fuse Bomb), the
-	                         Zombie Bomb cloud, per-assister stats / takedown
-	                         auras / Midnight Sword mana / orb rolls, then the
-	                         corpse drops (gear + gems), deferred to the
-	                         reward chest for encounter mobs
+	  * RunTakedownRewards   for EVERY player with a takedown (the killer and
+	                         everyone who hit the mob in the last
+	                         TakedownData.AssistWindowSeconds): lobbed bombs
+	                         (Trick Or Trap, Fuse Bomb), the Zombie Bomb
+	                         cloud, stats / takedown auras / Midnight Sword
+	                         mana / orb rolls; then the corpse drops (gear +
+	                         gems), deferred to the reward chest for
+	                         encounter mobs
 	  * TrackAssists         the assist registry those rewards read
 
 	The body side (ragdoll, impulse, sound, despawn) stays with each
@@ -52,6 +55,8 @@ local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local TakedownData = require(ReplicatedStorage.Submodules.Core.Shared.Data.TakedownData)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
@@ -101,9 +106,10 @@ local TAKEDOWN_AURA_RELICS = {
 local MIDNIGHT_SWORD_MANA_FRACTION = 0.05
 -- Assist credit EXPIRES: a player counts as an assister on this mob only
 -- while their last damaging hit was within this many seconds (every hit
--- refreshes the window). Applies to the WHOLE assist registry -- relic
--- takedown procs, orb rolls, kill statistics, gear drops.
-local ASSIST_WINDOW_SECONDS = 5
+-- refreshes the window). Applies to the WHOLE assist registry -- every
+-- takedown relic, orb rolls, kill statistics, gear drops. Shared with the
+-- relic cards' Takedown tooltip (KeywordData).
+local ASSIST_WINDOW_SECONDS = TakedownData.AssistWindowSeconds
 
 -- Lobbed bombs (Trick Or Trap's pumpkins, the Fuse Bomb): the client's
 -- arc flies for BOMB_FLIGHT_SECONDS; the server hitbox fires the margin
@@ -136,7 +142,7 @@ type BombSpec = {
 	-- the Fuse Bomb's fixed 1 never touches the RNG, exactly as before.
 	rollBombCount: () -> number,
 	-- The blast's damage lane, per struck mob.
-	onHit: (killer: Player, model: Model, targetCFrame: CFrame) -> (),
+	onHit: (player: Player, model: Model, targetCFrame: CFrame) -> (),
 }
 
 -- Trick Or Trap: 1-3 pumpkins. ANY takedown drops them. The
@@ -150,12 +156,12 @@ local TRICK_OR_TRAP_BOMBS: BombSpec = {
 	rollBombCount = function()
 		return math.random(1, 3)
 	end,
-	onHit = function(killer, model, targetCFrame)
+	onHit = function(player, model, targetCFrame)
 		-- isRelicSourced = true rides the UNTYPED lane now: unqualified
 		-- Damage bonuses scale the blast, typed relics/crits never apply.
 		-- Still rolls the WEAPON applier hub via onHitboxDamage
 		-- (isMagic = false).
-		onHitboxDamage(model, targetCFrame, killer, ArcaneData[ArcaneNames["Pumpkin Explosion"]], false, true)
+		onHitboxDamage(model, targetCFrame, player, ArcaneData[ArcaneNames["Pumpkin Explosion"]], false, true)
 
 		-- "...and burning them": the blast applies Burn outright rather
 		-- than rolling for it, which is what lets Trick Or Trap open the
@@ -164,7 +170,7 @@ local TRICK_OR_TRAP_BOMBS: BombSpec = {
 		-- on Player vs Player?, which fails its self type on any method
 		-- call from a strict file.
 		if StatusConditionService then
-			(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Burn)
+			(StatusConditionService :: any):ApplyStatus(player, model, StatusConditions.Burn)
 		end
 	end,
 }
@@ -181,7 +187,7 @@ local FUSE_BOMBS: BombSpec = {
 	rollBombCount = function()
 		return 1
 	end,
-	onHit = function(killer, model, _targetCFrame)
+	onHit = function(player, model, _targetCFrame)
 		-- UNTYPED relic lane (isRelicSourced): unqualified Damage bonuses
 		-- scale the blast; Weapon/Arcane-typed relics and crits never apply.
 		local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
@@ -189,8 +195,8 @@ local FUSE_BOMBS: BombSpec = {
 			return
 		end
 		local config = ArcaneData[ArcaneNames["Fuse Bomb Explosion"]]
-		local damageRoll = if config.runtimeDamageCallback then config.runtimeDamageCallback(killer) else config.damage
-		DamageService:TakeDamage(killer, targetHumanoid, damageRoll, false, false, false, true, true)
+		local damageRoll = if config.runtimeDamageCallback then config.runtimeDamageCallback(player) else config.damage
+		DamageService:TakeDamage(player, targetHumanoid, damageRoll, false, false, false, true, true)
 	end,
 }
 
@@ -210,6 +216,12 @@ local MOB_BOMB_CLOUD_FADE_SECONDS = 1.5
 --[ Module ]--
 
 local MobDeath = {}
+
+-- A corrupted mob pays CorruptionData.RewardMultiplier on its kill EXP and
+-- its Gems' value; everything else, 1.
+local function rewardMultiplier(model: Model): number
+	return if model:GetAttribute(Attributes.Corrupted) == true then CorruptionData.RewardMultiplier else 1
+end
 
 --[ Assist registry ]--
 
@@ -278,7 +290,7 @@ end
 function MobDeath.GrantKill(context: Context)
 	local slainBy = context.model:GetAttribute(Attributes.SlainBy)
 	if type(slainBy) == "string" and slainBy ~= "" then
-		ExpRewardService:GrantKill(context.enemyType)
+		ExpRewardService:GrantKill(context.enemyType, rewardMultiplier(context.model))
 	end
 end
 
@@ -289,8 +301,8 @@ end
 -- (BOMB_LIMIT_PER_RELIC) before spawning, and simply does not spawn when
 -- the cap is full. The claim is read-then-write with no yield between, so
 -- the bombs of one takedown cannot over-claim each other.
-local function lobBombs(context: Context, killer: Player, spec: BombSpec)
-	local owned = RelicService:GetSpecificRelicRegistry(killer, spec.relicName)
+local function lobBombs(context: Context, player: Player, spec: BombSpec)
+	local owned = RelicService:GetSpecificRelicRegistry(player, spec.relicName)
 	if not owned or owned <= 0 then
 		return
 	end
@@ -336,12 +348,12 @@ local function lobBombs(context: Context, killer: Player, spec: BombSpec)
 				)
 				VFXService:CreateHitbox(
 					arcaneName,
-					killer,
+					player,
 					targetCFrame,
 					TagList.Zombie,
 					IgnoreListService:GetWeaponIgnoreList(),
 					function(model: Model)
-						spec.onHit(killer, model, targetCFrame)
+						spec.onHit(player, model, targetCFrame)
 					end,
 					ArcaneData[arcaneName].hitboxSize.X
 				)
@@ -352,9 +364,9 @@ end
 
 --[ Zombie Bomb cloud ]--
 
-local function runZombieBombCloud(context: Context, killer: Player)
-	local damagePerLevel = RelicService:GetRelicEffect(killer, RelicNames["Zombie Bomb"])
-	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(killer, RelicNames["Zombie Bomb"]) <= 0 then
+local function runZombieBombCloud(context: Context, player: Player)
+	local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Zombie Bomb"])
+	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(player, RelicNames["Zombie Bomb"]) <= 0 then
 		return
 	end
 	-- Gate: the mob died POISONED (family read -- Noxious Venom counts;
@@ -363,7 +375,7 @@ local function runZombieBombCloud(context: Context, killer: Player)
 		return
 	end
 
-	local limitKey = RelicNames["Zombie Bomb"] .. "_" .. killer.UserId
+	local limitKey = RelicNames["Zombie Bomb"] .. "_" .. player.UserId
 	local liveClouds = RelicService:GetRelicLimitRegistry(limitKey) or 0
 	if liveClouds >= MOB_BOMB_CLOUD_LIMIT then
 		return
@@ -389,7 +401,7 @@ local function runZombieBombCloud(context: Context, killer: Player)
 		warn("[MobDeath] Missing ReplicatedStorage.GameAssets.VFX.PoisonCloud")
 	end
 
-	local tickDamage = math.round(damagePerLevel * getPlayerLevel(killer))
+	local tickDamage = math.round(damagePerLevel * getPlayerLevel(player))
 	task.spawn(function()
 		local elapsed = 0
 		while elapsed < MOB_BOMB_CLOUD_DURATION do
@@ -402,14 +414,14 @@ local function runZombieBombCloud(context: Context, killer: Player)
 				-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
 				-- (isRelicSourced = true).
 				if DamageService and tickDamage > 0 then
-					DamageService:TakeDamage(killer, targetHumanoid, tickDamage, false, false, nil, true)
+					DamageService:TakeDamage(player, targetHumanoid, tickDamage, false, false, nil, true)
 				end
 				-- "...and applies Poison": every tick, no roll. The card dropped
 				-- its Status Chance clause in the 2026-08 pass, so the cloud is
 				-- now a guaranteed Poison field rather than a chance to seed one.
 				if StatusConditionService then
 					-- Cast: see TRICK_OR_TRAP_BOMBS.
-					(StatusConditionService :: any):ApplyStatus(killer, model, StatusConditions.Poison, false)
+					(StatusConditionService :: any):ApplyStatus(player, model, StatusConditions.Poison, false)
 				end
 			end)
 		end
@@ -554,22 +566,29 @@ local function dropGems(context: Context)
 		return
 	end
 
+	-- A corrupted mob's pickups are each worth more (same count).
+	local multiplier = rewardMultiplier(context.model)
 	DropService.OnDropRequested:Fire(
 		context.rootPart,
 		DropTypes.Gems,
 		gems.minDropRate,
 		gems.maxDropRate,
-		gems.minGems,
-		gems.maxGems,
+		math.max(math.round(gems.minGems * multiplier), 1),
+		math.max(math.round(gems.maxGems * multiplier), 1),
 		false
 	)
 end
 
 --[ Public ]--
 
--- Everything a player's takedown pays, in the order MobBase always ran it:
--- the two bomb relics, the Zombie Bomb cloud, per-assister payouts
--- (immediate, regardless of mob tier), then the corpse drops.
+-- Everything a takedown pays, for a mob a PLAYER killed (SlainBy is set;
+-- a room despawn or trap with no owner pays nothing). A takedown is a
+-- kill OR an assist: the killer (when still here) and every player whose
+-- last hit on this mob landed inside the assist window each get one. Per
+-- player, in the order MobBase always ran it: the two bomb relics and the
+-- Zombie Bomb cloud (each bounded by its own concurrent cap), then the
+-- per-player payouts (handleAssists, regardless of mob tier); then the
+-- corpse drops, once.
 --
 -- Encounter-tier mobs (miniboss / boss ROLE) drop NOTHING at the corpse:
 -- their gear and coins are the reward CHEST's contents
@@ -578,10 +597,29 @@ end
 -- they drop like a regular mob. EncounterService.OnEncounterOutroFinished
 -- is the seam where corpse-side encounter rewards would go if any are
 -- ever added back.
-function MobDeath.RunKillerRewards(context: Context, killer: Player)
-	lobBombs(context, killer, TRICK_OR_TRAP_BOMBS)
-	lobBombs(context, killer, FUSE_BOMBS)
-	runZombieBombCloud(context, killer)
+function MobDeath.RunTakedownRewards(context: Context, killer: Player?)
+	local slainBy = context.model:GetAttribute(Attributes.SlainBy)
+	if type(slainBy) ~= "string" or slainBy == "" then
+		return
+	end
+	-- The killing blow always counts, even if its HealthChanged credit
+	-- raced the death.
+	if killer then
+		context.assists[killer.Name] = os.clock()
+	end
+
+	for name in context.assists do
+		if not MobDeath.AssistedRecently(context.assists, name) then
+			continue
+		end
+		local player = Players:FindFirstChild(name)
+		if not player or not player:IsA("Player") then
+			continue
+		end
+		lobBombs(context, player, TRICK_OR_TRAP_BOMBS)
+		lobBombs(context, player, FUSE_BOMBS)
+		runZombieBombCloud(context, player)
+	end
 	handleAssists(context)
 
 	if context.isEncounter and EncounterService then

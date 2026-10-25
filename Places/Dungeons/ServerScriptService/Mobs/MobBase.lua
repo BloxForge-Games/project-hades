@@ -82,6 +82,8 @@ local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
 local MobFaceData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFaceData)
+local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
@@ -223,7 +225,40 @@ type AttackPoolEntry = {
 	genericIndex: number?,
 	-- run(mob, target) -> active duration (seconds); see _buildAttackPool.
 	run: ((mob: Model, target: Model) -> number?)?,
+	-- Selection rules (MobData closeRange / minRange / cooldown; see
+	-- _selectAttack). readyAt is when a cooldown attack may fire again.
+	closeRange: number?,
+	minRange: number?,
+	cooldown: number?,
+	readyAt: number,
+	-- Relative odds in the random pick (MobData `weight`, default 1).
+	weight: number,
 }
+
+-- One pool entry from a MobData attack row. A cooldown attack first
+-- becomes ready halfway through its cooldown, so it does not open a fight.
+local function poolEntry(kind: string, attack: any, genericIndex: number?): AttackPoolEntry
+	return {
+		kind = kind,
+		attackRange = attack.attackRange,
+		-- Hoisted to the pool entry so _runAttack reads it uniformly (the raw
+		-- attack lives under `entry`). Without this hoist the recovery wait
+		-- saw nil and collapsed to ~1 frame regardless of the authored value.
+		recoveryDuration = attack.recoveryDuration,
+		entry = if kind == "generic" then attack else nil,
+		genericIndex = genericIndex,
+		run = if kind == "unique" then attack.run else nil,
+		closeRange = attack.closeRange,
+		minRange = attack.minRange,
+		cooldown = attack.cooldown,
+		readyAt = os.clock() + (attack.cooldown or 0) * 0.5,
+		weight = attack.weight or 1,
+	}
+end
+
+local function hasSelectionRule(entry: AttackPoolEntry): boolean
+	return entry.closeRange ~= nil or entry.minRange ~= nil or entry.cooldown ~= nil
+end
 
 -- One MobData entry: the table MobData[name] resolves to.
 type MobEntry = typeof(MobData[""])
@@ -275,6 +310,10 @@ type Fields = {
 	_stateEndTime: number,
 	_nextRoamPickAt: number,
 	_chosenAttack: AttackPoolEntry?,
+	-- The chase's pick among the attacks without a selection rule.
+	_plainAttack: AttackPoolEntry?,
+	-- The ruled pool's current random pick, held until it fires.
+	_attackIntent: AttackPoolEntry?,
 	_attackGeneration: number,
 
 	-- Pathfinding state
@@ -314,8 +353,11 @@ function MobBase.new(model: Model): MobBase
 	assert(data, "[MobBase] No data entry for mob: " .. model.Name)
 	self._data = data
 
-	-- Cached config (flat for speed)
-	self._health = data.health
+	-- Cached config (flat for speed). A mob spawned in the BOSS role that
+	-- normally serves elsewhere (MobData bossHealth: a miniboss doubling as
+	-- a placeholder boss) takes the boss's health and counts as a Boss.
+	local isBossRole = model:GetAttribute(Attributes.IsBoss) == true
+	self._health = if isBossRole and data.bossHealth then data.bossHealth else data.health
 	self._defaultWalkSpeed = data.walkSpeed
 	-- The CURRENT state's intended walk speed before status modifiers —
 	-- roam sets defaultWalkSpeed/3, chase the full default, attacking 0.
@@ -325,7 +367,7 @@ function MobBase.new(model: Model): MobBase
 	self._baseWalkSpeed = data.walkSpeed
 	self._detectionRange = data.detectionRange or 60
 	self._hipHeight = data.hipHeight
-	self._enemyType = data.enemyType
+	self._enemyType = if isBossRole then EnemyType.Boss else data.enemyType
 	self._agentRadius = data.agentRadius
 	-- Gems scatter (MobData `gems`): DropRate = pickup count range,
 	-- Gems = value-per-pickup range. nil on encounter mobs (chest-paid).
@@ -371,6 +413,8 @@ function MobBase.new(model: Model): MobBase
 	self._nextRoamPickAt = 0 -- when Roaming should pick its next point
 
 	self._chosenAttack = nil
+	self._plainAttack = nil
+	self._attackIntent = nil
 
 	self._attackGeneration = 0
 
@@ -399,16 +443,8 @@ function MobBase._buildAttackPool(_self: MobBase, data)
 	local pool: { AttackPoolEntry } = {}
 
 	for i, attack in ipairs(data.genericAttacks or {}) do
-		table.insert(pool, {
-			kind = "generic",
-			attackRange = attack.attackRange,
-			-- Hoisted to the pool entry so _runAttack reads it uniformly (the raw
-			-- attack lives under `entry`). Without this hoist the recovery wait
-			-- saw nil and collapsed to ~1 frame regardless of the authored value.
-			recoveryDuration = attack.recoveryDuration,
-			entry = attack,
-			genericIndex = i, -- for animation lookup
-		})
+		-- genericIndex is for the animation lookup.
+		table.insert(pool, poolEntry("generic", attack, i))
 	end
 
 	for _, attack in ipairs(data.uniqueAttacks or {}) do
@@ -416,12 +452,7 @@ function MobBase._buildAttackPool(_self: MobBase, data)
 		-- run(mobModel, target) returns the ACTIVE attack duration (seconds);
 		-- MobBase waits that, THEN recoveryDuration, before leaving Attacking — the
 		-- same two-stage clock a generic attack runs on.
-		table.insert(pool, {
-			kind = "unique",
-			attackRange = attack.attackRange,
-			recoveryDuration = attack.recoveryDuration,
-			run = attack.run,
-		})
+		table.insert(pool, poolEntry("unique", attack))
 	end
 
 	if #pool == 0 then
@@ -447,22 +478,11 @@ function MobBase._addAttacks(self: MobBase, genericAttacks: { any }?, uniqueAtta
 		if attack.animation then
 			self._loadedGenericAnimations[genericIndex] = self._animator:LoadAnimation(attack.animation)
 		end
-		table.insert(self._attackPool, {
-			kind = "generic",
-			attackRange = attack.attackRange,
-			recoveryDuration = attack.recoveryDuration,
-			entry = attack,
-			genericIndex = genericIndex,
-		})
+		table.insert(self._attackPool, poolEntry("generic", attack, genericIndex))
 	end
 
 	for _, attack in ipairs(uniqueAttacks or {}) do
-		table.insert(self._attackPool, {
-			kind = "unique",
-			attackRange = attack.attackRange,
-			recoveryDuration = attack.recoveryDuration,
-			run = attack.run,
-		})
+		table.insert(self._attackPool, poolEntry("unique", attack))
 	end
 end
 
@@ -488,8 +508,17 @@ function MobBase.Start(self: MobBase)
 	task.wait(START_GRACE_DELAY)
 
 	if self._model:GetAttribute(MINIBOSS_ATTRIBUTE) or self._model:GetAttribute(BOSS_ATTRIBUTE) then
-		print("[MobBase] Detected miniboss/boss; skipping initial AI tick until intro ends.")
+		-- The intro holds the AI. When it lets go, open the fight facing
+		-- the nearest player rather than wherever the intro left the body.
 		task.wait(10)
+		if self._model.Parent and self:FindTarget() and self._currentTargetHRP then
+			local rootPosition = self._rootPart.Position
+			local targetPosition = self._currentTargetHRP.Position
+			local flatTarget = Vector3.new(targetPosition.X, rootPosition.Y, targetPosition.Z)
+			if (flatTarget - rootPosition).Magnitude > 0.05 then
+				self._rootPart.CFrame = CFrame.lookAt(rootPosition, flatTarget)
+			end
+		end
 	end
 
 	self:_startAILoop()
@@ -519,6 +548,10 @@ function MobBase._applyHumanoidProperties(self: MobBase)
 	-- party changes shape.
 	local health = self._health
 	local resolvedHealth: number = if type(health) == "function" then health() else health
+	-- A CORRUPTED spawn (MobSpawnService.RollCorruption) is tougher.
+	if self._model:GetAttribute(Attributes.Corrupted) == true then
+		resolvedHealth *= CorruptionData.HealthMultiplier
+	end
 	self._health = resolvedHealth
 
 	EnemyScalingService:ApplyToMob(self._model, self._humanoid, resolvedHealth)
@@ -975,19 +1008,84 @@ end
 
 function MobBase._enterChase(self: MobBase)
 	self._state = STATE_CHASE
-	self._chosenAttack = self:_pickAttack()
+	self._plainAttack = self:_pickAttack()
+	self._chosenAttack = self._plainAttack
 	self._lastPathComputeAt = 0 -- allow first recompute immediately
 	self._pathFailures = 0
 	self._pathRetryAt = 0
 	self:_setBaseWalkSpeed(self._defaultWalkSpeed)
 end
 
+-- The chase's plain pick: one of the attacks WITHOUT a selection rule, at
+-- random (every attack, for a pool with no rules at all -- the old pick).
 function MobBase._pickAttack(self: MobBase)
-	local pool = self._attackPool
-	if #pool == 0 then
+	local plain = {}
+	for _, entry in self._attackPool do
+		if not hasSelectionRule(entry) then
+			table.insert(plain, entry)
+		end
+	end
+	if #plain == 0 then
 		return nil
 	end
-	return pool[math.random(1, #pool)]
+	return plain[math.random(1, #plain)]
+end
+
+-- Whether a ruled attack may be chosen right now: off cooldown, the target
+-- inside its closeRange (if it has one) and beyond its minRange (if it has
+-- one).
+local function eligible(entry: AttackPoolEntry, distance: number, now: number): boolean
+	if entry.cooldown and now < entry.readyAt then
+		return false
+	end
+	if entry.closeRange and distance > entry.closeRange then
+		return false
+	end
+	if entry.minRange and distance < entry.minRange then
+		return false
+	end
+	return true
+end
+
+-- A pool with selection rules (MobData closeRange / minRange / cooldown)
+-- picks its next attack at RANDOM, by `weight`, among the attacks that make
+-- sense right now (off cooldown, the target inside a closeRange / beyond a
+-- minRange), then commits to it -- walking in when it is a melee pick --
+-- until it fires. Only a pick that stops making sense (the target closed
+-- inside a long-range attack's minRange, or left a close-range attack's
+-- closeRange) re-rolls. Every attack clears the pick, so each one is a
+-- fresh roll: no fixed rotation to read. A pool without rules keeps its one
+-- pick for the whole chase.
+function MobBase._selectAttack(self: MobBase, distance: number): AttackPoolEntry?
+	local now = os.clock()
+	local intent = self._attackIntent
+	if intent and eligible(intent, distance, now) then
+		return intent
+	end
+
+	local candidates: { AttackPoolEntry } = {}
+	local totalWeight = 0
+	for _, entry in self._attackPool do
+		if eligible(entry, distance, now) then
+			table.insert(candidates, entry)
+			totalWeight += entry.weight
+		end
+	end
+	if #candidates == 0 then
+		self._attackIntent = nil
+		return self._plainAttack
+	end
+
+	local roll = math.random() * totalWeight
+	for _, entry in candidates do
+		roll -= entry.weight
+		if roll <= 0 then
+			self._attackIntent = entry
+			return entry
+		end
+	end
+	self._attackIntent = candidates[#candidates]
+	return self._attackIntent
 end
 
 --[ Chase step ]--
@@ -1012,8 +1110,15 @@ function MobBase._chaseStep(self: MobBase)
 		return lineOfSight :: boolean
 	end
 
+	local distance = (self._rootPart.Position - self._currentTargetHRP.Position).Magnitude
+	for _, poolEntryCandidate in self._attackPool do
+		if hasSelectionRule(poolEntryCandidate) then
+			self._chosenAttack = self:_selectAttack(distance)
+			break
+		end
+	end
+
 	if self._chosenAttack then
-		local distance = (self._rootPart.Position - self._currentTargetHRP.Position).Magnitude
 		if distance <= self._chosenAttack.attackRange then
 			local entry = self._chosenAttack.entry
 			local needsLOS = entry and entry.requiresLineOfSight
@@ -1042,6 +1147,12 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 		return -- re-entry guard
 	end
 	self._state = STATE_ATTACKING
+	-- A cooldown attack starts its clock the moment it fires, and the next
+	-- attack is a fresh roll (_selectAttack).
+	if chosenAttack.cooldown then
+		chosenAttack.readyAt = os.clock() + chosenAttack.cooldown
+	end
+	self._attackIntent = nil
 
 	local generation = self._attackGeneration
 
@@ -1052,6 +1163,11 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 		self._humanoid:MoveTo(self._rootPart.Position) -- cancel in-flight MoveTo
 		self:_setBaseWalkSpeed(0)
 		self._humanoid.AutoRotate = false
+		-- The chase's run / idle loop stops here: the Running handler skips
+		-- every change while MobIsAttacking is set, so a run track left
+		-- playing would loop under the whole attack (legs walking through a
+		-- swing, or after the Mist Ambush's teleport).
+		self:_stopNonAttackTracks()
 
 		self._model:SetAttribute("MobHighlightAttackActive", true)
 
@@ -1075,6 +1191,12 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 		if self._attackGeneration ~= generation then
 			return
 		end
+
+		-- Settle into idle under whatever swing is still finishing (attack
+		-- tracks play over it), and leave the locomotion state at "standing"
+		-- so the next movement starts the run again.
+		self._idleTrack:Play()
+		self._walking = true
 
 		self._model:SetAttribute("MobHighlightAttackActive", false)
 
@@ -1117,8 +1239,35 @@ function MobBase._runGenericAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	local kind = entry.kind or "melee"
 	if kind == "ranged" then
 		self:_runRangedSwing(entry)
-	else
-		MobService:ExecuteMobAttack(self._model, entry)
+		return
+	end
+
+	-- `strikes` swings in one attack (MobData; the sim mobs read the same
+	-- fields): each follow-up re-faces the target from where the lunge left
+	-- the mob, replays the swing and runs its own telegraph + hit frame.
+	local strikes = math.max(entry.strikes or 1, 1)
+	for strike = 1, strikes do
+		if strike > 1 then
+			if
+				self._humanoid.Health <= 0
+				or self._model:GetAttribute("AttackInterrupted") == true
+				or self._model:GetAttribute(Attributes.Jailed)
+			then
+				return
+			end
+			local targetHRP = self._currentTargetHRP
+			if targetHRP and targetHRP.Parent then
+				local rootPosition = self._rootPart.Position
+				local flatTarget = Vector3.new(targetHRP.Position.X, rootPosition.Y, targetHRP.Position.Z)
+				if (flatTarget - rootPosition).Magnitude > 0.05 then
+					self._rootPart.CFrame = CFrame.lookAt(rootPosition, flatTarget)
+				end
+			end
+			if animTrack then
+				animTrack:Play()
+			end
+		end
+		MobService:ExecuteMobAttack(self._model, entry, if strike > 1 then entry.followUpWindUpDuration else nil)
 	end
 end
 
@@ -1304,8 +1453,10 @@ function MobBase.OnDeath(self: MobBase)
 	local killer = MobDeath.ResolveKiller(self._model)
 	if killer then
 		self:_applyDeathImpulse(killer)
-		MobDeath.RunKillerRewards(deathContext, killer)
 	end
+	-- Every takedown (the killer and each recent assister), even when the
+	-- killer has left.
+	MobDeath.RunTakedownRewards(deathContext, killer)
 
 	self:_playDeathSound()
 	self:_applyForwardKnockback()
@@ -1325,7 +1476,7 @@ end
 
 -- True for minibosses + bosses (the encounter-tier mobs whose death plays an
 -- outro cinematic). Their coin + gear rewards come from the reward chest
--- (see MobDeath.RunKillerRewards).
+-- (see MobDeath.RunTakedownRewards).
 --
 -- Deliberately the spawn-side IsBoss / IsMiniboss flags MobSpawnService
 -- stamps, NOT Shared/Functions/Mob/isEncounterEnemy (the EnemyType tier

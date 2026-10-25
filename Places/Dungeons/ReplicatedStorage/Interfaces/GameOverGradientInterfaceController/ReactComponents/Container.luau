@@ -80,26 +80,27 @@ local BAR_COUNTDOWN_DURATION = GAME_OVER_PULSE_DURATION - BAR_STARTUP_DELAY
 -- REVIVE button, under the subtitle. Same footprint the spectate UI's
 -- button had, so it reads as the same control moved to where the
 -- decision is actually made.
-local REVIVE_BUTTON_POSITION = UDim2.fromScale(0.5, 0.65)
+local REVIVE_BUTTON_POSITION = UDim2.fromScale(0.5, 0.644)
 -- Where the button's CanvasGroup rests while hidden: a little BELOW its
 -- seat, so it rises into place on the fade-in and sinks away on the
 -- fade-out, the same motion the title and subtitle make.
-local REVIVE_BUTTON_START_POSITION = UDim2.fromScale(0.5, 0.65 + TEXT_RISE_OFFSET)
-local REVIVE_BUTTON_SIZE = UDim2.fromScale(0.105, 0.047)
+local REVIVE_BUTTON_START_POSITION = UDim2.fromScale(0.5, 0.644 + TEXT_RISE_OFFSET)
+local REVIVE_BUTTON_SIZE = UDim2.fromScale(0.099321, 0.058)
 local REVIVE_BUTTON_FONT = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold)
 -- The button's look, from the inventory / relic tray palette: the tray
 -- toggle's navy plate and black border, and its EasyVisuals shine ring
--- (shineStroke) in the tray's accent blue, at the same scale thickness.
+-- (shineStroke) in the tray's accent blue, drawn thicker than the toggle's
+-- so it reads on the death screen (playtest 2026-10-24).
 -- The plate is inset inside the CanvasGroup: a CanvasGroup clips whatever
 -- draws past its bounds, and the border and ring both sit OUTSIDE the plate.
 local REVIVE_PLATE_SIZE = UDim2.fromScale(0.9, 0.8)
 local REVIVE_PLATE_COLOR = Color3.fromRGB(43, 65, 85)
 local REVIVE_BORDER_COLOR = Color3.fromRGB(0, 0, 0)
-local REVIVE_BORDER_THICKNESS = 0.04
+local REVIVE_BORDER_THICKNESS = 0.06
 local REVIVE_TEXT_STROKE_COLOR = Color3.fromRGB(25, 25, 25)
 local REVIVE_RING_COLOR = Color3.fromRGB(105, 158, 186)
-local REVIVE_RING_THICKNESS = 0.04
-local REVIVE_CORNER = UDim.new(0.2, 0)
+local REVIVE_RING_THICKNESS = 0.07
+local REVIVE_CORNER = UDim.new(0.1, 0)
 
 -- Fixed subtitle per spec. No randomization (the death screen picks
 -- from DEATH_REASON_TEXTS); Game Over has a single deterministic line
@@ -655,7 +656,7 @@ local function Container(props: any)
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = REVIVE_PLATE_SIZE,
 				BackgroundColor3 = REVIVE_PLATE_COLOR,
-				Text = "REVIVE",
+				Text = "Revive",
 				TextColor3 = Color3.fromRGB(255, 255, 255),
 				TextScaled = true,
 				FontFace = REVIVE_BUTTON_FONT,

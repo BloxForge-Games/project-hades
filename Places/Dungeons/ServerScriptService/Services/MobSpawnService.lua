@@ -109,6 +109,16 @@ local MobSpawnService = {
 MobSpawnService.OnMobSpawn = Signal.new()
 MobSpawnService.OnMobDespawn = Signal.new()
 
+-- Rolls CORRUPTION for one spawning mob (Shared/Data/CorruptionData): the
+-- run difficulty's `corruptChance`, every kind of mob alike -- regular
+-- mobs (MobSimService), minibosses and bosses (SpawnMinibossInRoom). The
+-- spawner stamps the Corrupted attribute before parenting.
+function MobSpawnService.RollCorruption(_self: typeof(MobSpawnService)): boolean
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local chance = if dungeonService then dungeonService:GetDifficultyScale().corruptChance or 0 else 0
+	return chance > 0 and math.random() < chance
+end
+
 function MobSpawnService.IncrementMobCount(self: typeof(MobSpawnService), mob: Model)
 	self.OnMobSpawn:Fire(mob)
 end
@@ -729,6 +739,11 @@ function MobSpawnService.SpawnMinibossInRoom(
 		miniboss:SetAttribute(Attributes.IsBoss, true)
 	else
 		miniboss:SetAttribute(Attributes.IsMiniBoss, true)
+	end
+	-- Corruption rolls for encounter mobs too; MobBase scales the health,
+	-- MobService the damage, every client draws the aura.
+	if self:RollCorruption() then
+		miniboss:SetAttribute(Attributes.Corrupted, true)
 	end
 
 	local hrp = miniboss:FindFirstChild("HumanoidRootPart") :: BasePart?

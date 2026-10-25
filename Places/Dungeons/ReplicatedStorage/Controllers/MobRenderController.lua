@@ -35,9 +35,11 @@ local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
 local MobFaceData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFaceData)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CollisionGroups)
 local mobPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobPath)
+local attachCorruptVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.attachCorruptVFX)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
@@ -243,6 +245,9 @@ function MobRenderController._buildRig(self: typeof(MobRenderController), entry:
 
 	self:_loadAnimations(entry)
 	self:_dressProxy(entry, head)
+	if proxy:GetAttribute(Attributes.Corrupted) == true then
+		attachCorruptVFX(rig, rigRoot)
+	end
 
 	-- Status emitters (StatusConditionService clones them into the mob's
 	-- root) ride the rig's root here instead: the proxy root only moves
@@ -569,6 +574,16 @@ function MobRenderController._die(self: typeof(MobRenderController), entry: Entr
 		face.Texture = MobFaceData.Dead
 	end
 
+	-- A corrupted corpse stops burning.
+	local corruption = rig:FindFirstChild(CorruptionData.VFXName)
+	if corruption then
+		for _, emitter in corruption:GetDescendants() do
+			if emitter:IsA("ParticleEmitter") then
+				emitter.Enabled = false
+			end
+		end
+	end
+
 	local data = MobData[entry.proxy.Name]
 	if data and data.deathSound then
 		local sound = (data.deathSound :: Sound):Clone()
@@ -593,8 +608,11 @@ function MobRenderController._die(self: typeof(MobRenderController), entry: Entr
 			joint.Enabled = false
 		end
 	end
+	-- The body's limbs collide as a ragdoll; the corruption aura's parts
+	-- (welded on, massless) stay out of the physics.
+	local aura = rig:FindFirstChild(CorruptionData.VFXName)
 	for _, part in rig:GetDescendants() do
-		if part:IsA("BasePart") then
+		if part:IsA("BasePart") and not (aura and part:IsDescendantOf(aura)) then
 			part.CollisionGroup = CollisionGroups.Ragdoll
 			part.CanCollide = part ~= rigRoot
 		end

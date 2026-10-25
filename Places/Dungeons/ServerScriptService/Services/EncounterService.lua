@@ -825,6 +825,15 @@ function EncounterService._startFight(
 
 		local mob = MobSpawnService:SpawnMinibossInRoom(room, mobName, kind == ROOM_TYPES.Boss)
 		self:_addCutsceneMob(mob)
+		-- Face the players: they were just placed on the arrival line, so
+		-- the intro opens on the miniboss / boss looking at them.
+		local mobRoot = mob and mob:FindFirstChild("HumanoidRootPart")
+		if mob and mobRoot and mobRoot:IsA("BasePart") then
+			local flatArrival = Vector3.new(teleportPosition.X, mobRoot.Position.Y, teleportPosition.Z)
+			if (flatArrival - mobRoot.Position).Magnitude > 0.05 then
+				mob:PivotTo(CFrame.lookAt(mobRoot.Position, flatArrival))
+			end
+		end
 		if not mob then
 			warn(("[EncounterService] Failed to spawn %s '%s' in room %s"):format(kind, mobName, room.model.Name))
 
@@ -1343,6 +1352,45 @@ function EncounterService.StartEncounter(
 		return
 	end
 	self:_startLobby(kind, room, gateCFrame)
+end
+
+-- DEBUG (ChatCommandsService /fight): starts the active floor's miniboss or
+-- boss fight NOW, skipping the walk there and the pre-fight pad. Finds the
+-- room, the gate that leads into it (the previous room's ExitGate, the same
+-- gate the segment-clear flow hands StartEncounter), clears any open lobby,
+-- moves every player's room cursor in, and runs the normal fight start --
+-- fade, teleport into the arena, spawn, intro. Returns a line for the chat.
+function EncounterService.DebugStartEncounter(self: typeof(EncounterService), kind: EncounterKind): string
+	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
+	if not dungeon then
+		return "No dungeon is running."
+	end
+	local index: number? = nil
+	for i, room in dungeon.rooms do
+		if room.roomType == kind then
+			index = i
+			break
+		end
+	end
+	if not index then
+		return ("This floor has no %s room."):format(kind)
+	end
+	local room = dungeon.rooms[index]
+
+	-- The gate into it: the previous room's ExitGate, else the room's own
+	-- pivot (facing out of the arena, the convention _startFight reads).
+	local previous = dungeon.rooms[index - 1]
+	local gate = previous and previous.model and previous.model:FindFirstChild("ExitGate")
+	local gateCFrame = if gate and gate:IsA("BasePart") then gate.CFrame else room.model:GetPivot()
+
+	if self._activeLobby then
+		self:_cleanupLobby()
+	end
+	for _, player in Players:GetPlayers() do
+		DungeonService:SetPlayerRoom(player, room.id)
+	end
+	self:_startFight(kind, room, gateCFrame)
+	return ("Starting the %s fight."):format(kind)
 end
 
 -- True while a pre-fight lobby (or the next-dungeon vote) is running.

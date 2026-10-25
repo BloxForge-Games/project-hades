@@ -64,11 +64,11 @@ local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network
 local MobNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Mob)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local mobPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobPath)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
-local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 
 --[ Constants ]--
 
@@ -87,6 +87,20 @@ local TRACK_EVERY_FRAME_STUDS = THINK_MID_STUDS
 -- Spawn: the mob holds still this long before its first decision (MobBase's
 -- START_GRACE_DELAY), while every client fades its body in.
 local START_GRACE_SECONDS = 1
+-- How far under a spawn point (attachment + 2 studs) to look for its floor.
+local SPAWN_FLOOR_SEARCH_STUDS = 20
+
+-- A sim mob's body has no physics to push it out of a pillar or off
+-- another mob, so a spawn lands on the nearest CLEAR spot (no geometry
+-- inside its body, no other sim mob closer than SPAWN_MOB_SPACING of their
+-- combined radii) on rings of CLEAR_SEARCH_RINGS studs, CLEAR_SEARCH_DIRECTIONS
+-- around. A standing mob that finds itself inside geometry anyway (a lunge
+-- into a corner) walks out to the nearest clear spot; checked once per
+-- UNSTICK_CHECK_SECONDS while it stands still.
+local CLEAR_SEARCH_RINGS = { 2, 4, 6, 8 }
+local CLEAR_SEARCH_DIRECTIONS = 8
+local SPAWN_MOB_SPACING = 0.8
+local UNSTICK_CHECK_SECONDS = 1
 local DESPAWN_SECONDS = 5
 
 -- Roaming (MobBase's numbers): a point 20-25 studs away at half speed, a
@@ -96,7 +110,11 @@ local ROAM_DURATION_MIN = 2
 local ROAM_DURATION_MAX = 4
 local ROAM_RADIUS_MIN = 20
 local ROAM_RADIUS_MAX = 25
-local ROAM_PICK_ATTEMPTS = 5
+local ROAM_PICK_ATTEMPTS = 6
+-- Attempts past the first half try a shorter hop, so a mob boxed in by
+-- walls still finds somewhere to wander instead of standing still.
+local ROAM_SHORT_RADIUS_MIN = 8
+local ROAM_SHORT_RADIUS_MAX = 15
 local ROAM_FLOOR_SLOP_STUDS = 6
 local DEFAULT_DETECTION_RANGE = 60
 
@@ -115,17 +133,22 @@ local CHASE_REGOAL_DISTANCE_FRACTION = 0.15
 -- later one swings its approach angle by CHASE_SEPARATION_STEP (either
 -- side, up to twice) so a pack fans out around the player.
 local CHASE_SEPARATION_STUDS = 2.5
+-- A re-aimed chase goal this close to where the mob stands is not sent.
+local CHASE_SAME_SPOT_STUDS = 0.5
 local CHASE_SEPARATION_STEP = math.rad(35)
 
 -- A sim mob has no physics, so nothing but these checks keeps a straight
 -- leg out of walls and off ledges. A leg is walkable when a sphere of the
--- mob's half agent radius (clamped) clears the way at root height, and a
--- floor sits within WALK_STEP_STUDS of the straight line every
--- WALK_FLOOR_SAMPLE_STUDS (at most WALK_FLOOR_SAMPLES_MAX probes). Only
--- checked when a leg is about to be sent; a failed check is not retried
--- for WALK_RECHECK_SECONDS.
+-- mob's BODY radius (half its widest horizontal extent, so arms and
+-- shoulders count, not just the centre line) clears the way at root
+-- height, the same sphere fits at the end without touching anything, and
+-- a floor sits within WALK_STEP_STUDS of the straight line every
+-- WALK_FLOOR_SAMPLE_STUDS (at most WALK_FLOOR_SAMPLES_MAX probes). The
+-- sphere is kept WALK_PROBE_FLOOR_GAP clear of the floor so it never reads
+-- the ground as a wall. Only checked when a leg is about to be sent; a
+-- failed check is not retried for WALK_RECHECK_SECONDS.
 local WALK_PROBE_RADIUS_MIN = 0.5
-local WALK_PROBE_RADIUS_MAX = 2
+local WALK_PROBE_FLOOR_GAP = 0.5
 local WALK_FLOOR_SAMPLE_STUDS = 4
 local WALK_FLOOR_SAMPLES_MAX = 8
 local WALK_STEP_STUDS = 3
@@ -176,6 +199,8 @@ local STATE_DEAD = "dead"
 -- body box the Hurtbox copies, and its path under GameAssets.Mobs.
 type TemplateInfo = {
 	rootOffset: number,
+	-- Half the body's widest horizontal extent: the clearance a leg keeps.
+	bodyRadius: number,
 	hurtboxSize: Vector3,
 	hurtboxOffset: CFrame,
 	templatePath: string,
@@ -188,7 +213,13 @@ type Record = {
 	humanoid: Humanoid,
 	data: any,
 	rootOffset: number,
+	bodyRadius: number,
 	attackPool: { any },
+	-- Indices into attackPool a chase may pick at random (everything but
+	-- the close-range attacks), and the close-range ones (MobData
+	-- `closeRange`), which take over whenever the target is that near.
+	randomAttackIndices: { number },
+	closeAttackIndices: { number },
 	detectionRange: number,
 	walkSpeed: number,
 	approachAngle: number,
@@ -213,6 +244,8 @@ type Record = {
 	chaseTargetAt: Vector3?,
 	-- No straight-leg walkability check before this (a failed one backs off).
 	walkCheckAt: number,
+	-- No stuck-in-geometry check before this (see UNSTICK_CHECK_SECONDS).
+	unstickCheckAt: number,
 
 	-- Targeting
 	target: Model?,
@@ -297,7 +330,26 @@ local function getWalkParams(): RaycastParams
 		ignore.Regions,
 		ignore.Terrain,
 	}
+	-- Only what a body would actually bump into: dropped Gems and orbs,
+	-- effects and trigger volumes are queryable but not collidable, and
+	-- read as walls otherwise (a chaser refusing a free spot beside loot).
+	params.RespectCanCollide = true
 	walkParams = params
+	return params
+end
+
+-- The same exclusions for the overlap test at a leg's end.
+local walkOverlapParams: OverlapParams? = nil
+
+local function getWalkOverlapParams(): OverlapParams
+	if walkOverlapParams then
+		return walkOverlapParams
+	end
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = getWalkParams().FilterDescendantsInstances
+	params.RespectCanCollide = true
+	walkOverlapParams = params
 	return params
 end
 
@@ -307,6 +359,8 @@ end
 -- filter as they come and go.
 local groundParams = RaycastParams.new()
 groundParams.FilterType = Enum.RaycastFilterType.Exclude
+-- A floor is something you can stand on, not a pickup or a trigger volume.
+groundParams.RespectCanCollide = true
 local groundFilterCharacters: { Model } = {}
 
 local function setGroundFilter(characters: { Model })
@@ -467,6 +521,7 @@ function MobSimService._resolveTemplate(self: typeof(MobSimService), template: M
 		rootOffset = root.Position.Y - bottom,
 		hurtboxSize = boxMax - boxMin,
 		hurtboxOffset = CFrame.new((boxMin + boxMax) / 2),
+		bodyRadius = math.max(boxMax.X - boxMin.X, boxMax.Z - boxMin.Z) / 2,
 		templatePath = templatePathOf(template),
 	}
 	self._templateInfo[template] = info
@@ -577,6 +632,55 @@ local function hasLineOfSight(from: Vector3, targetRoot: BasePart): boolean
 	return hit == nil or hit.Instance:IsDescendantOf(targetRoot.Parent :: Instance)
 end
 
+-- The body sphere every walk and fit check uses: the body radius, kept
+-- WALK_PROBE_FLOOR_GAP off the floor so the ground never reads as a wall.
+local function probeRadius(rootOffset: number, bodyRadius: number): number
+	return math.clamp(
+		bodyRadius,
+		WALK_PROBE_RADIUS_MIN,
+		math.max(rootOffset - WALK_PROBE_FLOOR_GAP, WALK_PROBE_RADIUS_MIN)
+	)
+end
+
+-- Does a body of this size fit standing on `ground` (nothing solid inside
+-- its sphere; players do not count)?
+local function bodyFitsAt(rootOffset: number, bodyRadius: number, ground: Vector3): boolean
+	local center = ground + Vector3.new(0, rootOffset, 0)
+	local radius = probeRadius(rootOffset, bodyRadius)
+	for _, part in workspace:GetPartBoundsInRadius(center, radius, getWalkOverlapParams()) do
+		if not isCharacterPart(part) then
+			return false
+		end
+	end
+	return true
+end
+
+-- The nearest spot to `ground` (itself first) where the body fits, on a
+-- floor, and `crowded` (when given) does not object; nil if none within
+-- the last ring. See CLEAR_SEARCH_RINGS.
+local function findClearGround(
+	rootOffset: number,
+	bodyRadius: number,
+	ground: Vector3,
+	crowded: ((Vector3) -> boolean)?
+): Vector3?
+	if bodyFitsAt(rootOffset, bodyRadius, ground) and not (crowded and crowded(ground)) then
+		return ground
+	end
+	local lift = Vector3.new(0, rootOffset, 0)
+	for _, ring in CLEAR_SEARCH_RINGS do
+		for step = 0, CLEAR_SEARCH_DIRECTIONS - 1 do
+			local angle = step * (2 * math.pi / CLEAR_SEARCH_DIRECTIONS)
+			local probe = ground + lift + Vector3.new(math.cos(angle) * ring, 0, math.sin(angle) * ring)
+			local floor = floorBelow(probe, rootOffset + WALK_STEP_STUDS)
+			if floor and bodyFitsAt(rootOffset, bodyRadius, floor) and not (crowded and crowded(floor)) then
+				return floor
+			end
+		end
+	end
+	return nil
+end
+
 -- Can the mob walk a straight leg from `fromGround` to `toGround` (both
 -- ground points)? See the WALK_* constants.
 local function canWalkStraight(record: Record, fromGround: Vector3, toGround: Vector3): boolean
@@ -587,13 +691,21 @@ local function canWalkStraight(record: Record, fromGround: Vector3, toGround: Ve
 		return true
 	end
 
-	local radius = math.clamp(
-		(record.data.agentRadius or 2) * 0.5,
-		WALK_PROBE_RADIUS_MIN,
-		math.max(math.min(WALK_PROBE_RADIUS_MAX, record.rootOffset - 0.5), WALK_PROBE_RADIUS_MIN)
-	)
+	local radius = probeRadius(record.rootOffset, record.bodyRadius)
 	local hit = workspace:Spherecast(fromGround + lift, radius, delta, getWalkParams())
 	if hit and not isCharacterPart(hit.Instance) then
+		return false
+	end
+	-- The body must FIT where the leg ends: a sweep stops at the goal, so a
+	-- goal hugging a wall would otherwise park the mob half inside it.
+	if not bodyFitsAt(record.rootOffset, record.bodyRadius, toGround) then
+		return false
+	end
+	-- And back from the goal: a cast ignores any part it STARTS inside, so
+	-- a mob already pressed into a wall would pass the forward check and
+	-- walk out through it. From the far side the wall's face is hit.
+	local back = workspace:Raycast(toGround + lift, -delta, getWalkParams())
+	if back and not isCharacterPart(back.Instance) then
 		return false
 	end
 
@@ -678,7 +790,9 @@ function MobSimService._computePath(self: typeof(MobSimService), record: Record)
 	local path = record.path
 	if not path then
 		path = PathfindingService:CreatePath({
-			AgentRadius = record.data.agentRadius or 2,
+			-- Never narrower than the body, or a path would hug walls the
+			-- body then clips into.
+			AgentRadius = math.max(record.data.agentRadius or 2, record.bodyRadius),
 			AgentHeight = 5,
 			AgentCanJump = false,
 			WaypointSpacing = PATH_WAYPOINT_SPACING,
@@ -759,9 +873,11 @@ function MobSimService._enterRoaming(self: typeof(MobSimService), record: Record
 	record.stateEndTime = now + math.random(ROAM_DURATION_MIN, ROAM_DURATION_MAX)
 
 	local origin = rootPosition(record)
-	for _ = 1, ROAM_PICK_ATTEMPTS do
+	for attempt = 1, ROAM_PICK_ATTEMPTS do
 		local angle = math.random() * math.pi * 2
-		local distance = math.random(ROAM_RADIUS_MIN, ROAM_RADIUS_MAX)
+		local distance = if attempt <= ROAM_PICK_ATTEMPTS / 2
+			then math.random(ROAM_RADIUS_MIN, ROAM_RADIUS_MAX)
+			else math.random(ROAM_SHORT_RADIUS_MIN, ROAM_SHORT_RADIUS_MAX)
 		local candidate = origin + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
 		local floor = floorBelow(candidate, record.rootOffset + ROAM_FLOOR_SLOP_STUDS)
 		if floor and canWalkStraight(record, record.ground, floor) then
@@ -778,10 +894,10 @@ function MobSimService._enterChase(_self: typeof(MobSimService), record: Record)
 	record.chaseGoal = nil
 	record.pathFailures = 0
 	record.lastPathAt = 0
-	local pool = record.attackPool
-	if #pool > 0 then
-		record.chosenAttackIndex = math.random(1, #pool)
-		record.chosenAttack = pool[record.chosenAttackIndex]
+	local candidates = record.randomAttackIndices
+	if #candidates > 0 then
+		record.chosenAttackIndex = candidates[math.random(1, #candidates)]
+		record.chosenAttack = record.attackPool[record.chosenAttackIndex]
 	end
 end
 
@@ -804,8 +920,29 @@ function MobSimService._chaseStep(self: typeof(MobSimService), record: Record, n
 		return lineOfSight :: boolean
 	end
 
+	-- A close-range attack (the Wizard's slash) takes over from the chase's
+	-- pick whenever the target is inside its closeRange.
+	local targetDistance = (from - targetPosition).Magnitude
+	local overridden = false
+	for _, index in record.closeAttackIndices do
+		local closeAttack = record.attackPool[index]
+		if targetDistance <= closeAttack.closeRange then
+			record.chosenAttack = closeAttack
+			record.chosenAttackIndex = index
+			overridden = true
+			break
+		end
+	end
+	-- The target backed out of every close range: hand the chase back to a
+	-- random pick (the Wizard goes back to casting, not chasing to melee).
+	local current = record.chosenAttack
+	if not overridden and current and current.closeRange and #record.randomAttackIndices > 0 then
+		record.chosenAttackIndex = record.randomAttackIndices[math.random(1, #record.randomAttackIndices)]
+		record.chosenAttack = record.attackPool[record.chosenAttackIndex]
+	end
+
 	local attack = record.chosenAttack
-	if attack and (from - targetPosition).Magnitude <= attack.attackRange then
+	if attack and targetDistance <= attack.attackRange then
 		if not attack.requiresLineOfSight or sight() then
 			self:_startAttack(record, now)
 			return
@@ -829,8 +966,13 @@ function MobSimService._chaseStep(self: typeof(MobSimService), record: Record, n
 			and chaseGoal ~= nil
 			and flat(chaseGoal - record.ground).Magnitude < CHASE_REGOAL_STUDS
 		local regoal = math.max(CHASE_REGOAL_STUDS, (from - targetPosition).Magnitude * CHASE_REGOAL_DISTANCE_FRACTION)
+		-- Standing but out of reach: the target drifted a little since this
+		-- leg was aimed (under the re-aim distance), which used to leave the
+		-- mob waiting beside it until the player moved further. Re-aim now.
+		local outOfReach = not moving and targetDistance > reach
 		local needsLeg = record.moveKind ~= "direct"
 			or (not moving and not arrived)
+			or outOfReach
 			or chaseGoal == nil
 			or record.chaseTargetAt == nil
 			or flat(targetPosition - (record.chaseTargetAt :: Vector3)).Magnitude > regoal
@@ -840,6 +982,11 @@ function MobSimService._chaseStep(self: typeof(MobSimService), record: Record, n
 
 		if now >= record.walkCheckAt then
 			local goal = self:_pickChaseGoal(record, targetPosition, away, stopDistance)
+			-- A goal the mob already stands on is no leg at all (the target
+			-- is straight above or below): nothing to send.
+			if goal and flat(goal - record.ground).Magnitude < CHASE_SAME_SPOT_STUDS then
+				return
+			end
 			if goal and canWalkStraight(record, record.ground, goal) then
 				record.chaseGoal = goal
 				record.chaseTargetAt = targetPosition
@@ -906,6 +1053,23 @@ function MobSimService._setAttacking(_self: typeof(MobSimService), record: Recor
 	model:SetAttribute("MobHighlightAttackActive", attacking)
 end
 
+-- Turns the standing mob to its target and pins it there: a stop leg with
+-- the new facing for the clients, and the proxy written at once, because
+-- the swing's hitbox and the ranged shot read the root's facing.
+function MobSimService._faceTarget(self: typeof(MobSimService), record: Record, now: number)
+	local targetRoot = record.targetRoot
+	if targetRoot and targetRoot.Parent then
+		local facing = mobPath.yawFromDirection(targetRoot.Position - rootPosition(record))
+		if facing then
+			record.yaw = facing
+		end
+	end
+	self:_stop(record, now)
+	local cframe = mobPath.rootCFrame(record.ground, record.yaw, record.rootOffset)
+	record.root.CFrame = cframe
+	record.written = cframe
+end
+
 -- One generic attack: face the target, stand still, wind up, strike
 -- (MobService's shared melee hitbox, or the ranged cast), recover, roam.
 -- Runs in its own thread; the think loop leaves an attacking mob alone.
@@ -918,24 +1082,18 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 	record.state = STATE_ATTACKING
 	record.attackGeneration += 1
 	local generation = record.attackGeneration
+	local attackIndex = record.chosenAttackIndex
 
 	-- Aim BEFORE the wind-up: the swing's hitbox and the ranged shot both
 	-- read the root's facing (MobData hitboxCFrame / muzzleOffset).
 	record.ground = (mobPath.sample(record.move, now))
-	local facing = mobPath.yawFromDirection(targetRoot.Position - rootPosition(record))
-	if facing then
-		record.yaw = facing
-	end
-	self:_stop(record, now)
-	local cframe = mobPath.rootCFrame(record.ground, record.yaw, record.rootOffset)
-	record.root.CFrame = cframe
-	record.written = cframe
+	self:_faceTarget(record, now)
 
 	self:_setAttacking(record, true)
 	MobNetwork.MobAction.FireAll({
 		Id = record.id,
 		Kind = "Attack",
-		AttackIndex = record.chosenAttackIndex,
+		AttackIndex = attackIndex,
 	})
 
 	task.spawn(function()
@@ -958,7 +1116,33 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 				end
 			end
 		else
-			MobService:ExecuteMobAttack(record.model, attack)
+			-- `strikes` swings in one attack (PotHead's double slash): each
+			-- follow-up re-aims from where the last lunge left the mob, plays
+			-- the swing again and runs its own telegraph + hit frame.
+			local strikes = math.max(attack.strikes or 1, 1)
+			for strike = 1, strikes do
+				if strike > 1 then
+					if
+						not record.alive
+						or record.attackGeneration ~= generation
+						or record.model:GetAttribute(Attributes.Jailed)
+					then
+						break
+					end
+					record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
+					self:_faceTarget(record, workspace:GetServerTimeNow())
+					MobNetwork.MobAction.FireAll({
+						Id = record.id,
+						Kind = "Attack",
+						AttackIndex = attackIndex,
+					})
+				end
+				MobService:ExecuteMobAttack(
+					record.model,
+					attack,
+					if strike > 1 then attack.followUpWindUpDuration else nil
+				)
+			end
 		end
 
 		if not record.alive or record.attackGeneration ~= generation then
@@ -1013,6 +1197,21 @@ function MobSimService._think(self: typeof(MobSimService), record: Record, now: 
 	local frozen = move.speed == 0 and #move.points > 0
 	if (moving or frozen) and math.abs(effectiveSpeed(record) - move.speed) > 0.01 then
 		self:_issueMove(record, now, remainingPoints(move), record.moveKind)
+	end
+
+	-- Standing inside geometry (spawned or lunged into a pillar)? Every
+	-- walk check refuses a leg that starts in a wall, and the pathfinder
+	-- cannot start inside a part, so the mob would stand there for good:
+	-- walk it out to the nearest clear spot instead.
+	if not moving and now >= record.unstickCheckAt then
+		record.unstickCheckAt = now + UNSTICK_CHECK_SECONDS
+		if not bodyFitsAt(record.rootOffset, record.bodyRadius, record.ground) then
+			local clear = findClearGround(record.rootOffset, record.bodyRadius, record.ground)
+			if clear then
+				self:_issueMove(record, now, { clear }, "unstick")
+				return
+			end
+		end
 	end
 
 	-- A mob without Enabled holds still, exactly as MobBase skips its tick
@@ -1180,8 +1379,10 @@ function MobSimService._die(self: typeof(MobSimService), record: Record)
 			local away = flat(record.root.Position - killerRoot.Position)
 			direction = if away.Magnitude > 0.05 then away.Unit else nil
 		end
-		MobDeath.RunKillerRewards(deathContext, killer)
 	end
+	-- Every takedown (the killer and each recent assister), even when the
+	-- killer has left.
+	MobDeath.RunTakedownRewards(deathContext, killer)
 
 	MobNetwork.MobAction.FireAll({
 		Id = record.id,
@@ -1248,7 +1449,21 @@ function MobSimService.Spawn(
 		return nil
 	end
 
-	local ground = snapToGround(position) or position
+	-- The floor under the spawn point (a short probe that ignores players,
+	-- spell parts and invisible volumes), never something far below it.
+	refreshAlivePlayers(workspace:GetServerTimeNow())
+	local ground = floorBelow(position, SPAWN_FLOOR_SEARCH_STUDS) or position
+	-- Not inside a pillar, not on top of another mob (no physics will part
+	-- them later). Falls back to the spawn point when nothing nearby is clear.
+	ground = findClearGround(info.rootOffset, info.bodyRadius, ground, function(candidate: Vector3): boolean
+		for _, other in self._records do
+			local spacing = (info.bodyRadius + other.bodyRadius) * SPAWN_MOB_SPACING
+			if flat(other.ground - candidate).Magnitude < spacing then
+				return true
+			end
+		end
+		return false
+	end) or ground
 	local yaw = math.random() * math.pi * 2
 	local rootCFrame = mobPath.rootCFrame(ground, yaw, info.rootOffset)
 	local proxy, root, humanoid = buildProxy(template, info, rootCFrame)
@@ -1268,13 +1483,29 @@ function MobSimService.Spawn(
 	proxy:SetAttribute(Attributes.CCDebounce, false)
 	proxy:SetAttribute(Attributes.EnemyType, data.enemyType)
 
+	-- CORRUPTION (Shared/Data/CorruptionData): the run's difficulty tier
+	-- rolls it once, here. Stamped before parenting so every reader -- the
+	-- damage scaling in MobService, the rewards in MobDeath, the clients'
+	-- CorruptVFX -- sees it from the first frame.
+	local corrupted = MobSpawnService:RollCorruption()
+	if corrupted then
+		proxy:SetAttribute(Attributes.Corrupted, true)
+	end
+
 	local health = data.health
-	EnemyScalingService:ApplyToMob(proxy, humanoid, if type(health) == "function" then health() else health)
+	local baseHealth: number = if type(health) == "function" then health() else health
+	if corrupted then
+		baseHealth *= CorruptionData.HealthMultiplier
+	end
+	EnemyScalingService:ApplyToMob(proxy, humanoid, baseHealth)
 
 	local now = workspace:GetServerTimeNow()
 	local attackPool = {}
-	for _, attack in data.genericAttacks or {} do
+	local randomAttackIndices = {}
+	local closeAttackIndices = {}
+	for index, attack in data.genericAttacks or {} do
 		table.insert(attackPool, attack)
+		table.insert(if attack.closeRange then closeAttackIndices else randomAttackIndices, index)
 	end
 	if #attackPool == 0 then
 		warn("[MobSimService] " .. mobName .. " has no generic attacks; it will only roam")
@@ -1287,7 +1518,10 @@ function MobSimService.Spawn(
 		humanoid = humanoid,
 		data = data,
 		rootOffset = info.rootOffset,
+		bodyRadius = info.bodyRadius,
 		attackPool = attackPool,
+		randomAttackIndices = randomAttackIndices,
+		closeAttackIndices = closeAttackIndices,
 		detectionRange = data.detectionRange or DEFAULT_DETECTION_RANGE,
 		walkSpeed = data.walkSpeed,
 		approachAngle = (math.random() * 2 - 1) * APPROACH_ANGLE_MAX,
@@ -1309,6 +1543,7 @@ function MobSimService.Spawn(
 		chaseGoal = nil,
 		chaseTargetAt = nil,
 		walkCheckAt = 0,
+		unstickCheckAt = 0,
 
 		target = nil,
 		targetRoot = nil,
