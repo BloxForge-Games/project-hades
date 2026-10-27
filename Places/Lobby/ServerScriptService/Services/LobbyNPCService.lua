@@ -10,6 +10,7 @@
 
 	  a name containing "twig" or "merchant"       -> LobbyMerchant   (the Shop)
 	  a name containing "cysero" or "blacksmith"   -> LobbyBlacksmith (the Forge)
+	  a name containing "warlic" or "arcane"       -> LobbyArcaneTrainer (the chests)
 	Matched by keyword, case-insensitive, so "Twig the Moglin", "Twig the
 	Merchant" or "The Merchant" all land on the same graph (an exact-name
 	table missed a rename and dropped Twig onto the default graph).
@@ -38,8 +39,10 @@ local DIALOGUE_GRAPH_ATTRIBUTE = "DialogueGraph"
 local GRAPH_BY_KEYWORD: { { keyword: string, graph: string } } = {
 	{ keyword = "twig", graph = "LobbyMerchant" },
 	{ keyword = "cysero", graph = "LobbyBlacksmith" },
+	{ keyword = "warlic", graph = "LobbyArcaneTrainer" },
 	{ keyword = "merchant", graph = "LobbyMerchant" },
 	{ keyword = "blacksmith", graph = "LobbyBlacksmith" },
+	{ keyword = "arcane", graph = "LobbyArcaneTrainer" },
 }
 
 local function graphForName(name: string): string?

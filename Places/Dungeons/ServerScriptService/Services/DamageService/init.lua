@@ -44,6 +44,8 @@ local AuraService = require(ServerScriptService.Services.AuraService)
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
@@ -342,8 +344,10 @@ function DamageService.PlayerTakeDamage(
 	-- floats; the final humanoid:TakeDamage below rounds once.
 	damage = rollDamageVariance(damage)
 
+	-- Susanoo Armor: its damageReduction (ArcaneData, shown on the card).
 	if character:GetAttribute(Attributes.SusanooEnabled) == true then
-		damage = damage * 0.5
+		local susanoo = ArcaneData[ArcaneNames["Susanoo Armor"]]
+		damage = damage * (1 - (susanoo and susanoo.damageReduction or 0))
 	end
 
 	-- Teddy Trap (incoming side): +150% damage taken if owned. Callback

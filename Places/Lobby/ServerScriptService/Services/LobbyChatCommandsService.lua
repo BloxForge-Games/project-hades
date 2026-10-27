@@ -22,6 +22,12 @@
 	rebuilds from the fresh profile on rejoin. Same command as the Dungeons
 	place's; the Lobby is where a fresh start is usually wanted.
 
+	--- /gold [amount] ---
+
+	Adds Gold to YOUR profile through CurrencyService (the same write the
+	shop and the chests use, so the UI updates at once). Default 1000;
+	a negative amount takes Gold away, never below 0.
+
 	--- /tp [dungeon] [difficulty] [ascension] ---
 
 	A TEST stand-in for the hub's queue. Reserves ONE private server of the
@@ -49,6 +55,9 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local CurrencyService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
+local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DungeonIds)
@@ -84,6 +93,8 @@ local TELEPORT_RETRY_GRACE_SECONDS = 15
 -- /wipedata: the reply gets this long on screen before the kick.
 local WIPE_KICK_DELAY_SECONDS = 2
 local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
+-- /gold with no amount.
+local DEFAULT_GOLD_AMOUNT = 1000
 
 -- /tp defaults when no argument names them.
 local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
@@ -123,7 +134,7 @@ local teleportInFlight = false
 
 local LobbyChatCommandsService = {
 	Name = "LobbyChatCommandsService",
-	Dependencies = { TextIndicatorService, DataService } :: { any },
+	Dependencies = { TextIndicatorService, DataService, CurrencyService } :: { any },
 }
 
 --[ Registry ]--
@@ -212,6 +223,23 @@ COMMANDS = {
 				DungeonData[dungeonId].displayName,
 				difficulty
 			)
+		end,
+	},
+	gold = {
+		usage = "/gold [amount]",
+		description = "Adds Gold to YOUR profile (default 1000; negative takes it away).",
+		handler = function(player: Player, args: { string }): string?
+			local amount = if args[1] then tonumber(args[1]) else DEFAULT_GOLD_AMOUNT
+			if not amount then
+				return "Usage: /gold [amount]"
+			end
+			amount = math.floor(amount)
+			if not DataService:GetProfileData(player) then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			local total = math.max(CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) + amount, 0)
+			CurrencyService:SetCurrencyValue(player, CurrencyTypes.Gold, total)
+			return ("%+d Gold (now %d)."):format(amount, total)
 		end,
 	},
 	wipedata = {
