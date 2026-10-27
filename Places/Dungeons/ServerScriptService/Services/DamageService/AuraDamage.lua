@@ -80,10 +80,8 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Icy Arctic Fowl"]) or 1) - 1
 		end
 
-		-- Staff of Azure Ever Ice: +50% Magic Damage in the same window.
-		if DamageService.RelicCount(snapshot, RelicNames["Staff of Azure Ever Ice"]) > 0 then
-			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Staff of Azure Ever Ice"]) or 1) - 1
-		end
+		-- Staff of Azure Ever Ice rides the same window as a TRUE "more"
+		-- multiplier (MoreDamage.lua), not here.
 	end
 
 	-- Stonebound: damage payload straight off the marker (owner riders

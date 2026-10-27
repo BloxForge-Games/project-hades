@@ -124,14 +124,11 @@ local KNOCKBACK_STAGGER_PER_STUD = 0.1
 local KNOCKBACK_STAGGER_MAX = 0.35
 local KNOCKBACK_MIN_STUDS = 0.1
 
--- Support mobs: how far they look for hurt allies to walk to, how many
--- of the nearest allies they trail when nobody is hurt (and how far they
--- look), how far short of a heal target they stop (inside the heal's
--- range), how close to a goal counts as there, and how far a goal may
--- drift before a walking mob re-aims.
+-- Support mobs: how far they look for hurt allies to walk to, how far
+-- short of a target spot they stop (inside the heal's range), how close
+-- to a goal counts as there, and how far a goal may drift before a
+-- walking mob re-aims.
 local SUPPORT_HEAL_SEARCH_STUDS = 60
-local SUPPORT_ALLY_COUNT = 3
-local SUPPORT_ALLY_SEARCH_STUDS = 80
 local SUPPORT_STANDOFF_STUDS = 8
 local SUPPORT_ARRIVE_STUDS = 1.5
 local SUPPORT_REGOAL_STUDS = 4
@@ -1366,43 +1363,12 @@ local function pickHealCenter(
 	return floorBelow(position, SPAWN_FLOOR_SEARCH_STUDS) or position, covered
 end
 
--- Where a support mob walks: SUPPORT_STANDOFF_STUDS
--- short of `healAt` (a hurt ally it cannot reach yet), on its own side;
--- with nobody hurt, followDistance off the middle of its nearest allies
--- that are not support mobs themselves (two Healers used to trail each
--- other round the room). nil when it has nothing to walk to.
-function MobSimService._supportGoal(self: typeof(MobSimService), record: Record, heal: any, healAt: Vector3?): Vector3?
+-- Where a support mob walks: SUPPORT_STANDOFF_STUDS short of `anchor`
+-- (the spot it wants to drop its square on but cannot reach yet), on
+-- its own side. nil when no floor is found there.
+function MobSimService._supportGoal(_self: typeof(MobSimService), record: Record, heal: any, anchor: Vector3): Vector3?
 	local from = rootPosition(record)
-	local anchor: Vector3
-	local standoff: number
-	if healAt then
-		anchor = healAt
-		standoff = math.min(SUPPORT_STANDOFF_STUDS, heal.attackRange)
-	else
-		local allies = {}
-		for _, mob in livingMobs() do
-			local other = self._byModel[mob.model]
-			if mob.model ~= record.model and not (other and other.data.support) then
-				local distance = flat(mob.root.Position - from).Magnitude
-				if distance <= SUPPORT_ALLY_SEARCH_STUDS then
-					table.insert(allies, { position = mob.root.Position, distance = distance })
-				end
-			end
-		end
-		if #allies == 0 then
-			return nil
-		end
-		table.sort(allies, function(a, b)
-			return a.distance < b.distance
-		end)
-		local sum = Vector3.zero
-		local count = math.min(#allies, SUPPORT_ALLY_COUNT)
-		for index = 1, count do
-			sum += allies[index].position
-		end
-		anchor = sum / count
-		standoff = record.data.support.followDistance
-	end
+	local standoff = math.min(SUPPORT_STANDOFF_STUDS, heal.attackRange)
 	local side = flat(from - anchor)
 	side = if side.Magnitude > 0.05 then side.Unit else Vector3.xAxis
 	local lift = Vector3.new(0, record.rootOffset + WALK_STEP_STUDS, 0)
@@ -1410,10 +1376,12 @@ function MobSimService._supportGoal(self: typeof(MobSimService), record: Record,
 	return floorBelow(anchor + side * standoff + lift, depth) or floorBelow(anchor + lift, depth)
 end
 
--- A support mob's chase-state think, the Wizard's loop pointed at its
--- allies: a hurt ally inside the heal's range gets the heal; one further
--- out is walked toward; nobody hurt, it trails its allies (or roams when
--- it has none).
+-- A support mob's chase-state think, the Wizard's loop: a hurt ally
+-- inside the heal's range gets the heal, one further out is walked
+-- toward. With NOBODY to heal (every ally above hurtBelow, or it is the
+-- last mob and unhurt) the square turns on the player it is chasing:
+-- it walks into range and drops it on them (2026-10-27; it used to
+-- trail its allies or roam at random). Roams 2-4 s after every cast.
 function MobSimService._supportStep(self: typeof(MobSimService), record: Record, now: number)
 	if record.model:GetAttribute(Attributes.Jailed) then
 		return
@@ -1424,14 +1392,23 @@ function MobSimService._supportStep(self: typeof(MobSimService), record: Record,
 		return
 	end
 	local center, covered = pickHealCenter(record, heal, self._byModel, now)
-	if center and flat(center - rootPosition(record)).Magnitude <= heal.attackRange then
+	if not center then
+		local targetRoot = record.targetRoot
+		if not targetRoot then
+			self:_enterRoaming(record, now)
+			return
+		end
+		center = floorBelow(targetRoot.Position, SPAWN_FLOOR_SEARCH_STUDS) or targetRoot.Position
+	end
+	local aimAt = center :: Vector3
+	if flat(aimAt - rootPosition(record)).Magnitude <= heal.attackRange then
 		record.chosenAttack = heal
 		record.chosenAttackIndex = healIndex
-		self:_startHeal(record, now, center, covered)
+		self:_startHeal(record, now, aimAt, covered)
 		return
 	end
 
-	local goal = self:_supportGoal(record, heal, center)
+	local goal = self:_supportGoal(record, heal, aimAt)
 	if not goal then
 		self:_enterRoaming(record, now)
 		return

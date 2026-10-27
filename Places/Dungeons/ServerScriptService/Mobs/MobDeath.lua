@@ -107,8 +107,7 @@ local MIDNIGHT_SWORD_MANA_FRACTION = 0.05
 -- Assist credit EXPIRES: a player counts as an assister on this mob only
 -- while their last damaging hit was within this many seconds (every hit
 -- refreshes the window). Applies to the WHOLE assist registry -- every
--- takedown relic, orb rolls, kill statistics, gear drops. Shared with the
--- relic cards' Takedown tooltip (KeywordData).
+-- takedown relic, orb rolls, kill statistics, gear drops.
 local ASSIST_WINDOW_SECONDS = TakedownData.AssistWindowSeconds
 
 -- Lobbed bombs (Trick Or Trap's pumpkins, the Fuse Bomb): the client's

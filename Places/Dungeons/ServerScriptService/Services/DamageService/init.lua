@@ -77,11 +77,12 @@ local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 -- before it); minibosses and bosses never move. Arcane covers every
 -- hitbox burst (onHitboxDamage hands its centre over), relic bombs
 -- included; "relic" is the rest of the relic procs.
-local KNOCKBACK_MELEE_STUDS = 2
+-- 2026-10-27: melee 2 -> 2.5, arcane 3 -> 4, relic 1 -> 2.
+local KNOCKBACK_MELEE_STUDS = 2.5
 -- Bullets do not push (2026-10-25); below MobSimService's minimum.
 local KNOCKBACK_BULLET_STUDS = 0
-local KNOCKBACK_ARCANE_STUDS = 3
-local KNOCKBACK_RELIC_STUDS = 1
+local KNOCKBACK_ARCANE_STUDS = 4
+local KNOCKBACK_RELIC_STUDS = 2
 
 -- The run's difficulty damage multiplier on mob hits; 1 outside a run.
 -- DungeonService is reached at call time (this service is a consumer).
@@ -206,6 +207,10 @@ local EXECUTE_THRESHOLD = 0.15
 
 local PROJECTILE_RESISTANCE_SCALAR = 0.25
 
+-- Ceiling on the target-vulnerability factor (Shock, Coil Shocked and
+-- Painted together), 2026-10-27.
+local VULNERABILITY_CAP = 1.5
+
 -- Every on-hit module name the hit path indexes by string. Checked once
 -- at boot (Start) so a renamed or missing module file fails there rather
 -- than on the first hit.
@@ -216,8 +221,7 @@ local REQUIRED_DAMAGE_MODULES = {
 	"BlueHyperLaser",
 	"RedHyperlaserGun",
 	"MurderKnife",
-	"ForbiddenBox",
-	"GloriousSword",
+	"MoreDamage",
 	"FlatDamageRelics",
 	"MysticalSigil",
 	"LaserScythes",
@@ -1040,7 +1044,8 @@ end
 
 -- The multiplicative TARGET-VULNERABILITY factor: what the mob's statuses
 -- make it take extra, additively composed (+10% Shock +10% Coil Shocked
--- +5% Throwing Bolts = x1.25, never compounding).
+-- +5% Throwing Bolts = x1.25, never compounding), with Painted on top,
+-- capped at VULNERABILITY_CAP so stacked debuffs cannot run away.
 function DamageService._targetVulnerabilityMultiplier(
 	_self: typeof(DamageService),
 	player: Player,
@@ -1082,7 +1087,7 @@ function DamageService._targetVulnerabilityMultiplier(
 		end
 	end
 
-	return multiplier
+	return math.min(multiplier, VULNERABILITY_CAP)
 end
 
 function DamageService.TakeDamage(
@@ -1199,19 +1204,11 @@ function DamageService.TakeDamage(
 		+ self._onDamageModules["BlueHyperLaser"](player, snapshot, damage, isMagic)
 		+ self._onDamageModules["RedHyperlaserGun"](player, snapshot, damage, isMagic)
 		+ self._onDamageModules["MurderKnife"](player, snapshot, humanoid, damage, isMagic)
-		+ self._onDamageModules["ForbiddenBox"](player, snapshot, damage, isMagic)
-		-- The five TYPED modules below zero out on the untyped lane.
-		+ (if untypedOnly then 0 else self._onDamageModules["GloriousSword"](player, snapshot, damage, isMagic))
+		-- The TYPED modules below zero out on the untyped lane.
 		+ (if untypedOnly then 0 else self._onDamageModules["FlatDamageRelics"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["MysticalSigil"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["LaserScythes"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["AuraDamage"](player, snapshot, damage, isMagic))
-		-- Sword of Eternal Abyss: flat +50%, weapon and arcane alike. Inline
-		-- rather than a module because it is one unconditional multiplier
-		-- with no gating of its own.
-		+ (if DamageService.RelicCount(snapshot, RelicNames["Sword of Eternal Abyss"]) > 0
-			then damage * ((DamageService.RelicEffect(snapshot, RelicNames["Sword of Eternal Abyss"]) or 1) - 1)
-			else 0)
 		+ (
 			if untypedOnly
 				then 0
@@ -1249,19 +1246,10 @@ function DamageService.TakeDamage(
 		totalDamage *= self:_targetVulnerabilityMultiplier(player, targetModel, isMagic)
 	end
 
-	-- Double-Bladed Scythe (Cursed): arcane x(1 - callback), weapon
-	-- x(1 + callback), multiplicative on the amplified total (a Cursed
-	-- override, not part of the additive pool). A TYPED relic, so it obeys
-	-- the untyped lane like the modules above — relic bursts arrive as
-	-- isMagic=false and were silently taking the weapon bonus.
-	if not untypedOnly and DamageService.RelicCount(snapshot, RelicNames["Double-Bladed Scythe"]) > 0 then
-		local magnitude = DamageService.RelicEffect(snapshot, RelicNames["Double-Bladed Scythe"]) or 0
-		if isMagic then
-			totalDamage *= math.max(1 - magnitude, 0)
-		else
-			totalDamage *= 1 + magnitude
-		end
-	end
+	-- TRUE "more" multipliers: Legendary and Cursed damage relics multiply
+	-- the amplified total instead of joining the additive pool, so they are
+	-- worth what their card says on any floor (MoreDamage.lua has the list).
+	totalDamage *= self._onDamageModules["MoreDamage"](player, snapshot, isMagic == true, untypedOnly)
 
 	-- Greater Shrine "Power": one multiplier over the whole number, on
 	-- EVERY lane -- weapon, arcane and relic bursts alike (it sits after

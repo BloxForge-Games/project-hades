@@ -85,7 +85,8 @@ end
 --[ Constants ]--
 
 -- Sword in the Stone.
-local SWORD_PULL_SUCCESS_CHANCE = 0.20
+-- 0.20 -> 0.25 (2026-10-27).
+local SWORD_PULL_SUCCESS_CHANCE = 0.25
 -- A won pull deals this many Legendary cards; the player keeps one.
 local SWORD_OFFER_COUNT = 3
 local SWORD_PULL_HEALTH_FRACTION = 0.10
