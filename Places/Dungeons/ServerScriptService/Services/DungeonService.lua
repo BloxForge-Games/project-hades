@@ -80,8 +80,6 @@ export type Run = {
 	sequence: { string },
 	index: number,
 	difficulty: string,
-	-- Ascension level (1..MaxAscension) when difficulty is Ascension, else 0.
-	ascension: number,
 	exited: { [Player]: true },
 	-- OnPlayerExtracted has fired for this player: the clear bonus and the
 	-- progress record are paid ONCE per run, however many times the
@@ -323,20 +321,26 @@ end
 
 function DungeonService.SetRun(self: typeof(DungeonService), run: Run?)
 	self._run = run
+	-- Level-scaled relics count at most the tier's top gear level
+	-- (Shared/Functions/Player/getRelicLevel); read on both sides.
+	workspace:SetAttribute(
+		Attributes.RelicLevelCap,
+		if run then DifficultyData.Resolve(run.difficulty).levelRange.max else nil
+	)
 end
 
 function DungeonService.GetRun(self: typeof(DungeonService)): Run?
 	return self._run
 end
 
--- The tier the run plays (DifficultyData.Resolve, Ascension growth
--- applied): enemy health and damage, EXP, boss phases. Normal outside a run.
+-- The tier the run plays (DifficultyData.Resolve): enemy health and
+-- damage, EXP, boss phases. Easy outside a run.
 function DungeonService.GetDifficultyScale(self: typeof(DungeonService)): DifficultyData.TierConfig
 	local run = self._run
 	if not run then
-		return DifficultyData.Resolve(Difficulty.Normal)
+		return DifficultyData.Resolve(Difficulty.Easy)
 	end
-	return DifficultyData.Resolve(run.difficulty, run.ascension)
+	return DifficultyData.Resolve(run.difficulty)
 end
 
 -- The run's reward multiplier for `field` ("gold" or "ore"; the tiers no
@@ -352,7 +356,7 @@ function DungeonService.GetRewardScale(self: typeof(DungeonService), field: stri
 	if not run then
 		return 1
 	end
-	local scale = DifficultyData.Resolve(run.difficulty, run.ascension)
+	local scale = DifficultyData.Resolve(run.difficulty)
 	local dungeon = self._activeDungeon
 	local config = dungeon and DungeonData[dungeon.id]
 	return ((scale and scale[field]) or 1) * ((config and config.rewardScale) or 1)
@@ -403,9 +407,9 @@ function DungeonService.GetFloorCount(self: typeof(DungeonService)): number
 	return math.max(count, 1)
 end
 
--- The per-floor enemy stat multiplier (DifficultyData.FloorMultiplier).
-function DungeonService.GetFloorMultiplier(self: typeof(DungeonService)): number
-	return DifficultyData.FloorMultiplier(self:GetFloor())
+-- The per-floor enemy `stat` multiplier (DifficultyData.FloorMultiplier).
+function DungeonService.GetFloorMultiplier(self: typeof(DungeonService), stat: "health" | "damage"): number
+	return DifficultyData.FloorMultiplier(self:GetFloor(), stat)
 end
 
 function DungeonService.IsRunCleared(self: typeof(DungeonService)): boolean

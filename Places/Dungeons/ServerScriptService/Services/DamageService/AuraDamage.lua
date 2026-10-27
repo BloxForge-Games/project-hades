@@ -52,7 +52,7 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 	local fraction = 0
 
 	if not isMagic and hrp:FindFirstChild(AuraNames.Enflamed) then
-		fraction += AuraData[AuraNames.Enflamed].weaponDamagePercent or 0
+		fraction += (AuraData[AuraNames.Enflamed].weaponDamagePercent or 0) * DamageService.AuraScale(snapshot)
 
 		-- Faux Firebrand rides the same window. Raw fraction, not a
 		-- multiplier: its callback returns 0.20, not 1.20.
@@ -67,7 +67,7 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 	end
 
 	if isMagic and hrp:FindFirstChild(AuraNames.Frostburst) then
-		fraction += AuraData[AuraNames.Frostburst].magicDamagePercent or 0
+		fraction += (AuraData[AuraNames.Frostburst].magicDamagePercent or 0) * DamageService.AuraScale(snapshot)
 
 		-- Blizzard Wand rides the same window. Raw fraction like Faux
 		-- Firebrand, its Frost-side counterpart.
@@ -80,10 +80,8 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Icy Arctic Fowl"]) or 1) - 1
 		end
 
-		-- Staff of Azure Ever Ice: +50% Magic Damage in the same window.
-		if DamageService.RelicCount(snapshot, RelicNames["Staff of Azure Ever Ice"]) > 0 then
-			fraction += (DamageService.RelicEffect(snapshot, RelicNames["Staff of Azure Ever Ice"]) or 1) - 1
-		end
+		-- Staff of Azure Ever Ice rides the same window as a TRUE "more"
+		-- multiplier (MoreDamage.lua), not here.
 	end
 
 	-- Stonebound: damage payload straight off the marker (owner riders

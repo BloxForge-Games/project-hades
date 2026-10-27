@@ -710,6 +710,11 @@ function AimController.AbortStepped(self: typeof(AimController))
 end
 
 function AimController.Start(self: typeof(AimController))
+	-- The dungeon camera rotates (Q / E on PC, a swipe on mobile); the
+	-- Lobby's never does. Movement and aim already read the live camera
+	-- angle (GetMobileMoveVectorOffset), so they follow a rotation.
+	IsometricCameraController:SetRotationEnabled(true)
+
 	-- The authoritative end of every aim hold (see ReleaseAllAimHolds).
 	-- Unconditional: no weapon state, no equip check, nothing that can be
 	-- false at the moment the button comes up.

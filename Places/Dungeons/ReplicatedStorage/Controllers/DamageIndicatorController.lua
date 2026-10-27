@@ -62,6 +62,12 @@ local CRITICAL_SIZE_MOBILE = UDim2.fromOffset(70 / FONT_SCALED, 34 / FONT_SCALED
 -- half size). Ticks never crit, so this only ever scales the non-crit size.
 local STATUS_SIZE_SCALE = 0.85
 
+-- Heals (payload IsHeal, a support mob's heal square): a green "+N" at
+-- this fraction of a normal hit's frame, with the same pulse and arc, no
+-- hit sounds, and a green flash on the mob (CharacterHighlightController).
+local HEAL_COLOR3 = Color3.fromRGB(85, 255, 127)
+local HEAL_SIZE_SCALE = 0.75
+
 -- Crit JITTER: while the number is on its way up, the label rattles in every
 -- direction — a few px of position offset and a few degrees of rotation,
 -- re-rolled every frame — with an envelope that decays to zero over
@@ -305,6 +311,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		local isMelee = payload.IsMelee
 		local resistKind = payload.ResistKind
 		local isStatus = payload.IsStatus
+		local isHeal = payload.IsHeal == true
 		-- Arcane cutscene: DROPPED, not deferred (see
 		-- TextIndicatorController for why nothing is deferred).
 		if isArcaneCutscenePlaying() then
@@ -319,7 +326,13 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			return
 		end
 
-		self.OnIndicatorRequested:Fire()
+		if isHeal then
+			if CharacterHighlightController and CharacterHighlightController._mobRegistry[character] then
+				CharacterHighlightController:RequestHealFlash(character)
+			end
+		else
+			self.OnIndicatorRequested:Fire()
+		end
 
 		local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()
 		local indicator = damageIndicator.Indicator
@@ -332,7 +345,8 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		elseif resistKind == "Magic" then
 			ReplicatedStorage.GameAssets.Sounds.MagicResist:Play()
 		else
-			if not isMelee then
+			-- A heal (no resist kind) plays no hit sound.
+			if not isMelee and not isHeal then
 				ReplicatedStorage.GameAssets.Sounds.BulletHit:Play()
 			end
 		end
@@ -365,8 +379,12 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			indicatorSize = if not InputPlatformController:IsMobilePlatform()
 				then UDim2.fromOffset(75 / FONT_SCALED, 40 / FONT_SCALED)
 				else UDim2.fromOffset(60 / FONT_SCALED, 25 / FONT_SCALED)
-			textLabel.TextColor3 = color3 or Color3.fromRGB(255, 255, 255)
-			textLabel.Text = value
+			textLabel.TextColor3 = if isHeal then HEAL_COLOR3 else color3 or Color3.fromRGB(255, 255, 255)
+			textLabel.Text = if isHeal then "+" .. value else value
+			if isHeal then
+				indicatorSize =
+					UDim2.fromOffset(indicatorSize.X.Offset * HEAL_SIZE_SCALE, indicatorSize.Y.Offset * HEAL_SIZE_SCALE)
+			end
 
 			-- Status DoT ticks read as a secondary, "it's working" readout —
 			-- half the size of a real hit so a Burn stack never competes

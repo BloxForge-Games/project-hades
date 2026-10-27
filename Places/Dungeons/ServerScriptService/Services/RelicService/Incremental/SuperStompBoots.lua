@@ -48,7 +48,7 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 -- mirrors profile.Level onto it). Replaces the prior inline DataService
 -- lookup so the value matches everywhere — including the relic UI's
 -- runtimeDescriptionCallback.
-local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 
 local STOMP_RADIUS = 10 -- studs; tune via this constant
 
@@ -95,7 +95,7 @@ function SuperStompBoots.InvokeStomp(self: SuperStompBootsFields)
 	-- Player level → base damage. Reads the PlayerLevel attribute via
 	-- the shared helper; falls back to the profile on the server side
 	-- if the attribute hasn't been stamped yet (rare init race).
-	local level = getPlayerLevel(self._player)
+	local level = getRelicLevel(self._player)
 	local baseDamage = self._damagePerLevel * level
 
 	-- Hit every mob in the stomp radius. Tag-based lookup mirrors

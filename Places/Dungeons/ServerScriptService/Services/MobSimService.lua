@@ -44,6 +44,18 @@
 	only once the target has moved PATH_RECOMPUTE_MOVE_STUDS, backing off
 	after failures. A leg is re-sent whenever its speed changes (Chill,
 	Jail).
+
+	Support mobs (MobData `support`, the Healer) chase HURT ALLIES, not
+	players, the way the Wizard works a player: walk until a hurt ally is
+	in range, cast the heal on it, then roam 2-4 s before the next one
+	(_supportStep). With nobody hurt they trail their nearest allies.
+
+	Knockback (ApplyKnockback, from DamageService): a hit queues a push;
+	the next frame sums the queue, wall- and ledge-checks it, moves the
+	mob there and sends ONE leg from the pushed spot that starts a
+	stagger later, so it holds there before walking on. Every client
+	eases its rig across the gap (MobRenderController's leg blend) and
+	the proxy -- the hitboxes -- is already there.
 ]]
 
 --[ Roblox Services ]--
@@ -102,6 +114,24 @@ local CLEAR_SEARCH_DIRECTIONS = 8
 local SPAWN_MOB_SPACING = 0.8
 local UNSTICK_CHECK_SECONDS = 1
 local DESPAWN_SECONDS = 5
+
+-- Knockback: a pushed mob holds where it lands for this many seconds
+-- per stud of push (melee 2 studs = 0.2 s), capped, before it walks on,
+-- so a chasing mob visibly gives ground instead of walking straight
+-- back through the push. A push the walk checks refuse is tried at
+-- half length once, then dropped.
+local KNOCKBACK_STAGGER_PER_STUD = 0.1
+local KNOCKBACK_STAGGER_MAX = 0.35
+local KNOCKBACK_MIN_STUDS = 0.1
+
+-- Support mobs: how far they look for hurt allies to walk to, how far
+-- short of a target spot they stop (inside the heal's range), how close
+-- to a goal counts as there, and how far a goal may drift before a
+-- walking mob re-aims.
+local SUPPORT_HEAL_SEARCH_STUDS = 60
+local SUPPORT_STANDOFF_STUDS = 8
+local SUPPORT_ARRIVE_STUDS = 1.5
+local SUPPORT_REGOAL_STUDS = 4
 
 -- Roaming (MobBase's numbers): a point 20-25 studs away at half speed, a
 -- fresh one every 2-4 s. A candidate needs a clear ray from the root and a
@@ -246,6 +276,14 @@ type Record = {
 	walkCheckAt: number,
 	-- No stuck-in-geometry check before this (see UNSTICK_CHECK_SECONDS).
 	unstickCheckAt: number,
+	-- Knockback queued this frame (summed, flat) and the hold it earns;
+	-- the mob makes no decisions before staggerUntil (ApplyKnockback).
+	pushPending: Vector3,
+	staggerPending: number,
+	staggerUntil: number,
+	-- Support mobs: this cast cycle's pick, "heal" or "player", rolled
+	-- once (support.attackPlayerChance) and cleared after each cast.
+	supportIntent: string?,
 
 	-- Targeting
 	target: Model?,
@@ -1163,6 +1201,303 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 	end)
 end
 
+--[ Knockback ]--
+
+-- Moves a mob by its queued push (see ApplyKnockback): the summed push,
+-- or half of it, whichever the walk checks allow; nothing if neither.
+function MobSimService._resolveKnockback(self: typeof(MobSimService), record: Record, now: number)
+	local push = record.pushPending
+	local stagger = record.staggerPending
+	record.pushPending = Vector3.zero
+	record.staggerPending = 0
+	if not record.alive then
+		return
+	end
+
+	local attacking = record.state == STATE_ATTACKING
+	-- Mid-attack the proxy holds where the attack put it; otherwise the
+	-- leg says where the mob is right now.
+	local from = if attacking
+		then record.root.Position - Vector3.new(0, record.rootOffset, 0)
+		else (mobPath.sample(record.move, now))
+	local lift = Vector3.new(0, record.rootOffset, 0)
+	local landing: Vector3? = nil
+	for _, scale in { 1, 0.5 } do
+		local floor = floorBelow(
+			from + push * scale + lift + Vector3.new(0, WALK_STEP_STUDS, 0),
+			record.rootOffset + WALK_STEP_STUDS * 2
+		)
+		if floor and canWalkStraight(record, from, floor) then
+			landing = floor
+			break
+		end
+	end
+	if not landing then
+		return
+	end
+
+	record.ground = landing
+	if attacking then
+		-- The attack thread reads the proxy root when it resumes, and the
+		-- step loop leaves an attacking mob's proxy alone: write it now.
+		local cframe = mobPath.rootCFrame(landing, record.yaw, record.rootOffset)
+		record.root.CFrame = cframe
+		record.written = cframe
+		self:_issueMove(record, now, {}, record.moveKind)
+		return
+	end
+
+	-- Carry on with the same leg from the pushed spot, starting once the
+	-- stagger is over; a chase re-aims on its first think after that.
+	local resumeAt = now + stagger
+	record.staggerUntil = resumeAt
+	self:_issueMove(record, resumeAt, remainingPoints(record.move), record.moveKind)
+end
+
+--[ Support (the Healer) ]--
+
+-- Every living mob model under the Mobs folder (sim proxies and MobBase
+-- rigs alike), with its humanoid and root.
+local function livingMobs(): { { model: Model, humanoid: Humanoid, root: BasePart } }
+	local result = {}
+	local folder = workspace.IgnoreInstances:FindFirstChild("Mobs")
+	if not folder then
+		return result
+	end
+	for _, model in folder:GetChildren() do
+		if not model:IsA("Model") then
+			continue
+		end
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		local root = model:FindFirstChild("HumanoidRootPart")
+		if humanoid and root and root:IsA("BasePart") and humanoid.Health > 0 then
+			table.insert(result, { model = model, humanoid = humanoid, root = root })
+		end
+	end
+	return result
+end
+
+-- The heal attack in a support mob's pool, and its index (the client
+-- plays that index's animation).
+local function healAttackOf(record: Record): (any, number)
+	for index, attack in record.attackPool do
+		if attack.kind == "heal" then
+			return attack, index
+		end
+	end
+	return nil, 0
+end
+
+-- Where to drop the heal square: centred on the hurt ally (under
+-- hurtBelow of its max health, within SUPPORT_HEAL_SEARCH_STUDS of the
+-- caster) whose square would cover the most hurt
+-- allies; ties go to the most hurt. Its floor point and the hurt allies
+-- that square covers (healed even if they step out during the wind-up),
+-- or nil when nobody needs healing. Out of the heal's own range is the
+-- caller's business (walk there first).
+-- A sim ally is placed where its leg puts it when the square LANDS (a
+-- chasing Walker crosses a 10-stud square during the wind-up).
+-- The caster never aims at ITSELF while any other mob is that near
+-- (hurt or not): only a Healer left on its own heals itself on purpose.
+-- It still heals when it happens to stand in an ally's square.
+local function pickHealCenter(
+	record: Record,
+	heal: any,
+	records: { [Model]: Record },
+	now: number
+): (Vector3?, { Model })
+	local from = rootPosition(record)
+	local landsAt = now + (heal.windUpDuration or 0)
+	local mobs = livingMobs()
+	local alone = true
+	for _, mob in mobs do
+		if mob.model ~= record.model and flat(mob.root.Position - from).Magnitude <= SUPPORT_HEAL_SEARCH_STUDS then
+			alone = false
+			break
+		end
+	end
+	local hurt = {}
+	for _, mob in mobs do
+		if mob.model == record.model and not alone then
+			continue
+		end
+		local humanoid = mob.humanoid
+		if mob.model:GetAttribute(Attributes.Invulnerable) == true then
+			continue
+		end
+		local fraction = humanoid.Health / math.max(humanoid.MaxHealth, 1)
+		if fraction >= heal.hurtBelow then
+			continue
+		end
+		local position = mob.root.Position
+		local ally = records[mob.model]
+		if ally and ally.state ~= STATE_ATTACKING then
+			position = (mobPath.sample(ally.move, landsAt)) + Vector3.new(0, ally.rootOffset, 0)
+		end
+		if flat(position - from).Magnitude <= SUPPORT_HEAL_SEARCH_STUDS then
+			table.insert(hurt, { model = mob.model, position = position, fraction = fraction })
+		end
+	end
+	if #hurt == 0 then
+		return nil, {}
+	end
+	local halfX, halfZ = heal.hitbox.size.X / 2, heal.hitbox.size.Z / 2
+	local best, bestCount, bestFraction = nil, 0, math.huge
+	for _, candidate in hurt do
+		local count = 0
+		for _, other in hurt do
+			local offset = other.position - candidate.position
+			if math.abs(offset.X) <= halfX and math.abs(offset.Z) <= halfZ then
+				count += 1
+			end
+		end
+		if count > bestCount or (count == bestCount and candidate.fraction < bestFraction) then
+			best, bestCount, bestFraction = candidate, count, candidate.fraction
+		end
+	end
+	local position = (best :: any).position
+	local covered = {}
+	for _, other in hurt do
+		local offset = other.position - position
+		if math.abs(offset.X) <= halfX and math.abs(offset.Z) <= halfZ then
+			table.insert(covered, other.model)
+		end
+	end
+	return floorBelow(position, SPAWN_FLOOR_SEARCH_STUDS) or position, covered
+end
+
+-- Where a support mob walks: SUPPORT_STANDOFF_STUDS short of `anchor`
+-- (the spot it wants to drop its square on but cannot reach yet), on
+-- its own side. nil when no floor is found there.
+function MobSimService._supportGoal(_self: typeof(MobSimService), record: Record, heal: any, anchor: Vector3): Vector3?
+	local from = rootPosition(record)
+	local standoff = math.min(SUPPORT_STANDOFF_STUDS, heal.attackRange)
+	local side = flat(from - anchor)
+	side = if side.Magnitude > 0.05 then side.Unit else Vector3.xAxis
+	local lift = Vector3.new(0, record.rootOffset + WALK_STEP_STUDS, 0)
+	local depth = record.rootOffset + WALK_STEP_STUDS * 3
+	return floorBelow(anchor + side * standoff + lift, depth) or floorBelow(anchor + lift, depth)
+end
+
+-- A support mob's chase-state think, the Wizard's loop. Each cast cycle
+-- it rolls ONE intent (supportIntent): "player" at
+-- support.attackPlayerChance, otherwise "heal". Heal: a hurt ally in
+-- the heal's range gets the square, one further out is walked toward.
+-- Player, or a heal with NOBODY to heal (every ally above hurtBelow, or
+-- it is the last mob and unhurt): the square drops on the player it is
+-- chasing. Rolled once per cycle so it never flips mid-walk; cleared
+-- after each cast, then it roams 2-4 s.
+function MobSimService._supportStep(self: typeof(MobSimService), record: Record, now: number)
+	if record.model:GetAttribute(Attributes.Jailed) then
+		return
+	end
+
+	local heal, healIndex = healAttackOf(record)
+	if not heal then
+		return
+	end
+	if record.supportIntent == nil then
+		local chance = record.data.support.attackPlayerChance or 0
+		record.supportIntent = if math.random() < chance then "player" else "heal"
+	end
+	local center: Vector3?, covered: { Model } = nil, {}
+	if record.supportIntent == "heal" then
+		center, covered = pickHealCenter(record, heal, self._byModel, now)
+	end
+	if not center then
+		local targetRoot = record.targetRoot
+		if not targetRoot then
+			self:_enterRoaming(record, now)
+			return
+		end
+		center = floorBelow(targetRoot.Position, SPAWN_FLOOR_SEARCH_STUDS) or targetRoot.Position
+	end
+	local aimAt = center :: Vector3
+	if flat(aimAt - rootPosition(record)).Magnitude <= heal.attackRange then
+		record.chosenAttack = heal
+		record.chosenAttackIndex = healIndex
+		self:_startHeal(record, now, aimAt, covered)
+		return
+	end
+
+	local goal = self:_supportGoal(record, heal, aimAt)
+	if not goal then
+		self:_enterRoaming(record, now)
+		return
+	end
+	-- Already there, or already walking (straight or by path) to about
+	-- this spot: nothing new to send. A goal it never managed to set off
+	-- for (a refused walk, a failed path) is tried again.
+	if flat(goal - record.ground).Magnitude < SUPPORT_ARRIVE_STUDS then
+		record.chaseGoal = goal
+		return
+	end
+	local _, _, moving = mobPath.sample(record.move, now)
+	local current = record.chaseGoal
+	if current and moving and flat(goal - current).Magnitude < SUPPORT_REGOAL_STUDS then
+		return
+	end
+	record.chaseGoal = goal
+	if now >= record.walkCheckAt then
+		if canWalkStraight(record, record.ground, goal) then
+			self:_issueMove(record, now, { goal }, "direct")
+			return
+		end
+		record.walkCheckAt = now + WALK_RECHECK_SECONDS
+	end
+	self:_requestPath(record, now, goal)
+end
+
+-- The heal cast: face the square, stand, telegraph, then hurt and heal
+-- (MobService.CastHealZone), recover, then roam 2-4 s like the Wizard
+-- after a cast: that roam IS the gap between heals.
+function MobSimService._startHeal(
+	self: typeof(MobSimService),
+	record: Record,
+	now: number,
+	center: Vector3,
+	covered: { Model }
+)
+	local attack = record.chosenAttack
+	record.state = STATE_ATTACKING
+	record.attackGeneration += 1
+	local generation = record.attackGeneration
+
+	record.ground = (mobPath.sample(record.move, now))
+	local facing = mobPath.yawFromDirection(center - rootPosition(record))
+	if facing then
+		record.yaw = facing
+	end
+	self:_stop(record, now)
+	local cframe = mobPath.rootCFrame(record.ground, record.yaw, record.rootOffset)
+	record.root.CFrame = cframe
+	record.written = cframe
+
+	self:_setAttacking(record, true)
+	MobNetwork.MobAction.FireAll({
+		Id = record.id,
+		Kind = "Attack",
+		AttackIndex = record.chosenAttackIndex,
+	})
+
+	task.spawn(function()
+		MobService:CastHealZone(record.model, attack, CFrame.new(center), covered)
+		if not record.alive or record.attackGeneration ~= generation then
+			return
+		end
+		record.model:SetAttribute("MobHighlightAttackActive", false)
+		task.wait(attack.recoveryDuration or 0)
+		if not record.alive or record.attackGeneration ~= generation then
+			return
+		end
+		self:_setAttacking(record, false)
+		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
+		record.written = record.root.CFrame
+		record.supportIntent = nil
+		self:_enterRoaming(record, workspace:GetServerTimeNow())
+	end)
+end
+
 --[ Think ]--
 
 function MobSimService._findTarget(_self: typeof(MobSimService), record: Record)
@@ -1189,6 +1524,12 @@ function MobSimService._think(self: typeof(MobSimService), record: Record, now: 
 
 	local ground, yaw, moving = mobPath.sample(record.move, now)
 	record.ground, record.yaw = ground, yaw
+
+	-- Knocked back: hold the pushed spot until the stagger ends (the leg
+	-- already starts then).
+	if now < record.staggerUntil then
+		return
+	end
 
 	-- Chill / Jail landed or wore off mid-leg: re-send the rest of the leg
 	-- at the new speed. A leg frozen at speed 0 (jailed) still has every
@@ -1228,7 +1569,11 @@ function MobSimService._think(self: typeof(MobSimService), record: Record, now: 
 		end
 		if record.target then
 			self:_enterChase(record)
-			self:_chaseStep(record, now)
+			if record.data.support then
+				self:_supportStep(record, now)
+			else
+				self:_chaseStep(record, now)
+			end
 		else
 			self:_enterRoaming(record, now)
 		end
@@ -1241,7 +1586,11 @@ function MobSimService._think(self: typeof(MobSimService), record: Record, now: 
 			self:_enterRoaming(record, now)
 			return
 		end
-		self:_chaseStep(record, now)
+		if record.data.support then
+			self:_supportStep(record, now)
+		else
+			self:_chaseStep(record, now)
+		end
 	end
 end
 
@@ -1263,6 +1612,9 @@ function MobSimService._step(self: typeof(MobSimService))
 	refreshAlivePlayers(now)
 
 	for _, record in self._records do
+		if record.pushPending ~= Vector3.zero then
+			self:_resolveKnockback(record, now)
+		end
 		local thought = false
 		if now >= record.nextThink then
 			record.nextThink = now + thinkInterval(record)
@@ -1544,6 +1896,10 @@ function MobSimService.Spawn(
 		chaseTargetAt = nil,
 		walkCheckAt = 0,
 		unstickCheckAt = 0,
+		pushPending = Vector3.zero,
+		staggerPending = 0,
+		staggerUntil = 0,
+		supportIntent = nil,
 
 		target = nil,
 		targetRoot = nil,
@@ -1601,6 +1957,49 @@ function MobSimService.Spawn(
 		end
 	end)
 	return proxy
+end
+
+-- Queues a knockback of `distance` studs on a sim mob, flat and away from
+-- `origin`; resolved on the next frame (_resolveKnockback), summed with
+-- any other push that frame. `fallbackOrigin` (the attacker) is used
+-- when `origin` sits on top of the mob, or would push it TOWARD the
+-- fallback (a box spell centred past its near edge). Not a sim mob,
+-- dead, jailed, or in an attack that lunges: no push. Minibosses and
+-- bosses are kept out by DamageService.
+function MobSimService.ApplyKnockback(
+	self: typeof(MobSimService),
+	model: Model,
+	origin: Vector3,
+	distance: number,
+	fallbackOrigin: Vector3?
+)
+	local record = self._byModel[model]
+	if not record or not record.alive or distance < KNOCKBACK_MIN_STUDS then
+		return
+	end
+	-- Super armor (the Robombie's poise) does NOT stop a push: it only
+	-- means no flinch. Encounter enemies are kept out by DamageService.
+	if model:GetAttribute(Attributes.Jailed) then
+		return
+	end
+	-- A lunge's own PivotTo lands mid hit-frame and would undo the push.
+	if record.state == STATE_ATTACKING and record.chosenAttack and (record.chosenAttack.lungeDistance or 0) > 0 then
+		return
+	end
+
+	local at = record.root.Position
+	local direction = flat(at - origin)
+	local fallback = if fallbackOrigin then flat(at - fallbackOrigin) else nil
+	if fallback and fallback.Magnitude > 0.05 and (direction.Magnitude < 0.05 or direction:Dot(fallback) < 0) then
+		direction = fallback
+	end
+	if direction.Magnitude < 0.05 then
+		return
+	end
+
+	record.pushPending += direction.Unit * distance
+	record.staggerPending =
+		math.min(math.max(record.staggerPending, distance * KNOCKBACK_STAGGER_PER_STUD), KNOCKBACK_STAGGER_MAX)
 end
 
 -- True when `model` is a live sim mob's proxy.

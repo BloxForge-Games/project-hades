@@ -100,6 +100,22 @@ function DamageIndicatorService.ShowIndicatorNoHitVFX(
 	})
 end
 
+-- A heal on `character` (a support mob's heal square): the damage number's
+-- smaller green "+N" twin and a green flash, for EVERYONE (a heal is
+-- nobody's hit; every player should see the enemy recover).
+function DamageIndicatorService.ShowHealIndicator(
+	_self: typeof(DamageIndicatorService),
+	character: Model,
+	amount: number
+)
+	Combat.DamageIndicator.FireAll({
+		Character = character,
+		Value = amount,
+		Critical = false,
+		IsHeal = true,
+	})
+end
+
 -- Status proc burst on `model` for everyone. `vfxName` selects an authored
 -- asset over the shared, tinted StatusFX.
 function DamageIndicatorService.ShowStatusVFX(

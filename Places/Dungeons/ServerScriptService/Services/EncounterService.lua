@@ -22,6 +22,7 @@ local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local IsometricCameraService = require(ServerScriptService.Submodules.Core.Source.Services.IsometricCameraService)
 local EncounterChestService = require(ServerScriptService.Services.EncounterChestService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
+local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
@@ -70,6 +71,7 @@ local EncounterService = {
 		IsometricCameraService,
 		EncounterChestService,
 		InvulnerabilityService,
+		ArcaneService,
 	} :: { any },
 }
 
@@ -99,7 +101,7 @@ local ROOM_TYPES = {
 local ENCOUNTER_TELEPORT_FORWARD_OFFSET = 6
 
 -- The level on the encounter bar: the top of the run's Item Level range for
--- this dungeon and difficulty, plus Ascension's growth. 1 outside a run.
+-- this dungeon and difficulty. 1 outside a run.
 local function encounterLevel(): number
 	local dungeon = DungeonService and DungeonService:GetActiveDungeon()
 	if not dungeon then
@@ -866,6 +868,11 @@ function EncounterService._startFight(
 			hpConn = nil,
 		}
 		self.OnEncounterStarted:Fire(kind, room, mob)
+
+		-- Every Miniboss and Boss fight opens on a full mana bar.
+		for _, player in Players:GetPlayers() do
+			ArcaneService:RefillMana(player)
+		end
 
 		-- Phase 3: fade back from black.
 		DungeonNetwork.EncounterIntroFade.FireAll({

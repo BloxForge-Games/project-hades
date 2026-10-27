@@ -85,7 +85,10 @@ end
 --[ Constants ]--
 
 -- Sword in the Stone.
-local SWORD_PULL_SUCCESS_CHANCE = 0.15
+-- 0.20 -> 0.25 (2026-10-27).
+local SWORD_PULL_SUCCESS_CHANCE = 0.25
+-- A won pull deals this many Legendary cards; the player keeps one.
+local SWORD_OFFER_COUNT = 3
 local SWORD_PULL_HEALTH_FRACTION = 0.10
 
 -- Cursed Shrine.
@@ -186,6 +189,7 @@ local DROP_GROUND_RAY_DOWN = 100
 -- screen: the source label under the cards' title.
 local OFFER_SOURCE_FORGE = "Forge"
 local OFFER_SOURCE_SHRINE = "Shrine"
+local OFFER_SOURCE_SWORD = "Sword"
 
 -- The vending machine's dispense sting. It is authored as a child of the
 -- machine's PrimaryPart (Server/Components/RelicMachine plays it once per
@@ -731,9 +735,8 @@ function EventService._onMarkEventInteracted(_self: typeof(EventService), player
 
 	-- A WON sword pull, an accepted shrine bargain or a reforge queued
 	-- its reward for this moment — the conversation is over, pay out.
-	-- The pick-one hands (Shrine, Forge) are dealt as cards on the
-	-- player's screen; the Sword's single Legendary still pops out of the
-	-- stone, since there is nothing to choose.
+	-- The pick-one hands (Sword, Shrine, Forge) are dealt as cards on the
+	-- player's screen.
 	local pending = EventService._pendingRelicFans[player.UserId]
 	if pending and pending.model == model then
 		EventService._pendingRelicFans[player.UserId] = nil
@@ -747,7 +750,8 @@ end
 
 -- One pull attempt. Pays the health cost FIRST (it can kill — the stone
 -- takes its price either way), then rolls. Returns:
---   "success" — relic fan QUEUED (pops when the conversation ends),
+--   "success" — a hand of Legendary cards QUEUED (dealt when the
+--               conversation ends),
 --               event done for this player
 --   "fail"    — cost paid, sword didn't budge
 --   "dead"    — the cost was lethal
@@ -775,16 +779,17 @@ function EventService._onAttemptSwordPull(_self: typeof(EventService), player: P
 	EventService._swordDone[player.UserId] = EventService._swordDone[player.UserId] or {}
 	EventService._swordDone[player.UserId][swordModel] = true
 
-	-- ONE random usable Legendary — the card's promise ("The blade rewards
-	-- you with a Legendary Relic"). Replaced the old one-of-each-rarity
-	-- fan; still usability-gated, so a C2 tree Legendary only appears for
-	-- a player who can actually use it (the Neutral Legendaries are always
+	-- SWORD_OFFER_COUNT distinct usable Legendaries dealt as cards, keep one
+	-- (design call 2026-10-25; was one Legendary popping out of the
+	-- stone). Usability-gated, so a C2 tree Legendary only appears for a
+	-- player who can actually use it (the Neutral Legendaries are always
 	-- eligible while unowned).
-	local rewards = EventService:_rollUsableRelics(player, ItemRarity.Legendary, 1)
+	local rewards = EventService:_rollUsableRelics(player, ItemRarity.Legendary, SWORD_OFFER_COUNT)
 	-- Deferred to dialogue close — MarkEventInteracted releases it. The
 	-- roll and the health cost stay HERE because the dialogue branches
 	-- on this function's return value mid-conversation.
-	EventService._pendingRelicFans[player.UserId] = { model = swordModel :: Model, relics = rewards }
+	EventService._pendingRelicFans[player.UserId] =
+		{ model = swordModel :: Model, relics = rewards, offer = true, source = OFFER_SOURCE_SWORD }
 	return "success"
 end
 
