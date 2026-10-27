@@ -281,6 +281,9 @@ type Record = {
 	pushPending: Vector3,
 	staggerPending: number,
 	staggerUntil: number,
+	-- Support mobs: this cast cycle's pick, "heal" or "player", rolled
+	-- once (support.attackPlayerChance) and cleared after each cast.
+	supportIntent: string?,
 
 	-- Targeting
 	target: Model?,
@@ -1376,12 +1379,14 @@ function MobSimService._supportGoal(_self: typeof(MobSimService), record: Record
 	return floorBelow(anchor + side * standoff + lift, depth) or floorBelow(anchor + lift, depth)
 end
 
--- A support mob's chase-state think, the Wizard's loop: a hurt ally
--- inside the heal's range gets the heal, one further out is walked
--- toward. With NOBODY to heal (every ally above hurtBelow, or it is the
--- last mob and unhurt) the square turns on the player it is chasing:
--- it walks into range and drops it on them (2026-10-27; it used to
--- trail its allies or roam at random). Roams 2-4 s after every cast.
+-- A support mob's chase-state think, the Wizard's loop. Each cast cycle
+-- it rolls ONE intent (supportIntent): "player" at
+-- support.attackPlayerChance, otherwise "heal". Heal: a hurt ally in
+-- the heal's range gets the square, one further out is walked toward.
+-- Player, or a heal with NOBODY to heal (every ally above hurtBelow, or
+-- it is the last mob and unhurt): the square drops on the player it is
+-- chasing. Rolled once per cycle so it never flips mid-walk; cleared
+-- after each cast, then it roams 2-4 s.
 function MobSimService._supportStep(self: typeof(MobSimService), record: Record, now: number)
 	if record.model:GetAttribute(Attributes.Jailed) then
 		return
@@ -1391,7 +1396,14 @@ function MobSimService._supportStep(self: typeof(MobSimService), record: Record,
 	if not heal then
 		return
 	end
-	local center, covered = pickHealCenter(record, heal, self._byModel, now)
+	if record.supportIntent == nil then
+		local chance = record.data.support.attackPlayerChance or 0
+		record.supportIntent = if math.random() < chance then "player" else "heal"
+	end
+	local center: Vector3?, covered: { Model } = nil, {}
+	if record.supportIntent == "heal" then
+		center, covered = pickHealCenter(record, heal, self._byModel, now)
+	end
 	if not center then
 		local targetRoot = record.targetRoot
 		if not targetRoot then
@@ -1481,6 +1493,7 @@ function MobSimService._startHeal(
 		self:_setAttacking(record, false)
 		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
 		record.written = record.root.CFrame
+		record.supportIntent = nil
 		self:_enterRoaming(record, workspace:GetServerTimeNow())
 	end)
 end
@@ -1886,6 +1899,7 @@ function MobSimService.Spawn(
 		pushPending = Vector3.zero,
 		staggerPending = 0,
 		staggerUntil = 0,
+		supportIntent = nil,
 
 		target = nil,
 		targetRoot = nil,
