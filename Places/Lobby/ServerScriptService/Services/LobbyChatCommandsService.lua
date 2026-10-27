@@ -28,14 +28,14 @@
 	shop and the chests use, so the UI updates at once). Default 1000;
 	a negative amount takes Gold away, never below 0.
 
-	--- /tp [dungeon] [difficulty] [ascension] ---
+	--- /tp [dungeon] [difficulty] ---
 
 	A TEST stand-in for the hub's queue. Reserves ONE private server of the
 	named dungeon's place (DungeonData placeId) and teleports EVERY player in
 	this lobby server into it together, carrying the same teleport data the
-	queue will send: { partyLeaderUserId, Difficulty, Ascension }. The
+	queue will send: { partyLeaderUserId, Difficulty }. The
 	dungeon server clamps that difficulty to the leader's unlocks.
-	Defaults: Runegrove, Normal. The dungeon matches an id or the start of a
+	Defaults: Runegrove, Easy. The dungeon matches an id or the start of a
 	display name ("/tp ember hard"). A second /tp while one is in flight is
 	ignored (the first reservation is the party's). ReserveServer / TeleportAsync are unavailable in Studio
 	and throw for an unpublished place, so both are pcall'd and the failure
@@ -59,7 +59,6 @@ local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
-local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DungeonIds)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
@@ -98,7 +97,7 @@ local DEFAULT_GOLD_AMOUNT = 1000
 
 -- /tp defaults when no argument names them.
 local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
-local DEFAULT_TP_DIFFICULTY = Difficulty.Normal
+local DEFAULT_TP_DIFFICULTY = Difficulty.Easy
 
 -- A dungeon id from an id or the start of a display name, case-insensitive.
 local function matchDungeon(arg: string?): string?
@@ -142,22 +141,17 @@ local LobbyChatCommandsService = {
 local COMMANDS: { [string]: { usage: string, description: string, handler: (Player, { string }) -> string? } }
 COMMANDS = {
 	tp = {
-		usage = "/tp [dungeon] [difficulty] [ascension]",
+		usage = "/tp [dungeon] [difficulty]",
 		description = "Teleport EVERYONE here into one reserved server of a dungeon at EXACTLY that difficulty (no unlock / level clamp; test stand-in for the queue).",
 		handler = function(player: Player, args: { string }): string?
-			-- Any order: each word is a dungeon, a difficulty or the
-			-- Ascension level (`/tp hard`, `/tp runegrove hard`,
-			-- `/tp ascension 3`). Missing ones take the defaults.
+			-- Any order: each word is a dungeon or a difficulty (`/tp hard`,
+			-- `/tp runegrove hard`). Missing ones take the defaults.
 			local dungeonId: string? = nil
 			local difficulty: string? = nil
-			local ascensionArg: number? = nil
 			for _, arg in args do
-				local asNumber = tonumber(arg)
-				local asDifficulty = if asNumber then nil else matchDifficulty(arg)
-				local asDungeon = if asNumber or asDifficulty then nil else matchDungeon(arg)
-				if asNumber then
-					ascensionArg = asNumber
-				elseif asDifficulty then
+				local asDifficulty = matchDifficulty(arg)
+				local asDungeon = if asDifficulty then nil else matchDungeon(arg)
+				if asDifficulty then
 					difficulty = asDifficulty
 				elseif asDungeon then
 					dungeonId = asDungeon
@@ -168,9 +162,8 @@ COMMANDS = {
 			dungeonId = dungeonId or matchDungeon(nil)
 			difficulty = difficulty or matchDifficulty(nil)
 			if not dungeonId or not difficulty then
-				return "Usage: /tp [dungeon] [difficulty] [ascension]"
+				return "Usage: /tp [dungeon] [difficulty]"
 			end
-			local ascension = math.clamp(ascensionArg or 1, 1, DifficultyData.MaxAscension)
 			local placeId = DungeonData[dungeonId].placeId
 
 			if RunService:IsStudio() then
@@ -196,7 +189,6 @@ COMMANDS = {
 			options:SetTeleportData({
 				partyLeaderUserId = player.UserId,
 				Difficulty = difficulty,
-				Ascension = if difficulty == Difficulty.Ascension then ascension else nil,
 				-- Play exactly what was asked: the dungeon skips the unlock and
 				-- player-level clamps, but only for a leader its own command
 				-- check also allows (RunFlowService._resolveRunDifficulty).

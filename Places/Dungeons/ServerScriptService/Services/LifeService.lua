@@ -121,6 +121,10 @@ LifeService._isGameOver = false
 --[ Constants ]--
 
 local POST_LIFE_LOSS_INVULN_SECONDS = 3
+-- A revive (downed or fully dead) stands the player back up on this share
+-- of their maximum health: full (2026-10-27; 0.5 from 2026-10-25).
+-- Losing a life with lives to spare also refills to full.
+local REVIVE_HEALTH_FRACTION = 1
 local DEFAULT_LIVES = 1
 
 -- NATIVE deaths (QA 2026-10-21, P0 #4). The header's promise is that
@@ -165,7 +169,10 @@ local DEATH_WINDOW_LEAD_SECONDS = DeathCinematicData.GameOverImpactDelay + Death
 
 -- Paid revive. The dev product is prompted server-side only (and only
 -- while downed); ProcessReceipt is the sole production caller of :Revive.
-local REVIVE_CUTSCENE_DURATION = 4
+-- How long the stand-up holds the player (Death stays set: no moving, no
+-- highlight) before the 3 s Combat grace and its highlight take over.
+-- 0.5 (2026-10-27; was 4, a silent wait nothing on the client used).
+local REVIVE_CUTSCENE_DURATION = 0.5
 local FADE_DURATION = 0.4
 local REVIVE_PRODUCT_ID = 3598188186
 
@@ -889,7 +896,7 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 	end
 
 	if humanoid then
-		humanoid.Health = humanoid.MaxHealth
+		humanoid.Health = humanoid.MaxHealth * REVIVE_HEALTH_FRACTION
 	end
 
 	PlayerNetwork.RevivalFade.Fire(player, { Phase = "out", Duration = FADE_DURATION })

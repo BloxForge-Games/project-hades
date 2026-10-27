@@ -62,11 +62,20 @@ local HIGHLIGHT_NAME = "MobHighlight"
 local PROXY_ONLY_PARTS: { [string]: boolean } = { RaycastHitbox = true, MobHitbox = true }
 
 -- A fresh leg starts where the server says the mob is, which can sit a
--- little off where this client drew it; the gap is carried as an offset
+-- little off where this client drew it -- or, for a knockback, a few
+-- studs away on purpose; the gap is carried as an offset
 -- that decays at this rate (1/s) instead of snapping. A gap wider than
 -- MAX_BLEND_STUDS snaps.
 local OFFSET_DECAY_RATE = 10
 local MAX_BLEND_STUDS = 8
+-- A KNOCKBACK leg (MobSimService: it starts ahead of now, after the
+-- stagger) slides its gap out on a timed sine ease-out instead: the
+-- decay above puts ~63% of a push on screen in the first 0.1 s, which
+-- reads as a snap; this starts at about half that speed and settles.
+-- A leg counts as a knockback when it starts more than
+-- KNOCKBACK_LEAD_SECONDS ahead (ordinary legs start at or before now).
+local KNOCKBACK_SLIDE_SECONDS = 0.3
+local KNOCKBACK_LEAD_SECONDS = 0.03
 -- How fast the drawn facing turns toward the leg's (1/s).
 local TURN_RATE = 14
 -- With no usable leg the rig eases toward the proxy's replicated CFrame.
@@ -111,6 +120,10 @@ type Entry = {
 	attackTracks: { [number]: AnimationTrack },
 	move: mobPath.Move?,
 	offset: Vector3,
+	-- A knockback slide in progress: the gap it started from and when
+	-- (os.clock()); drives `offset` while set (KNOCKBACK_SLIDE_SECONDS).
+	slideGap: Vector3?,
+	slideStartedAt: number?,
 	position: Vector3?,
 	yaw: number,
 	running: boolean?,
@@ -487,6 +500,13 @@ function MobRenderController._onMove(self: typeof(MobRenderController), payload)
 		local ground = mobPath.sample(move, now)
 		local gap = position - (ground + Vector3.new(0, entry.rootOffset, 0))
 		entry.offset = if gap.Magnitude <= MAX_BLEND_STUDS then gap else Vector3.zero
+		if move.startTime > now + KNOCKBACK_LEAD_SECONDS and entry.offset ~= Vector3.zero then
+			entry.slideGap = entry.offset
+			entry.slideStartedAt = os.clock()
+		else
+			entry.slideGap = nil
+			entry.slideStartedAt = nil
+		end
 	end
 	entry.move = move
 	entry.divergedFor = 0
@@ -530,6 +550,8 @@ function MobRenderController._onLunge(
 	if not entry or entry.dead then
 		return
 	end
+	entry.slideGap = nil
+	entry.slideStartedAt = nil
 	entry.lunge = {
 		startCFrame = payload.StartCFrame,
 		goalCFrame = payload.GoalCFrame,
@@ -660,6 +682,15 @@ function MobRenderController._step(self: typeof(MobRenderController), dt: number
 		if entry.dead or not rigRoot then
 			continue
 		end
+		local slideGap, slideStartedAt = entry.slideGap, entry.slideStartedAt
+		if slideGap and slideStartedAt then
+			local alpha = math.min((clock - slideStartedAt) / KNOCKBACK_SLIDE_SECONDS, 1)
+			entry.offset = slideGap * (1 - math.sin(alpha * math.pi / 2))
+			if alpha >= 1 then
+				entry.slideGap = nil
+				entry.slideStartedAt = nil
+			end
+		end
 		local proxyCFrame = entry.proxyRoot.CFrame
 		local position: Vector3
 		local targetYaw: number
@@ -678,7 +709,9 @@ function MobRenderController._step(self: typeof(MobRenderController), dt: number
 				local ground, yaw, moving = mobPath.sample(move, now)
 				position = ground + Vector3.new(0, entry.rootOffset, 0) + entry.offset
 				targetYaw = yaw
-				running = moving
+				-- A leg that starts ahead of now is a knockback's stagger hold
+				-- (MobSimService): the mob stands while it slides, not runs.
+				running = moving and now >= move.startTime
 
 				local flatGap = position - proxyCFrame.Position
 				local allowance = CORRECTION_STUDS + move.speed * CORRECTION_STALE_SECONDS
@@ -699,7 +732,9 @@ function MobRenderController._step(self: typeof(MobRenderController), dt: number
 			end
 		end
 
-		entry.offset *= offsetKeep
+		if not entry.slideGap then
+			entry.offset *= offsetKeep
+		end
 		entry.yaw = lerpAngle(entry.yaw, targetYaw, turnAlpha)
 		entry.position = position
 

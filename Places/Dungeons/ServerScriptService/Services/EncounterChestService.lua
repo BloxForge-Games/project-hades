@@ -54,6 +54,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 
 --[ Constants ]--
@@ -318,15 +319,17 @@ end
 
 -- Fires a MobData `gems`-shaped row (pickup count range x value range)
 -- from `origin`, private to `player`, chest-style (a blip per pickup).
-local function dropGems(origin: BasePart, gems: { [string]: number }, player: Player)
+-- `countMultiplier` (default 1) scales how many pickups, not their value.
+local function dropGems(origin: BasePart, gems: { [string]: number }, player: Player, countMultiplier: number?)
 	if not DropService then
 		return
 	end
+	local multiplier = countMultiplier or 1
 	DropService.OnDropRequested:Fire(
 		origin,
 		DropTypes.Gems,
-		gems.minDropRate,
-		gems.maxDropRate,
+		gems.minDropRate * multiplier,
+		gems.maxDropRate * multiplier,
 		gems.minGems,
 		gems.maxGems,
 		false,
@@ -337,12 +340,22 @@ end
 
 -- Fires `total` of `dropType` as `count` pickups from `origin`, private to
 -- `player`, chest-style (a blip per pickup). Rounds the per-pickup value
--- up so the chest never pays less than its row.
-local function dropSplit(origin: BasePart, dropType: string, total: number, countRange: { number }, player: Player)
+-- up so the chest never pays less than its row. `multiplier` (default 1)
+-- scales the total AND the count, so each pickup is worth the same.
+local function dropSplit(
+	origin: BasePart,
+	dropType: string,
+	total: number,
+	countRange: { number },
+	player: Player,
+	multiplier: number?
+)
 	if not DropService or total <= 0 then
 		return
 	end
-	local count = math.random(countRange[1], countRange[2])
+	local scale = multiplier or 1
+	total *= scale
+	local count = math.random(countRange[1], countRange[2]) * scale
 	local value = math.max(1, math.ceil(total / count))
 	DropService.OnDropRequested:Fire(origin, dropType, count, count, value, value, false, player.UserId, true)
 end
@@ -447,18 +460,21 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		local tier = DungeonService:GetDifficultyScale()
 		local floor = DungeonService:GetFloor()
 		local pickups = pickupCountsFor(mobName)
+		-- A CORRUPTED encounter mob's chest pays more, in more pickups.
+		local corrupted = chest:GetAttribute(Attributes.Corrupted) == true
+		local payout = if corrupted then CorruptionData.ChestPayoutMultiplier else 1
 		local coins = DifficultyData.ChestPayout(tier, floor, enemyType, "chestCoins")
 		if coins then
-			dropSplit(origin, DropTypes.Coins, coins, pickups.coins, player)
+			dropSplit(origin, DropTypes.Coins, coins, pickups.coins, player, payout)
 		end
 		local ore = DifficultyData.ChestPayout(tier, floor, enemyType, "chestOre")
 		if ore then
-			dropSplit(origin, DropTypes.ForgeOre, ore, pickups.ore, player)
+			dropSplit(origin, DropTypes.ForgeOre, ore, pickups.ore, player, payout)
 		end
 		local mobData = mobName and MobData[mobName]
 		local purse = mobData and mobData.gems
 		if purse then
-			dropGems(origin, purse, player)
+			dropGems(origin, purse, player, if corrupted then CorruptionData.GemDropCountMultiplier else 1)
 		end
 	end
 
@@ -520,6 +536,8 @@ function EncounterChestService.DropChestsForEncounter(
 	end)
 
 	local mobName = if typeof(mob) == "string" then mob else mob and mob.Name
+	-- The corpse's Corrupted flag rides onto every chest (_openChest).
+	local corrupted = typeof(mob) == "Instance" and mob:GetAttribute(Attributes.Corrupted) == true
 
 	for _, player in Players:GetPlayers() do
 		-- Dead / spectating players get nothing: the chest would land on a
@@ -568,6 +586,9 @@ function EncounterChestService.DropChestsForEncounter(
 		chest:SetAttribute(CHEST_NAME_ATTRIBUTE, displayName)
 		if mobName then
 			chest:SetAttribute("MobName", mobName)
+		end
+		if corrupted then
+			chest:SetAttribute(Attributes.Corrupted, true)
 		end
 
 		-- The client component tweens every part's Position — physics must

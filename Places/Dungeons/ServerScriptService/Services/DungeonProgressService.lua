@@ -80,8 +80,7 @@ function DungeonProgressService._recordClear(
 	player: Player,
 	dungeonId: string,
 	rank: number,
-	difficulty: string,
-	ascension: number
+	difficulty: string
 )
 	local profile = DataService:GetProfileData(player)
 	if not profile then
@@ -94,7 +93,7 @@ function DungeonProgressService._recordClear(
 	local keystone = dungeonProgress.recordClear(progress, dungeonId, rank)
 	-- Dungeon Mastery: the clear pays the tier's XP into the same entry.
 	-- The level is derived, so a level-up is just the two reads differing.
-	local masteryXp = MasteryData.XpForClear(difficulty, ascension)
+	local masteryXp = MasteryData.XpForClear(difficulty)
 	local masteryBefore, masteryAfter = dungeonProgress.addMasteryXp(progress, dungeonId, masteryXp)
 	-- Written back through DataService so the change pushes and saves.
 	DataService:SetProfileValue(player, PROGRESS_KEY, progress)
@@ -122,12 +121,12 @@ function DungeonProgressService.Start(self: typeof(DungeonProgressService))
 		if not dungeon or not run then
 			return
 		end
-		local rank = DifficultyData.Rank(run.difficulty, run.ascension)
+		local rank = DifficultyData.Rank(run.difficulty)
 		if not rank then
 			return
 		end
 		for _, player in Players:GetPlayers() do
-			self:_recordClear(player, dungeon.id, rank, run.difficulty, run.ascension or 0)
+			self:_recordClear(player, dungeon.id, rank, run.difficulty)
 		end
 	end)
 end

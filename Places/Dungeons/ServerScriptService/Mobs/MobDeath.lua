@@ -57,7 +57,7 @@ local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTyp
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local TakedownData = require(ReplicatedStorage.Submodules.Core.Shared.Data.TakedownData)
 local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
-local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
@@ -107,8 +107,7 @@ local MIDNIGHT_SWORD_MANA_FRACTION = 0.05
 -- Assist credit EXPIRES: a player counts as an assister on this mob only
 -- while their last damaging hit was within this many seconds (every hit
 -- refreshes the window). Applies to the WHOLE assist registry -- every
--- takedown relic, orb rolls, kill statistics, gear drops. Shared with the
--- relic cards' Takedown tooltip (KeywordData).
+-- takedown relic, orb rolls, kill statistics, gear drops.
 local ASSIST_WINDOW_SECONDS = TakedownData.AssistWindowSeconds
 
 -- Lobbed bombs (Trick Or Trap's pumpkins, the Fuse Bomb): the client's
@@ -207,9 +206,13 @@ local FUSE_BOMBS: BombSpec = {
 -- CLOUD_STATUS_CHANCE to Poison everything inside (the sheet's "+30%
 -- Status Chance"). LIMIT bounds live clouds PER PLAYER, same shape as
 -- the pumpkin cap.
-local MOB_BOMB_CLOUD_DURATION = 5
+-- 8 s and double the radius (was 5 s / 7), 2026-10-25; the card shows the
+-- duration (RelicData) and the visual scales with the radius.
+local MOB_BOMB_CLOUD_DURATION = 8
 local MOB_BOMB_CLOUD_TICK_SECONDS = 1
-local MOB_BOMB_CLOUD_RADIUS = 7
+local MOB_BOMB_CLOUD_RADIUS = 14
+-- The radius the PoisonCloud VFX asset was authored at.
+local MOB_BOMB_CLOUD_VFX_AUTHORED_RADIUS = 7
 local MOB_BOMB_CLOUD_LIMIT = 3
 local MOB_BOMB_CLOUD_FADE_SECONDS = 1.5
 
@@ -217,10 +220,14 @@ local MOB_BOMB_CLOUD_FADE_SECONDS = 1.5
 
 local MobDeath = {}
 
--- A corrupted mob pays CorruptionData.RewardMultiplier on its kill EXP and
--- its Gems' value; everything else, 1.
+local function isCorrupted(model: Model): boolean
+	return model:GetAttribute(Attributes.Corrupted) == true
+end
+
+-- A corrupted mob pays CorruptionData.RewardMultiplier on its kill EXP;
+-- everything else, 1. (Its Gems drop MORE pickups instead: dropGems.)
 local function rewardMultiplier(model: Model): number
-	return if model:GetAttribute(Attributes.Corrupted) == true then CorruptionData.RewardMultiplier else 1
+	return if isCorrupted(model) then CorruptionData.RewardMultiplier else 1
 end
 
 --[ Assist registry ]--
@@ -387,6 +394,9 @@ local function runZombieBombCloud(context: Context, player: Player)
 	local cloud
 	if cloudTemplate then
 		cloud = cloudTemplate:Clone()
+		if cloud:IsA("Model") then
+			cloud:ScaleTo(cloud:GetScale() * MOB_BOMB_CLOUD_RADIUS / MOB_BOMB_CLOUD_VFX_AUTHORED_RADIUS)
+		end
 		cloud:PivotTo(CFrame.new(cloudPosition))
 		for _, part in cloud:GetDescendants() do
 			if part:IsA("BasePart") then
@@ -401,7 +411,7 @@ local function runZombieBombCloud(context: Context, player: Player)
 		warn("[MobDeath] Missing ReplicatedStorage.GameAssets.VFX.PoisonCloud")
 	end
 
-	local tickDamage = math.round(damagePerLevel * getPlayerLevel(player))
+	local tickDamage = math.round(damagePerLevel * getRelicLevel(player))
 	task.spawn(function()
 		local elapsed = 0
 		while elapsed < MOB_BOMB_CLOUD_DURATION do
@@ -560,21 +570,23 @@ local function dropGems(context: Context)
 	if room and (room.roomType == RoomTypes.Miniboss or room.roomType == RoomTypes.Boss) then
 		return
 	end
-	-- The row's `dropChance` (default 1): the kill drops at all, or not.
+	-- The row's `dropChance` (default 1): the kill drops at all, or not. A
+	-- corrupted mob always drops, and CorruptionData.GemDropCountMultiplier
+	-- times as many pickups, each worth the normal amount.
+	local corrupted = isCorrupted(context.model)
 	local dropChance = gems.dropChance
-	if type(dropChance) == "number" and math.random() >= dropChance then
+	if not corrupted and type(dropChance) == "number" and math.random() >= dropChance then
 		return
 	end
 
-	-- A corrupted mob's pickups are each worth more (same count).
-	local multiplier = rewardMultiplier(context.model)
+	local countMultiplier = if corrupted then CorruptionData.GemDropCountMultiplier else 1
 	DropService.OnDropRequested:Fire(
 		context.rootPart,
 		DropTypes.Gems,
-		gems.minDropRate,
-		gems.maxDropRate,
-		math.max(math.round(gems.minGems * multiplier), 1),
-		math.max(math.round(gems.maxGems * multiplier), 1),
+		gems.minDropRate * countMultiplier,
+		gems.maxDropRate * countMultiplier,
+		gems.minGems,
+		gems.maxGems,
 		false
 	)
 end

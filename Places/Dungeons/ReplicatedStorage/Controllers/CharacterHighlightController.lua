@@ -64,7 +64,7 @@
 
 	  CharacterHighlightController:RequestDamageFlash(model)
 	    Flips the damage-flash state for `model` so the per-frame
-	    resolver renders red for DAMAGE_FLASH_DURATION. Safe to call
+	    resolver renders red for DAMAGE_HOLD + DAMAGE_FADE. Safe to call
 	    on any model; no-ops if not in the mob registry.
 ]]
 
@@ -88,10 +88,24 @@ local PLAYER_HIGHLIGHT_NAME = "CharacterHighlight"
 -- OcclusionController's, on its own clock.
 local TICK_INTERVAL = 0.025
 
--- Damage flash: 0.25s fade from peak transparency 0.4 → 1, red.
-local DAMAGE_FLASH_DURATION = 0.25
+-- Damage flash (a mob you hit, and your own character when hurt): red
+-- from peak transparency 0.4, held for DAMAGE_HOLD, then faded to 1
+-- over DAMAGE_FADE on an ease-in curve, so it stays red most of the way
+-- and drops off at the end (2026-10-25: the old 0.25 s linear fade read
+-- as barely there).
 local DAMAGE_PEAK_TRANSPARENCY = 0.4
 local DAMAGE_COLOR = Color3.fromRGB(255, 0, 0)
+-- Heal flash (a support mob healed this mob): the damage flash's twin in
+-- green, same peak, hold and fade (damageFlashTransparency).
+local HEAL_COLOR = Color3.fromRGB(85, 255, 127)
+local DAMAGE_HOLD = 0.15
+local DAMAGE_FADE = 0.25
+
+-- Transparency of a damage flash ending at `endAt`, at `now`.
+local function damageFlashTransparency(endAt: number, now: number): number
+	local progress = math.clamp(1 - (endAt - now) / DAMAGE_FADE, 0, 1)
+	return DAMAGE_PEAK_TRANSPARENCY + (1 - DAMAGE_PEAK_TRANSPARENCY) * progress * progress
+end
 
 -- Perfect-dodge flash: white, snaps to peak over DODGE_ATTACK then fades
 -- out over DODGE_DECAY (the old onDodgeIndicator's 0.1 / 1 tweens).
@@ -193,6 +207,8 @@ type MobHighlightData = {
 	-- Damage flash state: nil if not flashing, else the os.clock()
 	-- timestamp at which the flash expires.
 	damageFlashEndAt: number?,
+	-- Heal flash state, the same shape (RequestHealFlash).
+	healFlashEndAt: number?,
 	-- Attack windup local-tween intensity (0..1).
 	windupIntensity: number,
 }
@@ -285,6 +301,7 @@ function CharacterHighlightController._registerMob(self: typeof(CharacterHighlig
 			-- Damage flash state: nil if not flashing, else tick()
 			-- timestamp at which the flash expires.
 			damageFlashEndAt = nil :: number?,
+			healFlashEndAt = nil :: number?,
 
 			-- Attack windup local-tween state. The server toggles a
 			-- model attribute and the client smoothly tweens intensity
@@ -316,7 +333,7 @@ end
 -- any other model (those go through the legacy onDamageIndicator path).
 function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterHighlightController), model: Model)
 	if model == Players.LocalPlayer.Character then
-		self._playerDamageFlashEndAt = os.clock() + DAMAGE_FLASH_DURATION
+		self._playerDamageFlashEndAt = os.clock() + DAMAGE_HOLD + DAMAGE_FADE
 		ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
 		return
 	end
@@ -324,9 +341,18 @@ function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterH
 	if not data then
 		return
 	end
-	data.damageFlashEndAt = os.clock() + DAMAGE_FLASH_DURATION
+	data.damageFlashEndAt = os.clock() + DAMAGE_HOLD + DAMAGE_FADE
 	-- One sound per hit, mirroring the old onDamageIndicator behavior.
 	ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
+end
+
+-- Public: a green heal flash on a tracked mob (DamageIndicatorController,
+-- on a heal number). Silent; a damage flash still wins while both run.
+function CharacterHighlightController.RequestHealFlash(self: typeof(CharacterHighlightController), model: Model)
+	local data = self._mobRegistry[model]
+	if data then
+		data.healFlashEndAt = os.clock() + DAMAGE_HOLD + DAMAGE_FADE
+	end
 end
 
 -- Perfect dodge: the white snap-and-fade, as a layer. Local player only.
@@ -418,10 +444,8 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	self._playerDownedStartAt = nil
 
 	if self._playerDamageFlashEndAt and now < self._playerDamageFlashEndAt then
-		local remaining = self._playerDamageFlashEndAt - now
-		local progress = 1 - (remaining / DAMAGE_FLASH_DURATION)
 		highlight.FillColor = DAMAGE_COLOR
-		highlight.FillTransparency = DAMAGE_PEAK_TRANSPARENCY + (1 - DAMAGE_PEAK_TRANSPARENCY) * progress
+		highlight.FillTransparency = damageFlashTransparency(self._playerDamageFlashEndAt, now)
 		highlight.OutlineTransparency = 1
 		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 		return
@@ -602,19 +626,28 @@ function CharacterHighlightController._resolveMobHighlight(
 
 	local now = os.clock()
 
-	-- Priority 1: damage flash (red, fading 0.4 → 1 over 0.25s).
+	-- Priority 1: damage flash (red; held, then an ease-in fade, see
+	-- DAMAGE_HOLD / DAMAGE_FADE).
 	if data.damageFlashEndAt and now < data.damageFlashEndAt then
-		local remaining = data.damageFlashEndAt - now
-		local progress = 1 - (remaining / DAMAGE_FLASH_DURATION) -- 0 at start, 1 at end
-		local transparency = DAMAGE_PEAK_TRANSPARENCY + (1 - DAMAGE_PEAK_TRANSPARENCY) * progress
 		highlight.FillColor = DAMAGE_COLOR
-		highlight.FillTransparency = transparency
+		highlight.FillTransparency = damageFlashTransparency(data.damageFlashEndAt, now)
+		highlight.OutlineTransparency = 1
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		return
+	end
+	-- Priority 1b: heal flash (green, the damage flash's curve).
+	if data.healFlashEndAt and now < data.healFlashEndAt then
+		highlight.FillColor = HEAL_COLOR
+		highlight.FillTransparency = damageFlashTransparency(data.healFlashEndAt, now)
 		highlight.OutlineTransparency = 1
 		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 		return
 	end
 	-- Clear stale damageFlashEndAt so subsequent frames don't pay the
 	-- comparison cost forever.
+	if data.healFlashEndAt and now >= data.healFlashEndAt then
+		data.healFlashEndAt = nil
+	end
 	if data.damageFlashEndAt and now >= data.damageFlashEndAt then
 		data.damageFlashEndAt = nil
 	end

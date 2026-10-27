@@ -70,14 +70,14 @@ local EXIT_PORTAL_ACTION_TEXT = "Teleport to Lobby"
 
 -- The run's difficulty when nothing asks otherwise (Studio, a direct join
 -- without teleport data). A request is still clamped to the leader's unlocks.
-local DEFAULT_DIFFICULTY = Difficulty.Normal
+-- Easy (2026-10-27; was Normal): a fresh player's first rung.
+local DEFAULT_DIFFICULTY = Difficulty.Easy
 -- How long the run waits for the leader's profile before starting without
 -- the unlock check.
 local LEADER_PROFILE_WAIT_SECONDS = 15
 -- Studio only: workspace attributes that pick the difficulty (and skip the
 -- unlock clamp, since Studio profiles are fresh).
 local DEBUG_DIFFICULTY_ATTRIBUTE = "DebugDifficulty"
-local DEBUG_ASCENSION_ATTRIBUTE = "DebugAscension"
 
 -- RUN LOOP (see StartRun / AdvanceRun). After a boss: outro + rewards
 -- (EncounterService) -> EXIT_PORTAL_DELAY -> the ExitPortal rises out of the
@@ -194,7 +194,7 @@ function RunFlowService.GenerateDungeon(
 end
 
 -- Starts a fresh RUN over `sequence` (dungeon ids, in order) at
--- `difficulty` / `ascension` for every dungeon in it. A normal run is ONE
+-- `difficulty` for every dungeon in it. A normal run is ONE
 -- dungeon repeated once per FLOOR (DifficultyData `floors`: Easy 1,
 -- Normal 2, Hard / Nightmare 3) -- consecutive equal ids are that
 -- dungeon's floors (DungeonService.GetFloor); a chain of different
@@ -203,7 +203,6 @@ function RunFlowService.StartRun(
 	self: typeof(RunFlowService),
 	sequence: { string },
 	difficulty: string,
-	ascension: number,
 	originCFrame: CFrame?
 ): Dungeon
 	assert(#sequence > 0, "[RunFlowService] StartRun needs at least one dungeon")
@@ -211,7 +210,6 @@ function RunFlowService.StartRun(
 		sequence = table.clone(sequence),
 		index = 1,
 		difficulty = difficulty,
-		ascension = if difficulty == Difficulty.Ascension then ascension else 0,
 		exited = {},
 		extracted = {},
 		originCFrame = originCFrame,
@@ -553,14 +551,13 @@ end
 --[ Run request ]--
 
 -- What the arriving party asked for: the hub queue's teleport data
--- ({ Difficulty, Ascension, partyLeaderUserId }), read off the FIRST player
+-- ({ Difficulty, partyLeaderUserId }), read off the FIRST player
 -- to arrive (yields until someone does). Returns the request and the
 -- leader whose unlocks bound it (the first arrival when the leader is not
 -- here yet or none was named).
-function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string, number, Player, boolean)
+function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string, Player, boolean)
 	local first = Players:GetPlayers()[1] or Players.PlayerAdded:Wait()
 	local difficulty = DEFAULT_DIFFICULTY
-	local ascension = 1
 	local leader = first
 	local unclamped = false
 	local joinData = first:GetJoinData()
@@ -569,36 +566,29 @@ function RunFlowService._readRunRequest(_self: typeof(RunFlowService)): (string,
 		if DifficultyData.IsValid(data.Difficulty) then
 			difficulty = data.Difficulty
 		end
-		if type(data.Ascension) == "number" then
-			ascension = data.Ascension
-		end
 		if type(data.partyLeaderUserId) == "number" then
 			leader = Players:GetPlayerByUserId(data.partyLeaderUserId) or leader
 		end
 		-- The lobby's /tp asks for its difficulty as-is (see below).
 		unclamped = data.Unclamped == true
 	end
-	return difficulty, ascension, leader, unclamped
+	return difficulty, leader, unclamped
 end
 
 -- The difficulty this run plays: the request, clamped DOWN to the highest
 -- rank the leader has unlocked in this dungeon (DungeonProgressService).
--- Studio uses the DebugDifficulty / DebugAscension workspace attributes,
+-- Studio uses the DebugDifficulty workspace attribute,
 -- or the default, and skips the clamp.
-function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dungeonId: string): (string, number)
-	local requested, ascension, leader, unclamped = self:_readRunRequest()
+function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dungeonId: string): string
+	local requested, leader, unclamped = self:_readRunRequest()
 
 	if RunService:IsStudio() then
 		local debugDifficulty = workspace:GetAttribute(DEBUG_DIFFICULTY_ATTRIBUTE)
 		if DifficultyData.IsValid(debugDifficulty) then
-			requested = debugDifficulty
-			ascension = tonumber(workspace:GetAttribute(DEBUG_ASCENSION_ATTRIBUTE)) or 1
-		else
-			-- No DebugDifficulty attribute: Studio plays NORMAL.
-			requested = Difficulty.Normal
-			ascension = 1
+			return debugDifficulty
 		end
-		return requested, ascension
+		-- No DebugDifficulty attribute: Studio plays the default (Easy).
+		return DEFAULT_DIFFICULTY
 	end
 
 	-- The lobby's /tp: exactly the requested difficulty, no unlock or level
@@ -609,12 +599,12 @@ function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dung
 		local commands = Blitz.OptionalService("ChatCommandsService")
 		if commands and commands:IsAuthorized(leader) then
 			Log.debug(("[RunFlowService] /tp run: %s unclamped for %s"):format(requested, leader.Name))
-			return requested, ascension
+			return requested
 		end
 		warn(("[RunFlowService] Ignoring Unclamped from %s (not authorised)"):format(leader.Name))
 	end
 
-	local rank = DifficultyData.Rank(requested, ascension) or 1
+	local rank = DifficultyData.Rank(requested) or 1
 	-- A consumer of this service's facade: resolved at call time.
 	local progressService = Blitz.OptionalService("DungeonProgressService")
 	local unlocked = progressService
@@ -679,18 +669,11 @@ function RunFlowService.Start(self: typeof(RunFlowService))
 	task.delay(AUTO_GENERATE_DELAY, function()
 		local ok, err = pcall(function()
 			local dungeonId = getPlaceDungeonId()
-			local difficulty, ascension = self:_resolveRunDifficulty(dungeonId)
-			local floors = DifficultyData.Resolve(difficulty, ascension).floors or 1
+			local difficulty = self:_resolveRunDifficulty(dungeonId)
+			local floors = DifficultyData.Resolve(difficulty).floors or 1
 			local sequence = table.create(floors, dungeonId)
-			Log.debug(
-				("[RunFlowService] Starting %s on %s (ascension %d), %d floor(s)"):format(
-					dungeonId,
-					difficulty,
-					ascension,
-					floors
-				)
-			)
-			self:StartRun(sequence, difficulty, ascension, workspace.IgnoreInstances.DungeonSpawnPoint.CFrame)
+			Log.debug(("[RunFlowService] Starting %s on %s, %d floor(s)"):format(dungeonId, difficulty, floors))
+			self:StartRun(sequence, difficulty, workspace.IgnoreInstances.DungeonSpawnPoint.CFrame)
 		end)
 		if not ok then
 			warn("[RunFlowService] Auto-generation failed: " .. tostring(err))

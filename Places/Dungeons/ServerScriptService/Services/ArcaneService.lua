@@ -188,6 +188,17 @@ function ArcaneService.SetPlayerArcaneData(self: typeof(ArcaneService), player: 
 	self:_stampManaAttributes(player)
 end
 
+-- Tops `player`'s mana up to their maximum. EncounterService calls it for
+-- everyone as a Miniboss or Boss fight starts (2026-10-27), so every
+-- encounter opens with both spells castable.
+function ArcaneService.RefillMana(self: typeof(ArcaneService), player: Player)
+	local data = self._arcaneDataProperty:GetFor(player)
+	if not data or data.mana >= data.maxMana then
+		return
+	end
+	self:SetPlayerArcaneData(player, data.maxMana, data.maxMana)
+end
+
 -- Mirror the current mana onto the character as replicated attributes so
 -- every client can draw it (ManaBillboardGui). See Attributes.Mana.
 function ArcaneService._stampManaAttributes(self: typeof(ArcaneService), player: Player)
