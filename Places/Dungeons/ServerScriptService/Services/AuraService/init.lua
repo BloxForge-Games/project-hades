@@ -70,12 +70,10 @@ local STONEBOUND_REDUCTION_ATTRIBUTE = "StoneboundDamageReduction"
 local STONEBOUND_OWNER_ATTRIBUTE = "StoneboundOwnerId"
 
 -- Aura-duration extensions, summed ADDITIVELY (never multiplied together
--- should more than one ever stack), read from the RECEIVER ("your auras"). Flaming Orb of
--- Divine Pain pays for its +50% with +25% damage taken while an aura is up
--- (DamageService:PlayerTakeDamage).
-local AURA_DURATION_BONUSES = {
-	{ relicName = RelicNames["Flaming Orb of Divine Pain"], bonus = 0.5 },
-}
+-- should more than one ever stack), read from the RECEIVER ("your auras").
+-- Empty since Flaming Orb of Divine Pain traded its +50% duration for
+-- doubled aura effects (2026-10-25); kept as the seam for the next one.
+local AURA_DURATION_BONUSES: { { relicName: string, bonus: number } } = {}
 
 -- How far Stonebound carries to allies. Every source spreads — Riot
 -- Shield, Space Sandwich, Spartan Sword and Shield, and anything added

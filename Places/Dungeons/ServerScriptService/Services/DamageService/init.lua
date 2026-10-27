@@ -48,7 +48,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
-local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
@@ -70,6 +70,17 @@ end
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
 local rollDamageVariance = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Damage.rollDamageVariance)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+
+-- Knockback on regular mobs (MobSimService.ApplyKnockback), studs per
+-- hit by what landed it. DoT / aura ticks never push (they return
+-- before it); minibosses and bosses never move. Arcane covers every
+-- hitbox burst (onHitboxDamage hands its centre over), relic bombs
+-- included; "relic" is the rest of the relic procs.
+local KNOCKBACK_MELEE_STUDS = 2
+-- Bullets do not push (2026-10-25); below MobSimService's minimum.
+local KNOCKBACK_BULLET_STUDS = 0
+local KNOCKBACK_ARCANE_STUDS = 3
+local KNOCKBACK_RELIC_STUDS = 1
 
 -- The run's difficulty damage multiplier on mob hits; 1 outside a run.
 -- DungeonService is reached at call time (this service is a consumer).
@@ -110,6 +121,9 @@ local DamageService = {
 	_onDamageModules = {} :: { [string]: any },
 	-- Lightning Horn / Shuriken fan-out latches: [userId] = os.clock() of the last proc.
 	_lightningStrikeLast = {} :: { [number]: number },
+	-- [userId] = true while that player's Lightning Strike deals its damage,
+	-- so the strike's own hits cannot roll another.
+	_lightningStrikeResolving = {} :: { [number]: boolean },
 	_shurikenLastRefund = {} :: { [number]: number },
 	-- Rolling per-player log of damage that actually reached HEALTH (post
 	-- shield / post-mitigation) — Astral Cloak's dodge heal consumes it.
@@ -134,9 +148,6 @@ end
 -- Baseline crit chance every hit has before any relic or aura.
 local DEFAULT_CRITICAL_CHANCE = 5
 local DEFAULT_CRITICAL_MULTIPLIER = 1.5
--- Double-Bladed Scythe (Cursed): "-50% less Magic Damage". Its callback owns
--- the +50% WEAPON half, so this drawback lives here as its own knob.
-local BONE_SCYTHE_MAGIC_MULTIPLIER = 0.5
 local RESISTED_COLOR3 = DamageIndicatorColors.Resisted
 local MAGIC_COLOR3 = DamageIndicatorColors.Arcane
 local WEAPON_COLOR3 = DamageIndicatorColors.Weapon
@@ -154,9 +165,9 @@ local STATUS_ATTRIBUTE_PREFIX = "Status"
 -- damage immunity should never be reachable from a free pickup.
 local GREATER_SHRINE_MAX_REDUCTION = 0.60
 
--- Flaming Orb of Divine Pain (Cursed): +25% damage TAKEN while any aura is
--- up — the price of its x1.5 aura-duration extension (AuraService).
-local FLAMING_ORB_DAMAGE_TAKEN_MULTIPLIER = 1.25
+-- Flaming Orb of Divine Pain (Cursed): +50% damage TAKEN while any of
+-- these auras is up -- the price of doubling their base effects. The
+-- numbers are the relic's `data` (auraScale, damageTakenBonus).
 local FLAMING_ORB_AURA_MARKERS = {
 	AuraNames.Enflamed,
 	AuraNames.Frostburst,
@@ -173,11 +184,10 @@ local DRAGON_LANTERN_TAX = 0.10
 -- on the multiplier). Chances/fractions that live in relic callbacks are
 -- read at the use site; these are the hardcoded halves.
 
--- Lightning Horn of the Heavens: a CRIT on a Shocked enemy has the relic's
--- data.strikeChance to call down a Lightning Strike (damage per level from
--- the relic callback) in this radius. Latched so one strike can never
--- chain another off its own crits, and relic-sourced damage can never
--- trigger one. (The Stormcharged clause was dropped in the 2026-09 pass.)
+-- Lightning Horn of the Heavens: ANY damage on a Shocked enemy has the
+-- relic's data.strikeChance to call down a Lightning Strike (damage per
+-- level from the relic callback) in this radius. Latched so a strike never
+-- chains another off its own damage.
 local LIGHTNING_STRIKE_RADIUS = 11
 local LIGHTNING_STRIKE_FANOUT_SECONDS = 0.1
 
@@ -235,6 +245,15 @@ end
 
 -- Same contract as RelicService:GetRelicEffect: the callback's value when
 -- owned, `false` otherwise (callers `or` their default).
+-- Flaming Orb of Divine Pain: how many times over the player's auras pay
+-- their AuraData base (1 without the relic).
+function DamageService.AuraScale(snapshot: RelicSnapshot): number
+	if DamageService.RelicCount(snapshot, RelicNames["Flaming Orb of Divine Pain"]) <= 0 then
+		return 1
+	end
+	return relicData(RelicNames["Flaming Orb of Divine Pain"], "auraScale", 2)
+end
+
 function DamageService.RelicEffect(snapshot: RelicSnapshot, relicName: string): any?
 	local entry = snapshot.relics[relicName]
 	if not entry then
@@ -374,26 +393,36 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * (1 - relicData(RelicNames["Sword of Eternal Abyss"], "damageReduction", 0.50))
 	end
 
-	-- Stonebound: -10% damage taken (plus the owner's Leland rider), read
+	-- Stonebound: its damage reduction (plus the owner's Leland rider), read
 	-- straight off the marker's replicated payload.
+	local stoneboundReduction = 0
 	if AuraService then
-		local _, stoneboundReduction = AuraService:GetStoneboundPayload(character)
-		if stoneboundReduction > 0 then
-			damage = damage * (1 - stoneboundReduction)
-		end
+		local _, payloadReduction = AuraService:GetStoneboundPayload(character)
+		stoneboundReduction = payloadReduction
 	end
 
-	-- Flaming Orb of Divine Pain (Cursed): +25% taken while ANY aura is up.
+	-- Flaming Orb of Divine Pain (Cursed): while ANY aura is up, +50% damage
+	-- taken, SUBTRACTED from the Stonebound reduction (one sum, not two
+	-- multipliers); its doubled Stonebound adds the aura's base once more.
+	-- So 30% -> 60% reduction - 50% = 10% less damage while Stonebound.
+	local orbPenalty = 0
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Flaming Orb of Divine Pain"]) > 0 then
 		local auraHrp = getRoot(character)
 		if auraHrp then
 			for _, markerName in FLAMING_ORB_AURA_MARKERS do
 				if auraHrp:FindFirstChild(markerName) then
-					damage = damage * FLAMING_ORB_DAMAGE_TAKEN_MULTIPLIER
+					orbPenalty = relicData(RelicNames["Flaming Orb of Divine Pain"], "damageTakenBonus", 0.50)
 					break
 				end
 			end
 		end
+		if stoneboundReduction > 0 then
+			local scale = relicData(RelicNames["Flaming Orb of Divine Pain"], "auraScale", 2)
+			stoneboundReduction += (AuraData[AuraNames.Stonebound].damageReduction or 0) * (scale - 1)
+		end
+	end
+	if stoneboundReduction > 0 or orbPenalty > 0 then
+		damage = damage * math.max(1 - stoneboundReduction + orbPenalty, 0)
 	end
 
 	-- Greater Shrine "Bulwark". Deliberately ABOVE the fixedDamage
@@ -585,15 +614,48 @@ function DamageService.TryExecute(_self: typeof(DamageService), player: Player, 
 	humanoid:TakeDamage(humanoid.Health)
 end
 
--- Post-damage hub — runs after EVERY damage application inside TakeDamage.
--- `isRelicSourced` blocks the Lightning Strike from re-triggering off
--- relic damage — a strike's own crits can never chain another strike.
+-- Pushes a regular sim mob away from the hit (see KNOCKBACK_*). Called
+-- once per landed hit, before the damage branches split, with the hit's
+-- kind read BEFORE any conversion flips it.
+function DamageService._knockback(
+	_self: typeof(DamageService),
+	player: Player,
+	targetModel: Model,
+	isMelee: boolean,
+	isGunShot: boolean,
+	isArcane: boolean,
+	hitOrigin: Vector3?
+)
+	if isEncounterEnemy(targetModel) then
+		return
+	end
+	local mobSimService = Blitz.OptionalService("MobSimService")
+	if not mobSimService then
+		return
+	end
+	local character = player.Character
+	local attackerRoot = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local attackerAt = attackerRoot and attackerRoot.Position
+	local origin = hitOrigin or attackerAt
+	if not origin then
+		return
+	end
+	local distance = if isMelee
+		then KNOCKBACK_MELEE_STUDS
+		elseif isArcane then KNOCKBACK_ARCANE_STUDS
+		elseif isGunShot then KNOCKBACK_BULLET_STUDS
+		else KNOCKBACK_RELIC_STUDS
+	mobSimService:ApplyKnockback(targetModel, origin, distance, attackerAt)
+end
+
+-- Post-damage hub — runs after EVERY damage application inside TakeDamage:
+-- weapon, arcane, relic bursts and DoT ticks.
 function DamageService._postDamage(
 	self: typeof(DamageService),
 	player: Player,
 	humanoid: Humanoid,
 	wasCrit: boolean?,
-	isRelicSourced: boolean?
+	_isRelicSourced: boolean?
 )
 	self:TryExecute(player, humanoid, wasCrit)
 
@@ -601,11 +663,12 @@ function DamageService._postDamage(
 	-- selects which of its two chances applies.
 	self:_tryLightningOrbStormcharge(player, wasCrit)
 
+	-- "All damage" relics (2026-10-25): every damage instance rolls them.
+	self._onDamageModules["Jail"](player, humanoid)
+	self:_tryLightningHornStrike(player, humanoid)
+
 	if wasCrit then
 		self:_tryShurikenManaRefund(player)
-		if not isRelicSourced then
-			self:_tryLightningHornStrike(player, humanoid)
-		end
 	end
 end
 
@@ -633,13 +696,15 @@ function DamageService._tryLightningOrbStormcharge(_self: typeof(DamageService),
 	end
 end
 
--- Lightning Horn of the Heavens (Legendary): a crit on a Shocked enemy
+-- Lightning Horn of the Heavens (Legendary): any damage on a Shocked enemy
 -- (Coil Shocked counts) has data.strikeChance to call down a Lightning
 -- Strike — per-level damage from the relic callback, in a radius, every
--- enemy inside. The fan-out latch collapses an AoE crit into ONE strike,
--- and _postDamage's isRelicSourced gate stops a strike's own crits from
--- chaining another.
+-- enemy inside. The fan-out latch collapses an AoE hit into ONE strike,
+-- and the resolving latch stops a strike's own damage chaining another.
 function DamageService._tryLightningHornStrike(self: typeof(DamageService), player: Player, humanoid: Humanoid)
+	if self._lightningStrikeResolving[player.UserId] then
+		return
+	end
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Lightning Horn of the Heavens"]) <= 0 then
 		return
 	end
@@ -652,7 +717,7 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 	-- The roll, before the latch: a failed roll must not spend the fan-out
 	-- window for the other targets of the same AoE crit.
 	local hornData = RelicData[RelicNames["Lightning Horn of the Heavens"]]
-	local strikeChance = (hornData and hornData.data and hornData.data.strikeChance) or 0.50
+	local strikeChance = (hornData and hornData.data and hornData.data.strikeChance) or 0.25
 	if math.random() > strikeChance then
 		return
 	end
@@ -671,7 +736,7 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 	self._lightningStrikeLast[player.UserId] = now
 
 	local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Lightning Horn of the Heavens"]) or 0
-	local strikeDamage = math.round(damagePerLevel * getPlayerLevel(player))
+	local strikeDamage = math.round(damagePerLevel * getRelicLevel(player))
 	if strikeDamage <= 0 then
 		return
 	end
@@ -681,10 +746,11 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 
 	RelicNetwork.LightningStrikeEffect.FireAll(strikePosition)
 
+	self._lightningStrikeResolving[player.UserId] = true
 	forEachEnemyInRadius(strikePosition, LIGHTNING_STRIKE_RADIUS, function(model, targetHumanoid)
 		-- Full pipeline, relic-sourced: amp chain and crit roll apply, but
-		-- relic-sourced damage can never trigger ANOTHER strike, and the
-		-- appliers roll per target like any relic arcane.
+		-- the resolving latch keeps it from triggering ANOTHER strike, and
+		-- the appliers roll per target like any relic arcane.
 		-- isMagic = false: the strike rides the untyped relic lane; a
 		-- arcane flag would wrongly pick up Painted's arcane vulnerability.
 		self:TakeDamage(player, targetHumanoid, strikeDamage, false, false, nil, true)
@@ -692,6 +758,7 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 			getStatusConditionService():ApplyArcaneOnHitStatuses(player, model)
 		end
 	end)
+	self._lightningStrikeResolving[player.UserId] = nil
 end
 
 -- Shuriken of the Crescent Moon: refund 1% of Maximum Mana on a critical
@@ -766,7 +833,7 @@ function DamageService.GetCritParameters(
 
 	-- Stormcharged: crit chance while up (AuraData owns the number).
 	if isStormcharged then
-		critChance += AuraData[AuraNames.Stormcharged].critChanceBonus or 0
+		critChance += (AuraData[AuraNames.Stormcharged].critChanceBonus or 0) * DamageService.AuraScale(relics)
 
 		-- Katana deepens the SAME window, both halves. Its crit-chance half
 		-- is the callback (percentage points); the damage half is the
@@ -922,12 +989,6 @@ function DamageService._sumTargetConditionalBonuses(
 	-- once per hit in GetTargetStatuses).
 	local statusCount = statuses.statusCount
 
-	-- Neon Rainbow Phoenix: +25% per distinct status, additive.
-	if statusCount > 0 and DamageService.RelicCount(snapshot, RelicNames["Neon Rainbow Phoenix"]) > 0 then
-		local perStatus = (DamageService.RelicEffect(snapshot, RelicNames["Neon Rainbow Phoenix"]) or 1) - 1
-		bonus += perStatus * statusCount
-	end
-
 	-- BLIGHTED: +10% per unique status on the target, and Overseer's
 	-- Battleaxe raises that same RATE to 15% rather than adding a second
 	-- bonus on top — so the player follows one number, not two.
@@ -946,7 +1007,8 @@ function DamageService._sumTargetConditionalBonuses(
 	if statusCount > 0 then
 		local attackerHrp = getRoot.fromPlayer(player)
 		if attackerHrp and attackerHrp:FindFirstChild(AuraNames.Blighted) then
-			local perStatus = AuraData[AuraNames.Blighted].damagePerUniqueStatus or 0
+			local perStatus = (AuraData[AuraNames.Blighted].damagePerUniqueStatus or 0)
+				* DamageService.AuraScale(snapshot)
 			if DamageService.RelicCount(snapshot, RelicNames["Overseer's Battleaxe"]) > 0 then
 				perStatus += (DamageService.RelicEffect(snapshot, RelicNames["Overseer's Battleaxe"]) or 1) - 1
 			end
@@ -1024,7 +1086,10 @@ function DamageService.TakeDamage(
 	-- Sword of the Epicredness marker (set ONLY by onHitboxDamage): this
 	-- weapon-flagged hit is a CONVERTED SPELL, so Orinthian's ranged
 	-- conversion below must not touch it.
-	isConvertedSpell: boolean?
+	isConvertedSpell: boolean?,
+	-- Where the hit came from, for the knockback (a hitbox burst's
+	-- centre, from onHitboxDamage). Nil = the attacker's position.
+	hitOrigin: Vector3?
 )
 	if humanoid.Health <= 0 then
 		return
@@ -1089,6 +1154,8 @@ function DamageService.TakeDamage(
 	-- a bullet for everything below that cares about bullets.
 	local isGunShot = not isMagic and not isMelee and not isRelicSourced and not isConvertedSpell
 
+	self:_knockback(player, targetModel, isMelee == true, isGunShot, isMagic == true or hitOrigin ~= nil, hitOrigin)
+
 	-- Orinthian Blaster 3777: ranged weapon hits are CONVERTED to Arcane
 	-- Damage. `isConvertedRanged` keeps the shot's RANGED identity alive
 	-- for the ranged-conditional procs.
@@ -1107,11 +1174,6 @@ function DamageService.TakeDamage(
 	-- vulnerability). Weapon Damage / Magic Damage relics, the armor
 	-- set's weapon amp, and CRITS never touch relic bursts.
 	local untypedOnly = isRelicSourced == true
-
-	-- Weapon-only on-hit side effects (Jail). Relic bursts don't jail.
-	if not untypedOnly then
-		self._onDamageModules["Jail"](player, snapshot, humanoid, isMagic)
-	end
 
 	-- ADDITIVE RELIC SUM. Each module internally gates itself and returns
 	-- `damage x its fraction`, so the sum realizes base x (1 + Σ bonuses).
@@ -1170,16 +1232,17 @@ function DamageService.TakeDamage(
 		totalDamage *= self:_targetVulnerabilityMultiplier(player, targetModel, isMagic)
 	end
 
-	-- Double-Bladed Scythe (Cursed): arcane halved, weapon +50%,
-	-- multiplicative on the amplified total (a Cursed override, not part of
-	-- the additive pool). A TYPED relic, so it obeys the untyped lane like
-	-- the modules above — relic bursts arrive as isMagic=false and were
-	-- silently taking the weapon +50%.
+	-- Double-Bladed Scythe (Cursed): arcane x(1 - callback), weapon
+	-- x(1 + callback), multiplicative on the amplified total (a Cursed
+	-- override, not part of the additive pool). A TYPED relic, so it obeys
+	-- the untyped lane like the modules above — relic bursts arrive as
+	-- isMagic=false and were silently taking the weapon bonus.
 	if not untypedOnly and DamageService.RelicCount(snapshot, RelicNames["Double-Bladed Scythe"]) > 0 then
+		local magnitude = DamageService.RelicEffect(snapshot, RelicNames["Double-Bladed Scythe"]) or 0
 		if isMagic then
-			totalDamage *= BONE_SCYTHE_MAGIC_MULTIPLIER
+			totalDamage *= math.max(1 - magnitude, 0)
 		else
-			totalDamage *= 1 + (DamageService.RelicEffect(snapshot, RelicNames["Double-Bladed Scythe"]) or 0)
+			totalDamage *= 1 + magnitude
 		end
 	end
 

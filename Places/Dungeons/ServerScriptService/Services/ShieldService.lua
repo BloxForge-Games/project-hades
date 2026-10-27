@@ -51,7 +51,7 @@ local AuraService = require(ServerScriptService.Services.AuraService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
-local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 
@@ -125,7 +125,10 @@ local TNT_FUSE_SECONDS = 0
 -- abrupt one, and at a 1s pulse interval two tremors overlap, so a hard cut
 -- there reads as a strobe.
 local TREMOR_INTERVAL = 1
-local TREMOR_RADIUS = 10
+-- Doubled 2026-10-25 (was 10); the visual scales with it.
+local TREMOR_RADIUS = 20
+-- The radius the Tremor VFX asset was authored at.
+local TREMOR_VFX_AUTHORED_RADIUS = 10
 local TREMOR_Y_OFFSET = 1.5
 local TREMOR_EMIT_COUNT = 5
 local TREMOR_FADE_OUT_SECONDS = 0.9
@@ -281,7 +284,7 @@ function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: numbe
 	-- callback IS the per-level damage, so this number has one home in
 	-- RelicData and cannot drift from the card.
 	local damagePerLevel = RelicService:GetRelicEffect(owner, RelicNames["Bundle of TNT"]) or 0
-	local blastDamage = math.round(getPlayerLevel(owner) * damagePerLevel)
+	local blastDamage = math.round(getRelicLevel(owner) * damagePerLevel)
 	if blastDamage <= 0 then
 		return
 	end
@@ -419,13 +422,16 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 				-- per-second damage, so the pulse always pays out and the number
 				-- lives only in RelicData.
 				local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Golem's Hammer"]) or 0
-				local tremorDamage = math.round(getPlayerLevel(player) * damagePerLevel)
+				local tremorDamage = math.round(getRelicLevel(player) * damagePerLevel)
 
 				local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
 				local tremorFolder = vfxFolder and vfxFolder:FindFirstChild("Tremor")
 				local tremorTemplate = tremorFolder and tremorFolder:FindFirstChild("Tremor")
 				if tremorTemplate then
 					local tremor = tremorTemplate:Clone()
+					if tremor:IsA("Model") then
+						tremor:ScaleTo(tremor:GetScale() * TREMOR_RADIUS / TREMOR_VFX_AUTHORED_RADIUS)
+					end
 					for _, part in tremor:GetDescendants() do
 						if part:IsA("BasePart") then
 							part.Anchored = true

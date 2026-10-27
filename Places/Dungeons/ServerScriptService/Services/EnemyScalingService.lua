@@ -14,10 +14,11 @@
 	    mob at 5% stays at 5% and never dies (or heals to full) because the
 	    party changed shape.
 
-	The multiplier is (1 + 0.5 x (active players - 1)) x the run's
+	The multiplier is (1 + 1 x (active players - 1)) x the run's
 	difficulty health x the floor's growth (DifficultyData): solo Normal
-	floor 1 is 1x base, duo 1.5x, trio 2x, a full party 2.5x (design call,
-	2026-10: each extra player adds half a mob's worth). The same curve
+	floor 1 is 1.5x base (Normal's enemyHealth), and each extra player adds
+	one more solo's worth: duo 2x solo, trio 3x, a full party 4x (design call,
+	2026-10-25: each extra player adds a whole mob's worth; was half). The same curve
 	applies to mobs, minibosses and bosses alike. "Active" is LifeService's count:
 	alive or DOWNED (a downed player may yet buy a revive); fully dead
 	players no longer count, which is why a party of two fighting a boss
@@ -61,9 +62,9 @@ local function difficultyHealthMultiplier(): number
 end
 
 -- Health added per active player past the first, as a fraction of base.
-local HEALTH_PER_EXTRA_PLAYER = 0.5
+local HEALTH_PER_EXTRA_PLAYER = 1
 
--- (1 + 0.5 x (active players - 1)) x difficulty x floor. `excluding` is a
+-- (1 + 1 x (active players - 1)) x difficulty x floor. `excluding` is a
 -- player mid PlayerRemoving, still listed by Players:GetPlayers() while
 -- its handlers run.
 function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingService), excluding: Player?): number

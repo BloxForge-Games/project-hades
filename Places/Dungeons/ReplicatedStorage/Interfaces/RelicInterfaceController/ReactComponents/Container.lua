@@ -499,6 +499,26 @@ local function Container(props: any)
 			ZIndex = -1,
 		}),
 
+		-- Click-away close: a clear full-screen button under the tray that
+		-- shuts it on any click outside the panel, the card or the toggle
+		-- (each of those sits above it and sinks its own clicks). Only
+		-- present while open, so it never eats input with the tray shut.
+		-- Every close path runs through `visible`, so a Merchant / Forge
+		-- session ends here exactly as it does on the toggle.
+		ClickAwayButton = React.createElement("TextButton", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(2, 2),
+			BackgroundTransparency = 1,
+			AutoButtonColor = false,
+			Text = "",
+			Visible = visible,
+			ZIndex = -1,
+			[React.Event.Activated] = function()
+				setVisible(false)
+			end,
+		}),
+
 		RelicDescriptionFrame = React.createElement("CanvasGroup", {
 			ref = descriptionFrameRef,
 
@@ -507,6 +527,18 @@ local function Container(props: any)
 			Size = UDim2.fromScale(0.424019, 0.291),
 			BackgroundTransparency = 1,
 		}, {
+			-- Sinks clicks on the card's empty space so they do not reach
+			-- ClickAwayButton. Only while the card is showing: a faded-out
+			-- card must not leave an invisible dead zone.
+			ClickBlocker = React.createElement("TextButton", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				AutoButtonColor = false,
+				Text = "",
+				Visible = visible and selectedRelic ~= nil,
+				ZIndex = 0,
+			}),
+
 			ContainerFrame = React.createElement("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.467, 0.5),
@@ -1036,6 +1068,16 @@ local function Container(props: any)
 			BackgroundTransparency = 0,
 			ZIndex = 0,
 		}, {
+			-- Sinks clicks on the panel's gaps so they do not reach
+			-- ClickAwayButton. The tiles (RelicListFrame) draw above it.
+			ClickBlocker = React.createElement("TextButton", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				AutoButtonColor = false,
+				Text = "",
+				ZIndex = 0,
+			}),
+
 			-- The animated shine ring (ShineRing), over the static stroke.
 			ShineRing = React.createElement(ShineRing, {
 				color = Color3.fromRGB(43, 65, 85),

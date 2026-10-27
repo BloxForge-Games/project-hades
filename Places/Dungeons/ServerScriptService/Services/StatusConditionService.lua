@@ -30,7 +30,7 @@
 	Shocked" must use IsBurning / IsPoisoned / IsShocked — the upgraded
 	variants stamp their OWN attribute, so a raw StatusBurn read misses a
 	Black Flame. Each variant still counts as its own DISTINCT status for
-	per-status counting (Overseer's Battleaxe, Neon Rainbow Phoenix).
+	per-status counting (Overseer's Battleaxe, Blighted).
 
 	Poison weaken: each player's PILE of Poison/Noxious stacks weakens
 	the mob's outgoing damage ONCE, at the pile's strongest record —
@@ -74,7 +74,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
-local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 
 -- One relic's tweak to a status application (StatusConditionData
 -- `relicModifiers` rows and GLOBAL_RELIC_MODIFIERS).
@@ -686,6 +686,12 @@ local RELIC_HIT_STATUSES: {
 		-- (the roll-time callback read), so the NC pickup PRODUCES the
 		-- Poison it then upgrades — Deluxe Coil Gun's exact pattern.
 		{ relicName = RelicNames["Skeletal Scythe"], status = StatusConditions.Poison },
+		-- Neon Rainbow Phoenix: its flat chance (the callback) on EACH of the
+		-- four tree statuses, every hit -- an applier on its own.
+		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Burn },
+		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Chill },
+		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Poison },
+		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Shock },
 		-- The four aura-gated chance boosters that used to live here (Faux
 		-- Firebrand, Blizzard Wand, Lightning Wand, Overseer's Short Sword)
 		-- are all gone: the 2026-08 pass turned the first three into damage
@@ -1247,7 +1253,7 @@ function StatusConditionService:_tryIceBreakerShatter(sourcePlayer: Player, targ
 		return false
 	end
 
-	local shatterDamage = math.round(ICE_BREAKER_DAMAGE_PER_LEVEL * getPlayerLevel(sourcePlayer))
+	local shatterDamage = math.round(ICE_BREAKER_DAMAGE_PER_LEVEL * getRelicLevel(sourcePlayer))
 	if shatterDamage <= 0 then
 		return false
 	end

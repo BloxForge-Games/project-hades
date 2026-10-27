@@ -34,7 +34,7 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local getPlayerLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getPlayerLevel)
+local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 
 local HITBOX_SIZE_MULTIPLIER = 1.25
 
@@ -67,14 +67,15 @@ function GhostDragon.new(
 	return self
 end
 
--- Ghost Dragon: every second, deal (8 x PlayerLevel x (1 + bonus MaxHP %))
--- Magic Damage to nearby enemies. RAW damage -- it scales on level and the
--- owner's relic-sourced bonus Maximum Health percentage and NOTHING else.
+-- Ghost Dragon: every second, deal (GHOST_DRAGON_DAMAGE_PER_LEVEL in
+-- RelicData x PlayerLevel) damage to nearby enemies. RAW damage -- it
+-- scales on level and NOTHING else (the bonus-max-health share came off in
+-- the 2026-08 pass).
 --
 -- The raw-damage flag (5th arg) is what enforces that: it takes
 -- TakeDamage's bypass branch, so no amplifier in the chain applies, there
 -- is no crit roll and no +-10% variance, and the number the mob takes is
--- exactly 20% of MaxHealth. The final arg opts back INTO the normal hit
+-- exactly level x rate. The final arg opts back INTO the normal hit
 -- VFX -- the raw path suppresses them by default for multi-tick DoTs,
 -- but this fires once per second and should read like any other hit.
 --
@@ -101,7 +102,7 @@ function GhostDragon.InvokeGhostDragon(self: GhostDragonFields)
 	-- the card is a flat level scale now, matching every other per-level
 	-- relic. Rounded because the raw-damage path applies this verbatim.
 	local ratePerLevel = getRelicService():GetRelicEffect(self._player, RelicNames["Ghost Dragon"]) or 10
-	local baseDamage = math.round(ratePerLevel * getPlayerLevel(self._player))
+	local baseDamage = math.round(ratePerLevel * getRelicLevel(self._player))
 
 	self._vfxService:CreateHitbox(
 		ArcaneNames["Ghost Dragon"],

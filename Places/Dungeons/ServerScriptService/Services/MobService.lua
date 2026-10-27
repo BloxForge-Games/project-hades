@@ -65,12 +65,14 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local RelicService = require(ServerScriptService.Services.RelicService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local DamageService = require(ServerScriptService.Services.DamageService)
+local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local MobNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Mob)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
+local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 
 local MobService = {
@@ -569,6 +571,85 @@ function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, 
 	})
 end
 
+--[ Heal zone (support mobs) ]--
+
+-- How far above / below the square's floor a mob's root may be and still
+-- be inside it (mob roots sit higher than a player's).
+local HEAL_ZONE_ABOVE = 12
+local HEAL_ZONE_BELOW = 4
+
+local function mobInZone(cframe: CFrame, size: Vector3, position: Vector3): boolean
+	local localPosition = cframe:PointToObjectSpace(position)
+	return math.abs(localPosition.X) <= size.X / 2
+		and math.abs(localPosition.Z) <= size.Z / 2
+		and localPosition.Y <= HEAL_ZONE_ABOVE
+		and localPosition.Y >= -HEAL_ZONE_BELOW
+end
+
+-- A support mob's heal (MobData kind = "heal"): the square telegraphs
+-- and hurts players exactly like a melee hitbox (SpawnHitbox, so the
+-- difficulty and corruption scaling come with it), then every living mob
+-- inside it heals healFraction of its max health (encounterHealFraction
+-- for minibosses and bosses), with a green "+N" and flash for everyone
+-- (DamageIndicatorService.ShowHealIndicator), and so
+-- does every mob in `covered` (the hurt allies the square was aimed at:
+-- a chasing mob can walk out of it during the wind-up). Blocks for
+-- wind-up + hit frame; the caller owns the recovery.
+function MobService.CastHealZone(self: typeof(MobService), mobModel: Model, attack, cframe: CFrame, covered: { Model }?)
+	-- Typed `any` like the mist cleave's: a literal CFrame here trips the
+	-- inferred (CFrame | fn) config type.
+	local zone: any = {
+		hitbox = attack.hitbox,
+		cframe = cframe,
+		damage = attack.damage,
+		canRagdoll = attack.canRagdoll,
+		windUpDuration = attack.windUpDuration,
+		hitFrameDuration = attack.hitFrameDuration,
+	}
+	self:SpawnHitbox(mobModel, zone)
+	local caster = mobModel:FindFirstChildOfClass("Humanoid")
+	if
+		not mobModel.Parent
+		or mobModel:GetAttribute("AttackInterrupted") == true
+		or not caster
+		or caster.Health <= 0
+	then
+		return
+	end
+
+	local mobs = workspace.IgnoreInstances:FindFirstChild("Mobs")
+	if not mobs then
+		return
+	end
+	local size: Vector3 = attack.hitbox.size
+	local aimedAt: { [Model]: boolean } = {}
+	if covered then
+		for _, model in covered do
+			aimedAt[model] = true
+		end
+	end
+	for _, model in mobs:GetChildren() do
+		if not model:IsA("Model") then
+			continue
+		end
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		local root = getRoot(model)
+		if not humanoid or not root or humanoid.Health <= 0 or humanoid.Health >= humanoid.MaxHealth then
+			continue
+		end
+		if not aimedAt[model :: Model] and not mobInZone(cframe, size, root.Position) then
+			continue
+		end
+		local fraction = if isEncounterEnemy(model) then attack.encounterHealFraction else attack.healFraction
+		local amount = math.min(math.round(humanoid.MaxHealth * fraction), humanoid.MaxHealth - humanoid.Health)
+		if amount <= 0 then
+			continue
+		end
+		humanoid.Health += amount
+		DamageIndicatorService:ShowHealIndicator(model :: Model, amount)
+	end
+end
+
 --[ Hidden Mist Ambush (Runic Executioner) ]--
 
 -- How long the body takes to dissolve into the mist, and to come back out.
@@ -619,7 +700,12 @@ end
 -- Untargetable through InvulnerabilityService (the Invulnerable attribute
 -- every damage path refuses), with the CUTSCENE reason so no white
 -- invulnerable outline gives his position away. Unseen through the same
--- Combat.MobFade cue a despawn uses, run on every client.
+-- Combat.MobFade cue a despawn uses, run on every client. Unhittable too:
+-- every part of him stops answering spatial queries and touches while he
+-- is gone, so swings find nothing (no hit marker, no impact), not just a
+-- hit that deals 0. A COLLIDABLE part answers raycasts whatever its
+-- CanQuery says, so the Phased attribute tells the projectile sweep
+-- (ProjectileCastService) to fly through him as well.
 function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, target: Model, config)
 	local root = getRoot(mobModel)
 	local humanoid = mobModel:FindFirstChildOfClass("Humanoid")
@@ -647,7 +733,23 @@ function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, tar
 	local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService) :: any
 	local window = InvulnerabilityService:OpenWindow(mobModel, "Cutscene")
 	Combat.MobFade.FireAll({ Mob = mobModel, Phase = "Out", Duration = MIST_FADE_OUT_SECONDS })
+	-- Each part's own CanQuery / CanTouch, put back exactly on reveal.
+	mobModel:SetAttribute(Attributes.Phased, true)
+	local hiddenParts: { [BasePart]: { canQuery: boolean, canTouch: boolean } } = {}
+	for _, part in mobModel:GetDescendants() do
+		if part:IsA("BasePart") then
+			hiddenParts[part] = { canQuery = part.CanQuery, canTouch = part.CanTouch }
+			part.CanQuery = false
+			part.CanTouch = false
+		end
+	end
 	local function reveal()
+		for part, saved in hiddenParts do
+			part.CanQuery = saved.canQuery
+			part.CanTouch = saved.canTouch
+		end
+		table.clear(hiddenParts)
+		mobModel:SetAttribute(Attributes.Phased, nil)
 		Combat.MobFade.FireAll({ Mob = mobModel, Phase = "In", Duration = MIST_FADE_IN_SECONDS })
 		InvulnerabilityService:CloseWindow(window)
 	end

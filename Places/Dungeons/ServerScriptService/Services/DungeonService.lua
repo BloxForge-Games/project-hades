@@ -323,6 +323,12 @@ end
 
 function DungeonService.SetRun(self: typeof(DungeonService), run: Run?)
 	self._run = run
+	-- Level-scaled relics count at most the tier's top gear level
+	-- (Shared/Functions/Player/getRelicLevel); read on both sides.
+	workspace:SetAttribute(
+		Attributes.RelicLevelCap,
+		if run then DifficultyData.Resolve(run.difficulty, run.ascension).levelRange.max else nil
+	)
 end
 
 function DungeonService.GetRun(self: typeof(DungeonService)): Run?

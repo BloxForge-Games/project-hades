@@ -121,6 +121,10 @@ LifeService._isGameOver = false
 --[ Constants ]--
 
 local POST_LIFE_LOSS_INVULN_SECONDS = 3
+-- A revive (downed or fully dead) stands the player back up on this share
+-- of their maximum health (design call 2026-10-25). Losing a life with
+-- lives to spare is not a revive and still refills to full.
+local REVIVE_HEALTH_FRACTION = 0.5
 local DEFAULT_LIVES = 1
 
 -- NATIVE deaths (QA 2026-10-21, P0 #4). The header's promise is that
@@ -889,7 +893,7 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 	end
 
 	if humanoid then
-		humanoid.Health = humanoid.MaxHealth
+		humanoid.Health = humanoid.MaxHealth * REVIVE_HEALTH_FRACTION
 	end
 
 	PlayerNetwork.RevivalFade.Fire(player, { Phase = "out", Duration = FADE_DURATION })
