@@ -57,8 +57,8 @@ local function difficultyHealthMultiplier(): number
 	if not dungeonService then
 		return 1
 	end
-	-- The tier's multiplier x the floor's (+10% per floor past the first).
-	return dungeonService:GetDifficultyScale().enemyHealth * dungeonService:GetFloorMultiplier()
+	-- The tier's multiplier x the floor's (DifficultyData's health growth).
+	return dungeonService:GetDifficultyScale().enemyHealth * dungeonService:GetFloorMultiplier("health")
 end
 
 -- Health added per active player past the first, as a fraction of base.

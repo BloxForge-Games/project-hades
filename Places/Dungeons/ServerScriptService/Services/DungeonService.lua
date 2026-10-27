@@ -409,9 +409,9 @@ function DungeonService.GetFloorCount(self: typeof(DungeonService)): number
 	return math.max(count, 1)
 end
 
--- The per-floor enemy stat multiplier (DifficultyData.FloorMultiplier).
-function DungeonService.GetFloorMultiplier(self: typeof(DungeonService)): number
-	return DifficultyData.FloorMultiplier(self:GetFloor())
+-- The per-floor enemy `stat` multiplier (DifficultyData.FloorMultiplier).
+function DungeonService.GetFloorMultiplier(self: typeof(DungeonService), stat: "health" | "damage"): number
+	return DifficultyData.FloorMultiplier(self:GetFloor(), stat)
 end
 
 function DungeonService.IsRunCleared(self: typeof(DungeonService)): boolean

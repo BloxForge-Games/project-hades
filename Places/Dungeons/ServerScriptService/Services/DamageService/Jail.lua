@@ -51,7 +51,8 @@ local function justiceData(field: string, fallback: number): number
 	return if type(value) == "number" then value else fallback
 end
 
-return function(player: Player, humanoid: Humanoid)
+-- `procCoefficient`: a bullet's (getGunProcCoefficient), 1 otherwise.
+return function(player: Player, humanoid: Humanoid, procCoefficient: number?)
 	-- Relic ownership check. Reads the count rather than the callback,
 	-- which returns a bare 1 (the relic's old +25% Weapon Damage half left
 	-- with its rework -- Jail is now its whole effect).
@@ -84,7 +85,7 @@ return function(player: Player, humanoid: Humanoid)
 		return
 	end
 
-	if math.random() > justiceData("jailChance", 0.20) then
+	if math.random() > justiceData("jailChance", 0.20) * (procCoefficient or 1) then
 		return
 	end
 	local jailSeconds = justiceData("jailSeconds", 3)

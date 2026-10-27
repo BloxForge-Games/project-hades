@@ -75,6 +75,7 @@ local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNam
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
+local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 
 -- One relic's tweak to a status application (StatusConditionData
 -- `relicModifiers` rows and GLOBAL_RELIC_MODIFIERS).
@@ -756,11 +757,16 @@ function StatusConditionService:_getStatusChanceBonus(sourcePlayer: Player): num
 end
 
 -- Sums the qualifying rows for one hit into { [status] = chance }.
+-- `procCoefficient` (a bullet's, getGunProcCoefficient; 1 otherwise)
+-- scales every chance below 1. A row authored at 1 or more is a
+-- guarantee (Magenta Paintball's Painted) and stays one.
 function StatusConditionService:_sumApplierChances(
 	sourcePlayer: Player,
 	isWeaponHit: boolean,
-	isRanged: boolean?
+	isRanged: boolean?,
+	procCoefficient: number?
 ): { [string]: number }
+	local coefficient = procCoefficient or 1
 	local character = sourcePlayer.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -777,6 +783,9 @@ function StatusConditionService:_sumApplierChances(
 		end
 		if RelicService:GetSpecificRelicRegistry(sourcePlayer, row.relicName) > 0 then
 			local chance = row.chance or RelicService:GetRelicEffect(sourcePlayer, row.relicName) or 0
+			if chance < 1 then
+				chance *= coefficient
+			end
 			chanceByStatus[row.status] = (chanceByStatus[row.status] or 0) + chance
 		end
 	end
@@ -795,7 +804,7 @@ function StatusConditionService:_sumApplierChances(
 		local chance = if ownerHasAura(sourcePlayer, AuraNames.Frostburst)
 			then raised or 0.40
 			else RelicService:GetRelicEffect(sourcePlayer, RelicNames["Korblox Mage Staff"]) or 0
-		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance
+		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance * coefficient
 	end
 
 	-- Staff of Azure Ever Ice: ADDITIVE Chill chance on all damage while
@@ -807,7 +816,7 @@ function StatusConditionService:_sumApplierChances(
 	then
 		local azureData = RelicData[RelicNames["Staff of Azure Ever Ice"]]
 		local chance = (azureData and azureData.data and azureData.data.chillChance) or 0.50
-		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance
+		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance * coefficient
 	end
 
 	-- Status Chance bonus: +pp on every status that already has a chance —
@@ -816,7 +825,7 @@ function StatusConditionService:_sumApplierChances(
 	if statusChanceBonus > 0 then
 		for status, chance in chanceByStatus do
 			if ELEMENTAL_STATUSES[status] then
-				chanceByStatus[status] = chance + statusChanceBonus
+				chanceByStatus[status] = chance + statusChanceBonus * coefficient
 			end
 		end
 	end
@@ -826,8 +835,9 @@ end
 
 -- Rolls the aura-grant rows for one hit. `isWeaponHit` picks which side's
 -- rows qualify (Flaming Bo Staff is weapon-only, Korblox Spell Book
--- arcane-only).
-function StatusConditionService:_rollAuraGrants(sourcePlayer: Player, isWeaponHit: boolean)
+-- arcane-only). `procCoefficient` scales each chance (a bullet's; 1
+-- otherwise).
+function StatusConditionService:_rollAuraGrants(sourcePlayer: Player, isWeaponHit: boolean, procCoefficient: number?)
 	if not RelicService or not AuraService then
 		return
 	end
@@ -842,7 +852,8 @@ function StatusConditionService:_rollAuraGrants(sourcePlayer: Player, isWeaponHi
 		if row.magicOnly and isWeaponHit then
 			continue
 		end
-		local chance = row.chance or RelicService:GetRelicEffect(sourcePlayer, row.relicName) or 0
+		local chance = (row.chance or RelicService:GetRelicEffect(sourcePlayer, row.relicName) or 0)
+			* (procCoefficient or 1)
 		if RelicService:GetSpecificRelicRegistry(sourcePlayer, row.relicName) > 0 and math.random() <= chance then
 			AuraService:SetAura(sourcePlayer, row.aura, character)
 		end
@@ -855,7 +866,11 @@ end
 -- two REPLACE each other rather than stacking. Rolled once per hit, not
 -- once per status, so a hit that applies two statuses is not two chances.
 
-function StatusConditionService:_rollEvilEyeBlight(sourcePlayer: Player, appliedStatus: boolean)
+function StatusConditionService:_rollEvilEyeBlight(
+	sourcePlayer: Player,
+	appliedStatus: boolean,
+	procCoefficient: number?
+)
 	if not AuraService or not RelicService or not sourcePlayer.Character then
 		return
 	end
@@ -868,6 +883,7 @@ function StatusConditionService:_rollEvilEyeBlight(sourcePlayer: Player, applied
 	local chance = if appliedStatus
 		then onStatus or 0.25
 		else RelicService:GetRelicEffect(sourcePlayer, RelicNames["Korblox Evil Eye"]) or 0
+	chance *= procCoefficient or 1
 	if chance > 0 and math.random() <= chance then
 		-- Through SetAura, so the Abyss lockout, duration bonuses and the
 		-- extend-only rule all apply for free.
@@ -879,7 +895,7 @@ end
 -- make after landing a hit on a mob.
 function StatusConditionService:ApplyWeaponOnHitStatuses(
 	sourcePlayer: Player,
-	_weaponModel: Instance?,
+	weaponModel: Instance?,
 	targetModel: Model,
 	isRanged: boolean?
 )
@@ -887,9 +903,14 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 		return
 	end
 
-	self:_rollAuraGrants(sourcePlayer, true)
+	-- A bullet rolls every chance at its gun's proc coefficient.
+	local procCoefficient = if isRanged
+		then getGunProcCoefficient(sourcePlayer, weaponModel and weaponModel.Name)
+		else 1
 
-	local chanceByStatus = self:_sumApplierChances(sourcePlayer, true, isRanged)
+	self:_rollAuraGrants(sourcePlayer, true, procCoefficient)
+
+	local chanceByStatus = self:_sumApplierChances(sourcePlayer, true, isRanged, procCoefficient)
 	local appliedStatus = false
 	for status, chance in chanceByStatus do
 		if math.random() <= chance then
@@ -900,7 +921,7 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 
 	-- AFTER the status rolls resolve: the Evil Eye chance depends on
 	-- whether this hit landed one.
-	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus)
+	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus, procCoefficient)
 end
 
 -- Arcane-hit status entry point — called by onHitboxDamage after a spell's

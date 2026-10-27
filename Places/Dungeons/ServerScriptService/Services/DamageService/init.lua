@@ -49,6 +49,7 @@ local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNam
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
+local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
@@ -89,8 +90,8 @@ local function difficultyDamageMultiplier(): number
 	if not dungeonService then
 		return 1
 	end
-	-- The tier's multiplier x the floor's (+10% per floor past the first).
-	return dungeonService:GetDifficultyScale().enemyDamage * dungeonService:GetFloorMultiplier()
+	-- The tier's multiplier x the floor's (DifficultyData's damage growth).
+	return dungeonService:GetDifficultyScale().enemyDamage * dungeonService:GetFloorMultiplier("damage")
 end
 
 -- The attacker's owned relics for ONE hit, from RelicService (re-exported
@@ -655,17 +656,22 @@ function DamageService._postDamage(
 	player: Player,
 	humanoid: Humanoid,
 	wasCrit: boolean?,
-	_isRelicSourced: boolean?
+	_isRelicSourced: boolean?,
+	isGunShot: boolean?
 )
 	self:TryExecute(player, humanoid, wasCrit)
 
+	-- A bullet rolls the chance relics below at its gun's proc
+	-- coefficient; everything else at 1.
+	local procCoefficient = if isGunShot then getGunProcCoefficient(player) else 1
+
 	-- Lightning Orb rolls on EVERY hit now, not just crits — `wasCrit` only
 	-- selects which of its two chances applies.
-	self:_tryLightningOrbStormcharge(player, wasCrit)
+	self:_tryLightningOrbStormcharge(player, wasCrit, procCoefficient)
 
 	-- "All damage" relics (2026-10-25): every damage instance rolls them.
-	self._onDamageModules["Jail"](player, humanoid)
-	self:_tryLightningHornStrike(player, humanoid)
+	self._onDamageModules["Jail"](player, humanoid, procCoefficient)
+	self:_tryLightningHornStrike(player, humanoid, procCoefficient)
 
 	if wasCrit then
 		self:_tryShurikenManaRefund(player)
@@ -680,7 +686,12 @@ end
 -- Routed through SetAura, so the Abyss lockout and duration bonuses apply
 -- for free.
 
-function DamageService._tryLightningOrbStormcharge(_self: typeof(DamageService), player: Player, wasCrit: boolean?)
+function DamageService._tryLightningOrbStormcharge(
+	_self: typeof(DamageService),
+	player: Player,
+	wasCrit: boolean?,
+	procCoefficient: number?
+)
 	if not AuraService or RelicService:GetSpecificRelicRegistry(player, RelicNames["Lightning Orb"]) <= 0 then
 		return
 	end
@@ -691,6 +702,7 @@ function DamageService._tryLightningOrbStormcharge(_self: typeof(DamageService),
 	local chance = if wasCrit
 		then relicData(RelicNames["Lightning Orb"], "critChance", 0.20)
 		else RelicService:GetRelicEffect(player, RelicNames["Lightning Orb"]) or 0
+	chance *= procCoefficient or 1
 	if chance > 0 and math.random() <= chance then
 		AuraService:SetAura(player, AuraNames.Stormcharged, character)
 	end
@@ -701,7 +713,12 @@ end
 -- Strike — per-level damage from the relic callback, in a radius, every
 -- enemy inside. The fan-out latch collapses an AoE hit into ONE strike,
 -- and the resolving latch stops a strike's own damage chaining another.
-function DamageService._tryLightningHornStrike(self: typeof(DamageService), player: Player, humanoid: Humanoid)
+function DamageService._tryLightningHornStrike(
+	self: typeof(DamageService),
+	player: Player,
+	humanoid: Humanoid,
+	procCoefficient: number?
+)
 	if self._lightningStrikeResolving[player.UserId] then
 		return
 	end
@@ -717,7 +734,7 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 	-- The roll, before the latch: a failed roll must not spend the fan-out
 	-- window for the other targets of the same AoE crit.
 	local hornData = RelicData[RelicNames["Lightning Horn of the Heavens"]]
-	local strikeChance = (hornData and hornData.data and hornData.data.strikeChance) or 0.25
+	local strikeChance = ((hornData and hornData.data and hornData.data.strikeChance) or 0.25) * (procCoefficient or 1)
 	if math.random() > strikeChance then
 		return
 	end
@@ -1340,7 +1357,7 @@ function DamageService.TakeDamage(
 			humanoid:TakeDamage(math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
 			-- Teddy Trap lifesteal reads the amount that actually landed.
 			self._onDamageModules["TeddyTrap"](player, math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
-			self:_postDamage(player, humanoid, true, relicSourced)
+			self:_postDamage(player, humanoid, true, relicSourced, isGunShot)
 			return
 		end
 
@@ -1355,7 +1372,7 @@ function DamageService.TakeDamage(
 		)
 		humanoid:TakeDamage(math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
-		self:_postDamage(player, humanoid, false, relicSourced)
+		self:_postDamage(player, humanoid, false, relicSourced, isGunShot)
 	else
 		if math.random() * 100 <= critChance then
 			local combinedDamage = math.round(totalDamage * critMultiplier)
@@ -1363,7 +1380,7 @@ function DamageService.TakeDamage(
 			showIndicator(player, targetModel, combinedDamage, true, hitColor, isMelee)
 			humanoid:TakeDamage(combinedDamage)
 			self._onDamageModules["TeddyTrap"](player, combinedDamage)
-			self:_postDamage(player, humanoid, true, relicSourced)
+			self:_postDamage(player, humanoid, true, relicSourced, isGunShot)
 			return
 		end
 
@@ -1371,7 +1388,7 @@ function DamageService.TakeDamage(
 
 		humanoid:TakeDamage(math.round(totalDamage))
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage))
-		self:_postDamage(player, humanoid, false, relicSourced)
+		self:_postDamage(player, humanoid, false, relicSourced, isGunShot)
 	end
 end
 
