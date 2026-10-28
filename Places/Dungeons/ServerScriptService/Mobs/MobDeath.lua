@@ -34,7 +34,6 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DropService = require(ServerScriptService.Services.DropService)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local RoundStatisticsService = require(ServerScriptService.Services.RoundStatisticsService)
-local AuraService = require(ServerScriptService.Services.AuraService)
 local VFXService = require(ServerScriptService.Services.VFXService)
 local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Services.IgnoreListService)
 local GearDropService = require(ServerScriptService.Services.GearDropService)
@@ -49,7 +48,6 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
-local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -90,16 +88,6 @@ export type Context = {
 }
 
 --[ Constants ]--
-
--- Takedown -> aura grants. Chance comes from each relic's callback, so
--- RelicData stays the one source and the cards cannot drift from this.
-local TAKEDOWN_AURA_RELICS = {
-	{ relicName = RelicNames["Flaming Mace"], aura = AuraNames.Enflamed },
-	{ relicName = RelicNames["Ice Cream"], aura = AuraNames.Frostburst },
-	{ relicName = RelicNames["Poison Picnic"], aura = AuraNames.Blighted },
-	{ relicName = RelicNames["Ninja Whip"], aura = AuraNames.Stormcharged },
-	{ relicName = RelicNames["Space Sandwich"], aura = AuraNames.Stonebound },
-}
 
 -- Midnight Sword: fraction of Maximum Mana restored per takedown (its old
 -- Overcharged-at-full-mana half died with that aura).
@@ -481,25 +469,6 @@ local function handleAssists(context: Context)
 		-- Takedown procs roll per killer/assister — anyone in this mob's
 		-- assist registry whose credit is still live (the 5s window),
 		-- INCLUDING the player who landed the killing blow.
-
-		-- Takedown aura grants — one relic per element tree, all rolling off
-		-- the same kill. These are each tree's THIRD ungated opener, added in
-		-- the 2026-08 pass so a run does not always begin with the same two
-		-- status/aura enablers.
-		--
-		-- Rolled per killer/assister like everything else here, and routed
-		-- through SetAura so the Sword of Eternal Abyss lockout, the duration
-		-- bonuses and the extend-only rule all apply for free.
-		if AuraService and player.Character then
-			for _, row in TAKEDOWN_AURA_RELICS do
-				if RelicService:GetSpecificRelicRegistry(player, row.relicName) > 0 then
-					local chance = RelicService:GetRelicEffect(player, row.relicName) or 0
-					if chance > 0 and math.random() <= chance then
-						AuraService:SetAura(player, row.aura, player.Character)
-					end
-				end
-			end
-		end
 
 		-- Midnight Sword: takedowns restore 5% of Maximum Mana.
 		if RelicService:GetSpecificRelicRegistry(player, RelicNames["Midnight Sword"]) > 0 then
