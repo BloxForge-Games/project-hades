@@ -231,9 +231,6 @@ local REQUIRED_DAMAGE_MODULES = {
 	"Volleyball",
 }
 
--- Ice Dragon Slayer: the "+25% vs Chilled" only counts above this fraction
--- of Maximum Mana.
-
 -- Phoenix / Katana health gates.
 
 --[ Relic snapshot readers ]--
@@ -451,6 +448,9 @@ function DamageService.PlayerTakeDamage(
 
 	-- Shield pool spends LAST, against the fully mitigated number.
 	damage = ShieldService:AbsorbShieldDamage(player, damage)
+	-- Space Sandwich: a hit taken while Stonebound grants a Barrier (after
+	-- the absorb, so it guards the NEXT hit, not this one).
+	ShieldService:TrySpaceSandwichBarrier(player)
 
 	local rootPart = getRoot(character)
 	if rootPart then
@@ -683,6 +683,7 @@ function DamageService._postDamage(
 
 	if wasCrit then
 		self:_tryShurikenManaRefund(player)
+		self:_tryNinjaWhipShock(player, humanoid)
 	end
 end
 
@@ -713,6 +714,45 @@ function DamageService._tryLightningOrbStormcharge(
 	chance *= procCoefficient or 1
 	if chance > 0 and math.random() <= chance then
 		AuraService:SetAura(player, AuraNames.Stormcharged, character)
+	end
+end
+
+-- Earth Protection Orb (Earth Rare): flat bonus damage = the callback's
+-- fraction of the attacker's live Barrier, while they are Stonebound.
+function DamageService._protectionOrbBonus(
+	_self: typeof(DamageService),
+	player: Player,
+	snapshot: RelicSnapshot
+): number
+	if DamageService.RelicCount(snapshot, RelicNames["Earth Protection Orb"]) <= 0 then
+		return 0
+	end
+	local hrp = getRoot.fromPlayer(player)
+	if not hrp or not hrp:FindFirstChild(AuraNames.Stonebound) then
+		return 0
+	end
+	local fraction = DamageService.RelicEffect(snapshot, RelicNames["Earth Protection Orb"])
+	if type(fraction) ~= "number" then
+		return 0
+	end
+	return ShieldService:GetShieldValue(player) * fraction
+end
+
+-- Ninja Whip (Storm bridge Rare): while its owner is Stormcharged, a
+-- Critical Hit Shocks its target (Deluxe Coil Gun's redirect included,
+-- through ApplyStatus). Relic bursts and DoT ticks never crit, so only
+-- weapon and spell hits reach this.
+function DamageService._tryNinjaWhipShock(_self: typeof(DamageService), player: Player, humanoid: Humanoid)
+	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Ninja Whip"]) <= 0 then
+		return
+	end
+	local hrp = getRoot.fromPlayer(player)
+	if not hrp or not hrp:FindFirstChild(AuraNames.Stormcharged) then
+		return
+	end
+	local targetModel = humanoid.Parent
+	if targetModel and targetModel:IsA("Model") and getStatusConditionService() then
+		getStatusConditionService():ApplyStatus(player, targetModel, StatusConditions.Shock)
 	end
 end
 
@@ -919,6 +959,13 @@ function DamageService.GetCritParameters(
 			else DamageService.RelicEffect(relics, RelicNames["Lightning Bolt Sword"]) or 0
 	end
 
+	-- Crit chance past 100% is not wasted (2026-10-27): every point over
+	-- becomes +1% Critical Damage, so a full crit build keeps scaling.
+	if critChance > 100 then
+		critMultiplier += (critChance - 100) / 100
+		critChance = 100
+	end
+
 	return critChance, critMultiplier
 end
 
@@ -993,17 +1040,12 @@ function DamageService._sumTargetConditionalBonuses(
 		bonus += (DamageService.RelicEffect(snapshot, RelicNames["Frozen Flail"]) or 1) - 1
 	end
 
-	-- Ice Dragon Slayer: gated on MANA, not on the target. The Chilled
-	-- value REPLACES the base.
+	-- Ice Dragon Slayer: for windowSeconds after ANY spell cast (2026-10-27;
+	-- it was "above 50% Mana", which casting itself switched off). The
+	-- Chilled value REPLACES the base.
 	if DamageService.RelicCount(snapshot, RelicNames["Ice Dragon Slayer"]) > 0 and ArcaneService then
-		local arcaneData = ArcaneService:GetPlayerArcaneData(player)
-		if
-			arcaneData
-			and arcaneData.maxMana
-			and arcaneData.maxMana > 0
-			and arcaneData.mana / arcaneData.maxMana
-				> relicData(RelicNames["Ice Dragon Slayer"], "manaFraction", 0.5)
-		then
+		local castAt = ArcaneService:GetLastCastAt(player)
+		if castAt and tick() - castAt <= relicData(RelicNames["Ice Dragon Slayer"], "windowSeconds", 4) then
 			bonus += if isChilled
 				then relicData(RelicNames["Ice Dragon Slayer"], "chilledBonus", 0.25)
 				else (DamageService.RelicEffect(snapshot, RelicNames["Ice Dragon Slayer"]) or 1) - 1
@@ -1227,6 +1269,13 @@ function DamageService.TakeDamage(
 					isMelee
 				)
 		)
+
+	-- Earth Protection Orb: while Stonebound, weapon and spell hits add a
+	-- share of the attacker's live Barrier as flat damage. Typed: relic
+	-- bursts skip it.
+	if not untypedOnly then
+		totalDamage += self:_protectionOrbBonus(player, snapshot)
+	end
 
 	-- Weapon Mastery set bonus (all 3 Ruinseeker pieces): +10% weapon
 	-- damage, additive with the relic sum. Typed — skipped on the

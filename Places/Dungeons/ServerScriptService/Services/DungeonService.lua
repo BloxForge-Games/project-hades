@@ -334,11 +334,11 @@ function DungeonService.GetRun(self: typeof(DungeonService)): Run?
 end
 
 -- The tier the run plays (DifficultyData.Resolve): enemy health and
--- damage, EXP, boss phases. Easy outside a run.
+-- damage, EXP, boss phases. Normal outside a run.
 function DungeonService.GetDifficultyScale(self: typeof(DungeonService)): DifficultyData.TierConfig
 	local run = self._run
 	if not run then
-		return DifficultyData.Resolve(Difficulty.Easy)
+		return DifficultyData.Resolve(Difficulty.Normal)
 	end
 	return DifficultyData.Resolve(run.difficulty)
 end
