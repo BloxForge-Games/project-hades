@@ -658,6 +658,8 @@ end
 --                             weapon hits only.
 --   auraGate                : row counts only while the OWNER has that
 --                             aura up (the "While <aura>..." relics).
+--   spellOnly               : arcane hits from a real SPELL only, never a
+--                             relic's arcane burst (Ice Cream).
 -- CHANCE RESOLUTION: a row WITHOUT `chance` reads the relic's callback at
 -- roll time (GetRelicEffect), so RelicData — the description's home — is
 -- the single source of truth. `chance` remains ONLY for relics whose
@@ -671,6 +673,7 @@ local RELIC_HIT_STATUSES: {
 		weaponOnly: boolean?,
 		rangedOnly: boolean?,
 		auraGate: string?,
+		spellOnly: boolean?,
 	}
 } =
 	{
@@ -698,6 +701,21 @@ local RELIC_HIT_STATUSES: {
 		-- are all gone: the 2026-08 pass turned the first three into damage
 		-- relics, and Short Sword's boost now covers EVERY elemental status
 		-- rather than Poison alone, so it lives in _getStatusChanceBonus.
+		-- The bridge Rares (2026-10-27): guaranteed while their aura is up.
+		-- Flaming Mace: weapon hits Burn while Enflamed.
+		{
+			relicName = RelicNames["Flaming Mace"],
+			status = StatusConditions.Burn,
+			weaponOnly = true,
+			auraGate = AuraNames.Enflamed,
+		},
+		-- Ice Cream: spell hits Chill while Frostburst.
+		{
+			relicName = RelicNames["Ice Cream"],
+			status = StatusConditions.Chill,
+			spellOnly = true,
+			auraGate = AuraNames.Frostburst,
+		},
 		-- Magenta Paintball Gun: EVERY ranged weapon hit Paints (was 35%).
 		{
 			relicName = RelicNames["Magenta Paintball Gun"],
@@ -764,7 +782,8 @@ function StatusConditionService:_sumApplierChances(
 	sourcePlayer: Player,
 	isWeaponHit: boolean,
 	isRanged: boolean?,
-	procCoefficient: number?
+	procCoefficient: number?,
+	isSpell: boolean?
 ): { [string]: number }
 	local coefficient = procCoefficient or 1
 	local character = sourcePlayer.Character
@@ -776,6 +795,9 @@ function StatusConditionService:_sumApplierChances(
 			continue
 		end
 		if row.rangedOnly and not isRanged then
+			continue
+		end
+		if row.spellOnly and not isSpell then
 			continue
 		end
 		if row.auraGate and (not hrp or hrp:FindFirstChild(row.auraGate) == nil) then
@@ -926,14 +948,15 @@ end
 
 -- Arcane-hit status entry point — called by onHitboxDamage after a spell's
 -- damage lands on a mob (covers regular spells and relic-cast arcane).
-function StatusConditionService:ApplyArcaneOnHitStatuses(sourcePlayer: Player, targetModel: Model)
+-- `isSpell`: a real spell cast, not a relic's arcane burst (spellOnly rows).
+function StatusConditionService:ApplyArcaneOnHitStatuses(sourcePlayer: Player, targetModel: Model, isSpell: boolean?)
 	if not RelicService then
 		return
 	end
 
 	self:_rollAuraGrants(sourcePlayer, false)
 
-	local chanceByStatus = self:_sumApplierChances(sourcePlayer, false, false)
+	local chanceByStatus = self:_sumApplierChances(sourcePlayer, false, false, 1, isSpell)
 
 	local appliedStatus = false
 	for status, chance in chanceByStatus do
@@ -1138,6 +1161,8 @@ function StatusConditionService:ApplyStatus(
 		end
 	end
 
+	self:_applyPicnicPoison(sourcePlayer :: Player, targetModel, status)
+
 	local duration, dotMultiplier, slowFraction, weakenFraction = self:_resolveApplication(sourcePlayer, config)
 	local isStackable = STACKABLE[status] == true
 	-- `sourcePlayer` is a plain Player; the Abyss guard's `sourcePlayer and`
@@ -1255,6 +1280,23 @@ function StatusConditionService:ApplyStatus(
 	self:_armRecord(record)
 
 	return true
+end
+
+-- Poison Picnic (Venom bridge Rare): while its owner is Blighted, every
+-- OTHER Status they apply (fresh or refresh) also applies their Poison.
+-- The Poison goes through ApplyStatus, so Skeletal Scythe's Noxious
+-- Venom redirect applies, and a Poison never re-triggers the rider.
+function StatusConditionService:_applyPicnicPoison(sourcePlayer: Player, targetModel: Model, status: string)
+	if status == StatusConditions.Poison or status == StatusConditions.NoxiousVenom then
+		return
+	end
+	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Poison Picnic"]) or 0) <= 0 then
+		return
+	end
+	if not ownerHasAura(sourcePlayer, AuraNames.Blighted) then
+		return
+	end
+	self:ApplyStatus(sourcePlayer, targetModel, StatusConditions.Poison)
 end
 
 -- Ice Breaker's Shatter: consume the Chill and burst the target.

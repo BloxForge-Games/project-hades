@@ -348,15 +348,14 @@ end
 -- (keep the two in sync):
 --   baseline + flat base-walkspeed relic callbacks (Speed Coil) + the
 --   WalkSpeedBonus stat attribute (PlayerStatsService —
---   Astral Cloak's +5),
---   then × Slateskin Potion's 0.50 while owned,
---   then × Slateskin's 0.5 / Stormcharged's 1.10 while up.
+--   Astral Cloak's +5).
 -- Jetpack flight multiplies its own ×1.5 on top at its call sites.
 local BASE_WALKSPEED_RELICS = {
 	RelicNames["Speed Coil"],
 }
--- Slateskin Potion HALVES the effective base (its callback owns the 0.50).
--- Keep in sync with the client mirror, getEffectiveBaseWalkSpeed.
+-- Slateskin Potion no longer slows (2026-10-27): its drawback is a single
+-- dodge stack (DodgeService). Keep in sync with the client mirror,
+-- getEffectiveBaseWalkSpeed.
 
 function RelicService.GetEffectiveBaseWalkSpeed(self: typeof(RelicService), player: Player): number
 	local total = HumanoidProperties.WalkSpeed
@@ -366,12 +365,6 @@ function RelicService.GetEffectiveBaseWalkSpeed(self: typeof(RelicService), play
 		end
 	end
 	total += player:GetAttribute("WalkSpeedBonus") or 0
-
-	-- Slateskin's halving, applied to the summed base so it scales the flat
-	-- bonuses above rather than being outrun by them.
-	if self:GetSpecificRelicRegistry(player, RelicNames["Slateskin Potion"]) > 0 then
-		total *= self:GetRelicEffect(player, RelicNames["Slateskin Potion"]) or 1
-	end
 
 	return total
 end

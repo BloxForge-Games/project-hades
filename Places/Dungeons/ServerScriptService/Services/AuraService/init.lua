@@ -17,7 +17,7 @@
 	STONEBOUND SPREADS FROM EVERY SOURCE. Any self-grant of it carries to
 	allies within STONEBOUND_SPREAD_RADIUS and plays the shockwave once on
 	the source (_spreadStonebound, fired from SetAura's fresh-grant path).
-	Riot Shield, Space Sandwich and Spartan Sword and Shield all get this
+	Riot Shield and Spartan Sword and Shield both get this
 	for free, and so does anything added later — it is a property of the
 	aura, not of one relic.
 
@@ -76,7 +76,7 @@ local STONEBOUND_OWNER_ATTRIBUTE = "StoneboundOwnerId"
 local AURA_DURATION_BONUSES: { { relicName: string, bonus: number } } = {}
 
 -- How far Stonebound carries to allies. Every source spreads — Riot
--- Shield, Space Sandwich, Spartan Sword and Shield, and anything added
+-- Shield, Spartan Sword and Shield, and anything added
 -- later — but ONLY from the player who earned it; recipients never pass
 -- it on. This is a property of the aura, not of one relic. It reaches
 -- the swinger and every ally in radius. The chance lives in the relic

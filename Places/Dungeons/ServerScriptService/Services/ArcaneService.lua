@@ -39,8 +39,8 @@ ArcaneService._arcaneDataProperty = RemoteProperty.Server({
 
 -- Passive mana regeneration. Every tick, each IN-COMBAT player gains
 -- (PASSIVE_MANA_REGEN_RATE * maxMana) mana, clamped to maxMana.
--- 0.01 = 1% of max per tick; INTERVAL = 1s means 1%/sec → 100% in
--- 100 seconds from empty. Tunable here without touching the loop.
+-- 0.015 per 0.5 s tick = 3% of max per second, so an empty bar refills in
+-- about 33 s of fighting. Tunable here without touching the loop.
 --
 -- COMBAT-ONLY (design-locked): mana is a combat resource, so it only
 -- flows while there is a fight to spend it on. "In combat" is
@@ -49,7 +49,8 @@ ArcaneService._arcaneDataProperty = RemoteProperty.Server({
 -- the game already tells them they are in a fight. Away from enemies
 -- the bar holds still and mana orbs (and Korblox Mage Staff hits)
 -- become the only way to climb.
-local PASSIVE_MANA_REGEN_RATE = 0.01
+-- 0.015 a 0.5 s tick = 3% of max per second (2026-10-27; was 2%/s).
+local PASSIVE_MANA_REGEN_RATE = 0.015
 local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 
 --[ Properties ]--
@@ -163,6 +164,23 @@ function ArcaneService.GetPlayerArcaneLastUsed(self: typeof(ArcaneService), play
 	end
 
 	return self._playerArcaneCooldownRegistry[player][vfxName].lastUsed
+end
+
+-- tick() of the player's most recent spell cast, any spell (the latest
+-- lastUsed VFXService stamped), or nil before their first. Ice Dragon
+-- Slayer's window reads it.
+function ArcaneService.GetLastCastAt(self: typeof(ArcaneService), player: Player): number?
+	local registry = self._playerArcaneCooldownRegistry[player]
+	if not registry then
+		return nil
+	end
+	local latest: number? = nil
+	for _, entry in registry do
+		if entry.lastUsed > 0 and (latest == nil or entry.lastUsed > latest) then
+			latest = entry.lastUsed
+		end
+	end
+	return latest
 end
 
 function ArcaneService.GetPlayerArcaneCooldown(self: typeof(ArcaneService), player: Player, vfxName: string)

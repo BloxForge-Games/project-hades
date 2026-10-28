@@ -39,7 +39,7 @@
 	this lobby server into it together, carrying the same teleport data the
 	queue will send: { partyLeaderUserId, Difficulty }. The
 	dungeon server clamps that difficulty to the leader's unlocks.
-	Defaults: Runegrove, Easy. The dungeon matches an id or the start of a
+	Defaults: Runegrove, Normal. The dungeon matches an id or the start of a
 	display name ("/tp ember hard"). A second /tp while one is in flight is
 	ignored (the first reservation is the party's). ReserveServer / TeleportAsync are unavailable in Studio
 	and throw for an unpublished place, so both are pcall'd and the failure
@@ -105,7 +105,7 @@ local MAX_SET_LEVEL = 200
 
 -- /tp defaults when no argument names them.
 local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
-local DEFAULT_TP_DIFFICULTY = Difficulty.Easy
+local DEFAULT_TP_DIFFICULTY = Difficulty.Normal
 
 -- A dungeon id from an id or the start of a display name, case-insensitive.
 local function matchDungeon(arg: string?): string?

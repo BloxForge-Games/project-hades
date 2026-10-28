@@ -70,8 +70,7 @@ local EXIT_PORTAL_ACTION_TEXT = "Teleport to Lobby"
 
 -- The run's difficulty when nothing asks otherwise (Studio, a direct join
 -- without teleport data). A request is still clamped to the leader's unlocks.
--- Easy (2026-10-27; was Normal): a fresh player's first rung.
-local DEFAULT_DIFFICULTY = Difficulty.Easy
+local DEFAULT_DIFFICULTY = Difficulty.Normal
 -- How long the run waits for the leader's profile before starting without
 -- the unlock check.
 local LEADER_PROFILE_WAIT_SECONDS = 15
@@ -587,7 +586,7 @@ function RunFlowService._resolveRunDifficulty(self: typeof(RunFlowService), dung
 		if DifficultyData.IsValid(debugDifficulty) then
 			return debugDifficulty
 		end
-		-- No DebugDifficulty attribute: Studio plays the default (Easy).
+		-- No DebugDifficulty attribute: Studio plays the default (Normal).
 		return DEFAULT_DIFFICULTY
 	end
 

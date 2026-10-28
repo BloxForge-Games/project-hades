@@ -15,15 +15,17 @@
 	    applied the shield. Two TNT owners shielding one target chain two
 	    independent explosions.
 	  * Earth Summoning Horn: Barriers X applies to THEMSELVES are shared
-	    (75% of the value) with allies within its radius.
+	    (75% of the value) with allies within its radius, and X's own
+	    Barriers last longer (data.durationBonus).
 
 	Other Earth hooks living here:
-	  * Earth Protection Orb: +50% on Barrier VALUE while its owner is
-	    Stonebound, both for Barriers they gain and Barriers they give.
+	  * Earth Protection Orb is a DAMAGE relic now (DamageService reads
+	    GetShieldValue); nothing here.
 	  * Golden Steampunk Gloves: +5% Barrier for 5s on a MELEE hit, rate
 	    limited by BARRIER_PROC_COOLDOWN (MeleeWeapon calls
-	    TryGoldenGlovesBarrier). This replaced Space Sandwich's
-	    damage-taken proc in the 2026-08 pass.
+	    TryGoldenGlovesBarrier).
+	  * Space Sandwich: while Stonebound, a hit taken grants a Barrier, on
+	    its own cooldown (DamageService calls TrySpaceSandwichBarrier).
 	  * Spartan Sword and Shield: grants Stonebound on a arcane cast
 	    (VFXService calls TrySpartanStonebound).
 	  * Golem's Hammer: while holding a Barrier, the Empower rig sits on
@@ -86,8 +88,6 @@ local SHIELD_CAP_FRACTION = 1.00
 -- fraction of shields the owner applies to themselves.
 local SUMMONING_HORN_RADIUS = 15
 
--- Space Sandwich: internal cooldown between procs, so a mob swarm can't
--- keep the shield permanently topped.
 -- GLOBAL Barrier cooldown, per applier+target pair. Every proc-driven
 -- Barrier source respects it, so a new one cannot be added without a
 -- rate limit by accident — Golden Steampunk Gloves rolls on every melee
@@ -152,8 +152,11 @@ type ShieldState = {
 -- buckets: { { value, expiresAt, ownerId }, ... }
 ShieldService._pools = {} :: { [number]: ShieldState }
 
--- Space Sandwich per-player last-proc clock.
+-- Golden Steampunk Gloves per-player last-proc clock.
 ShieldService._barrierProcLastAt = {}
+-- Space Sandwich per-player last-proc clock (its own cooldown, RelicData
+-- data.cooldownSeconds).
+ShieldService._sandwichLastAt = {} :: { [number]: number }
 
 --[ Private ]--
 
@@ -524,40 +527,30 @@ function ShieldService.GrantShield(
 
 	pruneExpired(state)
 
-	-- Earth Protection Orb: +50% on the VALUE while its owner is
-	-- Stonebound — covering Barriers they GIVE (owner is the applier) and
-	-- Barriers they GAIN (owner is the target). A self-grant qualifies once.
-	local valueMultiplier = 1
-	if RelicService then
-		local function orbBoost(player: Player): boolean
-			if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Earth Protection Orb"]) or 0) <= 0 then
-				return false
-			end
-			local hrp = getRoot.fromPlayer(player)
-			return hrp ~= nil and hrp:FindFirstChild(AuraNames.Stonebound) ~= nil
-		end
-		if orbBoost(applierPlayer) or (targetPlayer ~= applierPlayer and orbBoost(targetPlayer)) then
-			valueMultiplier = RelicService:GetRelicEffect(applierPlayer, RelicNames["Earth Protection Orb"])
-				or RelicService:GetRelicEffect(targetPlayer, RelicNames["Earth Protection Orb"])
-				-- Unreachable: orbBoost already proved one of the two owns it,
-				-- so one of the reads above returns a number. Matches the card
-				-- anyway so a future refactor cannot resurrect a stale 1.25.
-				or 1.50
-		end
-	end
-
 	-- Trim to the cap's remaining headroom (fraction of the HOLDER's max).
 	local headroom = (humanoid.MaxHealth * SHIELD_CAP_FRACTION) - totalOf(state)
 	if headroom <= 0 then
 		return 0
 	end
-	local value = math.min(applierHumanoid.MaxHealth * fraction * valueMultiplier, headroom)
+	local value = math.min(applierHumanoid.MaxHealth * fraction, headroom)
+
+	-- Earth Summoning Horn's solo half: a holder who owns it keeps every
+	-- Barrier they gain longer (data.durationBonus). Shares to allies
+	-- below use the ORIGINAL duration.
+	local holderDuration = duration
+	if
+		RelicService
+		and (RelicService:GetSpecificRelicRegistry(targetPlayer, RelicNames["Earth Summoning Horn"]) or 0) > 0
+	then
+		local horn = RelicData[RelicNames["Earth Summoning Horn"]]
+		holderDuration *= 1 + ((horn and horn.data and horn.data.durationBonus) or 0)
+	end
 
 	local wasEmpty = #state.buckets == 0
 
 	table.insert(state.buckets, {
 		value = value,
-		expiresAt = os.clock() + duration,
+		expiresAt = os.clock() + holderDuration,
 		ownerId = applierPlayer.UserId,
 	})
 	self:_stamp(state)
@@ -622,12 +615,36 @@ function ShieldService.GrantShield(
 	return value
 end
 
--- Space Sandwich: called by DamageService when its owner takes damage.
--- Internal cooldown so a swarm can't keep the shield permanently topped.
+-- Space Sandwich (Earth bridge Rare): called by DamageService on every hit
+-- its owner takes. While Stonebound, grants the card's Barrier, at most
+-- once per data.cooldownSeconds so a swarm cannot keep it topped.
+function ShieldService.TrySpaceSandwichBarrier(self: typeof(ShieldService), player: Player)
+	if not RelicService then
+		return
+	end
+	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Space Sandwich"]) or 0) <= 0 then
+		return
+	end
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp or not hrp:FindFirstChild(AuraNames.Stonebound) then
+		return
+	end
+	local entry = RelicData[RelicNames["Space Sandwich"]]
+	local data = entry and entry.data or {}
+	local now = os.clock()
+	if now - (self._sandwichLastAt[player.UserId] or -math.huge) < (data.cooldownSeconds or 8) then
+		return
+	end
+	local fraction = RelicService:GetRelicEffect(player, RelicNames["Space Sandwich"]) or 0
+	if fraction <= 0 then
+		return
+	end
+	self._sandwichLastAt[player.UserId] = now
+	self:GrantShield(player, player, fraction, data.barrierSeconds or 4)
+end
+
 -- Golden Steampunk Gloves: a MELEE hit rolls for a Barrier on its owner.
--- This slot used to be Space Sandwich's damage-taken proc; the 2026-08
--- pass turned Space Sandwich into a takedown aura relic and moved Earth's
--- proc-driven Barrier here, onto the offensive side of the tree.
 --
 -- Chance, size and duration all come from RelicData so the card stays the
 -- one source of truth.
@@ -757,6 +774,7 @@ function ShieldService.Start(self: typeof(ShieldService))
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self._pools[player.UserId] = nil
 		self._barrierProcLastAt[player.UserId] = nil
+		self._sandwichLastAt[player.UserId] = nil
 	end)
 end
 
