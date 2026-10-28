@@ -7,8 +7,8 @@
 	a new `if` in some other service.
 
 	Only members of the game's group at Constants.COMMAND_MIN_GROUP_RANK
-	(250) or above may run them in a live server; Studio is exempt. The one
-	gate is `_canRun` below.
+	(250) or above may run them, in Studio too (2026-10-27). The one gate
+	is `_canRun` below.
 
 	--- ANATOMY ---
 
@@ -35,6 +35,10 @@
 	number of aliases and a `drop()` that performs a SINGLE wave. The command
 	handles repetition, staggering, clamping, aliasing and feedback for you.
 
+	--- /level <level> ---
+
+	Sets YOUR level (ExperienceService:SetLevel), with 0 EXP into it.
+
 	--- /wipedata ---
 
 	Resets the CALLER's own profile to the DataTemplate defaults
@@ -48,7 +52,6 @@
 local GroupService = game:GetService("GroupService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
@@ -61,6 +64,8 @@ local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
+local ExperienceService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.ExperienceService)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 local CoffinEventService = require(ServerScriptService.Services.CoffinEventService)
@@ -93,6 +98,8 @@ local groupRankCache: { [Player]: number } = setmetatable({}, { __mode = "k" }) 
 --[ Constants ]--
 
 local COMMAND_PREFIX = "/"
+-- /level: the highest level it sets.
+local MAX_SET_LEVEL = 200
 -- /give gold: one command can hand out at most this much.
 local MAX_GIVE_GOLD = 1_000_000
 
@@ -124,6 +131,7 @@ local ChatCommandsService = {
 		TextIndicatorService,
 		LifeService,
 		DataService,
+		ExperienceService,
 		CoffinEventService,
 	} :: { any },
 }
@@ -346,6 +354,22 @@ COMMANDS = {
 		end,
 	},
 
+	level = {
+		usage = "/level <level>",
+		description = "Sets YOUR level (1 to 200), with 0 EXP into it.",
+		handler = function(player: Player, args: { string }): string?
+			local wanted = tonumber(args[1])
+			if not wanted then
+				return "Usage: /level <level>"
+			end
+			local level = ExperienceService:SetLevel(player, math.clamp(math.floor(wanted), 1, MAX_SET_LEVEL))
+			if not level then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			return ("Level set to %d."):format(level)
+		end,
+	},
+
 	wipedata = {
 		usage = "/wipedata",
 		description = "Wipes YOUR player data back to defaults and kicks you so it reloads.",
@@ -386,15 +410,12 @@ COMMANDS = {
 
 --[ Private ]--
 
--- Single permission seam, so no individual command has to care: anyone
--- in Studio, else members of the game's group at
+-- Single permission seam, so no individual command has to care: members
+-- of the game's group at
 -- Constants.COMMAND_MIN_GROUP_RANK or above. The rank is fetched once per
 -- player and cached (GroupService:GetGroupsAsync is a web call); a failed lookup (no group id yet, web error) reads
 -- as rank 0, so commands fail CLOSED.
 function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player: Player, _commandName: string): boolean
-	if RunService:IsStudio() then
-		return true
-	end
 	local rank = groupRankCache[player]
 	if rank == nil then
 		local ok, groups = pcall(function()
@@ -414,8 +435,8 @@ function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player:
 	return rank >= Constants.COMMAND_MIN_GROUP_RANK
 end
 
--- Public form of the command gate: may `player` run debug commands (Studio,
--- or the group rank). RunFlowService asks it before honouring a /tp
+-- Public form of the command gate: may `player` run debug commands (the
+-- group rank). RunFlowService asks it before honouring a /tp
 -- teleport's Unclamped flag, which arrives in client-settable TeleportData.
 function ChatCommandsService.IsAuthorized(self: typeof(ChatCommandsService), player: Player): boolean
 	return self:_canRun(player, "")

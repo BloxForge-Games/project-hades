@@ -9,8 +9,8 @@
 
 	EVERY command needs a member of the game's group at
 	Constants.COMMAND_MIN_GROUP_RANK (250) or above (2026-10-24), the same
-	gate the Dungeons place's commands use; Studio is exempt so they can be
-	exercised locally. `_canRun` is the one permission seam.
+	gate the Dungeons place's commands use -- in Studio too (2026-10-27).
+	`_canRun` is the one permission seam.
 
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
 	                                      commands are ignored silently
@@ -21,6 +21,10 @@
 	kicks you a beat later so every service that cached state off the load
 	rebuilds from the fresh profile on rejoin. Same command as the Dungeons
 	place's; the Lobby is where a fresh start is usually wanted.
+
+	--- /level <level> ---
+
+	Sets YOUR level (ExperienceService:SetLevel), with 0 EXP into it.
 
 	--- /gold [amount] ---
 
@@ -57,6 +61,8 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
+local ExperienceService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.ExperienceService)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DungeonIds)
@@ -94,6 +100,8 @@ local WIPE_KICK_DELAY_SECONDS = 2
 local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
 -- /gold with no amount.
 local DEFAULT_GOLD_AMOUNT = 1000
+-- /level: the highest level it sets.
+local MAX_SET_LEVEL = 200
 
 -- /tp defaults when no argument names them.
 local DEFAULT_TP_DUNGEON = DungeonIds.Runegrove
@@ -133,7 +141,7 @@ local teleportInFlight = false
 
 local LobbyChatCommandsService = {
 	Name = "LobbyChatCommandsService",
-	Dependencies = { TextIndicatorService, DataService, CurrencyService } :: { any },
+	Dependencies = { TextIndicatorService, DataService, CurrencyService, ExperienceService } :: { any },
 }
 
 --[ Registry ]--
@@ -234,6 +242,21 @@ COMMANDS = {
 			return ("%+d Gold (now %d)."):format(amount, total)
 		end,
 	},
+	level = {
+		usage = "/level <level>",
+		description = "Sets YOUR level (1 to 200), with 0 EXP into it.",
+		handler = function(player: Player, args: { string }): string?
+			local wanted = tonumber(args[1])
+			if not wanted then
+				return "Usage: /level <level>"
+			end
+			local level = ExperienceService:SetLevel(player, math.clamp(math.floor(wanted), 1, MAX_SET_LEVEL))
+			if not level then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			return ("Level set to %d."):format(level)
+		end,
+	},
 	wipedata = {
 		usage = "/wipedata",
 		description = "Wipes YOUR player data back to defaults and kicks you so it reloads.",
@@ -277,8 +300,8 @@ COMMANDS.dungeons = COMMANDS.tp
 --[ Private ]--
 
 -- Single permission seam: every command needs the game's group at
--- Constants.COMMAND_MIN_GROUP_RANK or above (the Dungeons place's gate);
--- Studio is exempt. The rank is read the way the Dungeons place reads it
+-- Constants.COMMAND_MIN_GROUP_RANK or above (the Dungeons place's gate),
+-- in Studio too. The rank is read the way the Dungeons place reads it
 -- (GroupService:GetGroupsAsync, a web call): pcall'd, and a failure
 -- refuses (never grants).
 function LobbyChatCommandsService._canRun(
@@ -286,9 +309,6 @@ function LobbyChatCommandsService._canRun(
 	player: Player,
 	_commandName: string
 ): boolean
-	if RunService:IsStudio() then
-		return true
-	end
 	local ok, groups = pcall(function()
 		return GroupService:GetGroupsAsync(player.UserId)
 	end)
