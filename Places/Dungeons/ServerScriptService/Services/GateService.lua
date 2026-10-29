@@ -31,6 +31,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
+local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
@@ -87,7 +88,9 @@ local ROOM_ATTRIBUTE = "RoomId" -- set on each room model so encounter systems c
 
 local BARRICADE_PREFAB_NAME = "DungeonBarricade"
 local BARRICADE_DISTANCE_FROM_GATE = 2.5 -- studs into the room, on the player's side
-local BARRICADE_RAYCAST_HEIGHT = 10 -- studs above the gate to start the ground ray
+-- Studs above the gate's BASE to start the ground ray (2026-10-29: was 10
+-- above its centre, which could land on a wall ledge instead of the floor).
+local BARRICADE_RAYCAST_HEIGHT = 3
 local BARRICADE_RAYCAST_DEPTH = 50 -- studs downward search distance
 
 -- Dungeon Gate cycle — segment-final Combat→Combat ExitGates ONLY (the
@@ -219,17 +222,24 @@ function GateService._placeGateBarricade(_self: typeof(GateService), roomModel: 
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
 	raycastParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Map.DungeonRooms }
-	local rayOrigin = Vector3.new(barricadeXZ.X, barricadeXZ.Y + BARRICADE_RAYCAST_HEIGHT, barricadeXZ.Z)
+	local gateBaseY = gate.Position.Y - gate.Size.Y / 2
+	local rayOrigin = Vector3.new(barricadeXZ.X, gateBaseY + BARRICADE_RAYCAST_HEIGHT, barricadeXZ.Z)
 	local hit = workspace:Raycast(rayOrigin, Vector3.new(0, -BARRICADE_RAYCAST_DEPTH, 0), raycastParams)
-	local floorY = hit and hit.Position.Y or (gate.Position.Y - gate.Size.Y / 2)
+	local floorY = hit and hit.Position.Y or gateBaseY
 
 	local barricade = template:Clone()
-	local barricadeHeight = barricade:GetExtentsSize().Y
-	local center = Vector3.new(barricadeXZ.X, floorY + (barricadeHeight / 2), barricadeXZ.Z)
+	local position = Vector3.new(barricadeXZ.X, floorY, barricadeXZ.Z)
 
 	-- Face the player (look back toward the room center). Using lookAt avoids
 	-- inheriting any pitch/roll from the gate's own CFrame.
-	barricade:PivotTo(CFrame.lookAt(center, center - playerSide))
+	barricade:PivotTo(CFrame.lookAt(position, position - playerSide))
+	-- Then seat it by its real bounds: the bottom of its bounding box on the
+	-- floor (2026-10-29). The pivot is not the box's centre -- the old
+	-- "floor + half the height" lifted a base-pivoted barricade by half its
+	-- height.
+	local boxCFrame, boxSize = barricade:GetBoundingBox()
+	local bottomY = boxCFrame.Position.Y - boxSize.Y / 2
+	barricade:PivotTo(barricade:GetPivot() + Vector3.new(0, floorY - bottomY, 0))
 	barricade.Parent = workspace.IgnoreInstances.Map.DungeonRooms
 end
 
@@ -852,7 +862,7 @@ function GateService._startEventGateHold(self: typeof(GateService), eventRoom: R
 			UserNotificationService:RequestUserNotification(player, {
 				titleText = indicatorText,
 				titleTextFont = Enum.Font.SourceSansBold,
-				titleTextColor3 = Color3.fromRGB(170, 85, 255),
+				titleTextColor3 = NotificationColors.Event,
 				titleTextTransparency = 0,
 
 				text = indicatorSubtext,
@@ -984,7 +994,7 @@ function GateService.OpenSegmentGate(
 					UserNotificationService:RequestUserNotification(player, {
 						titleText = "Boss Defeated",
 						titleTextFont = Enum.Font.SourceSansBold,
-						titleTextColor3 = Color3.fromRGB(85, 255, 127),
+						titleTextColor3 = NotificationColors.Success,
 						titleTextTransparency = 0,
 
 						text = if isFinal then "The run is complete." else "Collect your rewards...",
@@ -1011,7 +1021,7 @@ function GateService.OpenSegmentGate(
 			UserNotificationService:RequestUserNotification(player, {
 				titleText = "Chamber Cleared",
 				titleTextFont = Enum.Font.SourceSansBold,
-				titleTextColor3 = Color3.fromRGB(85, 255, 127),
+				titleTextColor3 = NotificationColors.Success,
 				titleTextTransparency = 0,
 
 				text = "Enemies defeated, choose a relic!",
@@ -1032,7 +1042,7 @@ function GateService.OpenSegmentGate(
 				UserNotificationService:RequestUserNotification(player, {
 					titleText = indicatorText,
 					titleTextFont = Enum.Font.SourceSansBold,
-					titleTextColor3 = Color3.fromRGB(170, 85, 255),
+					titleTextColor3 = NotificationColors.Event,
 					titleTextTransparency = 0,
 
 					text = indicatorSubtext,
