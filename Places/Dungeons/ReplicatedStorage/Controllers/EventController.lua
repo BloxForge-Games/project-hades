@@ -39,6 +39,7 @@ local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
+local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local ScreenGradientInterfaceController = require(ReplicatedStorage.Interfaces.ScreenGradientInterfaceController)
 local EncounterIntroController = require(ReplicatedStorage.Controllers.EncounterIntroController)
 local DialogueBillboardInterface =
@@ -678,7 +679,7 @@ function EventController.ShowBlockedActionNotification(_self: typeof(EventContro
 	UserNotificationSystem:ShowNotification({
 		titleText = "Unavailable",
 		titleTextFont = Enum.Font.SourceSansBold :: any,
-		titleTextColor3 = Color3.fromRGB(255, 92, 92),
+		titleTextColor3 = NotificationColors.Error,
 		titleTextTransparency = 0,
 
 		text = "You cannot perform this action right now",

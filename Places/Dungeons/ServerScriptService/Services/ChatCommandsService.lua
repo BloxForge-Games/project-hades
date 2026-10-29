@@ -7,8 +7,9 @@
 	a new `if` in some other service.
 
 	Only members of the game's group at Constants.COMMAND_MIN_GROUP_RANK
-	(250) or above may run them, in Studio too (2026-10-27). The one gate
-	is `_canRun` below.
+	(250) or above may run them, in Studio too (2026-10-27) -- except
+	PUBLIC_COMMANDS (/wipedata, 2026-10-28), which anyone may run. The one
+	gate is `_canRun` below.
 
 	--- ANATOMY ---
 
@@ -408,14 +409,24 @@ COMMANDS = {
 	},
 }
 
+-- Commands ANYONE may run, rank or not (2026-10-28): /wipedata only ever
+-- resets the caller's own profile.
+local PUBLIC_COMMANDS: { [string]: boolean } = {
+	wipedata = true,
+}
+
 --[ Private ]--
 
--- Single permission seam, so no individual command has to care: members
+-- Single permission seam, so no individual command has to care: anyone
+-- for PUBLIC_COMMANDS, else members
 -- of the game's group at
 -- Constants.COMMAND_MIN_GROUP_RANK or above. The rank is fetched once per
 -- player and cached (GroupService:GetGroupsAsync is a web call); a failed lookup (no group id yet, web error) reads
 -- as rank 0, so commands fail CLOSED.
-function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player: Player, _commandName: string): boolean
+function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player: Player, commandName: string): boolean
+	if PUBLIC_COMMANDS[commandName] then
+		return true
+	end
 	local rank = groupRankCache[player]
 	if rank == nil then
 		local ok, groups = pcall(function()

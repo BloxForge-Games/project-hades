@@ -9,7 +9,8 @@
 
 	EVERY command needs a member of the game's group at
 	Constants.COMMAND_MIN_GROUP_RANK (250) or above (2026-10-24), the same
-	gate the Dungeons place's commands use -- in Studio too (2026-10-27).
+	gate the Dungeons place's commands use -- in Studio too (2026-10-27) --
+	except PUBLIC_COMMANDS (/wipedata, 2026-10-28), which anyone may run.
 	`_canRun` is the one permission seam.
 
 	    /<command> <arg1> <arg2> ...   -- name + args lowercased; unknown
@@ -297,9 +298,15 @@ COMMANDS = {
 COMMANDS.dungeon = COMMANDS.tp
 COMMANDS.dungeons = COMMANDS.tp
 
+-- Commands ANYONE may run, rank or not (2026-10-28): /wipedata only ever
+-- resets the caller's own profile.
+local PUBLIC_COMMANDS: { [string]: boolean } = {
+	wipedata = true,
+}
+
 --[ Private ]--
 
--- Single permission seam: every command needs the game's group at
+-- Single permission seam: every command but PUBLIC_COMMANDS needs the game's group at
 -- Constants.COMMAND_MIN_GROUP_RANK or above (the Dungeons place's gate),
 -- in Studio too. The rank is read the way the Dungeons place reads it
 -- (GroupService:GetGroupsAsync, a web call): pcall'd, and a failure
@@ -307,8 +314,11 @@ COMMANDS.dungeons = COMMANDS.tp
 function LobbyChatCommandsService._canRun(
 	_self: typeof(LobbyChatCommandsService),
 	player: Player,
-	_commandName: string
+	commandName: string
 ): boolean
+	if PUBLIC_COMMANDS[commandName] then
+		return true
+	end
 	local ok, groups = pcall(function()
 		return GroupService:GetGroupsAsync(player.UserId)
 	end)

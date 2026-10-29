@@ -43,6 +43,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
+local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
@@ -771,7 +772,7 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 			UserNotificationService:RequestUserNotification(playerIndex, {
 				titleText = "Eternal Damnation",
 				titleTextFont = Enum.Font.SourceSansBold,
-				titleTextColor3 = Color3.fromRGB(252, 83, 83),
+				titleTextColor3 = NotificationColors.Error,
 				titleTextTransparency = 0,
 
 				text = player.Name .. " was claimed by the Spire.",
@@ -864,7 +865,7 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 		UserNotificationService:RequestUserNotification(playerIndex, {
 			titleText = "Player Revive",
 			titleTextFont = Enum.Font.SourceSansBold,
-			titleTextColor3 = Color3.fromRGB(85, 255, 127),
+			titleTextColor3 = NotificationColors.Success,
 			titleTextTransparency = 0,
 
 			text = player.Name .. " has been revived!",
