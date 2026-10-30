@@ -43,6 +43,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local RelicOfferService = require(ServerScriptService.Services.RelicOfferService)
 local DropService = require(ServerScriptService.Services.DropService)
@@ -699,7 +700,7 @@ function EventService.NotifyWishesToContinue(_self: typeof(EventService), player
 	UserNotificationService:RequestAllNotification({
 		titleText = "Skip Event Requested",
 		titleTextFont = Enum.Font.SourceSansBold,
-		titleTextColor3 = Color3.fromRGB(174, 95, 252),
+		titleTextColor3 = NotificationColors.Event,
 		titleTextTransparency = 0,
 
 		text = ("%s voted to skip."):format(player.Name),
@@ -1049,7 +1050,7 @@ function EventService._onChooseGreaterBlessing(
 		UserNotificationService:RequestAllNotification({
 			titleText = "Greater Blessing",
 			titleTextFont = Enum.Font.SourceSansBold,
-			titleTextColor3 = Color3.fromRGB(174, 95, 252),
+			titleTextColor3 = NotificationColors.Event,
 			titleTextTransparency = 0,
 
 			text = line,

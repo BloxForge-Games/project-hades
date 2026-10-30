@@ -39,6 +39,11 @@
 
                 }
 
+            },
+
+            "DebugRelicTray": {
+                "$className": "Folder",
+                "$path": "Places/Dungeons/ReplicatedStorage/Interfaces/RelicInterfaceController/ReactComponents"
             }
         },
         

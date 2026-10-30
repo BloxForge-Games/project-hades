@@ -50,6 +50,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local EventService = require(ServerScriptService.Services.EventService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
@@ -120,10 +121,6 @@ local STATUS = {
 	Failed = "failed",
 	Expired = "expired",
 }
-
-local NOTIFY_TITLE_COLOR = Color3.fromRGB(201, 134, 255)
-local NOTIFY_WIN_COLOR = Color3.fromRGB(85, 255, 127)
-local NOTIFY_FAIL_COLOR = Color3.fromRGB(255, 92, 92)
 
 --[ Service ]--
 
@@ -510,7 +507,7 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 		MusicService:SetEventRoomChallenge(state.room.id, true)
 	end
 	self:_publishLobby(state, seconds)
-	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name), NOTIFY_TITLE_COLOR)
+	notifyAll("The Laughing Coffin", ("%s started the Event!"):format(player.Name), NotificationColors.Event)
 	Log.debug(
 		("[CoffinEventService] Challenge started by %s: %d mobs, cap %d, %ds"):format(
 			player.Name,
@@ -567,7 +564,7 @@ function CoffinEventService._finish(self: typeof(CoffinEventService), state: Cof
 	end)
 
 	if won then
-		notifyAll("Event Successful", "Victory. Your reward awaits.", NOTIFY_WIN_COLOR)
+		notifyAll("Event Successful", "Victory. Your reward awaits.", NotificationColors.Success)
 
 		-- The door: a visible reward clock. Opens when every chest is opened
 		-- (the batch callback) or when the clock runs out, whichever first.
@@ -596,7 +593,7 @@ function CoffinEventService._finish(self: typeof(CoffinEventService), state: Cof
 			end
 		end)
 	else
-		notifyAll("Event Failed", "Defeat. The reward is lost.", NOTIFY_FAIL_COLOR)
+		notifyAll("Event Failed", "Defeat. The reward is lost.", NotificationColors.Error)
 		MobSpawnService:DespawnMobsInRoom(state.room)
 		DungeonService:ReleaseEventHold(state.room.id)
 	end
