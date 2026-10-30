@@ -28,10 +28,14 @@
 	once. A queue waits until it fills; the X on the pill leaves it. A
 	party that changes while queued leaves the queue.
 
+	Closed testing (2026-10-30): every player in the party must hold
+	Constants.QUEUE_MIN_GROUP_RANK in the game's group to queue.
+
 	Studio cannot teleport: a match there is announced and the queue
 	cleared instead.
 ]]
 
+local GroupService = game:GetService("GroupService")
 local HttpService = game:GetService("HttpService")
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local MessagingService = game:GetService("MessagingService")
@@ -41,6 +45,7 @@ local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local TeleportService = game:GetService("TeleportService")
 
+local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local PartyNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Party)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
@@ -163,11 +168,42 @@ end
 
 --[ Starting and leaving ]--
 
--- Why `players` may not queue this run, or nil.
+-- Whether `player` holds the group rank to queue (Constants
+-- QUEUE_MIN_GROUP_RANK), read the way the chat commands read it
+-- (GroupService:GetGroupsAsync, a web call). Nil when it could not be
+-- read; the caller refuses then (never grants).
+local function canQueue(player: Player): boolean?
+	local ok, groups = pcall(function()
+		return GroupService:GetGroupsAsync(player.UserId)
+	end)
+	if not ok or typeof(groups) ~= "table" then
+		warn(("[MatchmakingService] GetGroupsAsync failed for %s: %s"):format(player.Name, tostring(groups)))
+		return nil
+	end
+	for _, group in groups :: { any } do
+		if group.Id == Constants.GROUP_ID then
+			return (tonumber(group.Rank) or 0) >= Constants.QUEUE_MIN_GROUP_RANK
+		end
+	end
+	return false
+end
+
+-- Why `players` may not queue this run, or nil. Yields (the group rank).
 local function refusal(players: { Player }, dungeonId: string, difficulty: string): string?
 	local dungeon = DungeonData[dungeonId]
 	local tier = DifficultyData.Tiers[difficulty]
 	for _, player in players do
+		local allowed = canQueue(player)
+		if allowed == nil then
+			return ("Couldn't check %s's group rank. Try again."):format(player.DisplayName)
+		end
+		if not allowed then
+			return if #players == 1
+				then "Dungeons are only open to the dev team right now."
+				else ("%s can't queue: dungeons are only open to the dev team right now."):format(
+					player.DisplayName
+				)
+		end
 		local level = getPlayerLevel(player)
 		if level < (dungeon.unlockLevel or 1) then
 			return ("%s needs Level %d for %s."):format(player.DisplayName, dungeon.unlockLevel, dungeon.displayName)
