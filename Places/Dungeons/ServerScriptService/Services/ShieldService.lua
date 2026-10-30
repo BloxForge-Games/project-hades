@@ -48,6 +48,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local RelicService = require(ServerScriptService.Services.RelicService)
+local Breakable = require(ServerScriptService.Components.Breakable)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local AuraService = require(ServerScriptService.Services.AuraService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
@@ -125,8 +126,9 @@ local TNT_FUSE_SECONDS = 0
 -- abrupt one, and at a 1s pulse interval two tremors overlap, so a hard cut
 -- there reads as a strobe.
 local TREMOR_INTERVAL = 1
--- Doubled 2026-10-25 (was 10); the visual scales with it.
-local TREMOR_RADIUS = 20
+-- 12 since 2026-10-28 (was 20, doubled from 10 on 2026-10-25); the visual
+-- scales with it.
+local TREMOR_RADIUS = 12
 -- The radius the Tremor VFX asset was authored at.
 local TREMOR_VFX_AUTHORED_RADIUS = 10
 local TREMOR_Y_OFFSET = 1.5
@@ -304,6 +306,8 @@ function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: numbe
 		-- call, so the server copy could only stream or fire blind.
 		RelicNetwork.TntExplosionEffect.FireAll(blastPosition)
 
+		-- Relic damage breaks breakables too.
+		Breakable.HitInRadius(blastPosition, TNT_EXPLOSION_RADIUS, owner)
 		if getDamageService() then
 			forEachEnemyInRadius(blastPosition, TNT_EXPLOSION_RADIUS, function(_model, targetHumanoid)
 				-- Relic-sourced flat damage (never rolls appliers as a weapon
@@ -425,7 +429,9 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 				-- per-second damage, so the pulse always pays out and the number
 				-- lives only in RelicData.
 				local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Golem's Hammer"]) or 0
-				local tremorDamage = math.round(getRelicLevel(player) * damagePerLevel)
+				local golemRow = RelicData[RelicNames["Golem's Hammer"]]
+				local barrierShare = (golemRow and golemRow.data and golemRow.data.barrierShare) or 0
+				local tremorDamage = math.round(getRelicLevel(player) * damagePerLevel + totalOf(state) * barrierShare)
 
 				local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
 				local tremorFolder = vfxFolder and vfxFolder:FindFirstChild("Tremor")
@@ -485,6 +491,7 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 				end
 
 				if tremorDamage > 0 and getDamageService() then
+					Breakable.HitInRadius(hrp.Position, TREMOR_RADIUS, player)
 					forEachEnemyInRadius(hrp.Position, TREMOR_RADIUS, function(_model, targetHumanoid)
 						getDamageService():TakeDamage(player, targetHumanoid, tremorDamage, false, false, nil, true)
 					end)
@@ -532,7 +539,17 @@ function ShieldService.GrantShield(
 	if headroom <= 0 then
 		return 0
 	end
-	local value = math.min(applierHumanoid.MaxHealth * fraction, headroom)
+	-- Golem's Hammer: the HOLDER's Barriers are data.barrierBonus stronger
+	-- (still inside the cap).
+	local strength = 1
+	if
+		RelicService
+		and (RelicService:GetSpecificRelicRegistry(targetPlayer, RelicNames["Golem's Hammer"]) or 0) > 0
+	then
+		local golem = RelicData[RelicNames["Golem's Hammer"]]
+		strength += (golem and golem.data and golem.data.barrierBonus) or 0
+	end
+	local value = math.min(applierHumanoid.MaxHealth * fraction * strength, headroom)
 
 	-- Earth Summoning Horn's solo half: a holder who owns it keeps every
 	-- Barrier they gain longer (data.durationBonus). Shares to allies

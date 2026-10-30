@@ -29,6 +29,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Breakable = require(script.Parent.Parent.Components.Breakable)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Cast-site relic knobs. MUST mirror ArcaneController's client chain.
 -- Forbidden Box (Cursed): mana costs from Arcane are DOUBLED.
@@ -42,9 +43,6 @@ local DEFAULT_ARCANE_CUTSCENE_SECONDS = 2
 -- restore) as the bars come down. A frame of exposure at either end is
 -- exactly what the window exists to prevent.
 local ARCANE_CUTSCENE_INVULNERABLE_GRACE_SECONDS = 1.5
--- Icy Arctic Fowl: x0.75 mana while Frostburst is up (its +30% damage
--- half rides the AuraDamage module; the callback owns that value).
-local ICY_ARCTIC_FOWL_MANA_MULTIPLIER = 0.75
 -- Mystical Staff of Cyan: every equipped cast drops a Arcane Sigil at the
 -- caster's feet. The registry below is consumed by DamageService's
 -- MysticalSigil module via :IsInSigilZone. Radius is the BUFF zone --
@@ -58,7 +56,6 @@ local MYSTICAL_SIGIL_FADE_SECONDS = 1
 -- How far below the caster the sigil looks for the map floor: a short ray
 -- on purpose, so a mid-jump cast over the void drops no sigil.
 local MYSTICAL_SIGIL_GROUND_RAY_STUDS = 50
-local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local toggleWeaponSheath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.toggleWeaponSheath)
@@ -173,7 +170,36 @@ VFXService._vfxRegistry = {}
 
 VFXService.OnBuildingBroken = Signal.new()
 
+-- The hitboxes that are RELIC damage, not a cast (2026-10-29: "relic
+-- damage affects every breakable"). Their hits land on EVERY Breakable --
+-- barricades and props too, not only loot -- as one weapon-equivalent hit
+-- each, never the instant break a spell's is.
+local RELIC_HITBOXES: { [string]: boolean } = {
+	[ArcaneNames["Ghost Dragon"]] = true,
+	[ArcaneNames["Fireworks Explosion"]] = true,
+	[ArcaneNames["Pumpkin Explosion"]] = true,
+	[ArcaneNames["Big Pumpkin Explosion"]] = true,
+	[ArcaneNames["Fuse Bomb Explosion"]] = true,
+}
+
 --[ Private Functions ]--
+
+-- A real spell's hit on one mob: the damage, then the spell-hit gimmicks
+-- (RelicGimmickService).
+function VFXService._spellHit(
+	_self: typeof(VFXService),
+	model: Model,
+	cframe: CFrame,
+	activePlayer: Player,
+	vfxName: string,
+	arcaneIndexData: { [any]: any }
+)
+	onHitboxDamage(model, cframe, activePlayer, arcaneIndexData, true, false)
+	local gimmicks = Blitz.OptionalService("RelicGimmickService")
+	if gimmicks then
+		gimmicks:OnSpellHit(activePlayer, vfxName, model)
+	end
+end
 
 local function shouldResetHitRegistry(vfxName: string): boolean
 	return vfxName == ArcaneNames["Pumpkin Explosion"]
@@ -312,7 +338,12 @@ function VFXService.RegisterHitbox(
 
 			detectedRegistry[model] = true
 			hitCallback(model)
-		elseif canBreakBuildings and model:HasTag(TagList.Breakable) then
+		elseif
+			(canBreakBuildings or RELIC_HITBOXES[vfxName] or model:GetAttribute(Attributes.ArcaneHits) ~= nil)
+			and model:HasTag(TagList.Breakable)
+		then
+			-- Loot breakables (ArcaneHits set: veins, pots) take every
+			-- spell, relic procs included -- mining them is the point.
 			-- Arcane spells that opt in via ArcaneData.canBreakBuildings can
 			-- instantly destroy Breakables (gates, barricades, props). Passive
 			-- relic procs like Ghost Dragon and Fireworks set this to false
@@ -327,8 +358,12 @@ function VFXService.RegisterHitbox(
 
 			if breakable then
 				-- (isMagic, isMelee, origin, player) -- see MeleeWeapon for the
-				-- same slot fix.
-				breakable:Hit(true, false, cframe.Position, activePlayer)
+				-- same slot fix. A relic hitbox lands one weapon-equivalent hit.
+				if RELIC_HITBOXES[vfxName] then
+					breakable:Hit(false, true, cframe.Position, activePlayer)
+				else
+					breakable:Hit(true, false, cframe.Position, activePlayer)
+				end
 			end
 		elseif canBreakBuildings and model:HasTag(TagList.Destructable) and part.Name ~= BUILDING_FLOOR_STRING then
 			if not rootPart then
@@ -623,20 +658,9 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- cast precheck and the toolbar grey-out, and a drift here means the
 	-- UI lies about affordability:
 	--   * Forbidden Box (Cursed): x2 -- "Mana costs from Arcane are doubled".
-	--   * Icy Arctic Fowl: x0.65 while Frostburst is up.
 	local manaCostMultiplier = 1
 	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Forbidden Box"]) > 0 then
 		manaCostMultiplier = manaCostMultiplier * FORBIDDEN_BOX_MANA_MULTIPLIER
-	end
-	do
-		local casterHrp = getRoot.fromPlayer(player)
-		if
-			casterHrp
-			and casterHrp:FindFirstChild(AuraNames.Frostburst)
-			and getRelicService():GetSpecificRelicRegistry(player, RelicNames["Icy Arctic Fowl"]) > 0
-		then
-			manaCostMultiplier = manaCostMultiplier * ICY_ARCTIC_FOWL_MANA_MULTIPLIER
-		end
 	end
 
 	-- Robloxian Battle Shield: every equipped-spell cast grants its owner a
@@ -682,6 +706,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	local latest = ArcaneService:GetPlayerArcaneData(player) or arcaneData
 	ArcaneService:SetPlayerArcaneData(player, latest.mana - effectiveManaCost, latest.maxMana)
 	ArcaneService:SetPlayerArcaneLastUsed(player, vfxName, tick())
+
 	ArcaneService:SetPlayerArcaneCooldown(player, vfxName, newCooldown)
 
 	-- Mystical Staff of Cyan: the cast is COMMITTED (mana paid, cooldown
@@ -691,6 +716,13 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- rejected for mana/cooldown can't paint the floor.
 	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Mystical Staff of Cyan"]) > 0 then
 		self:_spawnArcaneSigil(player)
+	end
+
+	-- The gimmick epics that trigger on a committed cast (Frost Wyrm, the
+	-- Frost Field's arming, ...).
+	local gimmicks = Blitz.OptionalService("RelicGimmickService")
+	if gimmicks then
+		gimmicks:OnSpellCast(player, vfxName)
 	end
 
 	if self._vfxReplicationQueue[player.UserId] == nil then
@@ -868,7 +900,7 @@ function VFXService._onHitboxRequested(
 		if (activePlayer :: Player?) == nil then TagList.Player else TagList.Zombie,
 		IgnoreListService:GetWeaponIgnoreList(),
 		function(model: Model)
-			onHitboxDamage(model, cframe, activePlayer, arcaneIndexData, true, false)
+			self:_spellHit(model, cframe, activePlayer, vfxName, arcaneIndexData)
 		end,
 		arcaneIndexData.hitboxSize.X
 	)
@@ -958,7 +990,7 @@ function VFXService._onSweepHitboxRequested(
 		local stepCFrame = cframe + (direction * distance)
 
 		self:CreateHitbox(vfxName, activePlayer, stepCFrame, TagList.Zombie, overlapIgnoreList, function(model: Model)
-			onHitboxDamage(model, stepCFrame, activePlayer, arcaneIndexData, true, false)
+			self:_spellHit(model, stepCFrame, activePlayer, vfxName, arcaneIndexData)
 		end, arcaneIndexData.hitboxSize.X, true)
 	end
 end
@@ -1024,7 +1056,7 @@ function VFXService._onPersistentHitboxRequested(
 				TagList.Zombie,
 				IgnoreListService:GetWeaponIgnoreList(),
 				function(model: Model)
-					onHitboxDamage(model, cframe, activePlayer, arcaneIndexData, true, false)
+					self:_spellHit(model, cframe, activePlayer, vfxName, arcaneIndexData)
 				end,
 				arcaneIndexData.hitboxSize.X
 			)

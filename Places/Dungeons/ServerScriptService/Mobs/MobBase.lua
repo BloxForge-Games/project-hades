@@ -88,6 +88,9 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local MobDeath = require(script.Parent.MobDeath)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 
 --[ Constants ]--
 
@@ -436,15 +439,37 @@ function MobBase.new(model: Model): MobBase
 	return self
 end
 
+-- Is `attack` in play on this run's difficulty? An attack with a
+-- `minDifficulty` (MobData) joins the pool only on that tier and up; the
+-- run's tier comes from DungeonService (Normal outside a run).
+local function attackAllowed(attack, runRank: number): boolean
+	local minDifficulty = attack.minDifficulty
+	if minDifficulty == nil then
+		return true
+	end
+	return runRank >= (DifficultyData.Rank(minDifficulty) or 1)
+end
+
+local function runDifficultyRank(): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local run = dungeonService and dungeonService:GetRun()
+	local difficulty = if run then run.difficulty else Difficulty.Normal
+	return DifficultyData.Rank(difficulty) or 1
+end
+
 -- Builds the unified attack pool table. Pool entries are uniform shape
 -- so attack selection + dispatch don't branch on source. See comment
--- in MobBase.new where this is called.
+-- in MobBase.new where this is called. Attacks above the run's
+-- difficulty (`minDifficulty`) are left out.
 function MobBase._buildAttackPool(_self: MobBase, data)
 	local pool: { AttackPoolEntry } = {}
+	local runRank = runDifficultyRank()
 
 	for i, attack in ipairs(data.genericAttacks or {}) do
 		-- genericIndex is for the animation lookup.
-		table.insert(pool, poolEntry("generic", attack, i))
+		if attackAllowed(attack, runRank) then
+			table.insert(pool, poolEntry("generic", attack, i))
+		end
 	end
 
 	for _, attack in ipairs(data.uniqueAttacks or {}) do
@@ -452,7 +477,9 @@ function MobBase._buildAttackPool(_self: MobBase, data)
 		-- run(mobModel, target) returns the ACTIVE attack duration (seconds);
 		-- MobBase waits that, THEN recoveryDuration, before leaving Attacking — the
 		-- same two-stage clock a generic attack runs on.
-		table.insert(pool, poolEntry("unique", attack))
+		if attackAllowed(attack, runRank) then
+			table.insert(pool, poolEntry("unique", attack))
+		end
 	end
 
 	if #pool == 0 then

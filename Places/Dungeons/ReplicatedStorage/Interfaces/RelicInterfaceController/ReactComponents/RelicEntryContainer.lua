@@ -23,9 +23,11 @@ local BORDER_COLOR = Color3.fromRGB(43, 65, 85)
 -- tray look is the default; the description card passes its own lighter
 -- tint through `lockedLook`, since it sits on a lighter panel.
 local LOCK_ICON = "rbxassetid://4830959937"
+-- Darker than an open slot (2026-10-29; was 42, 66, 85, lighter than
+-- one), with the padlock lifted so it still reads on the dark box.
 local DEFAULT_LOCKED_LOOK = {
-	background = Color3.fromRGB(42, 66, 85),
-	icon = Color3.fromRGB(20, 31, 40),
+	background = Color3.fromRGB(17, 26, 34),
+	icon = Color3.fromRGB(58, 80, 98),
 	shadowVisible = true,
 }
 
@@ -110,7 +112,7 @@ local function RelicEntryContainer(props: any)
 		BackgroundColor3 = if locked
 			then lockedLook.background
 			-- An open, empty slot: the palette's dim blue-grey, a step
-			-- darker than a locked box so it reads as available but unused.
+			-- lighter than a locked box so it reads as available but unused.
 			else relicInfo and relicInfo.color or Color3.fromRGB(33, 52, 67),
 		BackgroundTransparency = 0,
 		ImageTransparency = 1,

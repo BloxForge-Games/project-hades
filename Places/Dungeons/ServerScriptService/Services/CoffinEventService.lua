@@ -80,6 +80,8 @@ local POLL_SECONDS = 0.25
 -- Torch ignition on accept. A light may carry this attribute to set its
 -- own lit brightness; otherwise the default. Emitters simply enable.
 local IGNITE_BRIGHTNESS_ATTRIBUTE = "IgniteBrightness"
+-- BreakableLootService's per-room folder of crystals and pots.
+local LOOT_FOLDER_NAME = "BreakableLoot"
 local DEFAULT_IGNITE_BRIGHTNESS = 1
 local IGNITE_SECONDS = 1.5
 -- The room's torch folder; every part under it is hidden until accept.
@@ -269,6 +271,11 @@ function CoffinEventService._darkenRoom(_self: typeof(CoffinEventService), room:
 		if primary and descendant:IsDescendantOf(primary) then
 			continue
 		end
+		-- The loot breakables (BreakableLootService) keep their own glow:
+		-- a crystal is not a torch.
+		if descendant:FindFirstAncestor(LOOT_FOLDER_NAME) then
+			continue
+		end
 		if descendant:IsA("Light") then
 			if descendant:GetAttribute(IGNITE_BRIGHTNESS_ATTRIBUTE) == nil then
 				descendant:SetAttribute(IGNITE_BRIGHTNESS_ATTRIBUTE, authoredNumber(descendant, "Brightness"))
@@ -327,6 +334,9 @@ function CoffinEventService._igniteRoom(_self: typeof(CoffinEventService), room:
 	local primary = model.PrimaryPart
 	for _, descendant in model:GetDescendants() do
 		if primary and descendant:IsDescendantOf(primary) then
+			continue
+		end
+		if descendant:FindFirstAncestor(LOOT_FOLDER_NAME) then
 			continue
 		end
 		if descendant:IsA("Light") then

@@ -18,6 +18,9 @@
 	The MARKER is a bare Attachment named "Frostburst" on the HRP — the
 	visuals live on body parts, but every consumer gates on the HRP child
 	name, so the marker must sit there regardless.
+
+	(Staff of Azure Ever Ice's Ice Glyph rode this aura until 2026-10-29;
+	it is worn at all times now, RelicGimmickService/Lib/azureGlyph.)
 ]]
 
 local Debris = game:GetService("Debris")
@@ -25,18 +28,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
--- RelicService requires this module at load (directly or through its parent),
--- so this side reaches it lazily: required on first use, once both exist.
-local relicServiceLazy: any = nil
-local function getRelicService(): any
-	if relicServiceLazy == nil then
-		relicServiceLazy = (require :: any)(ServerScriptService.Services.RelicService)
-	end
-	return relicServiceLazy
-end
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
-local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
@@ -45,70 +37,9 @@ local FALLBACK_DURATION = 5
 -- at expiry so nothing gets destroyed mid-flight.
 local FADE_SECONDS = 1
 
--- Staff of Azure Ever Ice's HIDDEN effect: while its owner is Frostburst,
--- a glyph rig (GameAssets.VFX.StaffofAzureIceGlyph) rides their back,
--- welded to the HRP. Undocumented in the relic card by design.
-local GLYPH_ASSET_NAME = "StaffofAzureIceGlyph"
-local GLYPH_CLONE_NAME = "AzureIceGlyph"
-local GLYPH_FADE_IN_SECONDS = 0.4
-local GLYPH_FADE_OUT_SECONDS = 1
-
 -- Name stamped on every visual clone so expiry can sweep them without
 -- tracking tables that could leak across respawns.
 local FX_NAME = "FrostburstFX"
-
--- Builds, welds and blooms the glyph onto the character. Returns the rig,
--- or nil when the asset is missing.
-local function spawnGlyph(character: Model, hrp: BasePart): Model?
-	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
-	local template = vfxFolder and vfxFolder:FindFirstChild(GLYPH_ASSET_NAME)
-	if not template or not template:IsA("Model") or not template.PrimaryPart then
-		warn("[Frostburst] Missing GameAssets.VFX." .. GLYPH_ASSET_NAME .. " (Model with a PrimaryPart)")
-		return nil
-	end
-
-	local glyph = template:Clone()
-	glyph.Name = GLYPH_CLONE_NAME
-
-	-- Snap the PrimaryPart onto the HRP (the asset is authored around its
-	-- own pivot), then weld EVERY part: the secondaries to the PrimaryPart
-	-- so the rig stays rigid, the PrimaryPart to the HRP so the whole thing
-	-- follows the character. Physics-neutral — massless, no collision.
-	glyph:PivotTo(hrp.CFrame)
-	for _, part in glyph:GetDescendants() do
-		if part:IsA("BasePart") then
-			part.Anchored = false
-			part.Massless = true
-			part.CanCollide = false
-			part.CanQuery = false
-			if part ~= glyph.PrimaryPart then
-				local weld = Instance.new("WeldConstraint")
-				weld.Part0 = glyph.PrimaryPart
-				weld.Part1 = part
-				weld.Parent = part
-			end
-		end
-	end
-	local rootWeld = Instance.new("WeldConstraint")
-	rootWeld.Part0 = hrp
-	rootWeld.Part1 = glyph.PrimaryPart
-	rootWeld.Parent = glyph.PrimaryPart
-
-	-- Parent as authored, then cue every client to bloom it in from
-	-- invisible — particles, beams and lights all ride the same alpha
-	-- (Combat.VFXFade -> VFXFadeController -> vfxFade). The cue goes out
-	-- in the same frame as the parenting, so no client renders the glyph
-	-- at full opacity first.
-	glyph.Parent = character
-	CombatNetwork.VFXFade.FireAll({
-		Rigs = { glyph },
-		FromAlpha = 0,
-		ToAlpha = 1,
-		Duration = GLYPH_FADE_IN_SECONDS,
-	})
-
-	return glyph
-end
 
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
@@ -175,16 +106,6 @@ return function(player: Player, character: Model, duration: number?)
 	marker.Parent = hrp
 	marker:SetAttribute(EXPIRY_ATTRIBUTE, os.clock() + (duration or FALLBACK_DURATION))
 
-	-- Azure glyph: only for Staff of Azure Ever Ice owners. Checked at
-	-- GRANT — a mid-aura relic change neither adds nor removes it.
-	local glyph: Model? = nil
-	if
-		getRelicService()
-		and (getRelicService():GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
-	then
-		glyph = spawnGlyph(character, hrp)
-	end
-
 	task.spawn(function()
 		awaitExpiry(marker)
 		if not marker.Parent then
@@ -201,28 +122,6 @@ return function(player: Player, character: Model, duration: number?)
 				clone.Enabled = false
 				grace = math.max(grace, clone.Lifetime.Max)
 			end
-		end
-
-		-- The glyph expires WITH the aura: emitters off (one replicated
-		-- bool each), then every client breathes the whole rig (beams and
-		-- lights included) out on one alpha, and the server destroys it
-		-- once that has played.
-		if glyph and glyph.Parent then
-			local dyingGlyph = glyph
-			for _, descendant in dyingGlyph:GetDescendants() do
-				if descendant:IsA("ParticleEmitter") then
-					descendant.Enabled = false
-				end
-			end
-			CombatNetwork.VFXFade.FireAll({
-				Rigs = { dyingGlyph },
-				FromAlpha = 1,
-				ToAlpha = 0,
-				Duration = GLYPH_FADE_OUT_SECONDS,
-			})
-			task.delay(GLYPH_FADE_OUT_SECONDS, function()
-				dyingGlyph:Destroy()
-			end)
 		end
 
 		task.delay(grace, function()

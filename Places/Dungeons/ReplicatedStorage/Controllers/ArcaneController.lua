@@ -24,7 +24,6 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 
 -- AimController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -103,10 +102,6 @@ local ArcaneController = {
 -- gate. MUST mirror VFXService:OnVFXRequested's server-side multiplier
 -- chain, or the local precheck drifts from what the server charges:
 --   * Forbidden Box (Cursed): x2 -- "Mana costs from Arcane are doubled".
---   * Icy Arctic Fowl: x0.75 while Frostburst is up. Conditional on a
---     live aura, so the toolbar grey-out can lag a beat when it
---     starts/ends; the CAST gate reads this helper live, so casting is
---     always correct.
 function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), vfxName: string): number
 	local arcaneIndexData = ArcaneData[vfxName]
 	if not arcaneIndexData then
@@ -117,13 +112,6 @@ function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), 
 	local ownedRelics = RelicController:GetRelicsFromUserId(Players.LocalPlayer.UserId)
 	if ownedRelics and (ownedRelics[RelicNames["Forbidden Box"]] or 0) > 0 then
 		manaCostMultiplier = manaCostMultiplier * 2
-	end
-	if ownedRelics and (ownedRelics[RelicNames["Icy Arctic Fowl"]] or 0) > 0 then
-		local character = Players.LocalPlayer.Character
-		local hrp = character and character:FindFirstChild("HumanoidRootPart")
-		if hrp and hrp:FindFirstChild(AuraNames.Frostburst) then
-			manaCostMultiplier = manaCostMultiplier * 0.75
-		end
 	end
 
 	return arcaneIndexData.manaCost * manaCostMultiplier

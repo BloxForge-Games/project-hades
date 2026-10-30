@@ -49,9 +49,14 @@
 	additively into ONE roll per hit), RELIC_HIT_AURAS rows (chance to
 	GRANT the owner an aura on hit), plus the Status Chance bonus —
 	percentage points added to every status the player already has a
-	qualifying applier row for (Blighted's +15, Mechatronic Spider's +15).
+	qualifying applier row for (Overseer's Short Sword while Blighted).
 	Direct weapon/arcane hits and relic procs roll appliers; DoT ticks do
-	NOT.
+	NOT. The four tree status rares roll their RelicData `arcaneChance`
+	on real spell hits instead of their weapon chance.
+
+	Mechatronic Spider: every application by its owner has the relic's
+	chance to ALSO apply a different random elemental status (ApplyStatus
+	wraps _applyStatusOnce for it).
 ]]
 
 --[ Roblox Services ]--
@@ -76,6 +81,7 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- One relic's tweak to a status application (StatusConditionData
 -- `relicModifiers` rows and GLOBAL_RELIC_MODIFIERS).
@@ -199,11 +205,26 @@ local STATUS_REDIRECTS: { [string]: { to: string, relicName: string, aura: strin
 
 -- Ice Breaker: applying Chill to an already-Chilled mob CONSUMES the Chill
 -- and Shatters for a flat per-level burst. Keep in sync with RelicData.
-local ICE_BREAKER_DAMAGE_PER_LEVEL = 75
+local ICE_BREAKER_DAMAGE_PER_LEVEL = 45
 
 -- (Staff of Azure Ever Ice's Shatter AoE half was cut in the 2026-09
 -- un-gating pass; its Chill chance lives in _sumApplierChances below and
 -- its Magic Damage rider in DamageService/AuraDamage.)
+
+-- Mechatronic Spider's pool: the four tree statuses (their upgrades come
+-- from the redirects), and which base each status belongs to so the extra
+-- one is never the status just applied.
+local SPIDER_STATUSES = {
+	StatusConditions.Burn,
+	StatusConditions.Chill,
+	StatusConditions.Poison,
+	StatusConditions.Shock,
+}
+local SPIDER_BASE_STATUS: { [string]: string } = {
+	[StatusConditions.BlackFlame] = StatusConditions.Burn,
+	[StatusConditions.NoxiousVenom] = StatusConditions.Poison,
+	[StatusConditions.CoilShocked] = StatusConditions.Shock,
+}
 
 -- Minimum gap between two plays of the SAME status sound, globally across
 -- every mob — an AoE fresh-applying one status to eight mobs in a frame
@@ -230,6 +251,10 @@ StatusConditionService._sweepBuffer = {} :: { StatusRecord }
 -- visualKey is the GameAssets.Auras folder name ("Burn", "BlackFlame",
 -- "Poison", "NoxiousPoison", ...). Four burn stacks = one rig at count 4.
 StatusConditionService._visuals = {} :: { [Model]: { [string]: VisualSlot } }
+
+-- [userId] = true while Mechatronic Spider's extra status is being
+-- applied, so that application can never roll another.
+StatusConditionService._spiderResolving = {} :: { [number]: boolean }
 
 --[ Private Functions ]--
 
@@ -702,13 +727,6 @@ local RELIC_HIT_STATUSES: {
 		-- relics, and Short Sword's boost now covers EVERY elemental status
 		-- rather than Poison alone, so it lives in _getStatusChanceBonus.
 		-- The bridge Rares (2026-10-27): guaranteed while their aura is up.
-		-- Flaming Mace: weapon hits Burn while Enflamed.
-		{
-			relicName = RelicNames["Flaming Mace"],
-			status = StatusConditions.Burn,
-			weaponOnly = true,
-			auraGate = AuraNames.Enflamed,
-		},
 		-- Ice Cream: spell hits Chill while Frostburst.
 		{
 			relicName = RelicNames["Ice Cream"],
@@ -749,8 +767,8 @@ local RELIC_HIT_AURAS: { { relicName: string, aura: string, chance: number?, wea
 -- literally nothing to a player owning no status appliers. Overseer's
 -- Short Sword inherited the role, where it can be gated properly.
 --
--- Mechatronic Spider used to add here too; it is a damage relic now and
--- DamageService owns it.
+-- (Mechatronic Spider used to add here too; it rolls an extra status in
+-- ApplyStatus now.)
 -- "Your Elemental Statuses" = the five tree statuses and their upgrades.
 -- Painted is deliberately absent: it belongs to a Neutral relic, and a
 -- Venom card should not quietly buff Magenta Paintball Gun.
@@ -804,41 +822,19 @@ function StatusConditionService:_sumApplierChances(
 			continue
 		end
 		if RelicService:GetSpecificRelicRegistry(sourcePlayer, row.relicName) > 0 then
-			local chance = row.chance or RelicService:GetRelicEffect(sourcePlayer, row.relicName) or 0
+			-- A real spell hit rolls the relic's `arcaneChance` when it has
+			-- one (the four tree status rares); everything else the callback.
+			local relicRow = RelicData[row.relicName]
+			local arcaneChance = isSpell and relicRow and relicRow.data and relicRow.data.arcaneChance
+			local chance = row.chance
+				or (if type(arcaneChance) == "number" then arcaneChance else nil)
+				or RelicService:GetRelicEffect(sourcePlayer, row.relicName)
+				or 0
 			if chance < 1 then
 				chance *= coefficient
 			end
 			chanceByStatus[row.status] = (chanceByStatus[row.status] or 0) + chance
 		end
-	end
-
-	-- Korblox Mage Staff: ADDITIVE Chill chance, raised while Frostburst is
-	-- up. Lives in the shared hub because its card says "on ALL damage" —
-	-- it sat in the ARCANE-only path until this pass, a leftover from when it
-	-- read "your Magic Damage has triple the Chill chance".
-	--
-	-- Additive, not a multiplier: x3 of nothing is still nothing, so the old
-	-- shape granted zero to a player with no Chill applier and could never
-	-- have been the NC opener the card now makes it.
-	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Korblox Mage Staff"]) or 0) > 0 then
-		local staffData = RelicData[RelicNames["Korblox Mage Staff"]]
-		local raised = staffData and staffData.data and staffData.data.frostburstChance
-		local chance = if ownerHasAura(sourcePlayer, AuraNames.Frostburst)
-			then raised or 0.40
-			else RelicService:GetRelicEffect(sourcePlayer, RelicNames["Korblox Mage Staff"]) or 0
-		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance * coefficient
-	end
-
-	-- Staff of Azure Ever Ice: ADDITIVE Chill chance on all damage while
-	-- Frostburst is up (the card's second half; the number is the relic's
-	-- data.chillChance so the card and the roll share it).
-	if
-		ownerHasAura(sourcePlayer, AuraNames.Frostburst)
-		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
-	then
-		local azureData = RelicData[RelicNames["Staff of Azure Ever Ice"]]
-		local chance = (azureData and azureData.data and azureData.data.chillChance) or 0.50
-		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + chance * coefficient
 	end
 
 	-- Status Chance bonus: +pp on every status that already has a chance —
@@ -850,6 +846,19 @@ function StatusConditionService:_sumApplierChances(
 				chanceByStatus[status] = chance + statusChanceBonus * coefficient
 			end
 		end
+	end
+
+	-- Staff of Azure Ever Ice: DOUBLES the owner's whole Chill chance on
+	-- every hit (data.chillChanceMultiplier), bonuses included -- last, so
+	-- it multiplies the finished sum.
+	local chill = chanceByStatus[StatusConditions.Chill]
+	if
+		chill
+		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
+	then
+		local azure = RelicData[RelicNames["Staff of Azure Ever Ice"]]
+		chanceByStatus[StatusConditions.Chill] = chill
+			* ((azure and azure.data and azure.data.chillChanceMultiplier) or 2)
 	end
 
 	return chanceByStatus
@@ -999,6 +1008,12 @@ function StatusConditionService:_dotTick(record: StatusRecord)
 	-- StatusConditionData tint the proc burst uses.
 	DamageService:TakeDamage(record.sourcePlayer, humanoid, damage, false, true, nil, nil, nil, config.color)
 
+	-- The tick gimmicks (Foul Poison Fowl's Toxic Spit).
+	local gimmicks = Blitz.OptionalService("RelicGimmickService")
+	if gimmicks then
+		gimmicks:OnStatusTick(record.sourcePlayer, record.model, record.status)
+	end
+
 	-- A status with its own authored hit VFX (Black Flame) bursts per
 	-- tick, not just on landing.
 	if config.hitVFXName and DamageIndicatorService then
@@ -1113,7 +1128,61 @@ end
 -- Returns true on a FRESH application, false on a REFRESH, nil when
 -- nothing was applied. Relic hooks split on that seam (Ice Breaker's
 -- Shatter consumes a re-Chilled target).
+--
+-- Mechatronic Spider: when anything was applied, its owner rolls the
+-- relic's chance to also apply a random DIFFERENT elemental status. The
+-- extra application runs latched, so it can never roll a third.
 function StatusConditionService:ApplyStatus(
+	sourcePlayer: Player,
+	targetModel: Model,
+	status: string?,
+	isWeaponHit: boolean?
+)
+	local applied = self:_applyStatusOnce(sourcePlayer, targetModel, status, isWeaponHit)
+	if applied ~= nil and status then
+		self:_trySpiderExtraStatus(sourcePlayer, targetModel, status)
+	end
+	return applied
+end
+
+-- The distinct statuses live on `model` right now (an upgraded variant
+-- counts as its own: Burn + Black Flame is two).
+function StatusConditionService:GetLiveStatuses(model: Model): { string }
+	local live: { string } = {}
+	for _, status: string in StatusConditions :: any do
+		if status ~= StatusConditions.None and model:GetAttribute(STATUS_ATTRIBUTE_PREFIX .. status) == true then
+			table.insert(live, status)
+		end
+	end
+	return live
+end
+
+function StatusConditionService:_trySpiderExtraStatus(sourcePlayer: Player, targetModel: Model, status: string)
+	if not sourcePlayer or not RelicService or self._spiderResolving[sourcePlayer.UserId] then
+		return
+	end
+	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Mechatronic Spider"]) or 0) <= 0 then
+		return
+	end
+	local chance = RelicService:GetRelicEffect(sourcePlayer, RelicNames["Mechatronic Spider"]) or 0
+	if math.random() > chance then
+		return
+	end
+	local base = SPIDER_BASE_STATUS[status] or status
+	local choices = {}
+	for _, candidate in SPIDER_STATUSES do
+		if candidate ~= base then
+			table.insert(choices, candidate)
+		end
+	end
+	local extra = choices[math.random(#choices)]
+	self._spiderResolving[sourcePlayer.UserId] = true
+	self:_applyStatusOnce(sourcePlayer, targetModel, extra)
+	self._spiderResolving[sourcePlayer.UserId] = nil
+end
+
+-- One application, without Mechatronic Spider's roll (see ApplyStatus).
+function StatusConditionService:_applyStatusOnce(
 	sourcePlayer: Player,
 	targetModel: Model,
 	status: string?,

@@ -31,6 +31,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Exports & Types & Defaults ]--
 
 local RelicService = require(ServerScriptService.Services.RelicService)
+local Breakable = require(ServerScriptService.Components.Breakable)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local ShieldService = require(ServerScriptService.Services.ShieldService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
@@ -151,7 +152,8 @@ end
 
 -- Baseline crit chance every hit has before any relic or aura.
 local DEFAULT_CRITICAL_CHANCE = 5
-local DEFAULT_CRITICAL_MULTIPLIER = 1.5
+-- x1.5 -> x1.75 (2026-10-28) so crit chance is worth taking.
+local DEFAULT_CRITICAL_MULTIPLIER = 1.75
 local RESISTED_COLOR3 = DamageIndicatorColors.Resisted
 local MAGIC_COLOR3 = DamageIndicatorColors.Arcane
 local WEAPON_COLOR3 = DamageIndicatorColors.Weapon
@@ -188,12 +190,11 @@ local DRAGON_LANTERN_TAX = 0.10
 -- on the multiplier). Chances/fractions that live in relic callbacks are
 -- read at the use site; these are the hardcoded halves.
 
--- Lightning Horn of the Heavens: ANY damage on a Shocked enemy has the
--- relic's data.strikeChance to call down a Lightning Strike (damage per
--- level from the relic callback) in this radius. Latched so a strike never
+-- Lightning Horn of the Heavens: a Critical Hit on a Shocked enemy calls
+-- down a Lightning Strike (damage per level from the relic callback) in
+-- this radius (see _tryLightningHornStrike). Latched so a strike never
 -- chains another off its own damage.
 local LIGHTNING_STRIKE_RADIUS = 11
-local LIGHTNING_STRIKE_FANOUT_SECONDS = 0.1
 
 -- Katana's crit-DAMAGE half (its callback carries the crit-chance half).
 -- Keep in sync with the relic's card.
@@ -230,8 +231,6 @@ local REQUIRED_DAMAGE_MODULES = {
 	"AuraDamage",
 	"Volleyball",
 }
-
--- Phoenix / Katana health gates.
 
 --[ Relic snapshot readers ]--
 
@@ -371,7 +370,7 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * (1 - (susanoo and susanoo.damageReduction or 0))
 	end
 
-	-- Teddy Trap (incoming side): +150% damage taken if owned. Callback
+	-- Teddy Trap (incoming side): +100% damage taken if owned. Callback
 	-- returns 2.0; nil → 1 (no-op when not owned). Its lifesteal half is
 	-- TeddyTrap.lua; its heal block is DropService's health-orb branch.
 	damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Teddy Trap"]) or 1)
@@ -664,8 +663,9 @@ function DamageService._postDamage(
 	player: Player,
 	humanoid: Humanoid,
 	wasCrit: boolean?,
-	_isRelicSourced: boolean?,
-	isGunShot: boolean?
+	isRelicSourced: boolean?,
+	isGunShot: boolean?,
+	isMelee: boolean?
 )
 	self:TryExecute(player, humanoid, wasCrit)
 
@@ -679,11 +679,30 @@ function DamageService._postDamage(
 
 	-- "All damage" relics (2026-10-25): every damage instance rolls them.
 	self._onDamageModules["Jail"](player, humanoid, procCoefficient)
-	self:_tryLightningHornStrike(player, humanoid, procCoefficient)
+	-- Thunderlord (2026-10-29): Critical Hits only.
+	if wasCrit then
+		self:_tryLightningHornStrike(player, humanoid)
+	end
 
 	if wasCrit then
 		self:_tryShurikenManaRefund(player)
 		self:_tryNinjaWhipShock(player, humanoid)
+		local targetModel = humanoid.Parent
+		local gimmicks = Blitz.OptionalService("RelicGimmickService")
+		if gimmicks and targetModel and targetModel:IsA("Model") then
+			gimmicks:OnCrit(player, targetModel, isMelee)
+		end
+	end
+
+	-- Every ATTACK hit -- weapon or spell, not a relic burst or a DoT tick
+	-- (both relic-sourced) -- for the on-hit gimmicks (Katana's Chain
+	-- Lightning). Relic bolts are relic-sourced, so they never re-trigger.
+	if not isRelicSourced then
+		local targetModel = humanoid.Parent
+		local gimmicks = Blitz.OptionalService("RelicGimmickService")
+		if gimmicks and targetModel and targetModel:IsA("Model") then
+			gimmicks:OnAttackHit(player, targetModel)
+		end
 	end
 end
 
@@ -756,17 +775,14 @@ function DamageService._tryNinjaWhipShock(_self: typeof(DamageService), player: 
 	end
 end
 
--- Lightning Horn of the Heavens (Legendary): any damage on a Shocked enemy
--- (Coil Shocked counts) has data.strikeChance to call down a Lightning
--- Strike — per-level damage from the relic callback, in a radius, every
--- enemy inside. The fan-out latch collapses an AoE hit into ONE strike,
--- and the resolving latch stops a strike's own damage chaining another.
-function DamageService._tryLightningHornStrike(
-	self: typeof(DamageService),
-	player: Player,
-	humanoid: Humanoid,
-	procCoefficient: number?
-)
+-- Lightning Horn of the Heavens (Legendary), THUNDERLORD (2026-10-29): a
+-- Critical Hit on a Shocked enemy (Coil Shocked counts) always calls down a
+-- Lightning Strike, at most once per data.cooldown -- per-level damage
+-- from the relic callback, in a radius, every enemy inside. The strike
+-- rolls its OWN crit (it rides the untyped lane, which never crits), and
+-- a crit strike extends its owner's Stormcharged by data.stormExtend.
+-- The resolving latch stops a strike's own damage chaining another.
+function DamageService._tryLightningHornStrike(self: typeof(DamageService), player: Player, humanoid: Humanoid)
 	if self._lightningStrikeResolving[player.UserId] then
 		return
 	end
@@ -779,23 +795,15 @@ function DamageService._tryLightningHornStrike(
 		return
 	end
 
-	-- The roll, before the latch: a failed roll must not spend the fan-out
-	-- window for the other targets of the same AoE crit.
-	local hornData = RelicData[RelicNames["Lightning Horn of the Heavens"]]
-	local strikeChance = ((hornData and hornData.data and hornData.data.strikeChance) or 0.25) * (procCoefficient or 1)
-	if math.random() > strikeChance then
-		return
-	end
-
 	local hrp = getRoot(targetModel)
 	if not hrp then
 		return
 	end
 
-	-- Fan-out latch: only the FIRST qualifying crit of an attack strikes.
+	-- The once-per-cooldown latch (also collapses an AoE crit to one).
 	local now = os.clock()
 	local lastStrike = self._lightningStrikeLast[player.UserId]
-	if lastStrike and (now - lastStrike) < LIGHTNING_STRIKE_FANOUT_SECONDS then
+	if lastStrike and (now - lastStrike) < relicData(RelicNames["Lightning Horn of the Heavens"], "cooldown", 1) then
 		return
 	end
 	self._lightningStrikeLast[player.UserId] = now
@@ -805,6 +813,18 @@ function DamageService._tryLightningHornStrike(
 	if strikeDamage <= 0 then
 		return
 	end
+	local critChance, critMultiplier =
+		self:GetCritParameters(player, false, false, if targetModel:IsA("Model") then targetModel else nil)
+	if math.random() * 100 <= critChance then
+		strikeDamage = math.round(strikeDamage * critMultiplier)
+		if AuraService and player.Character then
+			AuraService:ExtendAura(
+				player.Character,
+				AuraNames.Stormcharged,
+				relicData(RelicNames["Lightning Horn of the Heavens"], "stormExtend", 1)
+			)
+		end
+	end
 
 	-- Ground the strike under the target so the bolt lands on the floor.
 	local strikePosition = snapToGround(hrp.Position) or hrp.Position
@@ -812,6 +832,8 @@ function DamageService._tryLightningHornStrike(
 	RelicNetwork.LightningStrikeEffect.FireAll(strikePosition)
 
 	self._lightningStrikeResolving[player.UserId] = true
+	-- Relic damage breaks breakables too.
+	Breakable.HitInRadius(strikePosition, LIGHTNING_STRIKE_RADIUS, player)
 	forEachEnemyInRadius(strikePosition, LIGHTNING_STRIKE_RADIUS, function(model, targetHumanoid)
 		-- Full pipeline, relic-sourced: amp chain and crit roll apply, but
 		-- the resolving latch keeps it from triggering ANOTHER strike, and
@@ -852,18 +874,15 @@ end
 -- The player's crit CHANCE (0-100) and crit MULTIPLIER for one hit.
 -- Composition:
 --   chance = 5 + Shuriken (+5) + Ban Hammer (+25) + Stormcharged (+15)
---            + Sparkle Time (+50, arcane while Stormcharged)
 --            + Ninja Whip (+10 vs Shocked targets)
 --   multiplier = 1.5 + Stormcharged (+0.15)
---                + Dragon's Flame Sword (+0.35 vs Burning)
---                + Lightning Bolt Sword (+0.30 vs Shocked)
 -- `targetModel` is optional — target-conditional rows skip without one.
 -- `snapshot` / `statuses` are the per-hit tables TakeDamage already holds;
 -- a caller without them gets them resolved here.
 function DamageService.GetCritParameters(
 	self: typeof(DamageService),
 	player: Player,
-	isMagic: boolean?,
+	_isMagic: boolean?,
 	_isMelee: boolean?,
 	targetModel: Model?,
 	snapshot: RelicSnapshot?,
@@ -882,7 +901,8 @@ function DamageService.GetCritParameters(
 	local banHammerEffect = DamageService.RelicEffect(relics, RelicNames["Ban Hammer"]) or 0
 	critChance += banHammerEffect * 100
 
-	-- Silver Ninja Star: flat +15 points, no gate (callback = points).
+	-- Silver Ninja Star: flat +15 points, no gate (callback = points); its
+	-- +15% Critical Damage half is in the crit-multiplier block below.
 	if DamageService.RelicCount(relics, RelicNames["Silver Ninja Star"]) > 0 then
 		critChance += DamageService.RelicEffect(relics, RelicNames["Silver Ninja Star"]) or 0
 	end
@@ -899,21 +919,6 @@ function DamageService.GetCritParameters(
 	-- Stormcharged: crit chance while up (AuraData owns the number).
 	if isStormcharged then
 		critChance += (AuraData[AuraNames.Stormcharged].critChanceBonus or 0) * DamageService.AuraScale(relics)
-
-		-- Katana deepens the SAME window, both halves. Its crit-chance half
-		-- is the callback (percentage points); the damage half is the
-		-- constant below, since a callback returns only one value.
-		if DamageService.RelicCount(relics, RelicNames.Katana) > 0 then
-			critChance += DamageService.RelicEffect(relics, RelicNames.Katana) or 0
-		end
-	end
-
-	-- Sparkle Time Hoverboard on ARCANE hits while Stormcharged. Read from
-	-- the relic callback (percentage points) -- the old local constant
-	-- silently stayed at 25 when the relic was buffed to 50, which is
-	-- exactly the drift a single source prevents.
-	if isMagic and isStormcharged and DamageService.RelicCount(relics, RelicNames["Sparkle Time Hoverboard"]) > 0 then
-		critChance += DamageService.RelicEffect(relics, RelicNames["Sparkle Time Hoverboard"]) or 0
 	end
 
 	local targetShocked = targetStatuses.isShocked
@@ -931,6 +936,11 @@ function DamageService.GetCritParameters(
 	-- the pooled value adds as-is.
 	critMultiplier += PlayerStatsService:GetGreaterShrineEffect(player, "CritDamage")
 
+	-- Silver Ninja Star's Critical Damage half (data.critDamage), no gate.
+	if DamageService.RelicCount(relics, RelicNames["Silver Ninja Star"]) > 0 then
+		critMultiplier += relicData(RelicNames["Silver Ninja Star"], "critDamage", 0.15)
+	end
+
 	-- Stormcharged itself is crit CHANCE only (AuraData); the crit-DAMAGE
 	-- on its window is the relic riders below.
 	if isStormcharged then
@@ -938,25 +948,6 @@ function DamageService.GetCritParameters(
 		if DamageService.RelicCount(relics, RelicNames["Lightning Wand"]) > 0 then
 			critMultiplier += DamageService.RelicEffect(relics, RelicNames["Lightning Wand"]) or 0
 		end
-
-		-- Katana deepens the same window's crit-damage half.
-		if DamageService.RelicCount(relics, RelicNames.Katana) > 0 then
-			critMultiplier += relicData(RelicNames.Katana, "critDamageBonus", 0.20)
-		end
-	end
-
-	-- Dragon's Flame Sword: +35% crit damage vs Burning targets (family —
-	-- Black Flame counts).
-	if targetStatuses.isBurning and DamageService.RelicCount(relics, RelicNames["Dragon's Flame Sword"]) > 0 then
-		critMultiplier += DamageService.RelicEffect(relics, RelicNames["Dragon's Flame Sword"]) or 0
-	end
-
-	-- Lightning Bolt Sword: +25% crit damage always, +50% instead against a
-	-- Shocked target. The Shocked value REPLACES the base, it does not add.
-	if DamageService.RelicCount(relics, RelicNames["Lightning Bolt Sword"]) > 0 then
-		critMultiplier += if targetShocked
-			then relicData(RelicNames["Lightning Bolt Sword"], "shockedBonus", 0.50)
-			else DamageService.RelicEffect(relics, RelicNames["Lightning Bolt Sword"]) or 0
 	end
 
 	-- Crit chance past 100% is not wasted (2026-10-27): every point over
@@ -978,15 +969,12 @@ function DamageService._sumTargetConditionalBonuses(
 	_self: typeof(DamageService),
 	player: Player,
 	snapshot: RelicSnapshot,
-	targetModel: Model,
+	_targetModel: Model,
 	statuses: TargetStatuses,
 	isMagic: boolean?,
 	skipTyped: boolean?
 ): number
 	local bonus = 0
-
-	local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
-	local healthFraction = if humanoid and humanoid.MaxHealth > 0 then humanoid.Health / humanoid.MaxHealth else 1
 
 	local isBurning = statuses.isBurning
 	local isPoisoned = statuses.isPoisoned
@@ -1003,36 +991,9 @@ function DamageService._sumTargetConditionalBonuses(
 		bonus += (DamageService.RelicEffect(snapshot, RelicNames["Fire Breathing Dragon Friend"]) or 1) - 1
 	end
 
-	-- Phoenix: below the health gate it pays on ANY target now, with the
-	-- Burning value REPLACING the base rather than stacking on it.
-	if DamageService.RelicCount(snapshot, RelicNames.Phoenix) > 0 then
-		if healthFraction < relicData(RelicNames.Phoenix, "healthFraction", 0.5) then
-			bonus += if isBurning
-				then relicData(RelicNames.Phoenix, "burningBonus", 0.25)
-				else (DamageService.RelicEffect(snapshot, RelicNames.Phoenix) or 1) - 1
-		end
-	end
-
 	-- Venom payoffs.
 	if isPoisoned and DamageService.RelicCount(snapshot, RelicNames["Poisonous Butterfly"]) > 0 then
 		bonus += (DamageService.RelicEffect(snapshot, RelicNames["Poisonous Butterfly"]) or 1) - 1
-	end
-
-	-- Foul Poison Fowl: bonus damage equal to the target's TOTAL live
-	-- Weaken, from every applier and every Noxious Venom stack, already
-	-- clamped to the weaken cap by the service. Its OTHER half (+10% on
-	-- the owner's own Poison) is a relicModifier in StatusConditionData,
-	-- so a solo player's own Poison feeds this loop on its own.
-	if getStatusConditionService() and DamageService.RelicCount(snapshot, RelicNames["Foul Poison Fowl"]) > 0 then
-		bonus += getStatusConditionService():GetPoisonWeakenFraction(targetModel)
-	end
-
-	-- Mechatronic Spider: pays on every enemy, more on a Poisoned one.
-	-- The Poisoned value REPLACES the base.
-	if DamageService.RelicCount(snapshot, RelicNames["Mechatronic Spider"]) > 0 then
-		bonus += if isPoisoned
-			then relicData(RelicNames["Mechatronic Spider"], "poisonedBonus", 0.25)
-			else (DamageService.RelicEffect(snapshot, RelicNames["Mechatronic Spider"]) or 1) - 1
 	end
 
 	-- Frost payoffs. Frozen Flail is ARCANE-only per its card.
@@ -1040,25 +1001,12 @@ function DamageService._sumTargetConditionalBonuses(
 		bonus += (DamageService.RelicEffect(snapshot, RelicNames["Frozen Flail"]) or 1) - 1
 	end
 
-	-- Ice Dragon Slayer: for windowSeconds after ANY spell cast (2026-10-27;
-	-- it was "above 50% Mana", which casting itself switched off). The
-	-- Chilled value REPLACES the base.
-	if DamageService.RelicCount(snapshot, RelicNames["Ice Dragon Slayer"]) > 0 and ArcaneService then
-		local castAt = ArcaneService:GetLastCastAt(player)
-		if castAt and tick() - castAt <= relicData(RelicNames["Ice Dragon Slayer"], "windowSeconds", 4) then
-			bonus += if isChilled
-				then relicData(RelicNames["Ice Dragon Slayer"], "chilledBonus", 0.25)
-				else (DamageService.RelicEffect(snapshot, RelicNames["Ice Dragon Slayer"]) or 1) - 1
-		end
-	end
-
 	-- Distinct-status count, shared by the two per-status payoffs (resolved
 	-- once per hit in GetTargetStatuses).
 	local statusCount = statuses.statusCount
 
-	-- BLIGHTED: +10% per unique status on the target, and Overseer's
-	-- Battleaxe raises that same RATE to 15% rather than adding a second
-	-- bonus on top — so the player follows one number, not two.
+	-- BLIGHTED: +10% per unique status on the target. Overseer's
+	-- Battleaxe (2026-10-29) adds its own per-status rate below, always on.
 	--
 	-- Gated on the ATTACKER's aura, not on the target being Poisoned: the
 	-- aura is what the card names. Damage-type agnostic.
@@ -1076,10 +1024,12 @@ function DamageService._sumTargetConditionalBonuses(
 		if attackerHrp and attackerHrp:FindFirstChild(AuraNames.Blighted) then
 			local perStatus = (AuraData[AuraNames.Blighted].damagePerUniqueStatus or 0)
 				* DamageService.AuraScale(snapshot)
-			if DamageService.RelicCount(snapshot, RelicNames["Overseer's Battleaxe"]) > 0 then
-				perStatus += (DamageService.RelicEffect(snapshot, RelicNames["Overseer's Battleaxe"]) or 1) - 1
-			end
 			bonus += perStatus * statusCount
+		end
+		-- Overseer's Battleaxe: +data.damagePerStatus per distinct status,
+		-- no aura gate.
+		if DamageService.RelicCount(snapshot, RelicNames["Overseer's Battleaxe"]) > 0 then
+			bonus += relicData(RelicNames["Overseer's Battleaxe"], "damagePerStatus", 0.10) * statusCount
 		end
 	end
 
@@ -1133,7 +1083,9 @@ function DamageService._targetVulnerabilityMultiplier(
 		end
 	end
 
-	return math.min(multiplier, VULNERABILITY_CAP)
+	multiplier = math.min(multiplier, VULNERABILITY_CAP)
+
+	return multiplier
 end
 
 function DamageService.TakeDamage(
@@ -1237,8 +1189,8 @@ function DamageService.TakeDamage(
 	-- burst — pumpkins, Fuse Bomb, Summer Fireworks, Ghost Dragon,
 	-- Super Stomp Boots, Golem's Hammer tremors + barrier blast, Bundle
 	-- of TNT, Lightning Horn, Zombie Bomb, Ice Breaker — scales with
-	-- UNQUALIFIED "Damage" bonuses only (Mechatronic Spider, Phoenix,
-	-- Forbidden Box, the hyperlasers, Abyss, target
+	-- UNQUALIFIED "Damage" bonuses only (
+	-- the hyperlasers, Abyss, target
 	-- vulnerability). Weapon Damage / Magic Damage relics, the armor
 	-- set's weapon amp, and CRITS never touch relic bursts.
 	local untypedOnly = isRelicSourced == true
@@ -1253,7 +1205,7 @@ function DamageService.TakeDamage(
 		-- The TYPED modules below zero out on the untyped lane.
 		+ (if untypedOnly then 0 else self._onDamageModules["FlatDamageRelics"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["MysticalSigil"](player, snapshot, damage, isMagic))
-		+ (if untypedOnly then 0 else self._onDamageModules["LaserScythes"](player, snapshot, damage, isMagic))
+		+ (if untypedOnly then 0 else self._onDamageModules["LaserScythes"](player, snapshot, damage, isMagic, isMelee))
 		+ (if untypedOnly then 0 else self._onDamageModules["AuraDamage"](player, snapshot, damage, isMagic))
 		+ (
 			if untypedOnly
@@ -1302,7 +1254,7 @@ function DamageService.TakeDamage(
 	-- TRUE "more" multipliers: Legendary and Cursed damage relics multiply
 	-- the amplified total instead of joining the additive pool, so they are
 	-- worth what their card says on any floor (MoreDamage.lua has the list).
-	totalDamage *= self._onDamageModules["MoreDamage"](player, snapshot, isMagic == true, untypedOnly)
+	totalDamage *= self._onDamageModules["MoreDamage"](player, snapshot, isMagic == true, untypedOnly, isMelee == true)
 
 	-- Greater Shrine "Power": one multiplier over the whole number, on
 	-- EVERY lane -- weapon, arcane and relic bursts alike (it sits after
@@ -1398,7 +1350,7 @@ function DamageService.TakeDamage(
 			humanoid:TakeDamage(math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
 			-- Teddy Trap lifesteal reads the amount that actually landed.
 			self._onDamageModules["TeddyTrap"](player, math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
-			self:_postDamage(player, humanoid, true, relicSourced, isGunShot)
+			self:_postDamage(player, humanoid, true, relicSourced, isGunShot, isMelee)
 			return
 		end
 
@@ -1413,7 +1365,7 @@ function DamageService.TakeDamage(
 		)
 		humanoid:TakeDamage(math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
-		self:_postDamage(player, humanoid, false, relicSourced, isGunShot)
+		self:_postDamage(player, humanoid, false, relicSourced, isGunShot, isMelee)
 	else
 		if math.random() * 100 <= critChance then
 			local combinedDamage = math.round(totalDamage * critMultiplier)
@@ -1421,7 +1373,7 @@ function DamageService.TakeDamage(
 			showIndicator(player, targetModel, combinedDamage, true, hitColor, isMelee)
 			humanoid:TakeDamage(combinedDamage)
 			self._onDamageModules["TeddyTrap"](player, combinedDamage)
-			self:_postDamage(player, humanoid, true, relicSourced, isGunShot)
+			self:_postDamage(player, humanoid, true, relicSourced, isGunShot, isMelee)
 			return
 		end
 
@@ -1429,7 +1381,7 @@ function DamageService.TakeDamage(
 
 		humanoid:TakeDamage(math.round(totalDamage))
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage))
-		self:_postDamage(player, humanoid, false, relicSourced, isGunShot)
+		self:_postDamage(player, humanoid, false, relicSourced, isGunShot, isMelee)
 	end
 end
 

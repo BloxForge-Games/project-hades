@@ -25,6 +25,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
+local Breakable = require(ServerScriptService.Components.Breakable)
+
 -- DamageService requires this module at load (directly or through its parent),
 -- so this side reaches it lazily: required on first use, once both exist.
 local damageServiceLazy: any = nil
@@ -96,7 +98,7 @@ function SuperStompBoots.InvokeStomp(self: SuperStompBootsFields)
 	-- the shared helper; falls back to the profile on the server side
 	-- if the attribute hasn't been stamped yet (rare init race).
 	local level = getRelicLevel(self._player)
-	local baseDamage = self._damagePerLevel * level
+	local baseDamage = math.round(self._damagePerLevel * level)
 
 	-- Hit every mob in the stomp radius. Tag-based lookup mirrors
 	-- the hitbox pattern VFXService:CreateHitbox uses so behavior is
@@ -105,6 +107,9 @@ function SuperStompBoots.InvokeStomp(self: SuperStompBootsFields)
 	local overlapParams = OverlapParams.new()
 	overlapParams.FilterType = Enum.RaycastFilterType.Include
 	overlapParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Mobs }
+
+	-- Relic damage breaks breakables too (2026-10-29).
+	Breakable.HitInRadius(self._landingPosition, STOMP_RADIUS, self._player)
 
 	local hitMobs: { [Model]: boolean } = {}
 	for _, part in workspace:GetPartBoundsInRadius(self._landingPosition, STOMP_RADIUS, overlapParams) do

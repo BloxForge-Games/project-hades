@@ -73,6 +73,42 @@ local CoffinEventService = require(ServerScriptService.Services.CoffinEventServi
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+
+-- RelicService requires half the place at load; reached on first use.
+local function getRelicService(): any
+	return (require :: any)(ServerScriptService.Services.RelicService)
+end
+
+-- A relic name squashed for matching typed input: lower case, letters and
+-- digits only ("Dragon's Flame Sword" -> "dragonsflamesword").
+local function relicKey(name: string): string
+	return (string.gsub(string.lower(name), "[^%w]", ""))
+end
+
+-- The relic `query` names: an exact squashed match, else the ONE relic
+-- whose squashed name starts with or contains it. Returns the name, or nil
+-- and the candidates when it is ambiguous / unknown.
+local function findRelic(query: string): (string?, { string })
+	local wanted = relicKey(query)
+	local starts, contains = {}, {}
+	for name in RelicData do
+		local key = relicKey(name)
+		if key == wanted then
+			return name, {}
+		elseif string.sub(key, 1, #wanted) == wanted then
+			table.insert(starts, name)
+		elseif string.find(key, wanted, 1, true) then
+			table.insert(contains, name)
+		end
+	end
+	local pool = if #starts > 0 then starts else contains
+	if #pool == 1 then
+		return pool[1], {}
+	end
+	table.sort(pool)
+	return nil, pool
+end
 
 -- The spells the profile now has equipped, for the /wipedata reply. It
 -- reads the WIPED profile, so it shows what this server's template holds:
@@ -311,6 +347,46 @@ COMMANDS = {
 				)
 			end
 			return ("Usage: %s"):format(COMMANDS.give.usage)
+		end,
+	},
+
+	relic = {
+		usage = "/relic <name> | /relic clear",
+		description = "Grants yourself a relic by (partial) name, opening a slot if you are full; 'clear' removes all of yours.",
+		handler = function(player: Player, args: { string }): string?
+			local relicService = getRelicService()
+			local query = table.concat(args, " ")
+			if query == "" then
+				return ("Usage: %s"):format(COMMANDS.relic.usage)
+			end
+			if query == "clear" then
+				local removed = 0
+				for name, count in relicService:GetRelicsRegistry(player) do
+					if count > 0 then
+						relicService:RemoveRelicsRegistry(player, name, count)
+						removed += 1
+					end
+				end
+				return ("Removed %d relic(s)."):format(removed)
+			end
+			local name, candidates = findRelic(query)
+			if not name then
+				if #candidates == 0 then
+					return ("No relic matches '%s'."):format(query)
+				end
+				return ("'%s' matches %d relics: %s"):format(
+					query,
+					#candidates,
+					table.concat(candidates, ", ", 1, math.min(#candidates, 6))
+				)
+			end
+			if relicService:IsAtRelicCap(player) then
+				relicService:SetRelicSlots(player, relicService:GetRelicSlots(player) + 1)
+			end
+			if relicService:AddRelicsRegistry(player, name, 1) then
+				return ("Granted %s."):format(name)
+			end
+			return ("Could not grant %s (already owned, or no slot left)."):format(name)
 		end,
 	},
 

@@ -2,18 +2,15 @@
 --[[
 	Module: DamageService/LaserScythes.lua
 	Description:
-	The Laser Scythe twins (Neutral Epics), element-rework edition:
+	The Laser Scythe twins (Neutral Epics), flat always-on sticks synced to
+	their cards (2026-10-28; they used to convert bonus Max Health / Mana
+	percentages, which paid nothing without HP or mana bonuses):
 
-	  Red Laser Scythe   your bonus MAXIMUM HEALTH percentage joins the
-	                     WEAPON side of the additive relic sum at the same
-	                     fraction (BonusHealthPercent attribute — the
-	                     relic/rune HP sum PlayerStatsService stamps).
-	  Blue Laser Scythe  your bonus MAXIMUM MANA percentage joins the
-	                     ARCANE side the same way (BonusManaPercent — the
-	                     mana-rune sum).
+	  Red Laser Scythe   +30% on MELEE weapon hits.
+	  Blue Laser Scythe  +40% on ARCANE hits.
 
-	Returns BONUS damage (damage x fraction) for the orchestrator's
-	additive pool.
+	Each callback is the fraction. Returns BONUS damage (damage x fraction)
+	for the orchestrator's additive pool.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,18 +20,15 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
-local BONUS_HEALTH_PERCENT_ATTRIBUTE = "BonusHealthPercent"
-local BONUS_MANA_PERCENT_ATTRIBUTE = "BonusManaPercent"
-
-return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean)
+return function(_player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean, isMelee: boolean)
 	local fraction = 0
 
-	if not isMagic and DamageService.RelicCount(snapshot, RelicNames["Red Laser Scythe"]) > 0 then
-		fraction += (player:GetAttribute(BONUS_HEALTH_PERCENT_ATTRIBUTE) :: number?) or 0
+	if isMelee and not isMagic and DamageService.RelicCount(snapshot, RelicNames["Red Laser Scythe"]) > 0 then
+		fraction += DamageService.RelicEffect(snapshot, RelicNames["Red Laser Scythe"]) or 0
 	end
 
 	if isMagic and DamageService.RelicCount(snapshot, RelicNames["Blue Laser Scythe"]) > 0 then
-		fraction += (player:GetAttribute(BONUS_MANA_PERCENT_ATTRIBUTE) :: number?) or 0
+		fraction += DamageService.RelicEffect(snapshot, RelicNames["Blue Laser Scythe"]) or 0
 	end
 
 	if fraction <= 0 then

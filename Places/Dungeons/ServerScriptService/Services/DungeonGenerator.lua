@@ -882,11 +882,16 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 			end
 
 			-- The host room had a BranchWall blocking the doorway to the branch.
-			-- Now that a branch was actually placed, remove it so players can
-			-- walk through. (If no branch was placed, the wall stays and the
-			-- doorway remains sealed.)
+			-- Now that a branch was actually placed, swap it for a breakable
+			-- barricade (the same DungeonBarricade the segment's inner
+			-- doorways wear), so the treasure is broken into, not walked into.
+			-- (If no branch was placed, the wall stays and the doorway remains
+			-- sealed.)
 			local branchWall = slot.model:FindFirstChild(BRANCH_WALL_NAME)
 			if branchWall then
+				if branchWall:IsA("BasePart") then
+					GateService:PlaceBranchBarricade(slot.model, branchWall)
+				end
 				branchWall:Destroy()
 			end
 		end
