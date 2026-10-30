@@ -6,6 +6,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TextService = game:GetService("TextService")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
@@ -41,6 +42,48 @@ local LOCKED_SLOT_NAME = "Relic Slot"
 local LOCKED_SLOT_RARITY = "Locked"
 local LOCKED_SLOT_RARITY_COLOR = Color3.fromRGB(141, 141, 141)
 -- Rich text, the relic-description blue for the two nouns.
+-- Every relic description renders at ONE size (2026-10-29): TextScaled
+-- shrank the longer ones to squeeze them in, so cards disagreed. The size
+-- is the largest at which the LONGEST card -- DESCRIPTION_REFERENCE_RELIC's,
+-- the length budget every description is written to -- fits the label,
+-- measured with TextService for the label's live size, so it follows the
+-- card on any screen, phones included. A description longer than that
+-- budget shrinks to fit instead of spilling.
+local DESCRIPTION_REFERENCE_RELIC = "Spartan Sword and Shield"
+local DESCRIPTION_FONT =
+	Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+local DESCRIPTION_MIN_TEXT_SIZE = 8
+local DESCRIPTION_MAX_TEXT_SIZE = 60
+
+-- The largest whole TextSize at which `text` (rich text) fits `box`.
+-- Yields (TextService); cached per text and box.
+local fitCache: { [string]: number } = {}
+local function fitTextSize(text: string, box: Vector2): number
+	local key = string.format("%d:%d:%s", box.X, box.Y, text)
+	local cached = fitCache[key]
+	if cached then
+		return cached
+	end
+	local low, high = DESCRIPTION_MIN_TEXT_SIZE, DESCRIPTION_MAX_TEXT_SIZE
+	while low < high do
+		local size = math.ceil((low + high) / 2)
+		local params = Instance.new("GetTextBoundsParams")
+		params.Text = text
+		params.Font = DESCRIPTION_FONT
+		params.Size = size
+		params.Width = box.X
+		params.RichText = true
+		local ok, bounds = pcall(TextService.GetTextBoundsAsync, TextService, params)
+		if ok and bounds.Y <= box.Y then
+			low = size
+		else
+			high = size - 1
+		end
+	end
+	fitCache[key] = low
+	return low
+end
+
 local LOCKED_SLOT_DESCRIPTION =
 	"You can unlock this <font color='rgb(108,196,255)'>Relic Slot</font> by purchasing it from the <font color='rgb(108,196,255)'>Merchant Shop</font> event."
 -- The card's own copy of the locked box sits on a lighter panel than the
@@ -175,6 +218,8 @@ local function Container(props: any)
 	local containerRef = React.useRef(nil)
 	local backgroundFrameRef = React.useRef(nil)
 	local descriptionFrameRef = React.useRef(nil)
+	local descriptionLabelRef = React.useRef(nil)
+	local descriptionTextSize, setDescriptionTextSize = React.useState(14)
 	local toggleButtonRef = React.useRef(nil)
 	local toggleRingAnchorRef = React.useRef(nil)
 	local notificationButtonRef = React.useRef(nil)
@@ -474,10 +519,39 @@ local function Container(props: any)
 	elseif descriptionSelectedRelic and RelicData[descriptionSelectedRelic.name] then
 		descriptionText = getRelicDescription(localPlayer, descriptionSelectedRelic.name) or ""
 	end
-	-- Strip the rich-text tags once for the length-based size-tier
-	-- visibility check below — the small label hides past 47 chars and
-	-- the large label hides at/under 47.
-	local descriptionPlainLength = string.len((string.gsub(descriptionText, "<[^>]+>", "")))
+
+	-- The shared description size (see DESCRIPTION_REFERENCE_RELIC): the
+	-- reference card's fit, or this card's if it is the longer one. Re-run
+	-- when the label resizes or the text changes.
+	React.useEffect(function()
+		local label = descriptionLabelRef.current
+		if not label then
+			return
+		end
+		local cancelled = false
+		local function refit()
+			task.spawn(function()
+				local box = label.AbsoluteSize
+				if box.X < 1 or box.Y < 1 then
+					return
+				end
+				local reference = getRelicDescription(localPlayer, DESCRIPTION_REFERENCE_RELIC) or ""
+				local size = fitTextSize(reference, box)
+				if descriptionText ~= "" then
+					size = math.min(size, fitTextSize(descriptionText, box))
+				end
+				if not cancelled then
+					setDescriptionTextSize(size)
+				end
+			end)
+		end
+		refit()
+		local connection = label:GetPropertyChangedSignal("AbsoluteSize"):Connect(refit)
+		return function()
+			cancelled = true
+			connection:Disconnect()
+		end
+	end, { descriptionText })
 
 	return React.createElement("Frame", {
 		ref = containerRef,
@@ -548,8 +622,8 @@ local function Container(props: any)
 			}, {
 				BackgroundFrame = React.createElement("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.536, 0.457319),
-					Size = UDim2.fromScale(1.071, 0.884638),
+					Position = UDim2.fromScale(0.536, 0.434178),
+					Size = UDim2.fromScale(1.071, 0.838356),
 					BackgroundColor3 = Color3.fromRGB(20, 31, 40),
 					BackgroundTransparency = 0,
 					ZIndex = -1,
@@ -625,43 +699,22 @@ local function Container(props: any)
 					TextXAlignment = Enum.TextXAlignment.Left,
 				}),
 
+				-- One label, one size for every relic (DESCRIPTION_REFERENCE_RELIC).
 				RelicDescriptionTextLabel = React.createElement("TextLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.64, 0.436),
-					Size = UDim2.fromScale(0.752, 0.159),
+					ref = descriptionLabelRef,
+					AnchorPoint = Vector2.new(0.5, 0),
+					Position = UDim2.fromScale(0.64, 0.345),
+					Size = UDim2.fromScale(0.752, 0.205),
 					Text = descriptionText,
 					TextColor3 = Color3.fromRGB(255, 255, 255),
-					TextScaled = true,
+					TextScaled = false,
+					TextSize = descriptionTextSize,
 					TextWrapped = true,
 					RichText = true,
 					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
 					BackgroundTransparency = 1,
-					FontFace = Font.new(
-						"rbxasset://fonts/families/Montserrat.json",
-						Enum.FontWeight.SemiBold,
-						Enum.FontStyle.Normal
-					),
-					-- The locked message always takes the large label.
-					Visible = selectedIsLocked or descriptionPlainLength > 47,
-				}),
-
-				SmallRelicDescriptionTextLabel = React.createElement("TextLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.64, 0.395),
-					Size = UDim2.fromScale(0.752, 0.08),
-					Text = descriptionText,
-					TextColor3 = Color3.fromRGB(255, 255, 255),
-					TextScaled = true,
-					TextWrapped = true,
-					RichText = true,
-					TextXAlignment = Enum.TextXAlignment.Left,
-					BackgroundTransparency = 1,
-					FontFace = Font.new(
-						"rbxasset://fonts/families/Montserrat.json",
-						Enum.FontWeight.SemiBold,
-						Enum.FontStyle.Normal
-					),
-					Visible = not selectedIsLocked and descriptionPlainLength <= 47,
+					FontFace = DESCRIPTION_FONT,
 				}),
 
 				RelicNameTextLabel = React.createElement("TextLabel", {
@@ -713,7 +766,7 @@ local function Container(props: any)
 				SetBonusFrame = React.createElement("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
 					BackgroundColor3 = Color3.fromRGB(45, 70, 90),
-					Position = UDim2.fromScale(0.561539, 0.699734),
+					Position = UDim2.fromScale(0.562, 0.676),
 					Size = UDim2.fromScale(0.595079, 0.247),
 				}, {
 					UICorner = React.createElement("UICorner", {

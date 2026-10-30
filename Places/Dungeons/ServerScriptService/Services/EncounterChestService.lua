@@ -328,8 +328,8 @@ local function dropGems(origin: BasePart, gems: { [string]: number }, player: Pl
 	DropService.OnDropRequested:Fire(
 		origin,
 		DropTypes.Gems,
-		gems.minDropRate * multiplier,
-		gems.maxDropRate * multiplier,
+		math.round(gems.minDropRate * multiplier),
+		math.round(gems.maxDropRate * multiplier),
 		gems.minGems,
 		gems.maxGems,
 		false,

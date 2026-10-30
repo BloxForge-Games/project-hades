@@ -87,6 +87,12 @@ local ROOM_ATTRIBUTE = "RoomId" -- set on each room model so encounter systems c
 
 local BARRICADE_PREFAB_NAME = "DungeonBarricade"
 local BARRICADE_DISTANCE_FROM_GATE = 2.5 -- studs into the room, on the player's side
+-- A Treasure branch's barricade sits just past the doorway's own line,
+-- on the branch side (negative = away from the host room; playtest
+-- 2026-10-29: 1 back).
+local BRANCH_BARRICADE_DISTANCE = -1
+-- Its ground ray starts this far above the doorway's bottom.
+local BRANCH_BARRICADE_RAY_LIFT = 2
 local BARRICADE_RAYCAST_HEIGHT = 10 -- studs above the gate to start the ground ray
 local BARRICADE_RAYCAST_DEPTH = 50 -- studs downward search distance
 
@@ -192,7 +198,13 @@ end
 
 --[ Private Functions ]--
 
-function GateService._placeGateBarricade(_self: typeof(GateService), roomModel: Model, gate: BasePart)
+function GateService._placeGateBarricade(
+	_self: typeof(GateService),
+	roomModel: Model,
+	gate: BasePart,
+	square: boolean?,
+	distanceFromGate: number?
+)
 	local breakablesFolder = ReplicatedStorage:FindFirstChild("GameAssets")
 		and ReplicatedStorage.GameAssets:FindFirstChild("Breakables")
 	local template = breakablesFolder and breakablesFolder:FindFirstChild(BARRICADE_PREFAB_NAME)
@@ -212,14 +224,29 @@ function GateService._placeGateBarricade(_self: typeof(GateService), roomModel: 
 		towardCenter = -gate.CFrame.LookVector * Vector3.new(1, 0, 1)
 	end
 	local playerSide = towardCenter.Unit
+	-- `square`: face straight out of the doorway (the gate part's THIN
+	-- horizontal axis, signed toward the room) rather than toward the room
+	-- centre, which sits off to one side of a branch doorway and skewed
+	-- the barricade into the wall.
+	if square then
+		local axis = if gate.Size.X < gate.Size.Z then gate.CFrame.RightVector else gate.CFrame.LookVector
+		axis = (axis * Vector3.new(1, 0, 1)).Unit
+		playerSide = if axis:Dot(playerSide) >= 0 then axis else -axis
+	end
 
-	local barricadeXZ = gate.Position + (playerSide * BARRICADE_DISTANCE_FROM_GATE)
+	local barricadeXZ = gate.Position + (playerSide * (distanceFromGate or BARRICADE_DISTANCE_FROM_GATE))
 
 	-- Raycast straight down to ground the barricade on the dungeon floor.
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Include
 	raycastParams.FilterDescendantsInstances = { workspace.IgnoreInstances.Map.DungeonRooms }
-	local rayOrigin = Vector3.new(barricadeXZ.X, barricadeXZ.Y + BARRICADE_RAYCAST_HEIGHT, barricadeXZ.Z)
+	-- A `square` (branch) doorway casts from just above its own BOTTOM: from
+	-- above its middle the ray met the wall over the opening and stood the
+	-- barricade on top of it.
+	local rayStartY = if square
+		then gate.Position.Y - gate.Size.Y / 2 + BRANCH_BARRICADE_RAY_LIFT
+		else barricadeXZ.Y + BARRICADE_RAYCAST_HEIGHT
+	local rayOrigin = Vector3.new(barricadeXZ.X, rayStartY, barricadeXZ.Z)
 	local hit = workspace:Raycast(rayOrigin, Vector3.new(0, -BARRICADE_RAYCAST_DEPTH, 0), raycastParams)
 	local floorY = hit and hit.Position.Y or (gate.Position.Y - gate.Size.Y / 2)
 
@@ -231,6 +258,20 @@ function GateService._placeGateBarricade(_self: typeof(GateService), roomModel: 
 	-- inheriting any pitch/roll from the gate's own CFrame.
 	barricade:PivotTo(CFrame.lookAt(center, center - playerSide))
 	barricade.Parent = workspace.IgnoreInstances.Map.DungeonRooms
+end
+
+-- A breakable DungeonBarricade across a Treasure branch's doorway, on the
+-- host room's side, so the secret room has to be broken into the way a
+-- segment's inner doorways are. `doorway` is the host's BranchWall (the
+-- part that sealed it), read before DungeonGenerator removes it. Public
+-- for DungeonGenerator, which calls it as it seats each branch.
+function GateService.PlaceBranchBarricade(self: typeof(GateService), hostModel: Model, doorway: BasePart)
+	-- Square to the doorway and seated IN it (on the wall's line), so it
+	-- fills the opening instead of standing proud of the wall.
+	-- The wall still stands here (DungeonGenerator removes it after), and
+	-- the ground ray would land on top of it: take it out of queries first.
+	doorway.CanQuery = false
+	self:_placeGateBarricade(hostModel, doorway, true, BRANCH_BARRICADE_DISTANCE)
 end
 
 -- Wires a chunk's ExitGate as a touch trigger (the barricade doorways between

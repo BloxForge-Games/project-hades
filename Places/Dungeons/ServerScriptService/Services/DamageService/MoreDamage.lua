@@ -11,13 +11,13 @@
 -- Card wording follows the split: "+X% Damage" adds, "X% more Damage"
 -- multiplies here.
 --
---   Glorious Sword           40% more Weapon Damage           typed
---   Mystical Staff of Cyan   40% more Arcane Damage (owner)   typed; the
+--   Glorious Sword           75% more Melee Weapon Damage     typed
+--   Mystical Staff of Cyan   60% more Arcane Damage (owner)   typed; the
 --                            Sigil's +25% stays additive (MysticalSigil)
 --   Staff of Azure Ever Ice  50% more Arcane Damage while
 --                            Frostburst                       typed
---   Double-Bladed Scythe     80% less Arcane, 80% more Weapon typed
---   Forbidden Box            75% more Damage                  every lane
+--   Double-Bladed Scythe     100% more Weapon, Arcane deals 0 typed
+--   Forbidden Box            100% more Arcane Damage          typed
 --   Sword of Eternal Abyss   50% more Damage                  every lane
 --
 -- "Typed" relics skip the untyped relic-burst lane like every Weapon /
@@ -42,11 +42,16 @@ local function effect(snapshot: RelicSnapshot, relicName: string): number?
 	return if type(value) == "number" then value else nil
 end
 
-return function(player: Player, snapshot: RelicSnapshot, isMagic: boolean, untypedOnly: boolean): number
+return function(
+	player: Player,
+	snapshot: RelicSnapshot,
+	isMagic: boolean,
+	untypedOnly: boolean,
+	isMelee: boolean
+): number
 	local multiplier = 1
 
 	-- Unqualified "Damage": every lane, relic bursts included.
-	multiplier *= effect(snapshot, RelicNames["Forbidden Box"]) or 1
 	multiplier *= effect(snapshot, RelicNames["Sword of Eternal Abyss"]) or 1
 
 	if untypedOnly then
@@ -54,21 +59,26 @@ return function(player: Player, snapshot: RelicSnapshot, isMagic: boolean, untyp
 	end
 
 	if isMagic then
+		multiplier *= effect(snapshot, RelicNames["Forbidden Box"]) or 1
+
 		local mystical = RelicData[RelicNames["Mystical Staff of Cyan"]]
 		if DamageService.RelicCount(snapshot, RelicNames["Mystical Staff of Cyan"]) > 0 then
 			local more = mystical and mystical.data and mystical.data.ownerArcaneMore
 			multiplier *= 1 + (if type(more) == "number" then more else 0.40)
 		end
 
-		local hrp = getRoot.fromPlayer(player)
-		if hrp and hrp:FindFirstChild(AuraNames.Frostburst) then
-			multiplier *= effect(snapshot, RelicNames["Staff of Azure Ever Ice"]) or 1
+		-- Staff of Azure Ever Ice: its callback (1.5) while Frostburst.
+		if DamageService.RelicCount(snapshot, RelicNames["Staff of Azure Ever Ice"]) > 0 then
+			local hrp = getRoot.fromPlayer(player)
+			if hrp and hrp:FindFirstChild(AuraNames.Frostburst) then
+				multiplier *= effect(snapshot, RelicNames["Staff of Azure Ever Ice"]) or 1
+			end
 		end
-	else
+	elseif isMelee then
 		multiplier *= effect(snapshot, RelicNames["Glorious Sword"]) or 1
 	end
 
-	-- Double-Bladed Scythe: the callback is the magnitude (0.80), less on
+	-- Double-Bladed Scythe: the callback is the magnitude (1.00), less on
 	-- Arcane and more on Weapon.
 	local scythe = effect(snapshot, RelicNames["Double-Bladed Scythe"])
 	if scythe then

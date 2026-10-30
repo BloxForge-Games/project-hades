@@ -9,7 +9,6 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local VFXService = require(ServerScriptService.Services.VFXService)
 local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Services.IgnoreListService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
@@ -148,7 +147,15 @@ return function(player: Player)
 			TagList.Zombie,
 			IgnoreListService:GetWeaponIgnoreList(),
 			function(model: Model)
-				onHitboxDamage(model, hitboxCFrame, player, ArcaneData[ArcaneNames["Susanoo Armor"]], true, false)
+				-- Through VFXService's spell-hit path so Korblox Mage Staff's
+				-- refund sees the swing like any other cast hit.
+				VFXService:_spellHit(
+					model,
+					hitboxCFrame,
+					player,
+					ArcaneNames["Susanoo Armor"],
+					ArcaneData[ArcaneNames["Susanoo Armor"]]
+				)
 			end,
 			ArcaneData[ArcaneNames["Susanoo Armor"]].hitboxSize.X
 		)

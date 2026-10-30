@@ -120,10 +120,10 @@ local OFFER_SOURCE = "Vending"
 -- relic from a random element tree. Anything past this rolls normally, so
 -- the leftover slots can still come up elemental by luck.
 --
--- 0 = the run's first machine rolls exactly like any other machine
--- (2026-08-31 design call: completely random, no guaranteed elemental).
--- The forcing machinery stays dormant so this is retunable in one number.
-local STARTER_GUARANTEED_ELEMENTS = 0
+-- 1 (2026-10-29): the run's first machine always shows at least one
+-- elemental relic, so every run opens with a tree to build toward. (It was
+-- 0, completely random, from the 2026-08-31 call.)
+local STARTER_GUARANTEED_ELEMENTS = 1
 
 -- Slot roles for one pull, shuffled in place. See the call site for the
 -- per-machine rules.
@@ -131,9 +131,10 @@ local STARTER_GUARANTEED_ELEMENTS = 0
 -- only filtering left is `premiumOnly` (Pinata's Epic+ restriction) plus the
 -- ownership / already-offered exclusions applied above.
 -- STARTER SLOT: an unowned, ungated relic of `tree`, or nil when the tree
--- has none left. Bypasses the rarity roll entirely -- the point is a
--- guaranteed elemental foothold for the run's opening pull, and every
--- tree's NC pair is Rare anyway, so there is no rarity to preserve.
+-- has none left. Bypasses the rarity roll -- the point is a guaranteed
+-- elemental foothold for the run's opening pull -- but keeps to the tree's
+-- RARE ungated relics while it has any, so the guarantee never hands out
+-- an Epic for free (every tree has NC Epics since the 2026-10 pass).
 function RelicMachine:_getStarterRelicData(tree: string)
 	local owner = Players:GetPlayerByUserId(self._ownerId)
 	if not owner or not tree then
@@ -149,6 +150,15 @@ function RelicMachine:_getStarterRelicData(tree: string)
 	end
 	if #candidates == 0 then
 		return nil
+	end
+	local rares = {}
+	for _, relicName in candidates do
+		if RelicData[relicName].rarity == ItemRarity.Rare then
+			table.insert(rares, relicName)
+		end
+	end
+	if #rares > 0 then
+		candidates = rares
 	end
 
 	local picked = candidates[math.random(1, #candidates)]
@@ -324,7 +334,7 @@ function RelicMachine:Start()
 			--     and Wildcard would both be no-ops; its archetype allowlist +
 			--     diversity rules do the shaping instead.
 			-- STARTER MACHINE: STARTER_GUARANTEED_ELEMENTS slots (currently
-			-- ZERO — the opening pull is completely random) are forced to an
+			-- ONE) are forced to an
 			-- ungated relic from a random element tree; the rest roll
 			-- normally and can come up elemental or Neutral on luck alone.
 			--

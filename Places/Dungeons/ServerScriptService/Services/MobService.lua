@@ -558,10 +558,34 @@ end
 -- caller owns recoveryDuration after. `windUpOverride` is a follow-up
 -- strike's shorter wind-up (MobData `strikes` / `followUpWindUpDuration`).
 function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, attack, windUpOverride: number?)
+	local cframe: any = attack.hitboxCFrame
+	-- A fan (MobData `fanAngles`): the same hitbox again at each angle,
+	-- rotated about the mob, telegraphed and hit together with the main one.
+	if attack.fanAngles then
+		local root = getRoot(mobModel)
+		local resolved = if type(cframe) == "function" then cframe(mobModel) else cframe
+		if root and typeof(resolved) == "CFrame" then
+			cframe = resolved
+			local pivot = CFrame.new(root.Position)
+			for _, angle in attack.fanAngles do
+				local rotated = pivot * CFrame.Angles(0, math.rad(angle), 0) * pivot:Inverse() * resolved
+				local config: any = {
+					hitbox = attack.hitbox,
+					hitboxName = attack.hitboxName,
+					cframe = rotated,
+					damage = attack.damage,
+					canRagdoll = attack.canRagdoll,
+					windUpDuration = windUpOverride or attack.windUpDuration,
+					hitFrameDuration = attack.hitFrameDuration,
+				}
+				task.spawn(self.SpawnHitbox, self, mobModel, config)
+			end
+		end
+	end
 	self:SpawnHitbox(mobModel, {
 		hitbox = attack.hitbox,
 		hitboxName = attack.hitboxName,
-		cframe = attack.hitboxCFrame,
+		cframe = cframe,
 		damage = attack.damage,
 		canRagdoll = attack.canRagdoll,
 		windUpDuration = windUpOverride or attack.windUpDuration,

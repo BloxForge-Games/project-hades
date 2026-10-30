@@ -32,6 +32,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local DropService = require(ServerScriptService.Services.DropService)
+local Breakable = require(ServerScriptService.Components.Breakable)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local RoundStatisticsService = require(ServerScriptService.Services.RoundStatisticsService)
 local VFXService = require(ServerScriptService.Services.VFXService)
@@ -364,9 +365,14 @@ local function runZombieBombCloud(context: Context, player: Player)
 	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(player, RelicNames["Zombie Bomb"]) <= 0 then
 		return
 	end
-	-- Gate: the mob died POISONED (family read -- Noxious Venom counts;
-	-- any player's stacks, read before the stack watchers release).
-	if not (StatusConditionService and StatusConditionService:IsPoisoned(context.model)) then
+	-- PANDEMIC (2026-10-29): only a POISONED mob's takedown (Poison or
+	-- Noxious Venom) -- read before the stack watchers release -- and the
+	-- cloud carries every status it had.
+	if not StatusConditionService then
+		return
+	end
+	local carried: { string } = StatusConditionService:GetLiveStatuses(context.model)
+	if not table.find(carried, StatusConditions.Poison) and not table.find(carried, StatusConditions.NoxiousVenom) then
 		return
 	end
 
@@ -406,6 +412,8 @@ local function runZombieBombCloud(context: Context, player: Player)
 			task.wait(MOB_BOMB_CLOUD_TICK_SECONDS)
 			elapsed += MOB_BOMB_CLOUD_TICK_SECONDS
 
+			-- Relic damage breaks breakables too.
+			Breakable.HitInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, player)
 			forEachEnemyInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
 				-- Relic damage, NEUTRAL type (isMagic = false): no arcane
 				-- amplifiers, no arcane resist, white number — the same bucket
@@ -414,12 +422,11 @@ local function runZombieBombCloud(context: Context, player: Player)
 				if DamageService and tickDamage > 0 then
 					DamageService:TakeDamage(player, targetHumanoid, tickDamage, false, false, nil, true)
 				end
-				-- "...and applies Poison": every tick, no roll. The card dropped
-				-- its Status Chance clause in the 2026-08 pass, so the cloud is
-				-- now a guaranteed Poison field rather than a chance to seed one.
-				if StatusConditionService then
+				-- "...and applying every Status that enemy had": every tick,
+				-- no roll.
+				for _, status in carried do
 					-- Cast: see TRICK_OR_TRAP_BOMBS.
-					(StatusConditionService :: any):ApplyStatus(player, model, StatusConditions.Poison, false)
+					(StatusConditionService :: any):ApplyStatus(player, model, status, false)
 				end
 			end)
 		end
@@ -552,8 +559,8 @@ local function dropGems(context: Context)
 	DropService.OnDropRequested:Fire(
 		context.rootPart,
 		DropTypes.Gems,
-		gems.minDropRate * countMultiplier,
-		gems.maxDropRate * countMultiplier,
+		math.round(gems.minDropRate * countMultiplier),
+		math.round(gems.maxDropRate * countMultiplier),
 		gems.minGems,
 		gems.maxGems,
 		false

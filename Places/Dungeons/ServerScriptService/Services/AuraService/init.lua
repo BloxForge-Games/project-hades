@@ -136,16 +136,10 @@ function AuraService._computeStoneboundPayload(_self: typeof(AuraService), owner
 	local damageReduction = config.damageReduction
 
 	if RelicService then
-		if (RelicService:GetSpecificRelicRegistry(ownerPlayer, RelicNames["Spartan Sword and Shield"]) or 0) > 0 then
-			damageBonus += RelicService:GetRelicEffect(ownerPlayer, RelicNames["Spartan Sword and Shield"]) or 0
-		end
-		-- Leland rides BOTH halves now. The callback carries the Damage
-		-- Reduction; the damage half is in RelicData `data`, because a
-		-- callback returns one number.
+		-- Leland: Damage Reduction only (its callback); its damage half
+		-- left 2026-10-29.
 		if (RelicService:GetSpecificRelicRegistry(ownerPlayer, RelicNames["Leland the Lolturtle"]) or 0) > 0 then
 			damageReduction += RelicService:GetRelicEffect(ownerPlayer, RelicNames["Leland the Lolturtle"]) or 0
-			local lelandData = RelicData[RelicNames["Leland the Lolturtle"]]
-			damageBonus += (lelandData and lelandData.data and lelandData.data.damageBonus) or 0
 		end
 	end
 
@@ -232,6 +226,22 @@ end
 -- their Sword of Eternal Abyss blocks it. `ownerPlayer` matters only for
 -- Stonebound, whose payload follows the GRANTER's relics; nil = self.
 --
+-- Adds `seconds` to a LIVE aura's deadline (Lightning Horn's crit strikes
+-- on Stormcharged), never past one full fresh duration from now. No-op
+-- when the aura is not up.
+function AuraService.ExtendAura(_self: typeof(AuraService), character: Model, auraName: string, seconds: number)
+	local hrp = getRoot(character)
+	local marker = hrp and hrp:FindFirstChild(auraName)
+	if not marker then
+		return
+	end
+	local config = AuraData[auraName]
+	local now = os.clock()
+	local current = (marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or now
+	local ceiling = now + ((config and config.duration) or seconds)
+	marker:SetAttribute(EXPIRY_ATTRIBUTE, math.min(current + seconds, math.max(ceiling, current)))
+end
+
 -- EXTEND-ONLY on re-grant: the deadline moves out only when the new one is
 -- LATER, and visuals never respawn (no strobe).
 function AuraService.SetAura(

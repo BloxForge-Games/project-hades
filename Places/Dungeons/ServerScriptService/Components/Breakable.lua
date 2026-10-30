@@ -6,8 +6,15 @@
                   the player. Tagged "Breakable" via CollectionService.
 
                   Hit accounting:
-                    - Weapon hit (melee or projectile) = 1 count, breaks at 5
-                    - Arcane spell hit = instant break
+                    - Melee hit = 1 count, bullet = 0.5, breaks at the
+                      model's BreakHits attribute (default 3)
+                    - Arcane spell hit = instant break, unless the model
+                      sets ArcaneHits (the loot veins / pots), which is
+                      what one spell hit counts as instead
+
+                  Breakable.Signals.Hit / .Broken fire on the server for
+                  every landed hit and on the break, so a spawner can pay
+                  out (BreakableLootService).
 
                   Break effect mirrors VFXService's Destructable path:
                   darken color, reparent + unanchor for physics, outward
@@ -20,6 +27,7 @@
 
 --[ Roblox Services ]--
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
@@ -33,6 +41,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CollisionGroups)
 local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 
 --[ Constants ]--
 
@@ -44,12 +53,57 @@ local ANGULAR_IMPULSE_RANGE = 90 -- degrees per axis for the spin
 local DARKEN_VALUE = 0.35
 
 local DEBRIS_MIN_LIFETIME = 2
+-- A loot breakable (BreakStyle set) stays this long after its break, inert,
+-- while every client plays its shatter / sink on it.
+local STYLED_BREAK_LIFETIME = 2
 local DEBRIS_MAX_LIFETIME = 4
 local FADE_TIME = 1
 
 local Breakable = Component.new({
 	Tag = TagList.Breakable,
 })
+
+-- (model, hitCount, breakHits, player?) after every landed hit that did not
+-- break it, and (model, player?) on the break.
+Breakable.Signals = {
+	Hit = Signal.new(),
+	Broken = Signal.new(),
+}
+
+--[ Relic hits ]--
+
+-- RELIC damage on breakables (2026-10-29): every live Breakable within
+-- `radius` of `position` (measured to the edge of its box) takes one hit,
+-- as a weapon hit would. Relic AoEs find their mobs through
+-- forEachEnemyInRadius, which only ever sees the Mobs folder; their sites
+-- call this beside it. `seen` (optional) dedupes across one sweep's steps:
+-- a breakable it already holds is skipped, and a hit one is added.
+function Breakable.HitInRadius(position: Vector3, radius: number, player: Player?, seen: { [Instance]: boolean }?)
+	for _, instance in CollectionService:GetTagged(TagList.Breakable) do
+		if not instance:IsDescendantOf(workspace) or (seen and seen[instance]) then
+			continue
+		end
+		local center: Vector3, reach: number
+		if instance:IsA("Model") then
+			local boxCFrame, boxSize = instance:GetBoundingBox()
+			center, reach = boxCFrame.Position, math.max(boxSize.X, boxSize.Z) / 2
+		elseif instance:IsA("BasePart") then
+			center, reach = instance.Position, math.max(instance.Size.X, instance.Size.Z) / 2
+		else
+			continue
+		end
+		if (center - position).Magnitude > radius + reach then
+			continue
+		end
+		local breakable = Breakable:FromInstance(instance)
+		if breakable then
+			if seen then
+				seen[instance] = true
+			end
+			breakable:Hit(false, true, position, player, nil)
+		end
+	end
+end
 
 --[ Private Functions ]--
 
@@ -101,11 +155,27 @@ function Breakable:_applyBreakImpulse(part: BasePart)
 	end)
 end
 
-function Breakable:_break(_origin: Vector3?, _player: Player?)
+function Breakable:_break(_origin: Vector3?, player: Player?)
 	if self._broken then
 		return
 	end
 	self._broken = true
+	Breakable.Signals.Broken:Fire(self.Instance, player)
+
+	-- Loot breakables (pots, veins) do not fall apart: the breaking hit's
+	-- BreakableDamaged has already told every client to play the model's
+	-- BreakStyle on it, so the server just makes it inert and lets it go.
+	if self.Instance:GetAttribute(Attributes.BreakStyle) ~= nil then
+		for _, part in self.Instance:GetDescendants() do
+			if part:IsA("BasePart") then
+				part.CanCollide = false
+				part.CanQuery = false
+			end
+		end
+		Debris:AddItem(self.Instance, STYLED_BREAK_LIFETIME)
+		self._janitor:Cleanup()
+		return
+	end
 
 	-- Snapshot parts before reparenting them (which would mutate the iteration).
 	local pieces = {}
@@ -146,8 +216,9 @@ function Breakable:Hit(isMagic: boolean, isMelee: boolean, origin: Vector3, play
 		return
 	end
 
-	if isMagic then
-		self:_break(origin)
+	local arcaneHits = self.Instance:GetAttribute(Attributes.ArcaneHits)
+	if isMagic and type(arcaneHits) ~= "number" then
+		self:_break(origin, player)
 		return
 	end
 
@@ -155,11 +226,18 @@ function Breakable:Hit(isMagic: boolean, isMelee: boolean, origin: Vector3, play
 		self.Instance.PrimaryPart.HitSound:Play()
 	end
 
-	self._hitCount += if isMelee then 1 else 0.5
+	-- A bullet is half a hit -- a crystal takes twice its melee hits in
+	-- shots -- except on a pot ("Shatter"), which one bullet breaks.
+	local isPot = self.Instance:GetAttribute(Attributes.BreakStyle) == "Shatter"
+	self._hitCount += if isMagic then arcaneHits :: number elseif isMelee or isPot then 1 else 0.5
+	local breakHits = self.Instance:GetAttribute(Attributes.BreakHits)
+	local maxHits = if type(breakHits) == "number" then breakHits else MAX_WEAPON_HITS
 
 	-- `isMelee` rides along so the client can pick its impact feedback: a
 	-- bullet already draws its own BulletImpact where it landed. Arcane
-	-- never reaches here -- it broke the model above.
+	-- only reaches here on a model with ArcaneHits (the loot breakables);
+	-- everywhere else it broke the model above. Fired on the BREAKING hit
+	-- too, which is what plays a loot breakable's shatter / sink.
 	Combat.BreakableDamaged.FireAll({
 		Breakable = self.Instance,
 		HitCount = self._hitCount,
@@ -167,8 +245,10 @@ function Breakable:Hit(isMagic: boolean, isMelee: boolean, origin: Vector3, play
 		HitPosition = hitPosition,
 	})
 
-	if self._hitCount >= MAX_WEAPON_HITS then
+	if self._hitCount >= maxHits then
 		self:_break(origin, player)
+	else
+		Breakable.Signals.Hit:Fire(self.Instance, self._hitCount, maxHits, player)
 	end
 end
 
