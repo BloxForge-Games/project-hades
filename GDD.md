@@ -34,9 +34,8 @@ the Arcane Spire, a living celestial megastructure, one **Realm** at a time.
 - Every dungeon is its own place running the same Dungeons codebase.
 - Each dungeon is **independently queueable** from the Hub's Keystone Portal.
 - Difficulties per dungeon, unlocked in order and tracked per dungeon:
-  **Easy, Normal, Hard, Nightmare, Ascension 1 to 10.**
+  **Easy, Normal, Hard, Nightmare.** (Ascension was cut on 2026-10-30.)
   - Clearing **Hard** grants that dungeon's permanent **Keystone**.
-  - Clearing **Nightmare** unlocks Ascension 1; clearing Ascension N unlocks N+1.
 - **Keystone Trial:** owning all 5 Keystones unlocks it. All five dungeons chained into one
   continuous run with the relic build carried across. Failure resets the Trial; success completes
   the Realm and opens the **Realm Gate** to the next Realm.
@@ -46,8 +45,7 @@ the Arcane Spire, a living celestial megastructure, one **Realm** at a time.
 Enter one dungeon, procedural encounters, gain relics, boss, loot, return to Hub. The relic build
 resets afterwards. Roughly **6 to 15 gear drops** per run.
 
-- A run is **one to three floors by difficulty** (Easy 1, Normal 2, Hard and Nightmare 3; Ascension
-  3). Every floor is the same shape: two combat rooms, the miniboss, two combat rooms, the boss,
+- A run is **one to three floors by difficulty** (Easy 1, Normal 2, Hard and Nightmare 3). Every floor is the same shape: two combat rooms, the miniboss, two combat rooms, the boss,
   with two event rooms placed between them. One event is always the Merchant Shop, at the last door
   before the boss; the other lands before the miniboss and never rolls a second shop on the first
   floor. Normal and above may roll a third event (30 / 40 / 50%).
@@ -93,8 +91,8 @@ individually designed unique items that exist only at Legendary. No Mythic.
 
 ## Economy and the Blacksmith
 
-- Currencies on the profile, never inventory items: **Gold**, **Forge Crystal** (working name, the
-  one universal upgrade material), **Arcane Dust**.
+- Currencies on the profile, never inventory items: **Gold** and **Forge Crystal** (working name,
+  the one universal upgrade material).
 - **Blacksmith** upgrades cost Gold plus Forge Crystal. Early upgrades are guaranteed; if later ones
   can fail, failure never destroys or downgrades.
 - Forge Crystal comes from clears, bosses, higher difficulties, and salvaging gear.
@@ -106,26 +104,19 @@ individually designed unique items that exist only at Legendary. No Mythic.
 - **10 spells per dungeon: 5 Rare, 4 Epic, 1 Legendary.** Fixed rarity and identity per spell.
 - Power = base values + internal coefficient + source dungeon's tier + Arcane Rank.
   **Player level never scales Arcane damage.** Newer dungeons' spells are gradually stronger.
-- **Arcane Chests**, one per dungeon, sold by the **Arcane Trainer** in the Hub: standard for Gold,
-  upgraded for Robux. Each gives one spell from that dungeon's pool.
+- **Arcane Chests**, one per dungeon, sold by the **Arcane Trainer** in the Hub: standard for Gold
+  (Runegrove 400), premium for Robux (Runegrove 25) that is always Epic or better (Epic 80 /
+  Legendary 20). Each gives one spell from that dungeon's pool.
 - Reveal: chest opens, an **Arcane Scroll** themed to the dungeon floats out and unrolls, the spell is
   added to the **Arcane Index** at Rank 1.
-- Duplicates give Arcane XP to that exact spell; **Rank cap 5** (tentative); rank-ups are modest.
-- A duplicate of a max-rank spell becomes **Arcane Dust**. Dust levels any spell, deliberately
-  inefficiently, and costs scale with rarity.
+- Duplicates give Arcane XP to that exact spell; **Rank cap 10**. Rank 1 deals base damage and
+  each Rank after adds 15% (Rank 10 is x2.35). Rank 1 to 2 costs Rare 50 / Epic 75 / Legendary
+  100 XP, each later step that times the current Rank.
+- A duplicate of a max-rank spell **refunds 75% of the chest's Gold price**. (Arcane Dust was cut
+  on 2026-10-30.)
 
-| Arcane rarity | Dust per 1 XP | XP, Rank 1 to 2 |
-|---|---|---|
-| Rare | 10 | 50 |
-| Epic | 25 | 75 |
-| Legendary | 100 | 100 |
+## Dungeon Mastery
 
-## Ascension and Dungeon Mastery
-
-- **Ascension 1 to 10:** difficulty from modifiers, not just stats: elite frequency, enemy affixes,
-  reduced healing, hazardous rooms, extra boss mechanics, cursed encounters, aggression, stacked
-  modifiers. Rewards: better rarity odds, more EXP and Mastery XP. Gold, Forge Ore and Gems stay at
-  Nightmare's rates on every level. Efficiency and prestige, never mandatory power gating.
 - **Dungeon Mastery**, per dungeon, levels 1 to 30, never resets. XP from clears, bosses,
   difficulty, elites, challenges, Keystone Trial. Rewards are only Gold, EXP, titles and cosmetics
   (milestones at 5, 10, 15, 20, 25, and a title plus mount at 30). **Never combat power or drop
@@ -151,14 +142,13 @@ restrained glowing runes.
   Nature, and a medieval Civilization layer. Technology reads as ancient magic, never cyberpunk.
 - Rooms: gameplay shape first, then a landmark readable from the isometric camera, then decoration.
 - Scale through systems and reuse: weapon classes, rigs, animations, modular environments, VFX
-  frameworks, procedural layouts, the relic system, the Ascension system.
+  frameworks, procedural layouts, the relic system.
 
 ## Open design points
 
 - The GDD's Arcane Chest section still says eight spells split Common 3, Rare 2, Epic 2,
-  Legendary 1, and its Dust table prices Common. The rest of the GDD says 10 spells, 5 Rare,
-  4 Epic, 1 Legendary, no Commons. The 5/4/1 split is assumed.
+  Legendary 1. The rest of the GDD says 10 spells, 5 Rare, 4 Epic, 1 Legendary, no Commons. The
+  5/4/1 split is assumed; Runegrove's authored pool is still work in progress.
 - Gold is the currency name everywhere (the code's old Coins was renamed 2026-09-25).
-- Unresolved tuning: failure chances on late upgrades, Arcane XP per duplicate by rarity, and the
-  Robux chest's contents and odds.
+- Unresolved tuning: failure chances on late upgrades.
 - Explicitly postponed: Fate Cards.
