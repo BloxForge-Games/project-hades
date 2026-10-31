@@ -40,6 +40,17 @@
 
 	Sets YOUR level (ExperienceService:SetLevel), with 0 EXP into it.
 
+	--- /difficulty <easy|normal|hard|nightmare> ---
+
+	Switches the RUN's difficulty in place (DungeonService run + the active
+	floor's descriptor), re-stamps the relic level cap, rescales every
+	living mob to the new tier's health (EnemyScalingService) and, in
+	Studio, writes the DebugDifficulty workspace attribute so a restart
+	keeps it. Mob damage, EXP, gear level range and rarity, chest payouts
+	and the next floor's generation all read the live tier. The CURRENT
+	floor's layout (its miniboss, floor count) is already built and stays.
+	No argument reports the current tier.
+
 	--- /wipedata ---
 
 	Resets the CALLER's own profile to the DataTemplate defaults
@@ -53,6 +64,7 @@
 local GroupService = game:GetService("GroupService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
@@ -74,6 +86,34 @@ local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyT
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+
+-- RunFlowService's Studio-only difficulty pick; /difficulty writes it so a
+-- Studio restart replays the chosen tier.
+local DEBUG_DIFFICULTY_ATTRIBUTE = "DebugDifficulty"
+
+-- A Difficulty value from its name, case-insensitive.
+local function matchDifficulty(arg: string?): string?
+	if not arg then
+		return nil
+	end
+	for _, difficulty: string in Difficulty :: { [string]: string } do
+		if string.lower(difficulty) == string.lower(arg) then
+			return difficulty
+		end
+	end
+	return nil
+end
+
+local function difficultyNames(): string
+	local names = {}
+	for _, difficulty in DifficultyData.Order do
+		table.insert(names, string.lower(difficulty))
+	end
+	return table.concat(names, "|")
+end
 
 -- RelicService requires half the place at load; reached on first use.
 local function getRelicService(): any
@@ -329,12 +369,13 @@ COMMANDS = {
 				-- spend; gone when the run ends.
 				RunEscrowService:AddGems(player, amount)
 				return ("Gave you %d Gems (now %d)."):format(amount, RunEscrowService:GetGems(player))
-			elseif what == "gold" or what == "ore" then
-				-- PROFILE currency, which is what the Blacksmith spends.
+			elseif what == "gold" or what == "crystals" or what == "ore" then
+				-- PROFILE currencies: Gold (the Blacksmith's) and Arcane
+				-- Crystals (the Arcane Trainer's; "ore" is the old name).
 				if not CurrencyService then
 					return "CurrencyService is unavailable."
 				end
-				local currency = if what == "ore" then CurrencyTypes.ForgeOre else CurrencyTypes.Gold
+				local currency = if what == "gold" then CurrencyTypes.Gold else CurrencyTypes.ArcaneCrystals
 				CurrencyService:SetCurrencyValue(
 					player,
 					currency,
@@ -444,6 +485,56 @@ COMMANDS = {
 				return "Your profile isn't loaded yet -- try again in a moment."
 			end
 			return ("Level set to %d."):format(level)
+		end,
+	},
+
+	difficulty = {
+		usage = "/difficulty [easy|normal|hard|nightmare]",
+		description = "Switches the run's difficulty in place (mobs rescale; the current floor's layout stays).",
+		handler = function(_player: Player, args: { string }): string?
+			local dungeonService = Blitz.OptionalService("DungeonService")
+			if not dungeonService then
+				return "DungeonService is unavailable."
+			end
+			local run = dungeonService:GetRun()
+			if not run then
+				return "No run is active."
+			end
+			if not args[1] then
+				return ("Difficulty is %s."):format(run.difficulty)
+			end
+			local wanted = matchDifficulty(args[1])
+			if not wanted then
+				return ("Usage: /difficulty <%s>"):format(difficultyNames())
+			end
+			if wanted == run.difficulty then
+				return ("Difficulty is already %s."):format(wanted)
+			end
+
+			local previous = run.difficulty
+			run.difficulty = wanted
+			local active = dungeonService:GetActiveDungeon()
+			if active then
+				active.difficulty = wanted
+			end
+			-- SetRun re-stamps the relic level cap off the new tier.
+			dungeonService:SetRun(run)
+			if RunService:IsStudio() then
+				workspace:SetAttribute(DEBUG_DIFFICULTY_ATTRIBUTE, wanted)
+			end
+			local scaling = Blitz.OptionalService("EnemyScalingService")
+			if scaling then
+				scaling:RescaleAll()
+			end
+			local tier = DifficultyData.Resolve(wanted)
+			return ("Difficulty %s -> %s (enemy health x%.2f, damage x%.2f, gear L%d-%d). Living mobs rescaled; the floor's layout stays."):format(
+				previous,
+				wanted,
+				tier.enemyHealth,
+				tier.enemyDamage,
+				tier.levelRange.min,
+				tier.levelRange.max
+			)
 		end,
 	},
 

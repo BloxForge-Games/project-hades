@@ -19,8 +19,8 @@
 	visuals live on body parts, but every consumer gates on the HRP child
 	name, so the marker must sit there regardless.
 
-	(Staff of Azure Ever Ice's Ice Glyph rode this aura until 2026-10-29;
-	it is worn at all times now, RelicGimmickService/Lib/azureGlyph.)
+	(The Ice Glyph -- Korblox Mage Staff's since 2026-10-30 -- is worn while
+	this aura is up, but RelicGimmickService/Lib/azureGlyph owns it.)
 ]]
 
 local Debris = game:GetService("Debris")

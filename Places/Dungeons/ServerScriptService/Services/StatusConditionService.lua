@@ -3,7 +3,7 @@
 	Module: StatusConditionService.lua
 	Description:
 	Data-driven status conditions on MOBS (Burn / Black Flame / Chill /
-	Shock / Coil Shocked / Poison / Noxious Venom / Painted). Tuning lives
+	Shock / Coil Shocked / Poison / Death Venom / Painted). Tuning lives
 	in Shared/Data/StatusConditionData.lua; this service owns application,
 	refresh, the DoT loops, the aura VFX, and the attribute contract the
 	rest of combat reads.
@@ -70,6 +70,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local DamageService = require(ServerScriptService.Services.DamageService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local AuraService = require(ServerScriptService.Services.AuraService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
@@ -140,10 +141,26 @@ type StatusRecord = {
 
 local StatusConditionService = {
 	Name = "StatusConditionService",
-	Dependencies = { DataService, DamageIndicatorService } :: { any },
+	Dependencies = { DataService, DamageIndicatorService, TextIndicatorService } :: { any },
 }
 
 --[ Constants ]--
+
+-- Melted and Petrified (the duo statuses, 2026-10-30) are hard to read
+-- on a mob under everything else, so their APPLIER sees a floating label
+-- over the mob the moment they land (TextIndicatorService; refreshes are
+-- silent).
+local MELTED_TEXT = "Melted!"
+local MELTED_TEXT_COLOR = Color3.fromRGB(120, 255, 90)
+local PETRIFIED_TEXT = "Petrified!"
+local PETRIFIED_TEXT_COLOR = Color3.fromRGB(190, 180, 160)
+
+local function showStatusText(player: Player, model: Model, text: string, color: Color3)
+	local anchor = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if anchor and anchor:IsA("BasePart") then
+		TextIndicatorService:ShowIndicator(player, anchor, text, color)
+	end
+end
 
 local STATUS_ATTRIBUTE_PREFIX = "Status"
 local SLOW_ATTRIBUTE = "StatusSlowMultiplier"
@@ -312,12 +329,12 @@ function StatusConditionService:_resolveApplication(sourcePlayer: Player, config
 	return duration, dotMultiplier, slowFraction, weakenFraction
 end
 
--- Per-tick DoT cap, resolved once per application/refresh (cap follows the
--- APPLIER's level).
+-- Per-tick DoT cap, resolved once per application/refresh. Follows the
+-- APPLIER's Power (getRelicLevel: 1x at the starter loadout, ~8.5x at a
+-- maxed Level 20 Epic), the same factor every relic number scales by
+-- (2026-10-31; it followed the player's level before).
 function StatusConditionService:_resolveTickCap(sourcePlayer: Player, config: StatusConfig): number
-	local profile = DataService and DataService:GetProfileData(sourcePlayer)
-	local playerLevel = (profile and profile.Level) or 1
-	return playerLevel * (config.dotTickCapPerLevel or 25)
+	return getRelicLevel(sourcePlayer) * (config.dotTickCapPerLevel or 25)
 end
 
 -- The redirect decision for THIS application (see STATUS_REDIRECTS).
@@ -540,6 +557,9 @@ function StatusConditionService:_afterInstanceRemoved(model: Model, status: stri
 		if slowFraction and slowFraction > 0 then
 			model:SetAttribute(SLOW_ATTRIBUTE, nil)
 		end
+		if BURN_FAMILY[status] or POISON_FAMILY[status] then
+			self:_refreshMelted(model)
+		end
 	end
 end
 
@@ -616,6 +636,102 @@ end
 -- the upgraded variants stamp their own.
 function StatusConditionService:IsBurning(model: Model): boolean
 	return anyFamilyAttribute(model, BURN_FAMILY)
+end
+
+-- Flame Ronin Katana's DETONATE (2026-10-30): consumes every Black Flame
+-- stack `sourcePlayer` has on `model` and deals what they had left to
+-- tick, at once (each stack's per-tick damage x its remaining ticks, the
+-- tick cap applied per tick as it would have been). A black-fire burst
+-- plays on every client. Returns the damage dealt (0 = nothing to burn).
+function StatusConditionService:DetonateBlackFlame(sourcePlayer: Player, model: Model): number
+	local entry = self._active[model]
+	local value = entry and entry[StatusConditions.BlackFlame]
+	local stack = value and value[sourcePlayer.UserId]
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if not stack or #stack == 0 or not humanoid or humanoid.Health <= 0 then
+		return 0
+	end
+	local now = os.clock()
+	local total = 0
+	local color: Color3? = nil
+	for _, record: StatusRecord in table.clone(stack) :: { StatusRecord } do
+		local tickInterval = record.tickInterval or 1
+		local ticksLeft = math.max(1, math.ceil((record.expiresAt - now) / tickInterval))
+		local perTick = math.floor(
+			math.clamp(
+				humanoid.MaxHealth * (record.percentPerTick or 0) * record.dotMultiplier,
+				1,
+				record.dotTickDamageCap
+			)
+		)
+		total += perTick * ticksLeft
+		color = record.config.color
+		self:_expireInstance(model, StatusConditions.BlackFlame, sourcePlayer.UserId, record)
+	end
+	if total <= 0 then
+		return 0
+	end
+	-- The DoT path (isStatusConditionDamage), as a tick lands: the number
+	-- is already the burn's, not a hit to amplify again.
+	DamageService:TakeDamage(sourcePlayer, humanoid, total, false, true, nil, nil, nil, color)
+	local hrp = model:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if hrp then
+		RelicNetwork.GimmickEffect.FireAll({
+			Kind = "BlackBurst",
+			Caster = sourcePlayer,
+			From = hrp.Position,
+			To = hrp.Position,
+			Radius = 5,
+			Duration = 0,
+			StartTime = workspace:GetServerTimeNow(),
+		})
+	end
+	return total
+end
+
+-- Linked Sword (2026-10-30): pushes back the expiry of every Burn-family
+-- stack `sourcePlayer` has on `model` by `seconds`, never past
+-- `maxLeft` seconds remaining.
+function StatusConditionService:ExtendBurn(sourcePlayer: Player, model: Model, seconds: number, maxLeft: number)
+	local entry = self._active[model]
+	if not entry then
+		return
+	end
+	local now = os.clock()
+	for status in BURN_FAMILY do
+		local value = entry[status]
+		local stack = value and value[sourcePlayer.UserId]
+		if stack then
+			for _, record: StatusRecord in stack :: { StatusRecord } do
+				record.expiresAt = math.min(record.expiresAt + seconds, now + maxLeft)
+			end
+		end
+	end
+end
+
+-- Fire Breathing Friend (2026-10-30): a mob is Melted while it is Burning AND
+-- Poisoned, once a Fire Breathing Friend owner has applied either to it. The
+-- one writer of Attributes.Melted: ApplyStatus passes the applier,
+-- removals pass nil (they can only end it).
+function StatusConditionService:_refreshMelted(model: Model, sourcePlayer: Player?)
+	if not model.Parent then
+		return
+	end
+	if not (self:IsBurning(model) and self:IsPoisoned(model)) then
+		if model:GetAttribute(Attributes.Melted) ~= nil then
+			model:SetAttribute(Attributes.Melted, nil)
+		end
+		return
+	end
+	if
+		sourcePlayer
+		and RelicService
+		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Fire Breathing Friend"]) or 0) > 0
+		and model:GetAttribute(Attributes.Melted) ~= true
+	then
+		model:SetAttribute(Attributes.Melted, true)
+		showStatusText(sourcePlayer, model, MELTED_TEXT, MELTED_TEXT_COLOR)
+	end
 end
 
 function StatusConditionService:IsPoisoned(model: Model): boolean
@@ -722,7 +838,7 @@ local RELIC_HIT_STATUSES: {
 		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Poison },
 		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Shock },
 		-- The four aura-gated chance boosters that used to live here (Faux
-		-- Firebrand, Blizzard Wand, Lightning Wand, Overseer's Short Sword)
+		-- Firebrand, Frostbrand, Lightning Wand, Overseer's Short Sword)
 		-- are all gone: the 2026-08 pass turned the first three into damage
 		-- relics, and Short Sword's boost now covers EVERY elemental status
 		-- rather than Poison alone, so it lives in _getStatusChanceBonus.
@@ -734,11 +850,27 @@ local RELIC_HIT_STATUSES: {
 			spellOnly = true,
 			auraGate = AuraNames.Frostburst,
 		},
-		-- Magenta Paintball Gun: EVERY ranged weapon hit Paints (was 35%).
+		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (2026-10-30;
+		-- every hit before that, 35% before that -- at ~5 shots a second
+		-- 15% keeps a target Painted anyway).
 		{
 			relicName = RelicNames["Magenta Paintball Gun"],
 			status = StatusConditions.Paint,
-			chance = 1,
+			chance = 0.15,
+			weaponOnly = true,
+			rangedOnly = true,
+		},
+		-- The ranged relics' status halves (2026-10-30; the callback is the
+		-- chance). Their damage halves are DamageService/RangedRelics.
+		{
+			relicName = RelicNames["Red Hyperlaser Gun"],
+			status = StatusConditions.Burn,
+			weaponOnly = true,
+			rangedOnly = true,
+		},
+		{
+			relicName = RelicNames["Hyperlaser Gun"],
+			status = StatusConditions.Chill,
 			weaponOnly = true,
 			rangedOnly = true,
 		},
@@ -830,7 +962,11 @@ function StatusConditionService:_sumApplierChances(
 				or (if type(arcaneChance) == "number" then arcaneChance else nil)
 				or RelicService:GetRelicEffect(sourcePlayer, row.relicName)
 				or 0
-			if chance < 1 then
+			-- The gun coefficient tempers status chances written for melee /
+			-- spell cadence; a row authored FOR guns (rangedOnly: the
+			-- Hyperlasers, Paintball) already is, so it is not scaled twice
+			-- (audit 2026-10-30: "+25% chance to Burn" was landing at 12.5%).
+			if chance < 1 and not row.rangedOnly then
 				chance *= coefficient
 			end
 			chanceByStatus[row.status] = (chanceByStatus[row.status] or 0) + chance
@@ -848,17 +984,17 @@ function StatusConditionService:_sumApplierChances(
 		end
 	end
 
-	-- Staff of Azure Ever Ice: DOUBLES the owner's whole Chill chance on
-	-- every hit (data.chillChanceMultiplier), bonuses included -- last, so
-	-- it multiplies the finished sum.
-	local chill = chanceByStatus[StatusConditions.Chill]
+	-- Korblox Mage Staff (2026-10-30): while its owner is Frostburst, a
+	-- SPELL hit gets +data.glyphChillChance Chill (additive, like an
+	-- applier row; after the bonus so it is the Glyph's own).
 	if
-		chill
-		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
+		isSpell
+		and ownerHasAura(sourcePlayer, AuraNames.Frostburst)
+		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Korblox Mage Staff"]) or 0) > 0
 	then
-		local azure = RelicData[RelicNames["Staff of Azure Ever Ice"]]
-		chanceByStatus[StatusConditions.Chill] = chill
-			* ((azure and azure.data and azure.data.chillChanceMultiplier) or 2)
+		local staff = RelicData[RelicNames["Korblox Mage Staff"]]
+		local bonus = (staff and staff.data and staff.data.glyphChillChance) or 0.35
+		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + bonus * coefficient
 	end
 
 	return chanceByStatus
@@ -953,6 +1089,17 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 	-- AFTER the status rolls resolve: the Evil Eye chance depends on
 	-- whether this hit landed one.
 	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus, procCoefficient)
+
+	-- Linked Sword (2026-10-30): a weapon hit on a Burning enemy extends
+	-- the owner's Burn there.
+	if
+		(RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Linked Sword"]) or 0) > 0
+		and self:IsBurning(targetModel)
+	then
+		local linked = RelicData[RelicNames["Linked Sword"]]
+		local data = (linked and linked.data) or {}
+		self:ExtendBurn(sourcePlayer, targetModel, data.burnExtend or 1, data.burnMaxSeconds or 8)
+	end
 end
 
 -- Arcane-hit status entry point — called by onHitboxDamage after a spell's
@@ -1141,6 +1288,20 @@ function StatusConditionService:ApplyStatus(
 	local applied = self:_applyStatusOnce(sourcePlayer, targetModel, status, isWeaponHit)
 	if applied ~= nil and status then
 		self:_trySpiderExtraStatus(sourcePlayer, targetModel, status)
+		self:_refreshMelted(targetModel, sourcePlayer)
+		-- Medusa Head (duo, 2026-10-30): its owner's Poison, applied while
+		-- Stonebound, also Petrifies (and refreshes a Petrified already up).
+		if
+			POISON_FAMILY[status]
+			and RelicService
+			and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Medusa Head"]) or 0) > 0
+			and ownerHasAura(sourcePlayer, AuraNames.Stonebound)
+		then
+			-- true = a FRESH Petrify (false is a refresh, nil blocked).
+			if self:_applyStatusOnce(sourcePlayer, targetModel, StatusConditions.Petrified) == true then
+				showStatusText(sourcePlayer, targetModel, PETRIFIED_TEXT, PETRIFIED_TEXT_COLOR)
+			end
+		end
 	end
 	return applied
 end
@@ -1203,7 +1364,7 @@ function StatusConditionService:_applyStatusOnce(
 		return
 	end
 
-	-- Upgrade redirects (Burn -> Black Flame, Poison -> Noxious Venom,
+	-- Upgrade redirects (Burn -> Black Flame, Poison -> Death Venom,
 	-- Shock -> Coil Shocked): decided per application, before anything else
 	-- resolves, so the target lands ONE status and everything downstream
 	-- treats it as the ordinary status it is.
@@ -1357,6 +1518,12 @@ end
 -- Venom redirect applies, and a Poison never re-triggers the rider.
 function StatusConditionService:_applyPicnicPoison(sourcePlayer: Player, targetModel: Model, status: string)
 	if status == StatusConditions.Poison or status == StatusConditions.NoxiousVenom then
+		return
+	end
+	-- Petrified is Medusa Head's side effect OF a Poison, not a status the
+	-- owner applied; riding it would Poison -> Petrify -> Poison forever
+	-- (audit 2026-10-30).
+	if status == StatusConditions.Petrified then
 		return
 	end
 	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Poison Picnic"]) or 0) <= 0 then

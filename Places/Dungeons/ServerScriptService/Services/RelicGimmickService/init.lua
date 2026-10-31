@@ -19,9 +19,12 @@
 	      VFXService, for every mob a real spell hits.
 	  OnStatusTick(player, model, status)
 	      StatusConditionService, every DoT tick a player's status lands.
-	  OnCrit(player, model, isMelee)
-	      DamageService, every weapon or spell Critical Hit.
-	  OnAttackHit(player, model)
+	  OnCrit(player, model, isMelee, dealt, isRanged)
+	      DamageService, every weapon or spell Critical Hit, with what it
+	      dealt.
+	  OnRangedHit(player, model, dealt, wasCrit)
+	      DamageService, every gun shot that lands (2026-10-30).
+	  OnAttackHit(player, model, isMagic)
 	      DamageService, every weapon or spell hit (no relic bursts, no
 	      DoT ticks).
 	  dodges
@@ -63,8 +66,9 @@ type TreeModule = {
 	onSpellCast: ((player: Player, vfxName: string) -> ())?,
 	onSpellHit: ((player: Player, vfxName: string, model: Model) -> ())?,
 	onStatusTick: ((player: Player, model: Model, status: string) -> ())?,
-	onCrit: ((player: Player, model: Model, isMelee: boolean) -> ())?,
-	onAttackHit: ((player: Player, model: Model) -> ())?,
+	onCrit: ((player: Player, model: Model, isMelee: boolean, dealt: number, isRanged: boolean) -> ())?,
+	onRangedHit: ((player: Player, model: Model, dealt: number, wasCrit: boolean) -> ())?,
+	onAttackHit: ((player: Player, model: Model, isMagic: boolean) -> ())?,
 	onHeartbeat: ((now: number) -> ())?,
 	onTick: ((player: Player) -> ())?,
 	onPlayerRemoved: ((player: Player) -> ())?,
@@ -140,18 +144,44 @@ function RelicGimmickService.OnStatusTick(
 	end
 end
 
-function RelicGimmickService.OnCrit(self: typeof(RelicGimmickService), player: Player, model: Model, isMelee: boolean?)
+function RelicGimmickService.OnCrit(
+	self: typeof(RelicGimmickService),
+	player: Player,
+	model: Model,
+	isMelee: boolean?,
+	dealt: number?,
+	isRanged: boolean?
+)
 	for _, tree in self._trees do
 		if tree.onCrit then
-			tree.onCrit(player, model, isMelee == true)
+			tree.onCrit(player, model, isMelee == true, dealt or 0, isRanged == true)
 		end
 	end
 end
 
-function RelicGimmickService.OnAttackHit(self: typeof(RelicGimmickService), player: Player, model: Model)
+function RelicGimmickService.OnRangedHit(
+	self: typeof(RelicGimmickService),
+	player: Player,
+	model: Model,
+	dealt: number,
+	wasCrit: boolean
+)
+	for _, tree in self._trees do
+		if tree.onRangedHit then
+			tree.onRangedHit(player, model, dealt, wasCrit)
+		end
+	end
+end
+
+function RelicGimmickService.OnAttackHit(
+	self: typeof(RelicGimmickService),
+	player: Player,
+	model: Model,
+	isMagic: boolean?
+)
 	for _, tree in self._trees do
 		if tree.onAttackHit then
-			tree.onAttackHit(player, model)
+			tree.onAttackHit(player, model, isMagic == true)
 		end
 	end
 end

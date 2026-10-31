@@ -41,6 +41,11 @@ local DEFAULT_LOCKED_LOOK = {
 --                         that same index.
 --   lockedLook            optional { background, icon, shadowVisible }
 --                         override for the locked look.
+--   onHover               optional (relicName: string?, slot: GuiObject?)
+--                         -> (): the tray's hover tooltip. Called with
+--                         the relic and the box on MouseEnter of a FILLED
+--                         slot, with nils on MouseLeave; empty and locked
+--                         boxes never call it.
 local function RelicEntryContainer(props: any)
 	local relicName = props.relicName
 	local count = props.count
@@ -125,6 +130,9 @@ local function RelicEntryContainer(props: any)
 			if interactable then
 				uiSound:PlayHover()
 			end
+			if props.onHover and hasRing then
+				props.onHover(relicName, containerRef.current)
+			end
 			-- TweenService:Create(
 			-- 	containerRef.current,
 			-- 	TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -142,6 +150,9 @@ local function RelicEntryContainer(props: any)
 		end,
 
 		[React.Event.MouseLeave] = function()
+			if props.onHover and hasRing then
+				props.onHover(nil, nil)
+			end
 			TweenService:Create(
 				containerRef.current,
 				TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),

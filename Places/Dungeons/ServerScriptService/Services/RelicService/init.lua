@@ -28,15 +28,16 @@ local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Relic
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+
+-- The tiers the capstone pity tracks (RelicRollConfig.CapstonePityStep).
+local CAPSTONE_TIERS = { ItemRarity.Legendary, ItemRarity.Duo }
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ElementTreeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ElementTreeData)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
-local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
-local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Incremental Relics
 local Fireworks = require(script.Incremental.Fireworks)
@@ -89,6 +90,9 @@ local RelicService = {
 	} :: { any },
 
 	_relicLimitRegistry = {},
+	-- [userId][tier] = vending cards in a row that could have shown that
+	-- capstone tier (Legendary / Duo) and did not (RelicRollConfig pity).
+	_capstonePity = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = count held.
 	_relicRegistry = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = { id, name } — who ORIGINALLY put this relic
@@ -153,14 +157,12 @@ end
 -- a player in _incrementalOwners; owning none keeps the tick idle.
 local INCREMENTAL_RELICS: { string } = { RelicNames["Summer Fireworks"], RelicNames["Ghost Dragon"] }
 
--- Relics whose callback must NOT be pre-resolved into a snapshot: the two
--- hyperlasers read the owner's CURRENT health on every call, and Ghost
--- Dragon's callback builds its rig as a side effect. (Every `active`
+-- Relics whose callback must NOT be pre-resolved into a snapshot: Ghost
+-- Dragon's callback builds its rig as a side effect (the health-reading
+-- hyperlasers were here until 2026-10-30). (Every `active`
 -- relic is treated the same way — those callbacks are pickup side
 -- effects, not values.)
 local LIVE_EFFECT_RELICS: { [string]: boolean } = {
-	[RelicNames["Hyperlaser Gun"]] = true,
-	[RelicNames["Red Hyperlaser Gun"]] = true,
 	[RelicNames["Ghost Dragon"]] = true,
 }
 
@@ -715,6 +717,10 @@ function RelicService.GetPlayerAvailableRelics(self: typeof(RelicService), playe
 	local unstacked = {}
 
 	for relicName, relicInfo in RelicData do
+		-- Retired relics (RelicData `retired`) are never offered again.
+		if relicInfo.retired then
+			continue
+		end
 		local maxStack = RelicStackData[relicInfo.rarity]
 		if (self._relicRegistry[player.UserId] and self._relicRegistry[player.UserId][relicName] or 0) < maxStack then
 			table.insert(unstacked, relicName)
@@ -1040,16 +1046,19 @@ end
 -- odds), from the run-stage table in RelicRollConfig. Rarities with no
 -- candidate are simply absent from the plan, which IS the graceful fallback.
 -- Cursed never appears -- it has no entry in any stage table.
+-- `bonus` adds per-rarity weight on top of the table (capstone pity).
 function RelicService.RollRelicRarity(
 	_self: typeof(RelicService),
 	poolByRarity: { [string]: { string } },
 	stage: string,
-	luck: number?
+	luck: number?,
+	bonus: { [string]: number }?
 ): string?
 	local weights = RelicRollConfig.RarityWeights[stage] or RelicRollConfig.RarityWeights.Early
 	local plan = LootPlan.new("single")
 	local any = false
-	for rarity, weight in weights do
+	for rarity, baseWeight in weights do
+		local weight = baseWeight + ((bonus and bonus[rarity]) or 0)
 		if weight > 0 and poolByRarity[rarity] and #poolByRarity[rarity] > 0 then
 			plan:AddLoot(rarity, weight)
 			any = true
@@ -1119,7 +1128,30 @@ function RelicService.RollRandomRelicFromPool(
 		end
 		rolledRarity = if any then plan:GetRandomLoot(luck or 1) else nil
 	else
-		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck)
+		-- Capstone pity (RelicRollConfig): misses on an eligible Legendary /
+		-- Duo raise that tier for this player until one is shown.
+		local pity = ownerPlayer and self._capstonePity[ownerPlayer.UserId]
+		if ownerPlayer and not pity then
+			pity = {}
+			self._capstonePity[ownerPlayer.UserId] = pity
+		end
+		local bonus: { [string]: number } = {}
+		if pity then
+			for _, tier in CAPSTONE_TIERS do
+				bonus[tier] =
+					math.min((pity[tier] or 0) * RelicRollConfig.CapstonePityStep, RelicRollConfig.CapstonePityMax)
+			end
+		end
+		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck, bonus)
+		if pity then
+			for _, tier in CAPSTONE_TIERS do
+				if rolledRarity == tier then
+					pity[tier] = 0
+				elseif poolByRarity[tier] and #poolByRarity[tier] > 0 then
+					pity[tier] = (pity[tier] or 0) + 1
+				end
+			end
+		end
 	end
 	if not rolledRarity then
 		return nil, nil
@@ -1271,55 +1303,6 @@ function RelicService.Start(self: typeof(RelicService))
 		stomp:InvokeStomp()
 	end)
 
-	-- Apple Pie (Rare): clearing ANY dungeon room restores 8% Maximum
-	-- Health to relic owners. THREE signals cover every room type:
-	--   * OnSegmentCleared — Combat segment clears AND miniboss defeats
-	--     (the miniboss room is its own segment and fires this on death).
-	--   * OnDungeonCompleted — the Boss defeat (that path returns before
-	--     OnSegmentCleared fires, so it needs its own hook).
-	--   * OnRoomEntered — EVENT rooms. Nothing spawns in one, so an
-	--     event room never "clears"; walking in IS the clear (design
-	--     call). Per-player by nature: the signal fans out one call per
-	--     player as the party's cursors advance, and it fires once per
-	--     room, so there is no double-heal to guard against.
-	local APPLE_PIE_HEAL_FRACTION = 0.08
-
-	local function healApplePieOwner(player: Player)
-		if self:GetSpecificRelicRegistry(player, RelicNames["Apple Pie"]) <= 0 then
-			return
-		end
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if humanoid and humanoid.Health > 0 then
-			-- Through ApplyHealing so Holiday Ham's +50% applies, same as
-			-- every other mid-run restore.
-			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * APPLE_PIE_HEAL_FRACTION)
-		end
-	end
-
-	local function healApplePieOwners()
-		for _, player in Players:GetPlayers() do
-			healApplePieOwner(player)
-		end
-	end
-
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	if dungeonService then
-		dungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, _lastChunk)
-			healApplePieOwners()
-		end)
-
-		dungeonService.Signals.OnDungeonCompleted:Connect(function(_dungeon)
-			healApplePieOwners()
-		end)
-
-		dungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
-			if room and room.roomType == RoomTypes.Event then
-				healApplePieOwner(player)
-			end
-		end)
-	end
-
 	for _, module in script.Active:GetChildren() do
 		if module:IsA("ModuleScript") then
 			self._activeRegistry[module.Name] = (require :: any)(module)
@@ -1379,6 +1362,7 @@ function RelicService.Start(self: typeof(RelicService))
 	end)
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
+		self._capstonePity[player.UserId] = nil
 		self._relicRegistry[player.UserId] = nil
 		self._incrementalRegistry[player.UserId] = nil
 		self._incrementalOwners[player.UserId] = nil

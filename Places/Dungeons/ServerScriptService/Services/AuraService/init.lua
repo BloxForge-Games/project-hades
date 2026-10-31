@@ -17,9 +17,9 @@
 	STONEBOUND SPREADS FROM EVERY SOURCE. Any self-grant of it carries to
 	allies within STONEBOUND_SPREAD_RADIUS and plays the shockwave once on
 	the source (_spreadStonebound, fired from SetAura's fresh-grant path).
-	Riot Shield and Spartan Sword and Shield both get this
-	for free, and so does anything added later — it is a property of the
-	aura, not of one relic.
+	Riot Shield, Robloxian Battle Shield and Spartan Sword and Shield all
+	get this for free, and so does anything added later — it is a property
+	of the aura, not of one relic.
 
 	STONEBOUND is the special one: ONE instance per target across ALL
 	owners. Its payload (+damage / +damage reduction) is computed from the
@@ -42,7 +42,6 @@ local RelicService = require(ServerScriptService.Services.RelicService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
-local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local Enflamed = require(script.AuraServer.Enflamed)
 local Frostburst = require(script.AuraServer.Frostburst)
 local Stormcharged = require(script.AuraServer.Stormcharged)
@@ -277,17 +276,6 @@ function AuraService.SetAura(
 		end
 		if bonus > 0 then
 			resolvedDuration *= 1 + bonus
-		end
-
-		-- Staff of Azure Ever Ice: the owner's Frostburst lasts twice as
-		-- long. A multiplier on top of the additive extensions above (the
-		-- card says "doubled", not "+100%").
-		if
-			auraName == AuraNames.Frostburst
-			and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
-		then
-			local azureData = RelicData[RelicNames["Staff of Azure Ever Ice"]]
-			resolvedDuration *= (azureData and azureData.data and azureData.data.frostburstDurationMultiplier) or 2
 		end
 	end
 

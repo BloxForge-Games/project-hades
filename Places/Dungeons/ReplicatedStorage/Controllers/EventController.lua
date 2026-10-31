@@ -128,6 +128,8 @@ local EventController = {
 	-- splits the two outcome twins (swapped vs stepped back).
 	ForgeReforgeChosen = false,
 	ReforgeDone = false,
+	-- The Forge's "Leave" was taken this conversation (2026-10-30).
+	ForgeSkipped = false,
 	_reforgeFlowActive = false,
 	-- COFFIN (CoffinEvent graph). CoffinStatus / CoffinDeclined are fetched
 	-- by the opening node ("idle" | "running" | "won" | "failed" |
@@ -673,6 +675,29 @@ function EventController.DeclineCoffin(self: typeof(EventController))
 	end)
 end
 
+-- "You skipped <who>": the Merchant's and the Mechaforger's "Leave"
+-- (2026-10-30), through the same pipeline server-sent notifications ride.
+function EventController.ShowSkippedNotification(_self: typeof(EventController), who: string)
+	UserNotificationSystem:ShowNotification({
+		titleText = "Skipped",
+		titleTextFont = Enum.Font.SourceSansBold :: any,
+		titleTextColor3 = NotificationColors.Event,
+		titleTextTransparency = 0,
+
+		text = "You skipped " .. who .. ".",
+		textFont = Enum.Font.SourceSansBold :: any,
+		textColor3 = Color3.fromRGB(255, 255, 255),
+		textTransparency = 0,
+	})
+end
+
+-- The Forge's "Leave": counts as interacting with the room (its door can
+-- open), but leaves him usable -- only a finished reforge consumes him.
+function EventController.SkipForge(self: typeof(EventController))
+	self.ForgeSkipped = true
+	self:ShowSkippedNotification("the Mechaforger")
+end
+
 -- The masked-button toast, through the same pipeline server-sent
 -- notifications ride.
 function EventController.ShowBlockedActionNotification(_self: typeof(EventController))
@@ -714,6 +739,8 @@ function EventController.Start(self: typeof(EventController))
 		local greaterShrineSpent = self.GreaterShrineSpent
 		local coffinDeclined = self.CoffinDeclined
 		local coffinStatus = self.CoffinStatus
+		local reforgeDone = self.ReforgeDone
+		local forgeSkipped = self.ForgeSkipped
 		self.LastSwordResult = nil
 		self.ShrineAccepted = false
 		self.FountainChoice = nil
@@ -725,6 +752,7 @@ function EventController.Start(self: typeof(EventController))
 		self.SoldRelicsThisSession = 0
 		self.ForgeReforgeChosen = false
 		self.ReforgeDone = false
+		self.ForgeSkipped = false
 		self.CoffinStatus = "idle"
 		self.CoffinDeclined = false
 		self.CoffinAccepted = false
@@ -792,9 +820,26 @@ function EventController.Start(self: typeof(EventController))
 				end)
 			end
 		end
-		-- The Forge marks on EITHER path: reforging finishes it, and
-		-- "Leave" is an explicit refusal that opens the door too.
-		if graph == "SwordStone" or graph == "CursedShrine" or graph == "HealingFountain" or graph == "Forge" then
+		-- The Forge (2026-10-30): a finished reforge or its "Leave" counts as
+		-- interacting with the room; a walk-away does not. Only a finished
+		-- reforge consumes him (below) -- after "Leave" he can be talked to
+		-- again.
+		if graph == "Forge" and model and (reforgeDone or forgeSkipped) then
+			task.spawn(function()
+				pcall(function()
+					DungeonNetwork.MarkEventInteracted.Fire(model)
+				end)
+			end)
+			if reforgeDone then
+				for _, descendant in model:GetDescendants() do
+					if descendant:IsA("ProximityPrompt") then
+						descendant:SetAttribute("EventConsumed", true)
+						descendant.Enabled = false
+					end
+				end
+			end
+		end
+		if graph == "SwordStone" or graph == "CursedShrine" or graph == "HealingFountain" then
 			task.spawn(function()
 				pcall(function()
 					DungeonNetwork.MarkEventInteracted.Fire(model)

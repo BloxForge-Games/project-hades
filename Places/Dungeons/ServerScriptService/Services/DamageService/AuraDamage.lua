@@ -16,6 +16,8 @@
 	  Gloves
 	  Stonebound    +damage payload from the marker attributes (base 25% +
 	                the owner's Leland and Spartan riders), weapon AND arcane.
+	  Granite       +25% on MELEE hits while Stonebound (relic callback,
+	  Gauntlet      2026-10-30).
 
 	Returns BONUS damage (damage x summed fractions + flats) for the
 	orchestrator's additive pool.
@@ -36,7 +38,7 @@ local SHIELD_ATTRIBUTE = "ShieldValue"
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
-return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean)
+return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean, isMelee: boolean?)
 	local character: Model? = player.Character
 
 	local hrp = getRoot(character)
@@ -59,10 +61,16 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 	if isMagic and hrp:FindFirstChild(AuraNames.Frostburst) then
 		fraction += (AuraData[AuraNames.Frostburst].magicDamagePercent or 0) * DamageService.AuraScale(snapshot)
 
-		-- Blizzard Wand rides the same window. Raw fraction like Faux
+		-- Frostbrand rides the same window. Raw fraction like Faux
 		-- Firebrand, its Frost-side counterpart.
-		if DamageService.RelicCount(snapshot, RelicNames["Blizzard Wand"]) > 0 then
-			fraction += DamageService.RelicEffect(snapshot, RelicNames["Blizzard Wand"]) or 0
+		if DamageService.RelicCount(snapshot, RelicNames["Frostbrand"]) > 0 then
+			fraction += DamageService.RelicEffect(snapshot, RelicNames["Frostbrand"]) or 0
+		end
+
+		-- Korblox Mage Staff's Ice Glyph (2026-10-30): its callback's
+		-- fraction, Arcane only, on the same Frostburst window.
+		if DamageService.RelicCount(snapshot, RelicNames["Korblox Mage Staff"]) > 0 then
+			fraction += DamageService.RelicEffect(snapshot, RelicNames["Korblox Mage Staff"]) or 0
 		end
 	end
 
@@ -80,6 +88,22 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 	if AuraService then
 		local stoneboundDamage = AuraService:GetStoneboundPayload(character)
 		fraction += stoneboundDamage
+	end
+
+	if
+		isMelee
+		and hrp:FindFirstChild(AuraNames.Stonebound)
+		and DamageService.RelicCount(snapshot, RelicNames["Rolling Pin"]) > 0
+	then
+		fraction += DamageService.RelicEffect(snapshot, RelicNames["Rolling Pin"]) or 0
+	end
+
+	-- Stonefist Gauntlet (2026-10-31): while Stonebound, the owner's live
+	-- damage REDUCTION (the payload's second value, riders included) joins
+	-- the sum as damage, weapon and arcane alike.
+	if AuraService and DamageService.RelicCount(snapshot, RelicNames["Stonefist Gauntlet"]) > 0 then
+		local _, stoneboundReduction = AuraService:GetStoneboundPayload(character)
+		fraction += stoneboundReduction
 	end
 
 	return math.round(damage * fraction)

@@ -20,15 +20,23 @@
 	                        its path; every second it Burns and damages the
 	                        enemies on it (a per-level relic burst).
 
+	  Flame Ronin Katana    DETONATE: a Critical Hit on an enemy you have
+	                        Black-Flamed sets the burn off at once.
+	  Red Laser Scythe      SWING SPEED (2026-10-30): while Enflamed, the
+	                        character's MeleeSwingSpeed attribute (both
+	                        MeleeWeapon halves pace swings by it).
+
 	The numbers are each relic's RelicData `data`. Trick Or Trap lives where
 	it always did (MobDeath). Every visual is a helpers.fx packet the
 	clients draw; only the hits run here.
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
@@ -37,6 +45,8 @@ local helpers = require(script.Parent.Lib.gimmickHelpers)
 local FLAME_SWORD = RelicNames["Dragon's Flame Sword"]
 local CLAYMORE = RelicNames["Berserker's Claymore"]
 local PHOENIX = RelicNames.Phoenix
+local RONIN = RelicNames["Flame Ronin Katana"]
+local RED_LASER = RelicNames["Red Laser Scythe"]
 
 -- Flame Wave: its travel and its hit width.
 local WAVE_SPEED = 55
@@ -52,10 +62,15 @@ local CLEAVE_LATCH_SECONDS = 0.15
 -- dodge line.
 local TRAIL_WIDTH = 3.5
 
+-- Red Laser Scythe's swing speed is re-stamped this often, so Enflamed
+-- coming and going shows up within a beat.
+local SWING_SPEED_POLL_SECONDS = 0.2
+
 local Blaze = {}
 
 local swingCounts: { [Player]: number } = {}
 local lastCleave: { [Player]: number } = {}
+local nextSwingSpeedPoll = 0
 
 --[ Flame Wave ]--
 
@@ -77,16 +92,14 @@ local function launchFlameWave(player: Player, origin: Vector3, look: Vector3, s
 			hit[model] = true
 			local statusService = helpers.statusService()
 			local burning = statusService:IsBurning(model)
-			helpers
-				.damageService()
-				:TakeDamage(
-					player,
-					humanoid,
-					if burning then damage * (1 + burningBonus) else damage,
-					false,
-					false,
-					true
-				)
+			helpers.takeDamage(
+				player,
+				humanoid,
+				if burning then damage * (1 + burningBonus) else damage,
+				false,
+				false,
+				true
+			)
 			statusService:ApplyWeaponOnHitStatuses(player, nil, model, false)
 		end)
 	end)
@@ -142,9 +155,19 @@ function Blaze.onMeleeHit(player: Player, model: Model, damage: number)
 		if other == model then
 			return
 		end
-		helpers.damageService():TakeDamage(player, humanoid, splash, false, false, true)
+		helpers.takeDamage(player, humanoid, splash, false, false, true)
 		statusService:ApplyStatus(player, other, StatusConditions.Burn)
 	end)
+end
+
+--[ Flame Ronin Katana: Detonate ]--
+
+-- A Critical Hit on an enemy the owner has Black-Flamed detonates it: the
+-- burn's remaining damage at once (StatusConditionService).
+function Blaze.onCrit(player: Player, model: Model, _isMelee: boolean)
+	if helpers.owns(player, RONIN) then
+		helpers.statusService():DetonateBlackFlame(player, model)
+	end
 end
 
 --[ Phoenix Dash ]--
@@ -176,7 +199,7 @@ function Blaze.onDodge(player: Player, from: Vector3, to: Vector3)
 				return
 			end
 			-- Untyped relic lane, like every relic burst.
-			helpers.damageService():TakeDamage(player, humanoid, damage, false, false, nil, true)
+			helpers.takeDamage(player, humanoid, damage, false, false, nil, true)
 			statusService:ApplyStatus(player, model, StatusConditions.Burn)
 		end)
 	end
@@ -186,6 +209,30 @@ function Blaze.onDodge(player: Player, from: Vector3, to: Vector3)
 			task.wait(1)
 		end
 	end)
+end
+
+-- Red Laser Scythe (2026-10-30): the character's MeleeSwingSpeed is its
+-- data.enflamedSwingSpeed while Enflamed, and unset otherwise. The one
+-- writer of Attributes.MeleeSwingSpeed; both MeleeWeapon halves read it.
+function Blaze.onHeartbeat(now: number)
+	if now < nextSwingSpeedPoll then
+		return
+	end
+	nextSwingSpeedPoll = now + SWING_SPEED_POLL_SECONDS
+	for _, player in Players:GetPlayers() do
+		local character = player.Character
+		local root = getRoot(character)
+		if not character or not root then
+			continue
+		end
+		local speed: number? = nil
+		if root:FindFirstChild(AuraNames.Enflamed) and helpers.owns(player, RED_LASER) then
+			speed = helpers.data(RED_LASER, "enflamedSwingSpeed", 1.25)
+		end
+		if character:GetAttribute(Attributes.MeleeSwingSpeed) ~= speed then
+			character:SetAttribute(Attributes.MeleeSwingSpeed, speed)
+		end
+	end
 end
 
 function Blaze.onPlayerRemoved(player: Player)

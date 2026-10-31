@@ -34,8 +34,10 @@ local SPAWN_DELAY = 0.5
 --     The ordinal counts SEGMENTS, not chunks. DungeonData's
 --     chunksPerRoom explodes each Combat segment into 2-3 physical rooms,
 --     and every chunk of one segment fields the SAME queue — solo, the
---     authored floor is 5, 7 | miniboss | 9, 12 per chunk, 2 chunks before
---     the miniboss and 3 after: 87 mobs a floor.
+--     authored floor (2026-10-30) is 4, 5 | miniboss | 7, 9 per chunk, 2
+--     chunks before the miniboss and 3 after: 66 mobs on a run's last
+--     floor; the floors before it have no miniboss and 2 chunks a room:
+--     50 mobs.
 --   * a CONCURRENT cap of how many can be alive in the chunk at once:
 --         CONCURRENT_BASE + (players × CONCURRENT_PER_PLAYER)
 --     clamped at CONCURRENT_MAX (5 base, +1/player → 6 solo, 9 at 4
@@ -50,7 +52,7 @@ local SPAWN_DELAY = 0.5
 -- (perRoom / perPlayer, optional concurrent*), read at chunk activation
 -- via _queueTuning. Rooms with no active dungeon (hand-placed test rooms)
 -- fall back to these.
-local QUEUE_PER_ROOM = { 5, 7, 9, 11 }
+local QUEUE_PER_ROOM = { 4, 5, 7, 9 }
 local QUEUE_PER_PLAYER = 2
 local CONCURRENT_BASE = 5
 local CONCURRENT_PER_PLAYER = 1

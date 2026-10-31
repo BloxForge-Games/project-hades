@@ -11,12 +11,21 @@
 
 	The persistent ones are keyed by their caster and kept alive by the
 	server re-sending them:
-	  * the Ice Dragon Slayer's FROST WYRM, a neon ice cube hovering above
-	    its caster's shoulder (a smooth follow and bob, like a spirit
-	    companion) that fades in and out and turns to face each FrostOrb
-	    it fires;
+	  * the Ice Dragon Slayer's FROST WYRM, a neon ice cube that follows
+	    its caster like a larger Spirit Companion (the same spring follow,
+	    shoulder-to-shoulder drift and bob, on Heartbeat; 2026-10-30), fades
+	    in and out and turns to face each FrostOrb it fires. Its orbs home
+	    on their Target as the server's do;
 	  * the Spartan Sword and Shield's ORBITING SHIELD, whose angle comes
-	    from the server clock, so it sits where the server hits with it.
+	    from the server clock, so it sits where the server hits with it;
+	  * the Korblox Ice Claws duo's SHELL, a translucent ice sphere around its
+	    caster while they hold a Barrier.
+
+	MELTED mobs (Fire Breathing Friend, Attributes.Melted) wear green fire
+	while the attribute is set; that one is watched here, not sent.
+
+	The 2026-10-30 relics (ranged and duo) are PROTOTYPE visuals: simple
+	parts and the status emitters, to be replaced with authored VFX.
 
 	See bfg-core/Network/Relic.blink (GimmickEffectPayload) for the kinds.
 ]]
@@ -30,6 +39,8 @@ local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Re
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local SpiritCompanionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SpiritCompanionData)
 
 --[ Constants ]--
 
@@ -38,11 +49,20 @@ local ICE_COLOR = Color3.fromRGB(120, 210, 255)
 local TOXIC_COLOR = Color3.fromRGB(120, 230, 90)
 local BOLT_COLOR = Color3.fromRGB(150, 210, 255)
 local STONE_COLOR = Color3.fromRGB(150, 140, 120)
+local GOLD_COLOR = Color3.fromRGB(255, 205, 80)
+local BLACK_FLAME_COLOR = Color3.fromRGB(70, 35, 80)
+local BAN_COLOR = Color3.fromRGB(255, 85, 85)
+local PLASMA_COLOR = Color3.fromRGB(255, 120, 200)
+local SHOCK_COLOR = Color3.fromRGB(185, 87, 255)
 
 local BURST_COLORS: { [string]: Color3 } = {
 	FireBurst = FIRE_COLOR,
 	FrostBurst = ICE_COLOR,
 	ToxicBurst = TOXIC_COLOR,
+	BlackBurst = BLACK_FLAME_COLOR,
+	-- 2026-10-30 prototypes.
+	ShockBurst = SHOCK_COLOR,
+	PlasmaNova = PLASMA_COLOR,
 }
 local BURST_SECONDS = 0.3
 
@@ -68,22 +88,39 @@ local BOLT_GLOW_THICKNESS = 0.55
 local BOLT_FORK_CHANCE = 0.35
 local BOLT_FLASH_RADIUS = 1.6
 
--- Lobbed shards / bubbles.
+-- Lobbed bubbles arc high; Blizzard's ice shards hop fast and low (a
+-- quadratic bezier with its control point just above the line).
 local ARC_HEIGHT = 6
+local SHARD_ARC_HEIGHT = 1.5
 
--- Frost Wyrm: the cube, where it hovers in its caster's frame, how
--- quickly it follows and turns, and how long it fades.
+-- Frost Wyrm: the cube and its fade. It follows like a Spirit Companion
+-- WYRM_SCALE times the size (SpiritCompanionData's orbit, drift, spring
+-- and bob), a touch lazier so it trails a run or a roll.
 local WYRM_SIZE = Vector3.new(3, 3, 3)
 local WYRM_TRANSPARENCY = 0.15
-local WYRM_OFFSET = Vector3.new(-3.5, 7, 2)
-local WYRM_FOLLOW_RATE = 8
-local WYRM_TURN_RATE = 10
 local WYRM_FADE_SECONDS = 0.35
-local WYRM_BOB_AMPLITUDE = 0.35
-local WYRM_BOB_SPEED = 2.2
+local WYRM_SCALE = 2
+local WYRM_SMOOTH_TIME = 0.45
 -- How long the wyrm keeps facing a shot before it turns back to your look.
 local WYRM_FACE_SECONDS = 0.8
 local FROST_ORB_SIZE = 1.4
+-- The orb bursts this close to its target's root, or after ORB_MAX_SECONDS
+-- (the server's FrostOrb rules, RelicGimmickService/Frost).
+local ORB_CONTACT_STUDS = 2.5
+local ORB_MAX_SECONDS = 1.5
+-- The companion's orbit centre (directly behind, at SHOULDER_OFFSET's
+-- radius and height), scaled up.
+local WYRM_ORBIT_BASE = Vector3.new(
+	0,
+	SpiritCompanionData.SHOULDER_OFFSET.Y,
+	Vector3.new(SpiritCompanionData.SHOULDER_OFFSET.X, 0, SpiritCompanionData.SHOULDER_OFFSET.Z).Magnitude
+) * WYRM_SCALE
+
+-- Ban Hammer: the drop starts this high over the target, at this scale
+-- of the relic's display model.
+local BAN_HAMMER_DROP_HEIGHT = 18
+local BAN_HAMMER_SCALE = 3
+local BAN_HAMMER_LINGER_SECONDS = 0.5
 
 -- Orbiting Shield: its slab and how it fades in and out.
 local SHIELD_SIZE = Vector3.new(3, 3.4, 0.6)
@@ -93,11 +130,22 @@ local SHIELD_FADE_SECONDS = 0.35
 -- jitters the slab.
 local SHIELD_CLOCK_RATE = 2
 
+-- The 2026-10-30 prototypes: War Rocks's boulder, the Static Charge,
+-- Hailstorm's cloud and shards, and the Korblox Ice Claws.
+local BOULDER_SIZE = Vector3.new(2.2, 2.2, 2.2)
+local STATIC_CHARGE_SIZE = 1.2
+local HAIL_SHARD_SIZE = Vector3.new(0.5, 1.6, 0.5)
+local HAIL_CLOUD_HEIGHT = 16
+local ICE_SHELL_SIZE = 8
+local ICE_SHELL_TRANSPARENCY = 0.75
+local ICE_SHELL_FADE_SECONDS = 0.3
+
 --[ Types ]--
 
 type Payload = {
 	Kind: string,
 	Caster: Player?,
+	Target: Model?,
 	From: Vector3,
 	To: Vector3,
 	Radius: number,
@@ -111,9 +159,18 @@ type Wyrm = {
 	facing: Vector3?,
 	faceUntil: number,
 	fading: boolean,
+	-- The spring follow (SpiritCompanion's): carried velocity, the drift
+	-- angle and its next target, and the bob phase.
+	velocity: Vector3,
+	orbitAngle: number,
+	orbitTarget: number,
+	orbitNextMoveAt: number,
+	bobPhase: number,
 }
 
-type Shield = { part: BasePart, expiresAt: number, fading: boolean }
+type Shield = { parts: { BasePart }, expiresAt: number, fading: boolean }
+
+type Shell = { part: BasePart, expiresAt: number, fading: boolean }
 
 --[ Module ]--
 
@@ -122,7 +179,11 @@ local RelicGimmickFXController = {
 }
 
 local wyrms: { [Player]: Wyrm } = {}
+local orbitRandom = Random.new()
 local shields: { [Player]: Shield } = {}
+local shells: { [Player]: Shell } = {}
+-- Melted mobs' green fire, by mob.
+local meltedFire: { [Model]: { ParticleEmitter } } = {}
 
 --[ Helpers ]--
 
@@ -340,13 +401,13 @@ local function frostField(payload: Payload)
 end
 
 -- A lobbed shard or bubble arcing From -> To, bursting where it lands.
-local function lob(payload: Payload, part: BasePart, burstColor: Color3, spins: boolean)
+local function lob(payload: Payload, part: BasePart, burstColor: Color3, spins: boolean, arcHeight: number)
 	local from, to = payload.From, payload.To
 	part.Position = from
 	part.Parent = effectsFolder()
 	local last = from
 	animate(payload.Duration, elapsedOf(payload), function(alpha: number)
-		local point = from:Lerp(to, alpha) + Vector3.new(0, math.sin(alpha * math.pi) * ARC_HEIGHT, 0)
+		local point = from:Lerp(to, alpha) + Vector3.new(0, math.sin(alpha * math.pi) * arcHeight, 0)
 		local heading = point - last
 		part.CFrame = if spins and heading.Magnitude > 0.01
 			then CFrame.lookAt(point, point + heading)
@@ -360,8 +421,60 @@ end
 
 --[ Frost Wyrm ]--
 
-local function wyrmHome(root: BasePart): Vector3
-	return (root.CFrame * CFrame.new(WYRM_OFFSET)).Position
+-- SpiritCompanion's critically damped spring: the new position and the
+-- velocity to carry into the next frame.
+local function smoothDamp(
+	current: Vector3,
+	target: Vector3,
+	velocity: Vector3,
+	smoothTime: number,
+	deltaTime: number
+): (Vector3, Vector3)
+	local omega = 2 / math.max(smoothTime, 0.0001)
+	local x = omega * deltaTime
+	local expTerm = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x)
+	local change = current - target
+	local temp = (velocity + change * omega) * deltaTime
+	return target + (change + temp) * expTerm, (velocity - temp * omega) * expTerm
+end
+
+-- What the wyrm follows: the animated Torso's POSITION, like a Spirit
+-- Companion, so it sways with the walk instead of riding the rigid root
+-- -- but the root's YAW for its facing and orbit (2026-10-30): the Torso
+-- pitches and rolls through the dodge roll, and an orbit hung off its
+-- full rotation swung the wyrm in a 360 around the player on every dodge.
+local function wyrmAnchorPart(character: Model): BasePart?
+	local part = character:FindFirstChild("Torso")
+		or character:FindFirstChild("UpperTorso")
+		or character:FindFirstChild("HumanoidRootPart")
+	return if part and part:IsA("BasePart") then part else nil
+end
+
+-- The anchor's position with the character's yaw only (the root's look
+-- flattened; the anchor's own if there is no root).
+local function wyrmFrame(character: Model?, anchor: BasePart): CFrame
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local look = (if root and root:IsA("BasePart") then root.CFrame.LookVector else anchor.CFrame.LookVector)
+		* Vector3.new(1, 0, 1)
+	if look.Magnitude < 1e-3 then
+		look = Vector3.zAxis
+	end
+	return CFrame.lookAt(anchor.Position, anchor.Position + look.Unit)
+end
+
+local function wyrmHome(frame: CFrame, orbitAngle: number): Vector3
+	return (frame * CFrame.Angles(0, orbitAngle, 0) * CFrame.new(WYRM_ORBIT_BASE)).Position
+end
+
+-- The next drift angle: near one shoulder or the other, usually the
+-- other (SpiritCompanion:_pickOrbitTarget).
+local function pickOrbitTarget(current: number): number
+	local halfSweep = math.rad(SpiritCompanionData.IDLE_ORBIT_DEGREES)
+	local sign = if current >= 0 then 1 else -1
+	if orbitRandom:NextNumber() >= SpiritCompanionData.IDLE_ORBIT_SAME_SIDE_CHANCE then
+		sign = -sign
+	end
+	return sign * halfSweep * orbitRandom:NextNumber(SpiritCompanionData.IDLE_ORBIT_MIN_MAGNITUDE, 1)
 end
 
 local function dismissWyrm(caster: Player)
@@ -386,8 +499,8 @@ end
 local function summonWyrm(payload: Payload)
 	local caster = payload.Caster
 	local character = caster and caster.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not caster or not root or not root:IsA("BasePart") then
+	local root = character and wyrmAnchorPart(character)
+	if not caster or not root then
 		return
 	end
 	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
@@ -398,7 +511,8 @@ local function summonWyrm(payload: Payload)
 	end
 	local part = makePart("FrostWyrm", WYRM_SIZE, ICE_COLOR)
 	part.Transparency = 1
-	part.CFrame = CFrame.lookAt(wyrmHome(root), wyrmHome(root) + root.CFrame.LookVector)
+	local home = wyrmHome(wyrmFrame(character, root), 0)
+	part.CFrame = CFrame.lookAt(home, home + root.CFrame.LookVector)
 	local light = Instance.new("PointLight")
 	light.Color = ICE_COLOR
 	light.Brightness = 0
@@ -407,7 +521,18 @@ local function summonWyrm(payload: Payload)
 	part.Parent = effectsFolder()
 	TweenService:Create(part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = WYRM_TRANSPARENCY }):Play()
 	TweenService:Create(light, TweenInfo.new(WYRM_FADE_SECONDS), { Brightness = 2 }):Play()
-	wyrms[caster] = { part = part, expiresAt = expiresAt, facing = nil, faceUntil = 0, fading = false }
+	wyrms[caster] = {
+		part = part,
+		expiresAt = expiresAt,
+		facing = nil,
+		faceUntil = 0,
+		fading = false,
+		velocity = Vector3.zero,
+		orbitAngle = 0,
+		orbitTarget = 0,
+		orbitNextMoveAt = 0,
+		bobPhase = orbitRandom:NextNumber() * 2 * math.pi,
+	}
 end
 
 local function frostOrb(payload: Payload)
@@ -422,6 +547,7 @@ local function frostOrb(payload: Payload)
 			wyrm.faceUntil = os.clock() + WYRM_FACE_SECONDS
 		end
 	end
+	local launched = os.clock()
 	local orb = makePart("FrostOrb", Vector3.one * FROST_ORB_SIZE, ICE_COLOR)
 	orb.Shape = Enum.PartType.Ball
 	orb.Position = from
@@ -432,44 +558,94 @@ local function frostOrb(payload: Payload)
 	light.Brightness = 2
 	light.Range = 8
 	light.Parent = orb
-	animate(payload.Duration, elapsedOf(payload), function(alpha: number)
-		orb.Position = from:Lerp(to, alpha)
-	end, function()
-		burst(to, payload.Radius, ICE_COLOR)
-		retire(orb, emitters, 0.1, 1)
+	-- Home on the Target's root (where it last was once it is gone), at
+	-- the server's speed, starting as far along as the packet is late.
+	local target = payload.Target
+	local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+	local speed = (RelicData[RelicNames["Ice Dragon Slayer"]].data or {}).orbSpeed or 55
+	local position = from
+	local aim = to
+	local flown = elapsedOf(payload)
+	local connection: RBXScriptConnection
+	connection = RunService.RenderStepped:Connect(function(deltaTime: number)
+		local step = speed * (deltaTime + flown)
+		flown = 0
+		if targetRoot and targetRoot:IsA("BasePart") and targetRoot.Parent then
+			aim = targetRoot.Position
+		end
+		local gap = aim - position
+		local done = gap.Magnitude <= step + ORB_CONTACT_STUDS
+		position = if done then aim else position + gap.Unit * step
+		orb.Position = position
+		if done or os.clock() - launched >= ORB_MAX_SECONDS then
+			connection:Disconnect()
+			burst(position, payload.Radius, ICE_COLOR)
+			retire(orb, emitters, 0.1, 1)
+		end
 	end)
 end
 
 local function stepWyrms(deltaTime: number)
 	local now = os.clock()
-	local follow = 1 - math.exp(-WYRM_FOLLOW_RATE * deltaTime)
-	local turn = 1 - math.exp(-WYRM_TURN_RATE * deltaTime)
+	local turn = 1 - math.exp(-SpiritCompanionData.TURN_LERP_PER_SECOND * deltaTime)
+	local orbitEase = 1 - math.exp(-SpiritCompanionData.IDLE_ORBIT_EASE_PER_SECOND * deltaTime)
 	for caster, wyrm in wyrms do
 		local character = caster.Character
-		local root = character and character:FindFirstChild("HumanoidRootPart")
-		if not root or not root:IsA("BasePart") or not caster.Parent then
+		local anchor = character and wyrmAnchorPart(character)
+		if not anchor or not caster.Parent then
 			dismissWyrm(caster)
 			continue
 		end
 		if now >= wyrm.expiresAt then
 			dismissWyrm(caster)
 		end
+
+		-- Dwell near a shoulder, then drift to the other (the companion's
+		-- idle orbit).
+		if now >= wyrm.orbitNextMoveAt then
+			wyrm.orbitTarget = pickOrbitTarget(wyrm.orbitAngle)
+			wyrm.orbitNextMoveAt = now
+				+ orbitRandom:NextNumber(
+					SpiritCompanionData.IDLE_ORBIT_DWELL_MIN_SECONDS,
+					SpiritCompanionData.IDLE_ORBIT_DWELL_MAX_SECONDS
+				)
+		end
+		wyrm.orbitAngle += (wyrm.orbitTarget - wyrm.orbitAngle) * orbitEase
+		local frame = wyrmFrame(character, anchor)
+		local home = wyrmHome(frame, wyrm.orbitAngle)
+
+		-- Strip last frame's bob, spring toward home, bob again on top.
+		local bobAmplitude = SpiritCompanionData.BOB_AMPLITUDE * WYRM_SCALE
 		local current = wyrm.part.CFrame
-		local bob = Vector3.new(0, math.sin(now * WYRM_BOB_SPEED) * WYRM_BOB_AMPLITUDE, 0)
-		local position = current.Position:Lerp(wyrmHome(root) + bob, follow)
-		local look = if wyrm.facing and now < wyrm.faceUntil then wyrm.facing else root.CFrame.LookVector
+		local unbobbed = current.Position - Vector3.new(0, math.sin(wyrm.bobPhase) * bobAmplitude, 0)
+		local position
+		if (home - unbobbed).Magnitude > SpiritCompanionData.TELEPORT_SNAP_DISTANCE then
+			wyrm.velocity = Vector3.zero
+			position = home
+		else
+			position, wyrm.velocity = smoothDamp(unbobbed, home, wyrm.velocity, WYRM_SMOOTH_TIME, deltaTime)
+		end
+		wyrm.bobPhase += deltaTime * (2 * math.pi / SpiritCompanionData.BOB_CYCLE_SECONDS)
+		position += Vector3.new(0, math.sin(wyrm.bobPhase) * bobAmplitude, 0)
+
+		local look = if wyrm.facing and now < wyrm.faceUntil then wyrm.facing else frame.LookVector
 		local desired = CFrame.lookAt(Vector3.zero, look * Vector3.new(1, 0, 1) + Vector3.new(0, 0, 1e-4))
-		local rotation = current.Rotation:Lerp(desired, turn)
-		wyrm.part.CFrame = CFrame.new(position) * rotation
+		wyrm.part.CFrame = CFrame.new(position) * current.Rotation:Lerp(desired, turn)
 	end
 end
 
 --[ Orbiting Shield ]--
 
-local function orbitConfig(): (number, number)
+local function orbitConfig(): (number, number, number)
 	local row = RelicData[RelicNames["Spartan Sword and Shield"]]
 	local data = (row and row.data) or {}
-	return data.orbitRadius or 7.5, data.orbitSecondsPerTurn or 2.6
+	return data.orbitRadius or 9, data.orbitSecondsPerTurn or 2.6, data.shields or 2
+end
+
+local function destroyShield(shield: Shield)
+	for _, part in shield.parts do
+		part:Destroy()
+	end
 end
 
 local function keepShield(payload: Payload)
@@ -484,17 +660,22 @@ local function keepShield(payload: Payload)
 		return
 	end
 	if shield then
-		shield.part:Destroy()
+		destroyShield(shield)
 	end
-	local part = makePart("OrbitingShield", SHIELD_SIZE * 0.4, STONE_COLOR, Enum.Material.Slate)
-	part.Transparency = 1
-	part.Parent = effectsFolder()
-	TweenService:Create(
-		part,
-		TweenInfo.new(SHIELD_FADE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-		{ Transparency = 0, Size = SHIELD_SIZE }
-	):Play()
-	shields[caster] = { part = part, expiresAt = expiresAt, fading = false }
+	local _, _, count = orbitConfig()
+	local parts: { BasePart } = {}
+	for _ = 1, count do
+		local part = makePart("OrbitingShield", SHIELD_SIZE * 0.4, STONE_COLOR, Enum.Material.Slate)
+		part.Transparency = 1
+		part.Parent = effectsFolder()
+		TweenService:Create(
+			part,
+			TweenInfo.new(SHIELD_FADE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{ Transparency = 0, Size = SHIELD_SIZE }
+		):Play()
+		table.insert(parts, part)
+	end
+	shields[caster] = { parts = parts, expiresAt = expiresAt, fading = false }
 end
 
 -- The local clock's offset onto the server's, eased (SHIELD_CLOCK_RATE).
@@ -507,36 +688,294 @@ local function stepShields(deltaTime: number)
 	clockOffset = if clockOffset
 		then clockOffset + (target - clockOffset) * (1 - math.exp(-SHIELD_CLOCK_RATE * deltaTime))
 		else target
-	-- The server's angle, from the shared clock.
-	local angle = ((now + (clockOffset :: number)) / secondsPerTurn) * math.pi * 2
+	-- The server's angle, from the shared clock; the slabs spread evenly.
+	local base = ((now + (clockOffset :: number)) / secondsPerTurn) * math.pi * 2
 	for caster, shield in shields do
 		local character = caster.Character
 		local root = character and character:FindFirstChild("HumanoidRootPart")
 		if not root or not root:IsA("BasePart") then
 			shields[caster] = nil
-			shield.part:Destroy()
+			destroyShield(shield)
 			continue
 		end
-		-- Gone with Stonebound at once, not at the keep-alive's end; it
-		-- keeps orbiting while it fades.
+		-- Gone with Stonebound at once, not at the keep-alive's end; they
+		-- keep orbiting while they fade.
 		if not shield.fading and (now >= shield.expiresAt or not root:FindFirstChild(AuraNames.Stonebound)) then
 			shield.fading = true
-			TweenService:Create(
-				shield.part,
-				TweenInfo.new(SHIELD_FADE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-				{ Transparency = 1, Size = SHIELD_SIZE * 0.4 }
-			):Play()
+			for _, part in shield.parts do
+				TweenService:Create(
+					part,
+					TweenInfo.new(SHIELD_FADE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+					{ Transparency = 1, Size = SHIELD_SIZE * 0.4 }
+				):Play()
+			end
 			task.delay(SHIELD_FADE_SECONDS, function()
 				if shields[caster] == shield then
 					shields[caster] = nil
 				end
-				shield.part:Destroy()
+				destroyShield(shield)
 			end)
 		end
-		local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
-		local position = root.Position + offset
-		shield.part.CFrame = CFrame.lookAt(position, position + offset)
+		for index, part in shield.parts do
+			local angle = base + (index - 1) * (math.pi * 2 / #shield.parts)
+			local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
+			local position = root.Position + offset
+			part.CFrame = CFrame.lookAt(position, position + offset)
+		end
 	end
+end
+
+--[ 2026-10-30 prototypes ]--
+
+-- Witches Brew's puddle: Frost Field's disc in poison green.
+local function toxicPuddle(payload: Payload)
+	local radius = payload.Radius
+	local disc = makePart("ToxicPuddle", Vector3.new(0.3, radius * 2, radius * 2), TOXIC_COLOR)
+	disc.Shape = Enum.PartType.Cylinder
+	disc.Transparency = 1
+	disc.CFrame = CFrame.new(payload.From + Vector3.new(0, 0.15, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	disc.Parent = effectsFolder()
+	TweenService:Create(disc, TweenInfo.new(0.25), { Transparency = 0.6 }):Play()
+	local emitters = statusEmitters("Poison", disc)
+	task.delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
+		retire(disc, emitters, 0.4, 1.5)
+	end)
+end
+
+-- Rubber Chicken Launcher: a crackling ball stuck to its Target for the
+-- fuse (the server's ShockBurst packet is the detonation).
+local function staticCharge(payload: Payload)
+	local target = payload.Target
+	local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+	local ball = makePart("StaticCharge", Vector3.one * STATIC_CHARGE_SIZE, SHOCK_COLOR)
+	ball.Shape = Enum.PartType.Ball
+	ball.Transparency = 0.2
+	ball.Position = payload.From
+	ball.Parent = effectsFolder()
+	local light = Instance.new("PointLight")
+	light.Color = SHOCK_COLOR
+	light.Brightness = 3
+	light.Range = 8
+	light.Parent = ball
+	local emitters = statusEmitters("Shock", ball)
+	local lastSpark = 0
+	animate(payload.Duration, elapsedOf(payload), function(alpha: number)
+		local anchor = if targetRoot
+				and targetRoot:IsA("BasePart")
+				and targetRoot.Parent
+			then targetRoot.Position
+			else ball.Position
+		-- Swells and flickers faster as the fuse runs out.
+		local pulse = 1 + 0.25 * math.sin(alpha * alpha * 60)
+		ball.Size = Vector3.one * STATIC_CHARGE_SIZE * (1 + alpha * 0.8) * pulse
+		ball.Position = anchor + Vector3.new(0, 1.5, 0)
+		if os.clock() - lastSpark > 0.25 - alpha * 0.18 then
+			lastSpark = os.clock()
+			local spark = ball.Position
+				+ Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit * 3
+			bolt(ball.Position, spark)
+		end
+	end, function()
+		retire(ball, emitters, 0.1, 1)
+	end)
+end
+
+-- Hailstorm: a dark cloud over the zone and a frosted ring on the ground
+-- for its Duration; each shard is its own HailShard packet.
+local function hailstorm(payload: Payload)
+	local radius = payload.Radius
+	local ring = makePart("HailstormRing", Vector3.new(0.2, radius * 2, radius * 2), ICE_COLOR)
+	ring.Shape = Enum.PartType.Cylinder
+	ring.Transparency = 1
+	ring.CFrame = CFrame.new(payload.From + Vector3.new(0, 0.12, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Parent = effectsFolder()
+	local cloud = makePart("HailstormCloud", Vector3.new(radius * 2.2, 2.5, radius * 2.2), Color3.fromRGB(70, 90, 120))
+	cloud.Material = Enum.Material.SmoothPlastic
+	cloud.Shape = Enum.PartType.Ball
+	cloud.Transparency = 1
+	cloud.Position = payload.From + Vector3.new(0, HAIL_CLOUD_HEIGHT, 0)
+	cloud.Parent = effectsFolder()
+	TweenService:Create(ring, TweenInfo.new(0.3), { Transparency = 0.8 }):Play()
+	TweenService:Create(cloud, TweenInfo.new(0.3), { Transparency = 0.35 }):Play()
+	local emitters = statusEmitters("Chill", cloud)
+	task.delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
+		retire(ring, nil, 0.4)
+		retire(cloud, emitters, 0.5, 1.5)
+	end)
+end
+
+local function hailShard(payload: Payload)
+	local shard = makePart("HailShard", HAIL_SHARD_SIZE, ICE_COLOR)
+	shard.Transparency = 0.1
+	shard.CFrame = CFrame.new(payload.From)
+	shard.Parent = effectsFolder()
+	local from, to = payload.From, payload.To
+	animate(payload.Duration, elapsedOf(payload), function(alpha: number)
+		shard.CFrame = CFrame.new(from:Lerp(to, alpha * alpha))
+	end, function()
+		shard:Destroy()
+		burst(to, payload.Radius * 0.6, ICE_COLOR)
+	end)
+end
+
+-- Korblox Ice Claws: a translucent ice sphere on its caster, kept alive by the
+-- server's once-a-second re-send like the Orbiting Shield.
+local function dismissShell(caster: Player)
+	local shell = shells[caster]
+	if not shell or shell.fading then
+		return
+	end
+	shell.fading = true
+	TweenService:Create(shell.part, TweenInfo.new(ICE_SHELL_FADE_SECONDS), { Transparency = 1 }):Play()
+	task.delay(ICE_SHELL_FADE_SECONDS, function()
+		if shells[caster] == shell then
+			shells[caster] = nil
+		end
+		shell.part:Destroy()
+	end)
+end
+
+local function keepIceShell(payload: Payload)
+	local caster = payload.Caster
+	if not caster then
+		return
+	end
+	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
+	local shell = shells[caster]
+	if shell and not shell.fading then
+		shell.expiresAt = expiresAt
+		return
+	end
+	local part = makePart("IceShell", Vector3.one * ICE_SHELL_SIZE * 0.6, ICE_COLOR, Enum.Material.Glass)
+	part.Shape = Enum.PartType.Ball
+	part.Transparency = 1
+	part.Position = payload.From
+	part.Parent = effectsFolder()
+	TweenService:Create(
+		part,
+		TweenInfo.new(ICE_SHELL_FADE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{ Transparency = ICE_SHELL_TRANSPARENCY, Size = Vector3.one * ICE_SHELL_SIZE }
+	):Play()
+	shells[caster] = { part = part, expiresAt = expiresAt, fading = false }
+end
+
+local function stepShells()
+	local now = os.clock()
+	for caster, shell in shells do
+		local character = caster.Character
+		local found = character and character:FindFirstChild("HumanoidRootPart")
+		local root: BasePart? = if found and found:IsA("BasePart") then found else nil
+		if not root or not caster.Parent or now >= shell.expiresAt then
+			dismissShell(caster)
+		end
+		if root then
+			shell.part.Position = root.Position
+		end
+	end
+end
+
+-- The shatter: a big frost burst and a ring of shards flung outward.
+local function iceShellShatter(payload: Payload)
+	burst(payload.From, payload.Radius, ICE_COLOR)
+	for index = 1, 10 do
+		local angle = index / 10 * math.pi * 2
+		local outward = Vector3.new(math.cos(angle), 0.15, math.sin(angle))
+		local shard = makePart("IceShellShard", Vector3.new(0.6, 0.6, 2), ICE_COLOR)
+		shard.Transparency = 0.1
+		local from = payload.From
+		local to = from + outward * payload.Radius
+		shard.CFrame = CFrame.lookAt(from, to)
+		shard.Parent = effectsFolder()
+		animate(0.3, 0, function(alpha: number)
+			shard.CFrame = CFrame.lookAt(from:Lerp(to, alpha), to)
+		end, function()
+			retire(shard, nil, 0.2)
+		end)
+	end
+end
+
+-- Melted (Fire Breathing Friend): GameAssets.Auras.Melted on the mob while
+-- the attribute is set (a temporary green-fire stand-in for now).
+local function setMelted(model: Model, melted: boolean)
+	local existing = meltedFire[model]
+	if melted and not existing then
+		local root = model:FindFirstChild("HumanoidRootPart")
+		if not root or not root:IsA("BasePart") then
+			return
+		end
+		meltedFire[model] = statusEmitters("Melted", root)
+	elseif not melted and existing then
+		meltedFire[model] = nil
+		for _, emitter in existing do
+			emitter.Enabled = false
+			Debris:AddItem(emitter, 1.5)
+		end
+	end
+end
+
+local function watchMelted(model: Model)
+	model:GetAttributeChangedSignal(Attributes.Melted):Connect(function()
+		setMelted(model, model:GetAttribute(Attributes.Melted) == true)
+	end)
+	model.AncestryChanged:Connect(function()
+		if not model.Parent then
+			meltedFire[model] = nil
+		end
+	end)
+	if model:GetAttribute(Attributes.Melted) == true then
+		setMelted(model, true)
+	end
+end
+
+--[ Ban Hammer ]--
+
+-- The Ban Hammer relic model (GameAssets.Relics.Legendary["Ban Hammer"])
+-- drops onto the executed enemy head-first and slams down in Duration,
+-- then bursts and fades. A plain red block stands in if the asset is gone.
+local function banHammer(payload: Payload)
+	local relics = ReplicatedStorage.GameAssets:FindFirstChild("Relics")
+	local legendary = relics and relics:FindFirstChild("Legendary")
+	local template = legendary and legendary:FindFirstChild(RelicNames["Ban Hammer"])
+	local hammer: PVInstance
+	if template and (template:IsA("Model") or template:IsA("BasePart")) then
+		local clone = template:Clone()
+		if clone:IsA("Model") then
+			clone:ScaleTo(clone:GetScale() * BAN_HAMMER_SCALE)
+		end
+		hammer = clone :: any
+	else
+		hammer = makePart("BanHammer", Vector3.new(3, 6, 3), BAN_COLOR, Enum.Material.SmoothPlastic)
+	end
+	for _, descendant in (hammer :: Instance):GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanQuery = false
+			descendant.CanTouch = false
+		end
+	end
+	if hammer:IsA("BasePart") then
+		hammer.Anchored = true
+		hammer.CanCollide = false
+		hammer.CanQuery = false
+		hammer.CanTouch = false
+	end
+	-- Lands with its head on the floor, not buried to the pivot.
+	local size = if hammer:IsA("Model") then hammer:GetExtentsSize() else (hammer :: BasePart).Size
+	local landing = payload.From + Vector3.new(0, size.Y * 0.35, 0)
+	local top = landing + Vector3.new(0, BAN_HAMMER_DROP_HEIGHT, 0)
+	-- Head down, tipping forward as it falls.
+	local tilt = CFrame.Angles(0, math.random() * math.pi * 2, 0) * CFrame.Angles(math.rad(180), 0, 0)
+	hammer:PivotTo(CFrame.new(top) * tilt)
+	hammer.Parent = effectsFolder()
+	animate(payload.Duration, elapsedOf(payload), function(alpha: number)
+		local eased = alpha * alpha
+		hammer:PivotTo(CFrame.new(top:Lerp(landing, eased)) * tilt)
+	end, function()
+		burst(payload.From, payload.Radius, BAN_COLOR)
+		burst(payload.From, payload.Radius * 0.5, GOLD_COLOR)
+		Debris:AddItem(hammer, BAN_HAMMER_LINGER_SECONDS)
+	end)
 end
 
 --[ Dispatch ]--
@@ -548,18 +987,19 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	ThunderBlade = function(payload)
 		travellingSlash(payload, THUNDER_BLADE_SIZE, BOLT_COLOR, nil, true)
 	end,
+	BanHammer = banHammer,
 	PhoenixTrail = phoenixTrail,
 	FrostField = frostField,
 	IceShard = function(payload)
 		local shard = makePart("BlizzardShard", Vector3.new(0.8, 2.2, 0.8), ICE_COLOR)
 		shard.Transparency = 0.1
-		lob(payload, shard, ICE_COLOR, true)
+		lob(payload, shard, ICE_COLOR, true, SHARD_ARC_HEIGHT)
 	end,
 	ToxicBubble = function(payload)
 		local bubble = makePart("ToxicBubble", Vector3.one * 1.1, TOXIC_COLOR)
 		bubble.Shape = Enum.PartType.Ball
 		bubble.Transparency = 0.25
-		lob(payload, bubble, TOXIC_COLOR, false)
+		lob(payload, bubble, TOXIC_COLOR, false, ARC_HEIGHT)
 	end,
 	Bolt = function(payload)
 		bolt(payload.From, payload.To)
@@ -567,6 +1007,18 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	WyrmSummon = summonWyrm,
 	FrostOrb = frostOrb,
 	OrbitShield = keepShield,
+	-- 2026-10-30 prototypes.
+	Boulder = function(payload)
+		local rock = makePart("Boulder", BOULDER_SIZE, STONE_COLOR, Enum.Material.Slate)
+		rock.Shape = Enum.PartType.Ball
+		lob(payload, rock, STONE_COLOR, true, ARC_HEIGHT)
+	end,
+	StaticCharge = staticCharge,
+	ToxicPuddle = toxicPuddle,
+	Hailstorm = hailstorm,
+	HailShard = hailShard,
+	IceShell = keepIceShell,
+	IceShellShatter = iceShellShatter,
 }
 
 function RelicGimmickFXController.Start(_self: typeof(RelicGimmickFXController))
@@ -582,10 +1034,27 @@ function RelicGimmickFXController.Start(_self: typeof(RelicGimmickFXController))
 		end
 	end)
 
-	RunService.RenderStepped:Connect(function(deltaTime: number)
-		stepWyrms(deltaTime)
-		stepShields(deltaTime)
+	RunService.RenderStepped:Connect(stepShields)
+	RunService.RenderStepped:Connect(stepShells)
+
+	-- Melted: every mob under the Mobs folder, as it arrives.
+	task.spawn(function()
+		local ignore = workspace:WaitForChild("IgnoreInstances")
+		local mobs = ignore:WaitForChild("Mobs")
+		local function onDescendant(descendant: Instance)
+			local model = descendant.Parent
+			if descendant:IsA("Humanoid") and model and model:IsA("Model") then
+				watchMelted(model)
+			end
+		end
+		mobs.DescendantAdded:Connect(onDescendant)
+		for _, descendant in mobs:GetDescendants() do
+			onDescendant(descendant)
+		end
 	end)
+	-- Heartbeat, as SpiritCompanion: after physics, so the anchor holds
+	-- this frame's position rather than last frame's.
+	RunService.Heartbeat:Connect(stepWyrms)
 end
 
 return RelicGimmickFXController

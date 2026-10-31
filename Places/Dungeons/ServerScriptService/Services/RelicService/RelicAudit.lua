@@ -23,8 +23,9 @@
 	                        value, every `grants` entry a RelicTags value.
 	                        A C / C2 relic must belong to a tree with a
 	                        status+aura pair (never Neutral).
-	  4. Pool shape         each element tree carries 5 Rare / 4 Epic /
-	                        1 Legendary; Neutral carries the rest.
+	  4. Pool shape         each element tree carries 7 Rare / 5 Epic /
+	                        1 Legendary (2026-10-30), duo relics (`duo`
+	                        set) not counted; Neutral carries the rest.
 	  5. Runtime text       runtimeDescriptionCallback runs, returns a
 	                        string, and leaves no unsubstituted %-holes.
 	  6. Markup             description font tags are balanced.
@@ -50,11 +51,15 @@ local RelicAudit = {}
 
 local REQUIRED_FIELDS = { "name", "rarity", "tree", "combo", "archetype", "description", "color", "callback" }
 
--- Expected per-tree rarity spread (the sheet's 5/4/1).
+-- Expected per-tree rarity spread (7 / 5 / 1), with per-tree exceptions
+-- (Earth carries an eighth Rare, Stonefist Gauntlet, 2026-10-31).
 local TREE_EXPECTED = {
-	[ItemRarity.Rare] = 5,
-	[ItemRarity.Epic] = 4,
+	[ItemRarity.Rare] = 7,
+	[ItemRarity.Epic] = 5,
 	[ItemRarity.Legendary] = 1,
+}
+local TREE_EXPECTED_OVERRIDES: { [string]: { [string]: number } } = {
+	[ElementTrees.Earth] = { [ItemRarity.Rare] = 8 },
 }
 
 local function valueSet(enum): { [string]: boolean }
@@ -139,7 +144,7 @@ function RelicAudit.Run(): (number, number)
 			end
 		end
 
-		if data.tree ~= nil and data.rarity ~= nil then
+		if data.tree ~= nil and data.rarity ~= nil and data.duo == nil and not data.retired then
 			local byRarity = treeCounts[data.tree]
 			if not byRarity then
 				byRarity = {}
@@ -182,6 +187,10 @@ function RelicAudit.Run(): (number, number)
 		if tree ~= ElementTrees.Neutral then
 			local byRarity = treeCounts[tree] or {}
 			for rarity, expected in TREE_EXPECTED do
+				local override = TREE_EXPECTED_OVERRIDES[tree]
+				if override and override[rarity] then
+					expected = override[rarity]
+				end
 				local got = byRarity[rarity] or 0
 				if got ~= expected then
 					warn_(tree, ("tree carries %d %s relics (sheet says %d)"):format(got, rarity, expected))

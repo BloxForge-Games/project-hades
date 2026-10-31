@@ -257,6 +257,9 @@ type Record = {
 	state: string,
 	alive: boolean,
 	stateEndTime: number,
+	-- When the current attack began (server time): MobData attackInterval
+	-- rests the mob for what the attack did not use of its roll.
+	attackStartedAt: number?,
 	nextThink: number,
 	attackGeneration: number,
 	chosenAttack: any,
@@ -903,12 +906,22 @@ end
 
 --[ States ]--
 
-function MobSimService._enterRoaming(self: typeof(MobSimService), record: Record, now: number)
+-- `afterAttack`: the roam that follows an attack. A mob with a MobData
+-- `attackInterval` (hit to hit, 2026-10-30) rests only what is left of a
+-- roll in that range once the attack's own time is taken off; everything
+-- else roams ROAM_DURATION_MIN-MAX.
+function MobSimService._enterRoaming(self: typeof(MobSimService), record: Record, now: number, afterAttack: boolean?)
 	record.state = STATE_ROAMING
 	record.chosenAttack = nil
 	record.chaseGoal = nil
 	record.baseSpeed = record.walkSpeed / 2
-	record.stateEndTime = now + math.random(ROAM_DURATION_MIN, ROAM_DURATION_MAX)
+	local interval = record.data and record.data.attackInterval
+	if afterAttack and interval and record.attackStartedAt then
+		local roll = interval[1] + math.random() * (interval[2] - interval[1])
+		record.stateEndTime = now + math.max(roll - (now - record.attackStartedAt), 0)
+	else
+		record.stateEndTime = now + math.random(ROAM_DURATION_MIN, ROAM_DURATION_MAX)
+	end
 
 	local origin = rootPosition(record)
 	for attempt = 1, ROAM_PICK_ATTEMPTS do
@@ -1119,6 +1132,7 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 	end
 	record.state = STATE_ATTACKING
 	record.attackGeneration += 1
+	record.attackStartedAt = workspace:GetServerTimeNow()
 	local generation = record.attackGeneration
 	local attackIndex = record.chosenAttackIndex
 
@@ -1197,7 +1211,7 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 		local resumeAt = workspace:GetServerTimeNow()
 		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
 		record.written = record.root.CFrame
-		self:_enterRoaming(record, resumeAt)
+		self:_enterRoaming(record, resumeAt, true)
 	end)
 end
 
@@ -1461,6 +1475,7 @@ function MobSimService._startHeal(
 	local attack = record.chosenAttack
 	record.state = STATE_ATTACKING
 	record.attackGeneration += 1
+	record.attackStartedAt = workspace:GetServerTimeNow()
 	local generation = record.attackGeneration
 
 	record.ground = (mobPath.sample(record.move, now))
@@ -1494,7 +1509,7 @@ function MobSimService._startHeal(
 		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
 		record.written = record.root.CFrame
 		record.supportIntent = nil
-		self:_enterRoaming(record, workspace:GetServerTimeNow())
+		self:_enterRoaming(record, workspace:GetServerTimeNow(), true)
 	end)
 end
 

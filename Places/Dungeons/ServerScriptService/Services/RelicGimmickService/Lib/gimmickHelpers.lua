@@ -40,6 +40,16 @@ function helpers.damageService(): any
 	return service("DamageService")
 end
 
+-- TakeDamage for a gimmick hit, same arguments, with the relic push
+-- (DamageService.WithRelicKnockback: 1 stud, not a weapon / spell push).
+function helpers.takeDamage(player: Player, humanoid: Humanoid, damage: number, ...: any)
+	local damageService = service("DamageService")
+	local extra = table.pack(...)
+	damageService:WithRelicKnockback(function()
+		damageService:TakeDamage(player, humanoid, damage, table.unpack(extra, 1, extra.n))
+	end)
+end
+
 function helpers.statusService(): any
 	return service("StatusConditionService")
 end
@@ -88,10 +98,19 @@ end
 -- Sends one gimmick visual to every client (RelicGimmickFXController
 -- draws it; Relic.blink's GimmickEffectPayload lists the kinds). The
 -- server never builds effect parts: only the hits and checks run here.
-function helpers.fx(kind: string, from: Vector3, to: Vector3?, radius: number?, duration: number?, caster: Player?)
+function helpers.fx(
+	kind: string,
+	from: Vector3,
+	to: Vector3?,
+	radius: number?,
+	duration: number?,
+	caster: Player?,
+	target: Model?
+)
 	RelicNetwork.GimmickEffect.FireAll({
 		Kind = kind,
 		Caster = caster,
+		Target = target,
 		From = from,
 		To = to or from,
 		Radius = radius or 0,

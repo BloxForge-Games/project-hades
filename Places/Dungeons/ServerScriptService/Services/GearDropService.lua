@@ -100,9 +100,6 @@ local ATTR_TYPE = "GearType"
 local ATTR_RARITY = "GearRarity"
 local ATTR_DESCRIPTION = "GearDescription"
 local ATTR_LEVEL = "GearLevel"
--- The highest Quality this drop may roll on pickup (the run difficulty's
--- DifficultyData.qualityMax), read by the GearDrop component.
-local ATTR_QUALITY_MAX = "GearQualityMax"
 local ATTR_OWNER_ID = "OwnerId"
 local ATTR_ORIGIN_POSITION = "OriginPosition"
 -- Attributes.BouncePosition: set when the landing ricocheted off a wall.
@@ -222,23 +219,6 @@ function GearDropService._getActiveLevelRange(_self: typeof(GearDropService))
 	local dungeonConfig = DungeonData[active.id]
 	local difficultyConfig = dungeonConfig and dungeonConfig.difficulties[active.difficulty]
 	return difficultyConfig and difficultyConfig.levelRange or nil
-end
-
--- The active difficulty's Quality cap (DifficultyData.qualityMax), or nil
--- outside a run / for a config without one (the pickup then rolls the full
--- 50-100%).
-function GearDropService._getActiveQualityMax(_self: typeof(GearDropService)): number?
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	if not dungeonService then
-		return nil
-	end
-	local active = dungeonService:GetActiveDungeon()
-	if not active then
-		return nil
-	end
-	local dungeonConfig = DungeonData[active.id]
-	local difficultyConfig = dungeonConfig and dungeonConfig.difficulties[active.difficulty]
-	return difficultyConfig and difficultyConfig.qualityMax or nil
 end
 
 -- Rolls a level for a single drop using the active difficulty's
@@ -854,7 +834,6 @@ function GearDropService._buildDropModel(
 	model:SetAttribute(ATTR_RARITY, rarity)
 	model:SetAttribute(ATTR_DESCRIPTION, description)
 	model:SetAttribute(ATTR_LEVEL, level)
-	model:SetAttribute(ATTR_QUALITY_MAX, self:_getActiveQualityMax())
 	model:SetAttribute(ATTR_OWNER_ID, ownerId)
 	model:SetAttribute(ATTR_ORIGIN_POSITION, originPosition)
 	if fromChest then

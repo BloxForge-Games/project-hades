@@ -7,6 +7,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 
 --[ Imports ]--
 
@@ -35,6 +36,8 @@ local function getEventController(): any
 end
 
 local INTERFACE_ID = "RelicInterfaceController"
+-- The keyboard toggle (the run inventory's key until 2026-10-31).
+local TOGGLE_KEY = Enum.KeyCode.C
 
 -- The run's OPEN relic slot count, stamped on the Player by RelicService.
 -- The default is only a pre-stamp fallback: the attribute lands with the
@@ -58,6 +61,10 @@ local RelicInterfaceController = {
 	-- the signals). Read through IsOpen.
 	_isOpen = false,
 }
+
+-- False while LifeController hides the toggle (downed, dead); the C key
+-- refuses to open the tray then, as the hidden button would.
+RelicInterfaceController._toggleAllowed = true
 
 RelicInterfaceController.Signals = {
 	OnPulseGradient = Signal.new(),
@@ -206,9 +213,28 @@ end
 
 function RelicInterfaceController.Start(self: typeof(RelicInterfaceController))
 	self.Signals.SetToggleVisible:Connect(function(visible: boolean)
+		self._toggleAllowed = visible
 		if not visible then
 			self.Signals.SetVisible:Fire(false)
 		end
+	end)
+
+	-- C toggles the tray (2026-10-31; it opened the run inventory until
+	-- gear started banking at pickup). Opening asks the Windows scope
+	-- first, as the tray's own button does through its registration, and
+	-- is refused while the toggle is hidden (downed, dead, a cutscene).
+	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+		if processed or input.KeyCode ~= TOGGLE_KEY then
+			return
+		end
+		if self._isOpen then
+			self.Signals.SetVisible:Fire(false)
+			return
+		end
+		if not self._toggleAllowed or not InterfaceManagerController:RequestOpen(INTERFACE_ID) then
+			return
+		end
+		self.Signals.SetVisible:Fire(true)
 	end)
 
 	-- The Merchant's "sell relics" option: force the tray open with the

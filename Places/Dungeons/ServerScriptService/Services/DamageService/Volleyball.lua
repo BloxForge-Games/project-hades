@@ -7,13 +7,9 @@
 --      task.delay-into-humanoid:TakeDamage pattern so the spike VFX
 --      lands a beat after the original hit).
 --
--- Gating: ranged-only. isMagic = bail. isMelee = bail. Anything left
--- over is a ranged weapon hit. The relic's design moved from
--- weapon-wide to ranged-specific, which is why isMelee gets its own
--- early return.
---
--- Signature gained an isMelee param vs the prior implementation; the
--- orchestrator now passes both isMagic and isMelee through.
+-- Gating: gun shots only (the orchestrator's isGunShot, 2026-10-30; it
+-- used to infer "ranged" as not-magic-and-not-melee, which let a
+-- Sword-of-the-Epicredness spell count and spike).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -46,26 +42,16 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	rangedHitCounts[player.UserId] = nil
 end)
 
-return function(
-	player: Player,
-	snapshot: RelicSnapshot,
-	humanoid: Humanoid,
-	damage: number,
-	isMagic: boolean,
-	isMelee: boolean
-)
-	if isMagic then
+return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, damage: number, isGunShot: boolean)
+	-- Ranged WEAPON attacks only: the orchestrator passes isGunShot (true
+	-- for a bullet, Orinthian-converted or not; false for melee, spells and
+	-- Epicredness-converted spells), so nothing else can advance the count.
+	if not isGunShot then
 		return 0
 	end
 
 	local volleyballEffect = DamageService.RelicEffect(snapshot, RelicNames["Volleyball"]) or 1
 	if volleyballEffect == 1 then
-		return 0
-	end
-
-	-- The element rework dropped the flat Weapon Damage half -- the every-
-	-- 3rd-hit spike is the whole relic now, and it stays ranged-only.
-	if isMelee then
 		return 0
 	end
 
@@ -102,12 +88,9 @@ return function(
 			DamageIndicatorService:ShowIndicator(player, humanoid.Parent :: Model, spikeDamage, false)
 			humanoid:TakeDamage(spikeDamage)
 
-			-- Direct-damage path (bypasses TakeDamage's exits). Kept wired to
-			-- TryExecute, but the spike is not a Critical Hit so it passes no
-			-- `wasCrit` and never executes -- correct under the crit-gated Ban
-			-- Hammer. The call stays so a future crit-capable spike only needs
-			-- to pass the flag.
-			DamageService:TryExecute(player, humanoid)
+			-- Direct-damage path (bypasses TakeDamage's exits), so it asks
+			-- for Ban Hammer's execute itself: the spike is a weapon attack.
+			DamageService:TryExecute(player, humanoid, false)
 		end)
 	end
 

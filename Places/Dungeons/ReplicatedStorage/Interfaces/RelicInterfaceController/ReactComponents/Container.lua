@@ -8,10 +8,12 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextService = game:GetService("TextService")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local RelicListFragment = require(script.Parent.RelicListFragment)
 local RelicEntryContainer = require(script.Parent.RelicEntryContainer)
+local RelicHoverTooltip = require(script.Parent.RelicHoverTooltip)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
@@ -220,6 +222,34 @@ local function Container(props: any)
 	local descriptionFrameRef = React.useRef(nil)
 	local descriptionLabelRef = React.useRef(nil)
 	local descriptionTextSize, setDescriptionTextSize = React.useState(14)
+	-- The hover tooltip (RelicHoverTooltip): the relic under the mouse and
+	-- its slot's rect, in pixels relative to the tray root. Mouse only --
+	-- a touch tap selects the slot and opens the description card, which
+	-- says the same things, so touch never shows it.
+	local hoveredRelic, setHoveredRelic = React.useState(nil :: any)
+	local hoverEnabled = UserInputService.MouseEnabled or not UserInputService.TouchEnabled
+	local function onSlotHover(relicName: string?, slot: GuiObject?)
+		if not hoverEnabled then
+			return
+		end
+		local root = containerRef.current
+		if not relicName or not slot or not root then
+			setHoveredRelic(nil)
+			return
+		end
+		setHoveredRelic({
+			relicName = relicName,
+			anchorPosition = slot.AbsolutePosition - root.AbsolutePosition,
+			anchorSize = slot.AbsoluteSize,
+		})
+	end
+	-- Closing the tray drops the tooltip: no MouseLeave fires for a slot
+	-- that slides away under the cursor.
+	React.useEffect(function()
+		if not visible then
+			setHoveredRelic(nil)
+		end
+	end, { visible })
 	local toggleButtonRef = React.useRef(nil)
 	local toggleRingAnchorRef = React.useRef(nil)
 	local notificationButtonRef = React.useRef(nil)
@@ -973,7 +1003,15 @@ local function Container(props: any)
 				setSelectedRelic = function(selectedData: { [any]: any })
 					setSelectedRelic(selectedData)
 				end,
+				onHover = onSlotHover,
 			}),
+		}),
+
+		-- The hover tooltip, at the root so it draws over the list and the
+		-- card alike (its own ZIndex puts it above both).
+		RelicHoverTooltip = React.createElement(RelicHoverTooltip, {
+			hovered = hoveredRelic,
+			rootSize = if containerRef.current then containerRef.current.AbsoluteSize else nil,
 		}),
 
 		ToggleButtonFrame = React.createElement("Frame", {

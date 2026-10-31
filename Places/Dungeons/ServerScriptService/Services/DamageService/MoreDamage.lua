@@ -11,11 +11,9 @@
 -- Card wording follows the split: "+X% Damage" adds, "X% more Damage"
 -- multiplies here.
 --
---   Glorious Sword           75% more Melee Weapon Damage     typed
---   Mystical Staff of Cyan   60% more Arcane Damage (owner)   typed; the
+--   Glorious Sword           40% more Melee Weapon Damage     typed
+--   Mystical Staff of Cyan   40% more Arcane Damage (owner)   typed; the
 --                            Sigil's +25% stays additive (MysticalSigil)
---   Staff of Azure Ever Ice  50% more Arcane Damage while
---                            Frostburst                       typed
 --   Double-Bladed Scythe     100% more Weapon, Arcane deals 0 typed
 --   Forbidden Box            100% more Arcane Damage          typed
 --   Sword of Eternal Abyss   50% more Damage                  every lane
@@ -28,8 +26,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
-local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
-local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
@@ -43,7 +39,7 @@ local function effect(snapshot: RelicSnapshot, relicName: string): number?
 end
 
 return function(
-	player: Player,
+	_player: Player,
 	snapshot: RelicSnapshot,
 	isMagic: boolean,
 	untypedOnly: boolean,
@@ -65,14 +61,6 @@ return function(
 		if DamageService.RelicCount(snapshot, RelicNames["Mystical Staff of Cyan"]) > 0 then
 			local more = mystical and mystical.data and mystical.data.ownerArcaneMore
 			multiplier *= 1 + (if type(more) == "number" then more else 0.40)
-		end
-
-		-- Staff of Azure Ever Ice: its callback (1.5) while Frostburst.
-		if DamageService.RelicCount(snapshot, RelicNames["Staff of Azure Ever Ice"]) > 0 then
-			local hrp = getRoot.fromPlayer(player)
-			if hrp and hrp:FindFirstChild(AuraNames.Frostburst) then
-				multiplier *= effect(snapshot, RelicNames["Staff of Azure Ever Ice"]) or 1
-			end
 		end
 	elseif isMelee then
 		multiplier *= effect(snapshot, RelicNames["Glorious Sword"]) or 1

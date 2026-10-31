@@ -72,6 +72,7 @@ local VFXController = require(ReplicatedStorage.Controllers.VFXController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local MobNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Mob)
+local MobTelegraphVisibilityController = require(script.Parent.MobTelegraphVisibilityController)
 local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
 local attachCorruptVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.attachCorruptVFX)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -751,8 +752,16 @@ function MobController.Start(self: typeof(MobController))
 	end
 	Players.LocalPlayer.CharacterAdded:Connect(watchDeathAttribute)
 
+	-- The "Mob Hitboxes" setting (2026-10-30): melee flashes can be hidden;
+	-- ranged ones always draw.
+	local function hiddenBySetting(ranged: boolean?): boolean
+		return not ranged
+			and MobTelegraphVisibilityController ~= nil
+			and MobTelegraphVisibilityController:IsMeleeHidden()
+	end
+
 	Combat.MobAttack.On(function(payload)
-		if not payload.Mob then
+		if not payload.Mob or hiddenBySetting(payload.Ranged) then
 			return
 		end
 		spawnHitboxFlash(payload.Mob, function()
@@ -763,7 +772,7 @@ function MobController.Start(self: typeof(MobController))
 	-- Data hitboxes (MobData `hitbox`): the same flash on a telegraph this
 	-- client builds from the shape the server is about to query.
 	MobNetwork.MobTelegraph.On(function(payload)
-		if not payload.Mob then
+		if not payload.Mob or hiddenBySetting(payload.Ranged) then
 			return
 		end
 		local spec: mobHitbox.Spec = {

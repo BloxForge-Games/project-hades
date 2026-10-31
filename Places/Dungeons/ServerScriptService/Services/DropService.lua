@@ -1,6 +1,7 @@
 --!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
@@ -407,22 +408,18 @@ function DropService.Start(self: typeof(DropService))
 			-- the escrowed number is already final.
 			RunEscrowService:AddCoins(player, value)
 			self.OnCoinCollected:Fire(player.Name, value)
-		elseif dropType == DropTypes.ForgeOre then
+		elseif dropType == DropTypes.ArcaneCrystals then
 			-- Escrowed like coins: banked to the profile on clear
-			-- (RunEscrowService.BankAll), lost on death. Chests only; the
-			-- dungeon's rewardScale is the ONLY multiplier -- no relic or
-			-- set bonus touches it, it is the Blacksmith's gating resource
-			-- rather than an economy stat.
-			RunEscrowService:AddForgeOre(player, math.round(value * difficultyMultiplier("ore")))
+			-- (RunEscrowService.BankAll), half kept on death. Chests and
+			-- veins; the dungeon's rewardScale is the ONLY multiplier -- no
+			-- relic or set bonus touches it, it is the spell currency
+			-- (Arcane Chests) rather than an economy stat.
+			RunEscrowService:AddArcaneCrystals(player, math.round(value * difficultyMultiplier("crystals")))
 		elseif dropType == DropTypes.Mana then
 			playOrbPickupVFX(player, dropType)
 
 			-- Mana orbs restore 10% of the player's max mana.
-			-- Gear Recycler: "Mana Orbs grant +50% more mana" — its callback
-			-- returns the multiplier (1.5), applied to the base fraction so it
-			-- scales with the player's max mana.
 			local BASE_MANA_FRACTION = 0.1
-			local manaMultiplier = RelicService:GetRelicEffect(player, RelicNames["Gear Recycler"]) or 1
 
 			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
 			if not arcaneData then
@@ -430,7 +427,7 @@ function DropService.Start(self: typeof(DropService))
 			end
 			local currentMana = arcaneData.mana
 			local maxMana = arcaneData.maxMana
-			local manaRestored = currentMana + (maxMana * BASE_MANA_FRACTION * manaMultiplier)
+			local manaRestored = currentMana + maxMana * BASE_MANA_FRACTION
 
 			ArcaneService:SetPlayerArcaneData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
 		elseif dropType == DropTypes.Health then
@@ -446,7 +443,7 @@ function DropService.Start(self: typeof(DropService))
 			end
 
 			-- Health orbs restore 5% of the player's max health. Healing
-			-- amps (Holiday Ham, Regeneration Coil) apply inside
+			-- amps (Holiday Ham) apply inside
 			-- ApplyHealing — any-source, summed additively.
 			local BASE_HEALTH_FRACTION = 0.05
 
@@ -456,7 +453,30 @@ function DropService.Start(self: typeof(DropService))
 				return
 			end
 
-			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION)
+			-- Regeneration Coil (2026-10-30): the orb heals its multiplier more,
+			-- and every ally inside data.shareRadius gets the same heal.
+			local coil = RelicService:GetRelicEffect(player, RelicNames["Regeneration Coil"]) or 1
+			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
+			if coil > 1 then
+				local row = RelicData[RelicNames["Regeneration Coil"]]
+				local radius = (row and row.data and row.data.shareRadius) or 20
+				local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				for _, ally in Players:GetPlayers() do
+					local allyCharacter = ally.Character
+					local allyRoot = allyCharacter and allyCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+					local allyHumanoid = allyCharacter and allyCharacter:FindFirstChildOfClass("Humanoid")
+					if
+						ally ~= player
+						and root
+						and allyRoot
+						and allyHumanoid
+						and allyHumanoid.Health > 0
+						and (allyRoot.Position - root.Position).Magnitude <= radius
+					then
+						PlayerStatsService:ApplyHealing(ally, allyHumanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
+					end
+				end
+			end
 		elseif dropType == DropTypes.Relics then
 			-- Relic drops are handled in the RelicService, so we just fire a signal here for any client-side effects
 			self.OnDropCollected:Fire(player, dropType, value)

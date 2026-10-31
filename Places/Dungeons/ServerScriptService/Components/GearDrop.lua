@@ -55,10 +55,8 @@ local ENCHANTMENT_POOL = {
 
 -- scalarMultiplier (Quality) roll range for granted inventory items. Range
 -- agreed with the user — DataTemplate's hand-authored entries sit in
--- [0.85, 1.15]; runtime drops roll wider variance per spec. The TOP of the
--- range is the run difficulty's DifficultyData.qualityMax (70% Easy, 80%
--- Normal, 90% Hard, 100% Nightmare), stamped on the drop by GearDropService;
--- SCALAR_MULTIPLIER_MAX is the fallback for a drop without one.
+-- [0.85, 1.15]; runtime drops roll the full 50-100% on every difficulty
+-- (the per-tier cap left 2026-10-30).
 local SCALAR_MULTIPLIER_MIN = 0.5
 local SCALAR_MULTIPLIER_MAX = 1
 
@@ -67,7 +65,6 @@ local SCALAR_MULTIPLIER_MAX = 1
 local ATTR_NAME = "GearName"
 local ATTR_TYPE = "GearType"
 local ATTR_LEVEL = "GearLevel"
-local ATTR_QUALITY_MAX = "GearQualityMax"
 local ATTR_RARITY = "GearRarity"
 local ATTR_OWNER_ID = "OwnerId"
 -- Raised on pickup. Every client watches it to kill the prompt + label
@@ -134,12 +131,11 @@ function GearDrop:_buildInventoryEntry(
 	gearType: string,
 	level: number,
 	rarity: string,
-	uuid: string,
-	qualityMax: number?
+	uuid: string
 ): { [string]: any }
-	local top = math.clamp(qualityMax or SCALAR_MULTIPLIER_MAX, SCALAR_MULTIPLIER_MIN, SCALAR_MULTIPLIER_MAX)
-	local scalarMultiplier = math.round((SCALAR_MULTIPLIER_MIN + math.random() * (top - SCALAR_MULTIPLIER_MIN)) * 100)
-		/ 100
+	local scalarMultiplier = math.round(
+		(SCALAR_MULTIPLIER_MIN + math.random() * (SCALAR_MULTIPLIER_MAX - SCALAR_MULTIPLIER_MIN)) * 100
+	) / 100
 
 	if gearType == GearTypes.Weapon then
 		local enchantment = EnchantmentNames.None
@@ -207,9 +203,9 @@ function GearDrop:_grantInventory(
 		return false
 	end
 
-	-- Armor routes into profile.Inventory.Gear[<slot>] at BANK time, so
-	-- the slot has to be present now — reject early rather than escrow
-	-- an entry that can't be banked later.
+	-- Armor routes into profile.Inventory.Gear[<slot>] (RunEscrowService
+	-- AddItem banks at pickup since 2026-10-31), so the slot has to be
+	-- present -- reject early rather than bank an entry that cannot route.
 	if gearType == GearTypes.Armor and not armorSlot then
 		warn(
 			("[GearDrop] Armor pickup '%s' missing slot attribute — can't route to a Gear sub-array"):format(
@@ -222,8 +218,8 @@ function GearDrop:_grantInventory(
 	-- An item a PLAYER dropped already exists, so it is restored rather
 	-- than rebuilt: _buildInventoryEntry rolls a fresh quality and
 	-- enchantment every call, which would re-roll the item's stats each
-	-- time it changed hands. Released only once the escrow accepts it, so
-	-- a pickup refused by the run item cap leaves the drop intact.
+	-- time it changed hands. Released only once the bank accepts it, so
+	-- a pickup refused by the bag cap leaves the drop intact.
 	local preserved = GearDropService and GearDropService:GetPreservedEntry(uuid)
 	if preserved then
 		if not RunEscrowService:AddItem(player, preserved) then
@@ -233,15 +229,7 @@ function GearDrop:_grantInventory(
 		return true
 	end
 
-	local qualityMax = self.Instance:GetAttribute(ATTR_QUALITY_MAX)
-	local item = self:_buildInventoryEntry(
-		gearName,
-		gearType,
-		level,
-		rarity,
-		uuid,
-		if type(qualityMax) == "number" then qualityMax else nil
-	)
+	local item = self:_buildInventoryEntry(gearName, gearType, level, rarity, uuid)
 
 	return RunEscrowService:AddItem(player, {
 		gearType = gearType,

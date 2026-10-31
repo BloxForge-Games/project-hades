@@ -67,6 +67,7 @@ local function RelicListFragment(props: any)
 						selectedRelic = selectedRelic,
 
 						onClick = toggleSelected,
+						onHover = props.onHover,
 					})
 				)
 

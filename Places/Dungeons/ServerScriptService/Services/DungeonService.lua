@@ -321,12 +321,6 @@ end
 
 function DungeonService.SetRun(self: typeof(DungeonService), run: Run?)
 	self._run = run
-	-- Level-scaled relics count at most the tier's top gear level
-	-- (Shared/Functions/Player/getRelicLevel); read on both sides.
-	workspace:SetAttribute(
-		Attributes.RelicLevelCap,
-		if run then DifficultyData.Resolve(run.difficulty).levelRange.max else nil
-	)
 end
 
 function DungeonService.GetRun(self: typeof(DungeonService)): Run?
@@ -343,7 +337,7 @@ function DungeonService.GetDifficultyScale(self: typeof(DungeonService)): Diffic
 	return DifficultyData.Resolve(run.difficulty)
 end
 
--- The run's reward multiplier for `field` ("gold" or "ore"; the tiers no
+-- The run's reward multiplier for `field` ("gold" or "crystals"; the tiers no
 -- longer carry either, so this is the dungeon's rewardScale alone): the
 -- difficulty's ladder (DifficultyData) times the active dungeon's
 -- rewardScale (DungeonData, later dungeons pay more). THE one number both
