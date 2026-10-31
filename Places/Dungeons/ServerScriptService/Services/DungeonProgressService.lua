@@ -9,6 +9,9 @@
 	    run's final boss falls (DungeonService.Signals.OnFinalDungeonCompleted):
 	    clear count, highest cleared rank, the Keystone on a Hard-or-
 	    above clear, and the tier's Dungeon Mastery XP (MasteryData).
+	  * Pays the tier's miniboss / elite Mastery XP to the player credited
+	    with the kill or assist (RoundStatisticsService's OnMinibossChanged
+	    / OnEliteChanged), 2026-10-30.
 	  * Answers what a player has unlocked, which RunFlowService uses to
 	    clamp the difficulty a party arrives with.
 
@@ -110,9 +113,48 @@ function DungeonProgressService._recordClear(
 	)
 end
 
+-- A miniboss or elite kill / assist by `player` pays `xpFor(difficulty)`
+-- of Mastery XP into the active dungeon's entry.
+function DungeonProgressService._awardKillXp(
+	_self: typeof(DungeonProgressService),
+	player: Player,
+	xpFor: (string) -> number
+)
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local dungeon = dungeonService and dungeonService:GetActiveDungeon()
+	local run = dungeonService and dungeonService:GetRun()
+	if not dungeon or not run or player.Parent ~= Players then
+		return
+	end
+	local xp = xpFor(run.difficulty)
+	if xp <= 0 then
+		return
+	end
+	local profile = DataService:GetProfileData(player)
+	if not profile or profile.Version == nil then
+		return
+	end
+	local progress = profile[PROGRESS_KEY]
+	if type(progress) ~= "table" then
+		progress = {}
+	end
+	dungeonProgress.addMasteryXp(progress, dungeon.id, xp)
+	DataService:SetProfileValue(player, PROGRESS_KEY, progress)
+end
+
 --[ Lifecycle ]--
 
 function DungeonProgressService.Start(self: typeof(DungeonProgressService))
+	local roundStatistics = Blitz.OptionalService("RoundStatisticsService")
+	if roundStatistics and roundStatistics.Signals then
+		roundStatistics.Signals.OnMinibossChanged:Connect(function(player: Player)
+			self:_awardKillXp(player, MasteryData.XpForMiniboss)
+		end)
+		roundStatistics.Signals.OnEliteChanged:Connect(function(player: Player)
+			self:_awardKillXp(player, MasteryData.XpForElite)
+		end)
+	end
+
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	if not dungeonService then
 		return
