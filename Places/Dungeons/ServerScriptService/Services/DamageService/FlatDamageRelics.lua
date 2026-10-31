@@ -1,10 +1,9 @@
 --!strict
--- The flat, always-on damage sticks — Neutral stat relics whose ONLY gate
--- is which side of the damage split the hit is on:
---   Linked Sword          +20% Weapon Damage
---   Newtrat's Tuskinator  +10% Weapon Damage (its +20 Ammo Capacity half
---                         is a PlayerStatsService stat row)
---   Wizard Orb            +20% Magic Damage
+-- The flat, always-on damage sticks whose ONLY gate is which side of the
+-- damage split the hit is on:
+--   Linked Sword          +20% Weapon Damage (Blaze since 2026-10-30)
+--   Wizard Orb            +25% Arcane Damage (Frost since 2026-10-30)
+-- (Newtrat's Tuskinator moved to RangedRelics, ranged only, 2026-10-30.)
 -- Each callback returns the FRACTION; this module converts the summed
 -- fractions to the flat bonus the orchestrator's additive amplifier sum
 -- expects, so the sticks join base × (1 + Σ bonuses) like everything else.
@@ -16,7 +15,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
-local WEAPON_RELICS: { string } = { RelicNames["Linked Sword"], RelicNames["Newtrat's Tuskinator"] }
+local WEAPON_RELICS: { string } = { RelicNames["Linked Sword"] }
 local MAGIC_RELICS: { string } = { RelicNames["Wizard Orb"] }
 
 return function(_player: Player, snapshot: RelicSnapshot, damage: number, isMagic: boolean): number

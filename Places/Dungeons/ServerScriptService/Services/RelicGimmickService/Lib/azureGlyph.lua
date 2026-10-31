@@ -2,12 +2,11 @@
 --[[
 	Module: RelicGimmickService/Lib/azureGlyph
 	Description:
-	Staff of Azure Ever Ice's Ice Glyph (GameAssets.VFX.StaffofAzureIceGlyph):
-	a rig welded to its owner's back for as long as they hold the relic
-	(2026-10-29; it used to ride only the Frostburst aura). Frost.onTick
-	keeps it in step with ownership: added when missing, faded out and
-	removed when the relic goes. Each client blooms it in and out through
-	Combat.VFXFade.
+	The Ice Glyph (GameAssets.VFX.StaffofAzureIceGlyph, the asset keeps
+	its old name): a rig welded to its owner's back. Korblox Mage Staff's
+	since 2026-10-30, worn while Frostburst is up; Frost.onTick keeps it in
+	step (added when missing, faded out and removed when it should go).
+	Each client blooms it in and out through Combat.VFXFade.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

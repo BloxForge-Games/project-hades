@@ -15,17 +15,25 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local LifeService = require(ServerScriptService.Services.LifeService)
 local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
 
--- The client collects inside its PICKUP_RADIUS (10); this is that with
--- margin for the trigger's latency (QA 2026-10-21, P0 #3).
-local PICKUP_REACH = 24
+-- The client collects inside its PICKUP_RADIUS (15 since 2026-10-30; was
+-- 10); this is that with margin for the trigger's latency (QA 2026-10-21,
+-- P0 #3).
+local PICKUP_REACH = 29
+-- Coins and Ore (and room-bound drops outside a run) fade this long
+-- after they spawn.
 local DESTROY_DELAY = 25
-local MANA_DESTROY_DELAY = 10
+-- A room-bound drop fades this long after a player enters the NEXT
+-- combat room: a last moment to grab it on the way through the door.
+local NEXT_ROOM_GRACE = 3
 
--- Gems and the two orbs are ROOM-BOUND (2026-10-22): their fade timer
--- does not start at spawn but when the room is done -- the next segment
--- clear (a gate opening) or the dungeon completing -- so nothing that
--- dropped mid-fight is lost to the clock while the fight is still on.
--- Coins and Ore keep the plain timer. DungeonService is reached through
+-- Gems and the two orbs are ROOM-BOUND (design call, 2026-10-30): no
+-- clock at all while their room is in play, cleared or not. They fade
+-- only once a player walks into the NEXT combat room (a combat chunk's
+-- wave starting, DungeonService.Signals.OnCombatWaveStarted, which fires
+-- when its entry gate is crossed), NEXT_ROOM_GRACE later. A drop that
+-- spawns after that moment belongs to the new room and waits for the
+-- one after it; the floor teardown clears whatever is left. Coins and
+-- Ore keep the plain timer. DungeonService is reached through
 -- OptionalService, never required (see Docs/Architecture.md); without
 -- it (no run) the plain timer applies.
 local ROOM_BOUND_TYPES: { [string]: boolean } = {
@@ -92,17 +100,16 @@ function Drop:Start()
 		self.Instance.PrimaryPart.BillboardGui.Image.Image = self._imageId
 	end)
 
-	-- The fade-out, DESTROY_DELAY (MANA_DESTROY_DELAY for mana) after it
-	-- is armed: at spawn for coins and ore, at room completion for the
-	-- room-bound types (ROOM_BOUND_TYPES).
-	local fadeDelay = if self._dropType == DropTypes.Mana then MANA_DESTROY_DELAY else DESTROY_DELAY
+	-- The fade-out, `delay` seconds after it is armed: DESTROY_DELAY from
+	-- spawn for coins and ore, NEXT_ROOM_GRACE from the next combat room's
+	-- entry for the room-bound types (ROOM_BOUND_TYPES).
 	local fadeArmed = false
-	local function armFade()
+	local function armFade(delay: number)
 		if fadeArmed then
 			return
 		end
 		fadeArmed = true
-		task.delay(fadeDelay, function()
+		task.delay(delay, function()
 			local primary = self.Instance and self.Instance.PrimaryPart
 			if not primary or not primary.Parent then
 				return -- collected or torn down already
@@ -129,20 +136,16 @@ function Drop:Start()
 
 	local dungeonService = if ROOM_BOUND_TYPES[self._dropType] then Blitz.OptionalService("DungeonService") else nil
 	if dungeonService then
-		-- The room is done when its gate opens (a segment clear) or, for
-		-- the last room, when the dungeon completes; any one of these arms
-		-- the fade once.
-		for _, signal in
-			{
-				dungeonService.Signals.OnSegmentCleared,
-				dungeonService.Signals.OnDungeonCompleted,
-				dungeonService.Signals.OnFinalDungeonCompleted,
-			}
-		do
-			table.insert(self._connections, signal:Connect(armFade))
-		end
+		-- Connected at spawn, so only a combat room entered AFTER this drop
+		-- appeared counts as the next one.
+		table.insert(
+			self._connections,
+			dungeonService.Signals.OnCombatWaveStarted:Connect(function()
+				armFade(NEXT_ROOM_GRACE)
+			end)
+		)
 	else
-		armFade()
+		armFade(DESTROY_DELAY)
 	end
 
 	collectedRouter:Bind(self.Instance, function(player: Player)

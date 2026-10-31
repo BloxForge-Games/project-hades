@@ -52,7 +52,8 @@ local function justiceData(field: string, fallback: number): number
 end
 
 -- `procCoefficient`: a bullet's (getGunProcCoefficient), 1 otherwise.
-return function(player: Player, humanoid: Humanoid, procCoefficient: number?)
+-- `isMagic`: an Arcane hit rolls data.arcaneJailChance instead.
+return function(player: Player, humanoid: Humanoid, procCoefficient: number?, isMagic: boolean?)
 	-- Relic ownership check. Reads the count rather than the callback,
 	-- which returns a bare 1 (the relic's old +25% Weapon Damage half left
 	-- with its rework -- Jail is now its whole effect).
@@ -85,7 +86,8 @@ return function(player: Player, humanoid: Humanoid, procCoefficient: number?)
 		return
 	end
 
-	if math.random() > justiceData("jailChance", 0.20) * (procCoefficient or 1) then
+	local chance = if isMagic then justiceData("arcaneJailChance", 0.5) else justiceData("jailChance", 0.20)
+	if math.random() > chance * (procCoefficient or 1) then
 		return
 	end
 	local jailSeconds = justiceData("jailSeconds", 3)

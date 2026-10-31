@@ -7,7 +7,9 @@
 	percentages, which paid nothing without HP or mana bonuses):
 
 	  Red Laser Scythe   +30% on MELEE weapon hits.
-	  Blue Laser Scythe  +40% on ARCANE hits.
+	  Blue Laser Scythe  +30% on melee hits it CONVERTED to Arcane while
+	                     Frostburst (2026-10-30; TakeDamage converts them,
+	                     leaving isMelee set).
 
 	Each callback is the fraction. Returns BONUS damage (damage x fraction)
 	for the orchestrator's additive pool.
@@ -27,7 +29,7 @@ return function(_player: Player, snapshot: RelicSnapshot, damage: number, isMagi
 		fraction += DamageService.RelicEffect(snapshot, RelicNames["Red Laser Scythe"]) or 0
 	end
 
-	if isMagic and DamageService.RelicCount(snapshot, RelicNames["Blue Laser Scythe"]) > 0 then
+	if isMagic and isMelee and DamageService.RelicCount(snapshot, RelicNames["Blue Laser Scythe"]) > 0 then
 		fraction += DamageService.RelicEffect(snapshot, RelicNames["Blue Laser Scythe"]) or 0
 	end
 

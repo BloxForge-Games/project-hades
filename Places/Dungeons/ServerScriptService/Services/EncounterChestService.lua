@@ -17,15 +17,18 @@
 	  * GEAR  GearDropService:DropGear, which reads the active dungeon's
 	          DungeonData.dungeonDrops (its `pool` plus the `perEnemyType`
 	          row for Miniboss / Boss). Rolled PER PLAYER, exactly as the
-	          corpse drop did.
+	          corpse drop did. A floor with no Miniboss just has fewer
+	          pieces (design call, 2026-10-30: gear is scarce).
 	  * COINS + FORGE ORE  the tier's chestCoins / chestOre totals
-	          (DifficultyData, per EnemyType), split into the encounter
+	          (DifficultyData, per EnemyType; the Boss chest takes the
+	          whole floor's share when there is no Miniboss), split into the encounter
 	          mob's MobData `chestPickups` counts. These are the run's ONLY
 	          source of permanent currency (design call, 2026-10); grunts
 	          drop Gems, the run currency, and the Event Chest pays Gems.
 	  * GEMS  an encounter mob with a MobData `gems` row pays that purse
 	          from its chest too, on top of the Coins + Ore (the Miniboss:
-	          ~50 a floor before the tier's GemScale; the Boss has no row).
+	          ~50 before the tier's GemScale, on the last floor only; the
+	          Boss has no row. GemScale counts the floors without one).
 	  * EVENT CHEST  the Coffin's: its Gem row plus half a Boss chest's
 	          Coins for the tier and floor (EVENT_CHEST_COIN_SHARE_OF_BOSS),
 	          an unbalanced bonus by design.
@@ -121,8 +124,9 @@ local OWNER_ATTRIBUTE = "OwnerId"
 local BATCH_TIMEOUT_SECONDS = 90
 
 -- The EVENT chest (the Laughing Coffin) pays this share of a BOSS chest's
--- Coins for the run's tier and floor, on top of its Gem row (design call,
--- 2026-10-21): a lucky find, not part of the balanced take, scaling with
+-- Coins for the run's tier and floor (the Boss's own ENCOUNTER_SHARES
+-- slice, even where the Boss chest also pays the absent Miniboss's), on
+-- top of its Gem row (design call, 2026-10-21): a lucky find, not part of the balanced take, scaling with
 -- the tier so it stays worth the fight on Nightmare. No Ore.
 local EVENT_CHEST_COIN_SHARE_OF_BOSS = 0.5
 local EVENT_CHEST_COIN_PICKUPS = { 8, 12 }
@@ -444,7 +448,9 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		end
 		local tier = DungeonService:GetDifficultyScale()
 		local floor = DungeonService:GetFloor()
-		local bossCoins = DifficultyData.ChestPayout(tier, floor, EnemyTypes.Boss, "chestCoins")
+		-- `true`: the Boss's own slice, not the whole floor a Boss chest
+		-- pays on a floor with no Miniboss, so the Coffin is not inflated there.
+		local bossCoins = DifficultyData.ChestPayout(tier, floor, EnemyTypes.Boss, "chestCoins", true)
 		if bossCoins then
 			dropSplit(
 				origin,
@@ -456,7 +462,8 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		end
 	elseif enemyType then
 		-- The tier's run total, split across floors (back-loaded) and
-		-- between the floor's miniboss and boss (DifficultyData.ChestPayout).
+		-- between the floor's miniboss and boss (DifficultyData.ChestPayout;
+		-- all of it to the boss on a floor with no miniboss).
 		local tier = DungeonService:GetDifficultyScale()
 		local floor = DungeonService:GetFloor()
 		local pickups = pickupCountsFor(mobName)

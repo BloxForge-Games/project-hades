@@ -236,6 +236,12 @@ type AttackPoolEntry = {
 	readyAt: number,
 	-- Relative odds in the random pick (MobData `weight`, default 1).
 	weight: number,
+	-- AUTOMATIC attacks (MobData `autoEvery` = { min, max }, 2026-10-30):
+	-- never in the pick; fired on their own clock (nextAutoAt) while the
+	-- mob is in a fight, at the farthest player when `targetFarthest`.
+	autoEvery: { number }?,
+	targetFarthest: boolean?,
+	nextAutoAt: number,
 }
 
 -- One pool entry from a MobData attack row. A cooldown attack first
@@ -256,11 +262,16 @@ local function poolEntry(kind: string, attack: any, genericIndex: number?): Atta
 		cooldown = attack.cooldown,
 		readyAt = os.clock() + (attack.cooldown or 0) * 0.5,
 		weight = attack.weight or 1,
+		autoEvery = attack.autoEvery,
+		targetFarthest = attack.targetFarthest,
+		nextAutoAt = if attack.autoEvery
+			then os.clock() + attack.autoEvery[1] + math.random() * (attack.autoEvery[2] - attack.autoEvery[1])
+			else math.huge,
 	}
 end
 
 local function hasSelectionRule(entry: AttackPoolEntry): boolean
-	return entry.closeRange ~= nil or entry.minRange ~= nil or entry.cooldown ~= nil
+	return entry.closeRange ~= nil or entry.minRange ~= nil or entry.cooldown ~= nil or entry.autoEvery ~= nil
 end
 
 -- One MobData entry: the table MobData[name] resolves to.
@@ -1062,6 +1073,10 @@ end
 -- inside its closeRange (if it has one) and beyond its minRange (if it has
 -- one).
 local function eligible(entry: AttackPoolEntry, distance: number, now: number): boolean
+	-- Automatic attacks fire on their own clock (MobBase._tryAutoAttack).
+	if entry.autoEvery then
+		return false
+	end
 	if entry.cooldown and now < entry.readyAt then
 		return false
 	end
@@ -1358,6 +1373,41 @@ function MobBase._runUniqueAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	task.wait(duration)
 end
 
+-- An automatic attack that is due (MobData autoEvery) fires now, from any
+-- state but Attacking, while the mob has a target: at the living player
+-- farthest from it inside the attack's range when `targetFarthest`, else
+-- the current target. True when it fired.
+function MobBase._tryAutoAttack(self: MobBase): boolean
+	local now = os.clock()
+	for _, entry in self._attackPool do
+		if not entry.autoEvery or now < entry.nextAutoAt then
+			continue
+		end
+		local range = entry.attackRange or self._detectionRange
+		if entry.targetFarthest then
+			local farthest, farthestHRP, farthestDistance = nil, nil, -1
+			for _, alive in cachedAlivePlayerEntries do
+				local distance = (alive.hrp.Position - self._rootPart.Position).Magnitude
+				if distance <= range and distance > farthestDistance then
+					farthest, farthestHRP, farthestDistance = alive.character, alive.hrp, distance
+				end
+			end
+			if farthest then
+				self._currentTarget = farthest
+				self._currentTargetHRP = farthestHRP
+			end
+		end
+		if not self._currentTarget then
+			return false
+		end
+		local every = entry.autoEvery :: { number }
+		entry.nextAutoAt = now + every[1] + math.random() * (every[2] - every[1])
+		self:_runAttack(entry)
+		return true
+	end
+	return false
+end
+
 function MobBase._afterAttack(self: MobBase)
 	self:_enterRoaming()
 end
@@ -1416,6 +1466,11 @@ function MobBase._startAILoop(self: MobBase)
 			-- Attacking: hands-off in main loop; the attack coroutine
 			-- transitions state when done.
 			if self._state == STATE_ATTACKING then
+				continue
+			end
+
+			-- An automatic attack that is due goes first (Mist Ambush).
+			if hasTarget and self:_tryAutoAttack() then
 				continue
 			end
 

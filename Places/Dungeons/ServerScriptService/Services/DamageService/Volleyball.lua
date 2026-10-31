@@ -102,12 +102,9 @@ return function(
 			DamageIndicatorService:ShowIndicator(player, humanoid.Parent :: Model, spikeDamage, false)
 			humanoid:TakeDamage(spikeDamage)
 
-			-- Direct-damage path (bypasses TakeDamage's exits). Kept wired to
-			-- TryExecute, but the spike is not a Critical Hit so it passes no
-			-- `wasCrit` and never executes -- correct under the crit-gated Ban
-			-- Hammer. The call stays so a future crit-capable spike only needs
-			-- to pass the flag.
-			DamageService:TryExecute(player, humanoid)
+			-- Direct-damage path (bypasses TakeDamage's exits), so it asks
+			-- for Ban Hammer's execute itself: the spike is a weapon attack.
+			DamageService:TryExecute(player, humanoid, false)
 		end)
 	end
 

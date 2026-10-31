@@ -28,6 +28,9 @@ local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Relic
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+
+-- The tiers the capstone pity tracks (RelicRollConfig.CapstonePityStep).
+local CAPSTONE_TIERS = { ItemRarity.Legendary, ItemRarity.Duo }
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ElementTreeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ElementTreeData)
@@ -89,6 +92,9 @@ local RelicService = {
 	} :: { any },
 
 	_relicLimitRegistry = {},
+	-- [userId][tier] = vending cards in a row that could have shown that
+	-- capstone tier (Legendary / Duo) and did not (RelicRollConfig pity).
+	_capstonePity = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = count held.
 	_relicRegistry = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = { id, name } — who ORIGINALLY put this relic
@@ -153,14 +159,12 @@ end
 -- a player in _incrementalOwners; owning none keeps the tick idle.
 local INCREMENTAL_RELICS: { string } = { RelicNames["Summer Fireworks"], RelicNames["Ghost Dragon"] }
 
--- Relics whose callback must NOT be pre-resolved into a snapshot: the two
--- hyperlasers read the owner's CURRENT health on every call, and Ghost
--- Dragon's callback builds its rig as a side effect. (Every `active`
+-- Relics whose callback must NOT be pre-resolved into a snapshot: Ghost
+-- Dragon's callback builds its rig as a side effect (the health-reading
+-- hyperlasers were here until 2026-10-30). (Every `active`
 -- relic is treated the same way — those callbacks are pickup side
 -- effects, not values.)
 local LIVE_EFFECT_RELICS: { [string]: boolean } = {
-	[RelicNames["Hyperlaser Gun"]] = true,
-	[RelicNames["Red Hyperlaser Gun"]] = true,
 	[RelicNames["Ghost Dragon"]] = true,
 }
 
@@ -715,6 +719,10 @@ function RelicService.GetPlayerAvailableRelics(self: typeof(RelicService), playe
 	local unstacked = {}
 
 	for relicName, relicInfo in RelicData do
+		-- Retired relics (RelicData `retired`) are never offered again.
+		if relicInfo.retired then
+			continue
+		end
 		local maxStack = RelicStackData[relicInfo.rarity]
 		if (self._relicRegistry[player.UserId] and self._relicRegistry[player.UserId][relicName] or 0) < maxStack then
 			table.insert(unstacked, relicName)
@@ -1040,16 +1048,19 @@ end
 -- odds), from the run-stage table in RelicRollConfig. Rarities with no
 -- candidate are simply absent from the plan, which IS the graceful fallback.
 -- Cursed never appears -- it has no entry in any stage table.
+-- `bonus` adds per-rarity weight on top of the table (capstone pity).
 function RelicService.RollRelicRarity(
 	_self: typeof(RelicService),
 	poolByRarity: { [string]: { string } },
 	stage: string,
-	luck: number?
+	luck: number?,
+	bonus: { [string]: number }?
 ): string?
 	local weights = RelicRollConfig.RarityWeights[stage] or RelicRollConfig.RarityWeights.Early
 	local plan = LootPlan.new("single")
 	local any = false
-	for rarity, weight in weights do
+	for rarity, baseWeight in weights do
+		local weight = baseWeight + ((bonus and bonus[rarity]) or 0)
 		if weight > 0 and poolByRarity[rarity] and #poolByRarity[rarity] > 0 then
 			plan:AddLoot(rarity, weight)
 			any = true
@@ -1119,7 +1130,30 @@ function RelicService.RollRandomRelicFromPool(
 		end
 		rolledRarity = if any then plan:GetRandomLoot(luck or 1) else nil
 	else
-		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck)
+		-- Capstone pity (RelicRollConfig): misses on an eligible Legendary /
+		-- Duo raise that tier for this player until one is shown.
+		local pity = ownerPlayer and self._capstonePity[ownerPlayer.UserId]
+		if ownerPlayer and not pity then
+			pity = {}
+			self._capstonePity[ownerPlayer.UserId] = pity
+		end
+		local bonus: { [string]: number } = {}
+		if pity then
+			for _, tier in CAPSTONE_TIERS do
+				bonus[tier] =
+					math.min((pity[tier] or 0) * RelicRollConfig.CapstonePityStep, RelicRollConfig.CapstonePityMax)
+			end
+		end
+		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck, bonus)
+		if pity then
+			for _, tier in CAPSTONE_TIERS do
+				if rolledRarity == tier then
+					pity[tier] = 0
+				elseif poolByRarity[tier] and #poolByRarity[tier] > 0 then
+					pity[tier] = (pity[tier] or 0) + 1
+				end
+			end
+		end
 	end
 	if not rolledRarity then
 		return nil, nil
@@ -1379,6 +1413,7 @@ function RelicService.Start(self: typeof(RelicService))
 	end)
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
+		self._capstonePity[player.UserId] = nil
 		self._relicRegistry[player.UserId] = nil
 		self._incrementalRegistry[player.UserId] = nil
 		self._incrementalOwners[player.UserId] = nil

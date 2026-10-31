@@ -24,6 +24,8 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 
 -- AimController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -102,6 +104,8 @@ local ArcaneController = {
 -- gate. MUST mirror VFXService:OnVFXRequested's server-side multiplier
 -- chain, or the local precheck drifts from what the server charges:
 --   * Forbidden Box (Cursed): x2 -- "Mana costs from Arcane are doubled".
+--   * Wizard Orb (2026-10-30): data.frostburstManaDiscount off while
+--     Frostburst.
 function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), vfxName: string): number
 	local arcaneIndexData = ArcaneData[vfxName]
 	if not arcaneIndexData then
@@ -112,6 +116,17 @@ function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), 
 	local ownedRelics = RelicController:GetRelicsFromUserId(Players.LocalPlayer.UserId)
 	if ownedRelics and (ownedRelics[RelicNames["Forbidden Box"]] or 0) > 0 then
 		manaCostMultiplier = manaCostMultiplier * 2
+	end
+	local character = Players.LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if
+		ownedRelics
+		and (ownedRelics[RelicNames["Wizard Orb"]] or 0) > 0
+		and root
+		and root:FindFirstChild(AuraNames.Frostburst)
+	then
+		local orb = RelicData[RelicNames["Wizard Orb"]]
+		manaCostMultiplier *= 1 - ((orb and orb.data and orb.data.frostburstManaDiscount) or 0.20)
 	end
 
 	return arcaneIndexData.manaCost * manaCostMultiplier

@@ -388,6 +388,8 @@ end
 --   lungeDistance    : number?               — default 0 (no lunge)
 --   onTelegraph      : (mob, cframe) -> ()?   — optional; fired server-side at windup start for
 --                                               signature VFX / camera shake (owns its replication)
+--   rangedTelegraph  : boolean?              — a ranged attack's flash: clients show it even
+--                                               with mob hitboxes hidden (2026-10-30)
 function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, config)
 	if not mobModel or not mobModel.Parent then
 		return
@@ -430,6 +432,7 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 			StartTime = workspace:GetServerTimeNow(),
 			WindUpDuration = windUpDuration,
 			HitFrameDuration = hitFrameDuration,
+			Ranged = config.rangedTelegraph == true,
 		})
 	else
 		Combat.MobAttack.FireAll({
@@ -438,6 +441,7 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 			CFrame = cframe,
 			WindUpDuration = windUpDuration,
 			HitFrameDuration = hitFrameDuration,
+			Ranged = config.rangedTelegraph == true,
 		})
 	end
 	if config.onTelegraph then
@@ -577,6 +581,7 @@ function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, 
 					canRagdoll = attack.canRagdoll,
 					windUpDuration = windUpOverride or attack.windUpDuration,
 					hitFrameDuration = attack.hitFrameDuration,
+					rangedTelegraph = attack.rangedTelegraph,
 				}
 				task.spawn(self.SpawnHitbox, self, mobModel, config)
 			end
@@ -592,6 +597,7 @@ function MobService.ExecuteMobAttack(self: typeof(MobService), mobModel: Model, 
 		hitFrameDuration = attack.hitFrameDuration,
 		lungeDistance = attack.lungeDistance,
 		onTelegraph = attack.onTelegraph,
+		rangedTelegraph = attack.rangedTelegraph,
 	})
 end
 
@@ -629,6 +635,8 @@ function MobService.CastHealZone(self: typeof(MobService), mobModel: Model, atta
 		canRagdoll = attack.canRagdoll,
 		windUpDuration = attack.windUpDuration,
 		hitFrameDuration = attack.hitFrameDuration,
+		-- Lands on the target, away from the healer: always shown.
+		rangedTelegraph = true,
 	}
 	self:SpawnHitbox(mobModel, zone)
 	local caster = mobModel:FindFirstChildOfClass("Humanoid")

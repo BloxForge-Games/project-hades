@@ -5,12 +5,13 @@
 	Earth's gimmick epic (Tank / Barrier). Its damage rides the untyped
 	relic lane like every relic burst.
 
-	  Spartan Sword and    ORBITING SHIELD: while Stonebound, a stone shield
-	  Shield               circles you; an enemy it passes takes per-level
-	                       damage and gives you a small Barrier. (Its
-	                       Stonebound-on-cast stays in ShieldService.)
+	  Spartan Sword and    PHALANX (2026-10-30): while Stonebound, `shields`
+	  Shield               stone shields orbit you; an enemy one passes
+	                       takes per-level damage and gives you a
+	                       `barrierPercent` Barrier for `barrierSeconds`.
+	                       (Its Stonebound-on-cast stays in ShieldService.)
 
-	The shield's angle is a function of the server clock
+	The shields' angle is a function of the server clock
 	(GetServerTimeNow), so the clients (RelicGimmickFXController) draw it
 	exactly where it hits; the server only re-sends that it is still up.
 	(Golden Steampunk Gloves' Shockwave Fist lived here until 2026-10-29;
@@ -48,43 +49,57 @@ local function shieldService(): any
 	return helpers.service("ShieldService")
 end
 
---[ Orbiting Shield ]--
+--[ Phalanx ]--
+
+-- `shields` slabs evenly spaced round the orbit, at the server clock's
+-- angle (the client draws the same: RelicGimmickFXController).
+local function shieldOffsets(): { Vector3 }
+	local radius = helpers.data(SPARTAN, "orbitRadius", 9)
+	local secondsPerTurn = helpers.data(SPARTAN, "orbitSecondsPerTurn", 2.6)
+	local count = helpers.data(SPARTAN, "shields", 2)
+	local base = (workspace:GetServerTimeNow() / secondsPerTurn) * math.pi * 2
+	local offsets = {}
+	for index = 0, count - 1 do
+		local angle = base + index * (math.pi * 2 / count)
+		table.insert(offsets, Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius)
+	end
+	return offsets
+end
 
 function Earth.onHeartbeat(now: number)
-	local radius = helpers.data(SPARTAN, "orbitRadius", 7.5)
-	local secondsPerTurn = helpers.data(SPARTAN, "orbitSecondsPerTurn", 2.6)
-	local angle = (workspace:GetServerTimeNow() / secondsPerTurn) * math.pi * 2
-	local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
+	local offsets = shieldOffsets()
 	for player, orbit in orbits do
 		local root = getRoot.fromPlayer(player)
 		if not root or not root:FindFirstChild(AuraNames.Stonebound) or not helpers.owns(player, SPARTAN) then
 			orbits[player] = nil
 			continue
 		end
-		local position = root.Position + offset
 		local damage = helpers.levelDamage(player, helpers.data(SPARTAN, "damagePerLevel", 10))
 		local hitCooldown = helpers.data(SPARTAN, "hitCooldown", 0.75)
 		if now - orbit.breakReset >= hitCooldown then
 			orbit.breakReset = now
 			table.clear(orbit.breakSeen)
 		end
-		helpers.hitBreakables(player, position, ORBIT_HIT_RADIUS, orbit.breakSeen)
-		forEachEnemyInRadius(position, ORBIT_HIT_RADIUS, function(model: Model, humanoid: Humanoid)
-			if orbit.lastHit[model] and now - orbit.lastHit[model] < hitCooldown then
-				return
-			end
-			orbit.lastHit[model] = now
-			helpers.damageService():TakeDamage(player, humanoid, damage, false, false, nil, true)
-			if now - orbit.lastBarrier >= helpers.data(SPARTAN, "barrierCooldown", 0.5) then
-				orbit.lastBarrier = now
-				shieldService():GrantShield(
-					player,
-					player,
-					helpers.data(SPARTAN, "barrierPercent", 0.05),
-					helpers.data(SPARTAN, "barrierSeconds", 3)
-				)
-			end
-		end)
+		for _, offset in offsets do
+			local position = root.Position + offset
+			helpers.hitBreakables(player, position, ORBIT_HIT_RADIUS, orbit.breakSeen)
+			forEachEnemyInRadius(position, ORBIT_HIT_RADIUS, function(model: Model, humanoid: Humanoid)
+				if orbit.lastHit[model] and now - orbit.lastHit[model] < hitCooldown then
+					return
+				end
+				orbit.lastHit[model] = now
+				helpers.takeDamage(player, humanoid, damage, false, false, nil, true)
+				if now - orbit.lastBarrier >= helpers.data(SPARTAN, "barrierCooldown", 0.5) then
+					orbit.lastBarrier = now
+					shieldService():GrantShield(
+						player,
+						player,
+						helpers.data(SPARTAN, "barrierPercent", 0.05),
+						helpers.data(SPARTAN, "barrierSeconds", 3)
+					)
+				end
+			end)
+		end
 	end
 end
 

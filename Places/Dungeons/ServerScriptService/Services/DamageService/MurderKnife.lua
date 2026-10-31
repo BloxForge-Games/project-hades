@@ -4,6 +4,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local DamageService = require(script.Parent)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
@@ -27,6 +30,17 @@ return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, dam
 
 	if (humanoidRootPart.Position - playerRootPart.Position).Magnitude >= MURDER_KNIFE_STUD_RADIUS then
 		return 0
+	end
+
+	-- Its Venom half (2026-10-30): the same nearby hit rolls data.poisonChance.
+	local row = RelicData[RelicNames["Murder Knife"]]
+	local poisonChance = (row and row.data and row.data.poisonChance) or 0
+	local target = humanoid.Parent
+	if poisonChance > 0 and target and target:IsA("Model") and math.random() < poisonChance then
+		local statusService = Blitz.OptionalService("StatusConditionService")
+		if statusService then
+			statusService:ApplyStatus(player, target, StatusConditions.Poison)
+		end
 	end
 
 	-- Its old backstab rider left with the element rework -- the +20%

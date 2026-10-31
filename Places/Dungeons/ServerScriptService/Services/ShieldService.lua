@@ -26,6 +26,10 @@
 	    TryGoldenGlovesBarrier).
 	  * Space Sandwich: while Stonebound, a hit taken grants a Barrier, on
 	    its own cooldown (DamageService calls TrySpaceSandwichBarrier).
+	  * Cheezburger: any hit taken grants a Barrier, on its own cooldown
+	    (DamageService calls TryPebblePouchBarrier; 2026-10-30).
+	  * Korblox Ice Claws (duo): when a holder who owns it loses their last Barrier,
+	    it shatters for Arcane Damage and Chills (_shatterIceShell).
 	  * Spartan Sword and Shield: grants Stonebound on a arcane cast
 	    (VFXService calls TrySpartanStonebound).
 	  * Golem's Hammer: while holding a Barrier, the Empower rig sits on
@@ -57,6 +61,8 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
+local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- DamageService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -159,6 +165,11 @@ ShieldService._barrierProcLastAt = {}
 -- Space Sandwich per-player last-proc clock (its own cooldown, RelicData
 -- data.cooldownSeconds).
 ShieldService._sandwichLastAt = {} :: { [number]: number }
+-- Bundle of TNT per-OWNER last-blast clock (data.cooldownSeconds), and
+-- Cheezburger and Korblox Ice Claws per-player last-proc clocks.
+ShieldService._tntLastAt = {} :: { [number]: number }
+ShieldService._pebbleLastAt = {} :: { [number]: number }
+ShieldService._iceShellLastAt = {} :: { [number]: number }
 
 --[ Private ]--
 
@@ -293,6 +304,15 @@ function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: numbe
 	if blastDamage <= 0 then
 		return
 	end
+	-- One blast per owner per data.cooldownSeconds (2026-10-30).
+	local tnt = RelicData[RelicNames["Bundle of TNT"]]
+	local now = os.clock()
+	if
+		now - (ShieldService._tntLastAt[ownerId] or -math.huge) < ((tnt and tnt.data and tnt.data.cooldownSeconds) or 3)
+	then
+		return
+	end
+	ShieldService._tntLastAt[ownerId] = now
 
 	-- Fuse. Position is captured NOW so the blast lands where the shield
 	-- ended even if the holder walks off, and so the VFX and the damage
@@ -335,9 +355,63 @@ function ShieldService._detonateEndedOwners(
 	end
 end
 
+-- Korblox Ice Claws (duo, 2026-10-30): the holder's Barriers are gone, so their
+-- ice shell shatters: per-level Arcane Damage and a Chill to every enemy
+-- in data.radius, at most once per data.cooldownSeconds.
+function ShieldService._shatterIceShell(self: typeof(ShieldService), state: ShieldState)
+	local player = Players:GetPlayerFromCharacter(state.character)
+	local hrp = getRoot(state.character)
+	if not player or not hrp or not RelicService then
+		return
+	end
+	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Korblox Ice Claws"]) or 0) <= 0 then
+		return
+	end
+	local entry = RelicData[RelicNames["Korblox Ice Claws"]]
+	local data = (entry and entry.data) or {}
+	local now = os.clock()
+	if now - (self._iceShellLastAt[player.UserId] or -math.huge) < (data.cooldownSeconds or 3) then
+		return
+	end
+	self._iceShellLastAt[player.UserId] = now
+	local damage =
+		math.round((RelicService:GetRelicEffect(player, RelicNames["Korblox Ice Claws"]) or 0) * getRelicLevel(player))
+	local radius = data.radius or 12
+	local position = hrp.Position
+	RelicNetwork.GimmickEffect.FireAll({
+		Kind = "IceShellShatter",
+		Caster = player,
+		From = position,
+		To = position,
+		Radius = radius,
+		Duration = 0,
+		StartTime = workspace:GetServerTimeNow(),
+	})
+	Breakable.HitInRadius(position, radius, player)
+	local damageService = getDamageService()
+	local statusService = Blitz.OptionalService("StatusConditionService")
+	forEachEnemyInRadius(position, radius, function(model: Model, targetHumanoid: Humanoid)
+		if damage > 0 and damageService then
+			damageService:WithRelicKnockback(function()
+				damageService:TakeDamage(player, targetHumanoid, damage, true, false, false)
+			end)
+		end
+		if statusService then
+			statusService:ApplyStatus(player, model, StatusConditions.Chill)
+		end
+	end)
+end
+
 function ShieldService._teardown(self: typeof(ShieldService), state: ShieldState)
 	table.clear(state.buckets)
 	self:_stamp(state)
+	-- Both end paths (absorbed dry, watcher exit) land here, sometimes
+	-- twice in a row; the shatter's cooldown keeps it to one.
+	if state.character.Parent then
+		task.spawn(function()
+			self:_shatterIceShell(state)
+		end)
+	end
 
 	-- Disable emitters first so in-flight particles fade naturally, then
 	-- destroy their host attachments after the fade window.
@@ -429,9 +503,7 @@ function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: Shi
 				-- per-second damage, so the pulse always pays out and the number
 				-- lives only in RelicData.
 				local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Golem's Hammer"]) or 0
-				local golemRow = RelicData[RelicNames["Golem's Hammer"]]
-				local barrierShare = (golemRow and golemRow.data and golemRow.data.barrierShare) or 0
-				local tremorDamage = math.round(getRelicLevel(player) * damagePerLevel + totalOf(state) * barrierShare)
+				local tremorDamage = math.round(getRelicLevel(player) * damagePerLevel)
 
 				local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
 				local tremorFolder = vfxFolder and vfxFolder:FindFirstChild("Tremor")
@@ -661,6 +733,27 @@ function ShieldService.TrySpaceSandwichBarrier(self: typeof(ShieldService), play
 	self:GrantShield(player, player, fraction, data.barrierSeconds or 4)
 end
 
+-- Cheezburger (Earth Rare, 2026-10-30): called by DamageService on every
+-- hit its owner takes. Grants the card's Barrier, at most once per
+-- data.cooldownSeconds.
+function ShieldService.TryPebblePouchBarrier(self: typeof(ShieldService), player: Player)
+	if not RelicService or (RelicService:GetSpecificRelicRegistry(player, RelicNames["Cheezburger"]) or 0) <= 0 then
+		return
+	end
+	local entry = RelicData[RelicNames["Cheezburger"]]
+	local data = (entry and entry.data) or {}
+	local now = os.clock()
+	if now - (self._pebbleLastAt[player.UserId] or -math.huge) < (data.cooldownSeconds or 5) then
+		return
+	end
+	local fraction = RelicService:GetRelicEffect(player, RelicNames["Cheezburger"]) or 0
+	if fraction <= 0 then
+		return
+	end
+	self._pebbleLastAt[player.UserId] = now
+	self:GrantShield(player, player, fraction, data.barrierSeconds or 3)
+end
+
 -- Golden Steampunk Gloves: a MELEE hit rolls for a Barrier on its owner.
 --
 -- Chance, size and duration all come from RelicData so the card stays the
@@ -792,6 +885,9 @@ function ShieldService.Start(self: typeof(ShieldService))
 		self._pools[player.UserId] = nil
 		self._barrierProcLastAt[player.UserId] = nil
 		self._sandwichLastAt[player.UserId] = nil
+		self._pebbleLastAt[player.UserId] = nil
+		self._iceShellLastAt[player.UserId] = nil
+		self._tntLastAt[player.UserId] = nil
 	end)
 end
 

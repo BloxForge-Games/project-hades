@@ -1,6 +1,7 @@
 --!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
@@ -446,7 +447,7 @@ function DropService.Start(self: typeof(DropService))
 			end
 
 			-- Health orbs restore 5% of the player's max health. Healing
-			-- amps (Holiday Ham, Regeneration Coil) apply inside
+			-- amps (Holiday Ham) apply inside
 			-- ApplyHealing — any-source, summed additively.
 			local BASE_HEALTH_FRACTION = 0.05
 
@@ -456,7 +457,30 @@ function DropService.Start(self: typeof(DropService))
 				return
 			end
 
-			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION)
+			-- Regeneration Coil (2026-10-30): the orb heals its multiplier more,
+			-- and every ally inside data.shareRadius gets the same heal.
+			local coil = RelicService:GetRelicEffect(player, RelicNames["Regeneration Coil"]) or 1
+			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
+			if coil > 1 then
+				local row = RelicData[RelicNames["Regeneration Coil"]]
+				local radius = (row and row.data and row.data.shareRadius) or 20
+				local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+				for _, ally in Players:GetPlayers() do
+					local allyCharacter = ally.Character
+					local allyRoot = allyCharacter and allyCharacter:FindFirstChild("HumanoidRootPart") :: BasePart?
+					local allyHumanoid = allyCharacter and allyCharacter:FindFirstChildOfClass("Humanoid")
+					if
+						ally ~= player
+						and root
+						and allyRoot
+						and allyHumanoid
+						and allyHumanoid.Health > 0
+						and (allyRoot.Position - root.Position).Magnitude <= radius
+					then
+						PlayerStatsService:ApplyHealing(ally, allyHumanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
+					end
+				end
+			end
 		elseif dropType == DropTypes.Relics then
 			-- Relic drops are handled in the RelicService, so we just fire a signal here for any client-side effects
 			self.OnDropCollected:Fire(player, dropType, value)

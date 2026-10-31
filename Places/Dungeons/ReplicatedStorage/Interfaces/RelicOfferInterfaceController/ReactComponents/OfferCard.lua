@@ -154,6 +154,7 @@ local PILL_WIDTHS: { [string]: number } = {
 	[ItemRarity.Rare] = 0.239123,
 	[ItemRarity.Epic] = 0.237693,
 	[ItemRarity.Legendary] = 0.45186,
+	[ItemRarity.Duo] = 0.239123,
 	[ItemRarity.Cursed] = 0.308248,
 }
 local PILL_WIDTH_BASE = 0.1

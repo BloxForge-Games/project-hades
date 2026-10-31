@@ -42,7 +42,6 @@ local RelicService = require(ServerScriptService.Services.RelicService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
-local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local Enflamed = require(script.AuraServer.Enflamed)
 local Frostburst = require(script.AuraServer.Frostburst)
 local Stormcharged = require(script.AuraServer.Stormcharged)
@@ -277,17 +276,6 @@ function AuraService.SetAura(
 		end
 		if bonus > 0 then
 			resolvedDuration *= 1 + bonus
-		end
-
-		-- Staff of Azure Ever Ice: the owner's Frostburst lasts twice as
-		-- long. A multiplier on top of the additive extensions above (the
-		-- card says "doubled", not "+100%").
-		if
-			auraName == AuraNames.Frostburst
-			and (RelicService:GetSpecificRelicRegistry(player, RelicNames["Staff of Azure Ever Ice"]) or 0) > 0
-		then
-			local azureData = RelicData[RelicNames["Staff of Azure Ever Ice"]]
-			resolvedDuration *= (azureData and azureData.data and azureData.data.frostburstDurationMultiplier) or 2
 		end
 	end
 

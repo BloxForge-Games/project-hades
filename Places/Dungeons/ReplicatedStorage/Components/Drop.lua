@@ -19,8 +19,9 @@ local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.F
 
 -- Studs from the local player's root within which a landed drop is
 -- collected (DropPickupSweepController tests it). Pot Of Gold owners skip
--- the gate for coins and orbs; that rule lives in the sweep.
-local PICKUP_RADIUS = 10
+-- the gate for coins and orbs; that rule lives in the sweep. 10 -> 15
+-- (+50%, 2026-10-30); keep the server's PICKUP_REACH this plus its margin.
+local PICKUP_RADIUS = 15
 
 -- Set by the server on loot that came out of a chest (Miniboss, Boss
 -- or Treasure). Those drops get a blip each as they pop; mob death

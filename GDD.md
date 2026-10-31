@@ -47,10 +47,13 @@ Enter one dungeon, procedural encounters, gain relics, boss, loot, return to Hub
 resets afterwards. Roughly **6 to 15 gear drops** per run.
 
 - A run is **one to three floors by difficulty** (Easy 1, Normal 2, Hard and Nightmare 3; Ascension
-  3). Every floor is the same shape: two combat rooms, the miniboss, two combat rooms, the boss,
-  with two event rooms placed between them. One event is always the Merchant Shop, at the last door
-  before the boss; the other lands before the miniboss and never rolls a second shop on the first
-  floor. Normal and above may roll a third event (30 / 40 / 50%).
+  3). Every floor before the last is four combat rooms, one event, the Merchant Shop and the boss:
+  a combat room first, the boss last, and the event and the shop at random doors in between, never
+  back to back (for example C E C C S C B). Its event never rolls a second shop.
+- **Only the run's last floor has a miniboss:** two combat rooms, the miniboss, two combat rooms,
+  the boss. Its shop sits at the last door before the boss and its event before the miniboss
+  (never a second shop on Easy's single floor). Normal and above may roll a third event there
+  (30 / 40 / 50%).
 - A floor's boss room ends on a Descend pad to the next floor; the exit portal rises only after the
   final floor's boss. Gems, relics and the loot escrow carry across floors. Chest rewards are
   back-loaded (40/60 on two floors, 25/35/40 on three): a death loses everything, so the deepest
@@ -71,15 +74,19 @@ individually designed unique items that exist only at Legendary. No Mythic.
 
 | Rarity | Max upgrade |
 |---|---|
-| Common | +8 |
-| Uncommon | +10 |
-| Rare | +12 |
-| Epic | +14 |
-| Legendary | +18 |
+| Common | +4 |
+| Uncommon | +5 |
+| Rare | +6 |
+| Epic | +8 |
+| Legendary | +10 |
+
+Each upgrade counts as one Item Level (+15% of base), so a +2 Level 1 item
+beats a Level 2 one of the same quality.
 
 - **Item Level:** set by the dungeon and difficulty the item dropped from.
 - **Quality:** a permanent 50 to 100 roll on every weapon and armor piece, high values increasingly
-  rare. Affects only the primary stat.
+  rare. Affects only the primary stat: 50 is ×0.85, 100 is ×1.25. It is the chase; the Easy and
+  Normal difficulties cap the roll (70 / 80), Hard 90, Nightmare 100.
 - **Weapons:** one stat, Damage = f(Item Level, Rarity, Quality, Upgrade). No random substats.
   - Melee handling, fixed per named weapon: Attack Speed, Melee Range, Mobility.
   - Ranged handling, fixed per named weapon: Fire Rate, Reload Speed, Mobility.

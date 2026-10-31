@@ -1,4 +1,5 @@
 --!strict
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -10,7 +11,9 @@ local ChestCoinData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Ches
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local getPlaceDungeonId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.getPlaceDungeonId)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
+local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local LifeService = require(ServerScriptService.Services.LifeService)
+local GearDropService = require(ServerScriptService.Services.GearDropService)
 
 local INTERACT_PROXIMITY_PROMPT_DURATION = 0
 
@@ -124,6 +127,15 @@ function Chest:Start()
 				nil,
 				true
 			)
+		end
+
+		-- Gear: a personal roll for every living player (DungeonData
+		-- EnemyTypes.Treasure row, 15%), like a corpse drop.
+		local origin = self.Instance.PrimaryPart.Position
+		for _, player in Players:GetPlayers() do
+			if not LifeService:IsDeathState(player) then
+				task.spawn(GearDropService.DropGear, GearDropService, player, origin, EnemyTypes.Treasure, true)
+			end
 		end
 	end)
 end

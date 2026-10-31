@@ -29,6 +29,8 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Breakable = require(script.Parent.Parent.Components.Breakable)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Cast-site relic knobs. MUST mirror ArcaneController's client chain.
@@ -47,8 +49,11 @@ local ARCANE_CUTSCENE_INVULNERABLE_GRACE_SECONDS = 1.5
 -- caster's feet. The registry below is consumed by DamageService's
 -- MysticalSigil module via :IsInSigilZone. Radius is the BUFF zone --
 -- the visual ring is smaller; forgiving on purpose.
-local MYSTICAL_SIGIL_DURATION = 5
-local MYSTICAL_SIGIL_RADIUS = 13
+-- Twice the size and the time since 2026-10-30 (5 s / 13 studs before);
+-- MYSTICAL_SIGIL_SCALE grows the model to match the radius.
+local MYSTICAL_SIGIL_DURATION = 10
+local MYSTICAL_SIGIL_RADIUS = 26
+local MYSTICAL_SIGIL_SCALE = 2
 -- Visual fade tail: emitters/beams switch off at the 5s buff end, the
 -- model is destroyed this many seconds later so in-flight particles
 -- finish their lifetime instead of vanishing mid-air.
@@ -346,8 +351,10 @@ function VFXService.RegisterHitbox(
 			-- spell, relic procs included -- mining them is the point.
 			-- Arcane spells that opt in via ArcaneData.canBreakBuildings can
 			-- instantly destroy Breakables (gates, barricades, props). Passive
-			-- relic procs like Ghost Dragon and Fireworks set this to false
-			-- so they don't shred the player's own barricades while ticking.
+			-- relic procs (Ghost Dragon, Fireworks, the Pumpkin and Fuse
+			-- Bomb blasts) set this to false; RELIC_HITBOXES lands them as one
+			-- weapon hit instead of an instant break (Big Pumpkin has no
+			-- ArcaneData row).
 			-- Dedupe so a multi-part breakable only fires once per AOE.
 			if detectedRegistry[model] then
 				continue
@@ -583,6 +590,9 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 	end
 
 	local sigil = model:Clone()
+	if sigil:IsA("Model") then
+		sigil:ScaleTo(sigil:GetScale() * MYSTICAL_SIGIL_SCALE)
+	end
 	for _, part in sigil:GetDescendants() do
 		if part:IsA("BasePart") then
 			part.Anchored = true
@@ -661,6 +671,17 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	local manaCostMultiplier = 1
 	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Forbidden Box"]) > 0 then
 		manaCostMultiplier = manaCostMultiplier * FORBIDDEN_BOX_MANA_MULTIPLIER
+	end
+	--   * Wizard Orb (2026-10-30): data.frostburstManaDiscount off while
+	--     Frostburst.
+	local discountRoot = getRoot.fromPlayer(player)
+	if
+		discountRoot
+		and discountRoot:FindFirstChild(AuraNames.Frostburst)
+		and getRelicService():GetSpecificRelicRegistry(player, RelicNames["Wizard Orb"]) > 0
+	then
+		local orb = RelicData[RelicNames["Wizard Orb"]]
+		manaCostMultiplier *= 1 - ((orb and orb.data and orb.data.frostburstManaDiscount) or 0.20)
 	end
 
 	-- Robloxian Battle Shield: every equipped-spell cast grants its owner a

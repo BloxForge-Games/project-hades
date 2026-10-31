@@ -10,7 +10,8 @@
 	  * crystal VEINS -> Forge Ore, private per player, a fixed amount per
 	    vein by floor (scaled by tier) ON TOP of the chests, bursting out
 	    as several pickups. One in about half the rooms.
-	  * POTS -> a public Gem pickup and a rare private Gold handful per
+	  * POTS -> a public Gem pickup, a rare public Health / Mana orb,
+	    and a rare private Gold handful per
 	    player. 4-7 a room, in short rows.
 
 	WHERE (the Hades rule: breakables hug the walls, never the fight): a
@@ -51,7 +52,6 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local BreakableLootData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BreakableLootData)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
-local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local DropService = require(ServerScriptService.Services.DropService)
 local Breakable = require(ServerScriptService.Components.Breakable)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
@@ -92,8 +92,8 @@ local BreakableLootService = {
 	-- This floor's live loot, keyed by model.
 	_veins = {} :: { [Model]: VeinState },
 	_pots = {} :: { [Model]: boolean },
-	-- What one vein UNIT pays in Ore (VEIN.orePerFloor x the tier's ore
-	-- scale), and one Gold handful in Gold, on the current floor (set when
+	-- What one vein UNIT pays in Ore (VEIN.oreShare x the tier's
+	-- chestOre), and one Gold handful in Gold, on the current floor (set when
 	-- the floor is built).
 	_oreUnitValue = 0,
 	_goldHandfulValue = 0,
@@ -533,15 +533,11 @@ function BreakableLootService._spawnFloor(self: typeof(BreakableLootService), du
 	local tier = if dungeonService then dungeonService:GetDifficultyScale() else nil
 	local floor = if dungeonService then dungeonService:GetFloor() else 1
 	local floorShare = if tier then DifficultyData.FloorShare(tier, floor) else 0
-	local goldBudget = (if tier then tier.chestCoins or 0 else 0) * POT.goldShare * floorShare
-	-- Ore is a fixed amount per vein unit, scaled by the tier against
-	-- Normal (BreakableLootData.Vein.orePerFloor); the dungeon's
-	-- rewardScale is applied on collect (DropService).
-	local normalOre = DifficultyData.Resolve(Difficulty.Normal).chestOre
-	local tierOreScale = if tier and normalOre > 0 then (tier.chestOre or 0) / normalOre else 1
-	local orePerFloor = VEIN.orePerFloor
-	local floorOre = orePerFloor[math.clamp(floor, 1, #orePerFloor)]
-	self._oreUnitValue = floorOre * tierOreScale
+	local goldBudget = (if tier then DifficultyData.RunGoldTake(tier) else 0) * POT.goldShare * floorShare
+	-- Ore is a fixed share of the tier's run chestOre per vein unit
+	-- (BreakableLootData.Vein.oreShare); the dungeon's rewardScale is
+	-- applied on collect (DropService).
+	self._oreUnitValue = (if tier then tier.chestOre or 0 else 0) * VEIN.oreShare
 	self._goldHandfulValue = if totalPots > 0 then goldBudget / (totalPots * POT.goldChance) else 0
 
 	local missText, blockerText = {}, {}
@@ -599,6 +595,13 @@ function BreakableLootService._onBroken(self: typeof(BreakableLootService), mode
 			local value = math.max(roundStochastic(self._goldHandfulValue), 1)
 			DropService.OnDropRequested:Fire(origin, DropTypes.Coins, 1, 1, value, value, false, player.UserId, true)
 		end
+	end
+
+	-- Orb: one roll per pot; on a hit, one public Health or Mana orb, a
+	-- coin flip between them, exactly as a grunt's corpse drops them.
+	if math.random() < POT.orbChance then
+		local orbType = if math.random() < 0.5 then DropTypes.Health else DropTypes.Mana
+		DropService.OnDropRequested:Fire(origin, orbType, 1, 1, 1, 1, false)
 	end
 end
 

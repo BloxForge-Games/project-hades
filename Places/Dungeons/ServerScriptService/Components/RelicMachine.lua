@@ -120,10 +120,10 @@ local OFFER_SOURCE = "Vending"
 -- relic from a random element tree. Anything past this rolls normally, so
 -- the leftover slots can still come up elemental by luck.
 --
--- 1 (2026-10-29): the run's first machine always shows at least one
--- elemental relic, so every run opens with a tree to build toward. (It was
--- 0, completely random, from the 2026-08-31 call.)
-local STARTER_GUARANTEED_ELEMENTS = 1
+-- 0 (2026-10-30): no guarantee; the first machine rolls like any other
+-- (it still offers ungated relics only). It was 1 from 2026-10-29, and 0
+-- from the 2026-08-31 call before that.
+local STARTER_GUARANTEED_ELEMENTS = 0
 
 -- Slot roles for one pull, shuffled in place. See the call site for the
 -- per-machine rules.
@@ -179,6 +179,7 @@ function RelicMachine:_getRandomRelicData(premiumOnly: boolean?)
 	local PREMIUM_RARITIES = {
 		[ItemRarity.Epic] = true,
 		[ItemRarity.Legendary] = true,
+		[ItemRarity.Duo] = true,
 		[ItemRarity.Cursed] = true,
 	}
 

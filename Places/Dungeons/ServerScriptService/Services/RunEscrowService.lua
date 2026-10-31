@@ -8,6 +8,9 @@
 
 	  * BANK (all escrow → profile): walking out through the exit portal,
 	    via :ClaimRewards. Killing the boss does NOT bank — see below.
+	  * HALF (2026-10-30): a FULL death, a wipe or a leave in a run not yet
+	    cleared banks HALF the Coins and Forge Ore (OUT_OF_RUN_KEEP) and
+	    loses the rest; the gear spills as below.
 	  * SPILL (gear leaves the escrow, hits the floor): every FULL death,
 	    wipe or not. A DOWNED player (revive window open) keeps everything:
 	    the spill waits for LifeService.OnPlayerFullyDied, so a revive
@@ -131,6 +134,11 @@ local RUN_GEMS_ATTRIBUTE = "RunGems"
 -- Whether the run's final boss is down (DungeonService Run.cleared): the
 -- escrow is then safe -- a death banks it rather than losing it.
 -- DungeonService is a consumer of this module, so it is reached at call time.
+-- The share of the Coins and Forge Ore a player keeps when they are out
+-- of a run they did not clear: fully dead, wiped, or gone (design call,
+-- 2026-10-30). Their run gear spills either way.
+local OUT_OF_RUN_KEEP = 0.5
+
 local function runIsCleared(): boolean
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	return dungeonService ~= nil and dungeonService:IsRunCleared() == true
@@ -381,9 +389,10 @@ end
 
 -- Banks the Coins and Forge Ore alone (the profile's Gold and Ore) and
 -- zeroes them in the escrow, leaving the run gear and the Gems where they
--- are. The currencies are never lost (design call, 2026-10-21): a wipe
--- and a leave land here before the gear is discarded.
-function RunEscrowService.BankCurrencies(self: typeof(RunEscrowService), player: Player)
+-- are. `keepFraction` (default all) is the share that reaches the
+-- profile; the rest is lost. A full death, a wipe and a leave keep
+-- OUT_OF_RUN_KEEP (design call, 2026-10-30; they kept it all before).
+function RunEscrowService.BankCurrencies(self: typeof(RunEscrowService), player: Player, keepFraction: number?)
 	local entry = self._escrow[player.UserId]
 	if not entry or (entry.coins == 0 and (entry.forgeOre or 0) == 0) then
 		return
@@ -392,7 +401,9 @@ function RunEscrowService.BankCurrencies(self: typeof(RunEscrowService), player:
 		warn(("[RunEscrowService] Currency bank failed — no profile for %s"):format(player.Name))
 		return
 	end
-	local coins, ore = entry.coins, entry.forgeOre or 0
+	local keep = math.clamp(keepFraction or 1, 0, 1)
+	local coins = math.floor(entry.coins * keep)
+	local ore = math.floor((entry.forgeOre or 0) * keep)
 	if coins > 0 then
 		CurrencyService:SetCurrencyValue(
 			player,
@@ -460,7 +471,7 @@ function RunEscrowService.Discard(self: typeof(RunEscrowService), player: Player
 		return
 	end
 
-	self:BankCurrencies(player)
+	self:BankCurrencies(player, if runIsCleared() then 1 else OUT_OF_RUN_KEEP)
 
 	Log.debug(
 		("[RunEscrowService] Discarded %d items + %d coins + %d gems for %s (%s)"):format(
@@ -679,6 +690,10 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 				return
 			end
 			self:DropAllOnDeath(player)
+			-- Out of the run: half the Gold and Ore now, the rest lost
+			-- (design call, 2026-10-30). A revive in the downed window never
+			-- gets here, so it keeps everything.
+			self:BankCurrencies(player, OUT_OF_RUN_KEEP)
 			if isWipe then
 				for _, otherPlayer in Players:GetPlayers() do
 					self:Discard(otherPlayer, "wipe")
@@ -727,8 +742,14 @@ function RunEscrowService.Start(self: typeof(RunEscrowService))
 	-- 2026-10-21, P0 #1). The spill runs first, on the same frame, so
 	-- the entry is still there for it.
 	PlayerEventService.OnPlayerLeaving:Connect(function(player: Player)
+		-- A cleared run is won: a leaver keeps it all (and spills nothing).
+		if runIsCleared() then
+			self:BankCurrencies(player)
+			self._escrow[player.UserId] = nil
+			return
+		end
 		self:DropAllOnLeave(player)
-		self:BankCurrencies(player)
+		self:BankCurrencies(player, OUT_OF_RUN_KEEP)
 		self._escrow[player.UserId] = nil
 	end)
 end

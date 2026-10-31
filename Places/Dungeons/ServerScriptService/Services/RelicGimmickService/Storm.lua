@@ -7,10 +7,11 @@
 	crit-chance relics make them crit while their crits never re-trigger
 	the crit gimmicks.
 
-	  Katana                 CHAIN LIGHTNING: while Stormcharged, any weapon
-	                         or spell hit has `chainChance` to arc lightning
-	                         from its target through `jumps` more enemies
-	                         (damage only, no Shock). One roll per
+	  Katana                 CHAIN LIGHTNING: any weapon or spell hit has
+	                         `chainChance` (`arcaneChainChance` on Arcane)
+	                         to arc lightning from its target through
+	                         `jumps` more enemies within `jumpRange` (damage
+	                         only, no Shock). One roll per
 	                         CHAIN_FANOUT_SECONDS, so an AoE rolls once.
 	  Lightning Bolt Sword   THUNDER BLADE: while Stormcharged, every 4 / 3 /
 	                         2 melee swings (Daggers / Sword / Greatsword)
@@ -37,9 +38,8 @@ local KATANA = RelicNames.Katana
 local BOLT_SWORD = RelicNames["Lightning Bolt Sword"]
 local HOVERBOARD = RelicNames["Sparkle Time Hoverboard"]
 
--- Chain Lightning: how far each jump may reach, and the beat between
--- jumps (so the chain reads as travelling, enemy to enemy).
-local CHAIN_JUMP_RANGE = 12
+-- Chain Lightning: the beat between jumps (so the chain reads as
+-- travelling, enemy to enemy). Its reach is data.jumpRange.
 local CHAIN_JUMP_SECONDS = 0.07
 local CHAIN_FANOUT_SECONDS = 0.1
 
@@ -61,7 +61,7 @@ local lastChainRoll: { [Player]: number } = {}
 -- unless `noShock` (Chain Lightning).
 local function boltHit(player: Player, model: Model, humanoid: Humanoid, baseDamage: number, noShock: boolean?)
 	local multiplier = helpers.rollCrit(player, model)
-	helpers.damageService():TakeDamage(player, humanoid, baseDamage * multiplier, false, false, nil, true)
+	helpers.takeDamage(player, humanoid, baseDamage * multiplier, false, false, nil, true)
 	if not noShock then
 		helpers.statusService():ApplyStatus(player, model, StatusConditions.Shock)
 	end
@@ -89,7 +89,7 @@ local function chainLightning(player: Player, origin: Model)
 		local nextModel: Model? = nil
 		local nextHumanoid: Humanoid? = nil
 		local nearest = math.huge
-		forEachEnemyInRadius(from, CHAIN_JUMP_RANGE, function(model: Model, humanoid: Humanoid)
+		forEachEnemyInRadius(from, helpers.data(KATANA, "jumpRange", 18), function(model: Model, humanoid: Humanoid)
 			if hit[model] then
 				return
 			end
@@ -156,8 +156,8 @@ function Storm.onMeleeSwing(
 end
 
 -- A weapon or spell hit by `player` landed on `model` (DamageService).
-function Storm.onAttackHit(player: Player, model: Model)
-	if not helpers.owns(player, KATANA) or not isStormcharged(player) then
+function Storm.onAttackHit(player: Player, model: Model, isMagic: boolean)
+	if not helpers.owns(player, KATANA) then
 		return
 	end
 	local now = os.clock()
@@ -165,7 +165,10 @@ function Storm.onAttackHit(player: Player, model: Model)
 		return
 	end
 	lastChainRoll[player] = now
-	if math.random() < helpers.data(KATANA, "chainChance", 0.2) then
+	local chance = if isMagic
+		then helpers.data(KATANA, "arcaneChainChance", 0.3)
+		else helpers.data(KATANA, "chainChance", 0.1)
+	if math.random() < chance then
 		-- Spawned: the jumps wait between them, and the damage path must
 		-- not yield.
 		task.spawn(chainLightning, player, model)

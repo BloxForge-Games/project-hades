@@ -2,13 +2,14 @@
 --[[
 	Module: RelicGimmickService/Venom
 	Description:
-	Venom's gimmick epics (Status / Poison) that need a world effect:
+	Venom's gimmick relic that needs a world effect:
 
-	  Foul Poison Fowl  TOXIC SPIT: each tick of its owner's Poison (Noxious
-	                    Venom included) has `spitChance` to lob a toxic
-	                    bubble from the ticking enemy at another one nearby,
-	                    damaging and Poisoning it where it lands. (Its +10% Weaken stays
-	                    a StatusConditionData relicModifier.)
+	  Zombie Bomb       TOXIC SPIT (Foul Poison Fowl's until 2026-10-30;
+	                    the two swapped): each tick of its owner's Poison
+	                    (Death Venom included) has `spitChance` to lob a
+	                    toxic bubble from the ticking enemy at another one
+	                    nearby, damaging and Poisoning it where it lands.
+	                    (Foul Poison Fowl's takedown cloud is in MobDeath.)
 
 	The bubble is drawn by the clients (helpers.fx); the server waits out
 	its flight and Poisons where it lands.
@@ -22,13 +23,13 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 
-local FOWL = RelicNames["Foul Poison Fowl"]
+local ZOMBIE_BOMB = RelicNames["Zombie Bomb"]
 
 -- Toxic Spit's reach and flight.
 local SPIT_RANGE = 15
 local SPIT_FLIGHT_SECONDS = 0.5
--- Enemies within this far of the landing are Poisoned.
-local SPIT_SPLASH_RADIUS = 4
+-- The goop splashes every enemy within this far of the landing.
+local SPIT_SPLASH_RADIUS = 6
 
 local POISON_FAMILY: { [string]: boolean } = {
 	[StatusConditions.Poison] = true,
@@ -65,10 +66,10 @@ local function lobBubble(player: Player, fromModel: Model)
 			return
 		end
 		helpers.hitBreakables(player, to, SPIT_SPLASH_RADIUS)
-		local damage = helpers.levelDamage(player, helpers.data(FOWL, "damagePerLevel", 10))
+		local damage = helpers.levelDamage(player, helpers.data(ZOMBIE_BOMB, "damagePerLevel", 12))
 		forEachEnemyInRadius(to, SPIT_SPLASH_RADIUS, function(model: Model, humanoid: Humanoid)
 			-- Untyped relic lane, like every relic burst.
-			helpers.damageService():TakeDamage(player, humanoid, damage, false, false, nil, true)
+			helpers.takeDamage(player, humanoid, damage, false, false, nil, true)
 			helpers.statusService():ApplyStatus(player, model, StatusConditions.Poison)
 		end)
 	end)
@@ -76,10 +77,10 @@ end
 
 -- A DoT tick landed (StatusConditionService): Toxic Spit's roll.
 function Venom.onStatusTick(player: Player, model: Model, status: string)
-	if not POISON_FAMILY[status] or not helpers.owns(player, FOWL) then
+	if not POISON_FAMILY[status] or not helpers.owns(player, ZOMBIE_BOMB) then
 		return
 	end
-	if math.random() < helpers.data(FOWL, "spitChance", 0.35) then
+	if math.random() < helpers.data(ZOMBIE_BOMB, "spitChance", 0.35) then
 		lobBubble(player, model)
 	end
 end

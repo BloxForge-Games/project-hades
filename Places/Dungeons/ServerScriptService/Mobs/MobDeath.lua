@@ -12,8 +12,8 @@
 	  * RunTakedownRewards   for EVERY player with a takedown (the killer and
 	                         everyone who hit the mob in the last
 	                         TakedownData.AssistWindowSeconds): lobbed bombs
-	                         (Trick Or Trap, Fuse Bomb), the Zombie Bomb
-	                         cloud, stats / takedown auras / Midnight Sword
+	                         (Trick Or Trap, Fuse Bomb), the Foul Poison
+	                         Fowl cloud, stats / takedown auras / Midnight Sword
 	                         mana / orb rolls; then the corpse drops (gear +
 	                         gems), deferred to the reward chest for
 	                         encounter mobs
@@ -118,6 +118,10 @@ local BOMB_REST_HEIGHT_STUDS = 3.25 / 2
 -- (BOMB_FLIGHT_SECONDS + BOMB_DETONATION_MARGIN_SECONDS), so the cap bites
 -- only on a genuine pile-up.
 local BOMB_LIMIT_PER_RELIC = 15
+-- A bomb's slot is held this long past its detonation too, so the cap
+-- also bounds the explosion effects every client is still playing (the
+-- old in-flight-only hold let ~30 bombs a second through, 2026-10-30).
+local BOMB_SLOT_LINGER_SECONDS = 1.5
 
 -- One lobbed-bomb relic. `lobBombs` runs the recipe both share (ground
 -- the corpse, roll the count, claim a cap slot per bomb, broadcast the
@@ -188,18 +192,16 @@ local FUSE_BOMBS: BombSpec = {
 	end,
 }
 
--- Zombie Bomb (Venom Legendary): a takedown on a POISONED mob leaves a
--- Poison Cloud at the corpse (the Blighted clause was dropped in the
--- 2026-09 un-gating pass) -- (callback x level) damage per tick for the
--- duration, and each tick has
--- CLOUD_STATUS_CHANCE to Poison everything inside (the sheet's "+30%
--- Status Chance"). LIMIT bounds live clouds PER PLAYER, same shape as
--- the pumpkin cap.
--- 8 s and double the radius (was 5 s / 7), 2026-10-25; the card shows the
--- duration (RelicData) and the visual scales with the radius.
-local MOB_BOMB_CLOUD_DURATION = 8
+-- Foul Poison Fowl (Venom Epic; Zombie Bomb's cloud until 2026-10-30, the
+-- two swapped): a takedown on a POISONED mob leaves a Poison Cloud at the
+-- corpse -- (callback x level) damage per second for the duration, and a
+-- Poison on everything inside every tick. LIMIT bounds live clouds PER
+-- PLAYER, same shape as the pumpkin cap. The card shows the duration
+-- (RelicData) and the visual scales with the radius.
+local MOB_BOMB_CLOUD_DURATION = 5
 local MOB_BOMB_CLOUD_TICK_SECONDS = 1
-local MOB_BOMB_CLOUD_RADIUS = 14
+-- 7 studs since 2026-10-30 (10 before; cloud and hit area both -30%).
+local MOB_BOMB_CLOUD_RADIUS = 7
 -- The radius the PoisonCloud VFX asset was authored at.
 local MOB_BOMB_CLOUD_VFX_AUTHORED_RADIUS = 7
 local MOB_BOMB_CLOUD_LIMIT = 3
@@ -338,10 +340,12 @@ local function lobBombs(context: Context, player: Player, spec: BombSpec)
 				-- never strand it — the counter is server-wide and nothing ever
 				-- resets it, so a leaked slot would starve the relic for the life
 				-- of the server.
-				RelicService:SetRelicLimitRegistry(
-					spec.relicName,
-					(RelicService:GetRelicLimitRegistry(spec.relicName) or 0) - 1
-				)
+				task.delay(BOMB_SLOT_LINGER_SECONDS, function()
+					RelicService:SetRelicLimitRegistry(
+						spec.relicName,
+						(RelicService:GetRelicLimitRegistry(spec.relicName) or 0) - 1
+					)
+				end)
 				VFXService:CreateHitbox(
 					arcaneName,
 					player,
@@ -358,16 +362,15 @@ local function lobBombs(context: Context, player: Player, spec: BombSpec)
 	end
 end
 
---[ Zombie Bomb cloud ]--
+--[ Foul Poison Fowl cloud ]--
 
-local function runZombieBombCloud(context: Context, player: Player)
-	local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Zombie Bomb"])
-	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(player, RelicNames["Zombie Bomb"]) <= 0 then
+local function runPoisonCloud(context: Context, player: Player)
+	local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Foul Poison Fowl"])
+	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(player, RelicNames["Foul Poison Fowl"]) <= 0 then
 		return
 	end
-	-- PANDEMIC (2026-10-29): only a POISONED mob's takedown (Poison or
-	-- Noxious Venom) -- read before the stack watchers release -- and the
-	-- cloud carries every status it had.
+	-- Only a POISONED mob's takedown (Poison or Death Venom), read before
+	-- the stack watchers release.
 	if not StatusConditionService then
 		return
 	end
@@ -376,7 +379,7 @@ local function runZombieBombCloud(context: Context, player: Player)
 		return
 	end
 
-	local limitKey = RelicNames["Zombie Bomb"] .. "_" .. player.UserId
+	local limitKey = RelicNames["Foul Poison Fowl"] .. "_" .. player.UserId
 	local liveClouds = RelicService:GetRelicLimitRegistry(limitKey) or 0
 	if liveClouds >= MOB_BOMB_CLOUD_LIMIT then
 		return
@@ -422,12 +425,9 @@ local function runZombieBombCloud(context: Context, player: Player)
 				if DamageService and tickDamage > 0 then
 					DamageService:TakeDamage(player, targetHumanoid, tickDamage, false, false, nil, true)
 				end
-				-- "...and applying every Status that enemy had": every tick,
-				-- no roll.
-				for _, status in carried do
-					-- Cast: see TRICK_OR_TRAP_BOMBS.
-					(StatusConditionService :: any):ApplyStatus(player, model, status, false)
-				end
+				-- "...and Poisoning enemies": every tick, no roll.
+				-- Cast: see TRICK_OR_TRAP_BOMBS.
+				(StatusConditionService :: any):ApplyStatus(player, model, StatusConditions.Poison, false)
 			end)
 		end
 
@@ -499,9 +499,12 @@ local function handleAssists(context: Context)
 			DropService.OnDropRequested:Fire(context.rootPart, DropTypes.Mana, 1, 1, 1, 1, false)
 		end
 
-		-- Health orb roll per killer/assister. (Regeneration Coil's old
+		-- Health orb roll per killer/assister. 5 -> 10 (2026-10-30): the
+		-- run's only in-combat healing (~0.5% max HP a kill, ~a third of
+		-- the bar over a 66-mob floor), which the tier damage ladder
+		-- (DifficultyData) is solved against. (Regeneration Coil's old
 		-- +2.5pp here left when it became an any-source healing amp.)
-		local healthDropChance = 5
+		local healthDropChance = 10
 
 		if math.random() * 100 <= healthDropChance then
 			DropService.OnDropRequested:Fire(context.rootPart, DropTypes.Health, 1, 1, 1, 1, false)
@@ -511,15 +514,17 @@ end
 
 --[ Corpse drops ]--
 
--- Personal-loot gear roll for every player in the assist registry.
+-- Personal-loot gear roll for every player in the assist registry. A
+-- corrupted grunt rolls its own row (DungeonData, EnemyTypes.Corrupted).
 local function dropGear(context: Context)
 	if not GearDropService then
 		return
 	end
+	local dropKey = if isCorrupted(context.model) then EnemyType.Corrupted else context.enemyType
 	for name, _ in context.assists do
 		local player = Players:FindFirstChild(name)
 		if player and player:IsA("Player") and MobDeath.AssistedRecently(context.assists, name) then
-			GearDropService:DropGear(player, context.rootPart.Position, context.enemyType)
+			GearDropService:DropGear(player, context.rootPart.Position, dropKey)
 		end
 	end
 end
@@ -574,7 +579,7 @@ end
 -- kill OR an assist: the killer (when still here) and every player whose
 -- last hit on this mob landed inside the assist window each get one. Per
 -- player, in the order MobBase always ran it: the two bomb relics and the
--- Zombie Bomb cloud (each bounded by its own concurrent cap), then the
+-- Foul Poison Fowl cloud (each bounded by its own concurrent cap), then the
 -- per-player payouts (handleAssists, regardless of mob tier); then the
 -- corpse drops, once.
 --
@@ -606,7 +611,7 @@ function MobDeath.RunTakedownRewards(context: Context, killer: Player?)
 		end
 		lobBombs(context, player, TRICK_OR_TRAP_BOMBS)
 		lobBombs(context, player, FUSE_BOMBS)
-		runZombieBombCloud(context, player)
+		runPoisonCloud(context, player)
 	end
 	handleAssists(context)
 
