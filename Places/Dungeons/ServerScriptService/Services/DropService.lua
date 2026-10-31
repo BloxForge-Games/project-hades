@@ -408,22 +408,18 @@ function DropService.Start(self: typeof(DropService))
 			-- the escrowed number is already final.
 			RunEscrowService:AddCoins(player, value)
 			self.OnCoinCollected:Fire(player.Name, value)
-		elseif dropType == DropTypes.ForgeOre then
+		elseif dropType == DropTypes.ArcaneCrystals then
 			-- Escrowed like coins: banked to the profile on clear
-			-- (RunEscrowService.BankAll), lost on death. Chests only; the
-			-- dungeon's rewardScale is the ONLY multiplier -- no relic or
-			-- set bonus touches it, it is the Blacksmith's gating resource
-			-- rather than an economy stat.
-			RunEscrowService:AddForgeOre(player, math.round(value * difficultyMultiplier("ore")))
+			-- (RunEscrowService.BankAll), half kept on death. Chests and
+			-- veins; the dungeon's rewardScale is the ONLY multiplier -- no
+			-- relic or set bonus touches it, it is the spell currency
+			-- (Arcane Chests) rather than an economy stat.
+			RunEscrowService:AddArcaneCrystals(player, math.round(value * difficultyMultiplier("crystals")))
 		elseif dropType == DropTypes.Mana then
 			playOrbPickupVFX(player, dropType)
 
 			-- Mana orbs restore 10% of the player's max mana.
-			-- Gear Recycler: "Mana Orbs grant +50% more mana" — its callback
-			-- returns the multiplier (1.5), applied to the base fraction so it
-			-- scales with the player's max mana.
 			local BASE_MANA_FRACTION = 0.1
-			local manaMultiplier = RelicService:GetRelicEffect(player, RelicNames["Gear Recycler"]) or 1
 
 			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
 			if not arcaneData then
@@ -431,7 +427,7 @@ function DropService.Start(self: typeof(DropService))
 			end
 			local currentMana = arcaneData.mana
 			local maxMana = arcaneData.maxMana
-			local manaRestored = currentMana + (maxMana * BASE_MANA_FRACTION * manaMultiplier)
+			local manaRestored = currentMana + maxMana * BASE_MANA_FRACTION
 
 			ArcaneService:SetPlayerArcaneData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
 		elseif dropType == DropTypes.Health then

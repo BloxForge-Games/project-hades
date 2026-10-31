@@ -438,8 +438,11 @@ local function smoothDamp(
 	return target + (change + temp) * expTerm, (velocity - temp * omega) * expTerm
 end
 
--- What the wyrm follows: the animated Torso, like a Spirit Companion, so
--- it sways with the walk instead of riding the rigid root.
+-- What the wyrm follows: the animated Torso's POSITION, like a Spirit
+-- Companion, so it sways with the walk instead of riding the rigid root
+-- -- but the root's YAW for its facing and orbit (2026-10-30): the Torso
+-- pitches and rolls through the dodge roll, and an orbit hung off its
+-- full rotation swung the wyrm in a 360 around the player on every dodge.
 local function wyrmAnchorPart(character: Model): BasePart?
 	local part = character:FindFirstChild("Torso")
 		or character:FindFirstChild("UpperTorso")
@@ -447,8 +450,20 @@ local function wyrmAnchorPart(character: Model): BasePart?
 	return if part and part:IsA("BasePart") then part else nil
 end
 
-local function wyrmHome(anchor: BasePart, orbitAngle: number): Vector3
-	return (anchor.CFrame * CFrame.Angles(0, orbitAngle, 0) * CFrame.new(WYRM_ORBIT_BASE)).Position
+-- The anchor's position with the character's yaw only (the root's look
+-- flattened; the anchor's own if there is no root).
+local function wyrmFrame(character: Model?, anchor: BasePart): CFrame
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local look = (if root and root:IsA("BasePart") then root.CFrame.LookVector else anchor.CFrame.LookVector)
+		* Vector3.new(1, 0, 1)
+	if look.Magnitude < 1e-3 then
+		look = Vector3.zAxis
+	end
+	return CFrame.lookAt(anchor.Position, anchor.Position + look.Unit)
+end
+
+local function wyrmHome(frame: CFrame, orbitAngle: number): Vector3
+	return (frame * CFrame.Angles(0, orbitAngle, 0) * CFrame.new(WYRM_ORBIT_BASE)).Position
 end
 
 -- The next drift angle: near one shoulder or the other, usually the
@@ -496,7 +511,7 @@ local function summonWyrm(payload: Payload)
 	end
 	local part = makePart("FrostWyrm", WYRM_SIZE, ICE_COLOR)
 	part.Transparency = 1
-	local home = wyrmHome(root, 0)
+	local home = wyrmHome(wyrmFrame(character, root), 0)
 	part.CFrame = CFrame.lookAt(home, home + root.CFrame.LookVector)
 	local light = Instance.new("PointLight")
 	light.Color = ICE_COLOR
@@ -596,7 +611,8 @@ local function stepWyrms(deltaTime: number)
 				)
 		end
 		wyrm.orbitAngle += (wyrm.orbitTarget - wyrm.orbitAngle) * orbitEase
-		local home = wyrmHome(anchor, wyrm.orbitAngle)
+		local frame = wyrmFrame(character, anchor)
+		local home = wyrmHome(frame, wyrm.orbitAngle)
 
 		-- Strip last frame's bob, spring toward home, bob again on top.
 		local bobAmplitude = SpiritCompanionData.BOB_AMPLITUDE * WYRM_SCALE
@@ -612,7 +628,7 @@ local function stepWyrms(deltaTime: number)
 		wyrm.bobPhase += deltaTime * (2 * math.pi / SpiritCompanionData.BOB_CYCLE_SECONDS)
 		position += Vector3.new(0, math.sin(wyrm.bobPhase) * bobAmplitude, 0)
 
-		local look = if wyrm.facing and now < wyrm.faceUntil then wyrm.facing else anchor.CFrame.LookVector
+		local look = if wyrm.facing and now < wyrm.faceUntil then wyrm.facing else frame.LookVector
 		local desired = CFrame.lookAt(Vector3.zero, look * Vector3.new(1, 0, 1) + Vector3.new(0, 0, 1e-4))
 		wyrm.part.CFrame = CFrame.new(position) * current.Rotation:Lerp(desired, turn)
 	end

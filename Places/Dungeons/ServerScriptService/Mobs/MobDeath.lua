@@ -13,8 +13,8 @@
 	                         everyone who hit the mob in the last
 	                         TakedownData.AssistWindowSeconds): lobbed bombs
 	                         (Trick Or Trap, Fuse Bomb), the Foul Poison
-	                         Fowl cloud, stats / takedown auras / Midnight Sword
-	                         mana / orb rolls; then the corpse drops (gear +
+	                         Fowl cloud, stats / takedown auras / orb rolls;
+	                         then the corpse drops (gear +
 	                         gems), deferred to the reward chest for
 	                         encounter mobs
 	  * TrackAssists         the assist registry those rewards read
@@ -43,7 +43,6 @@ local StatusConditionService = require(ServerScriptService.Services.StatusCondit
 local EncounterService = require(ServerScriptService.Services.EncounterService)
 local ExpRewardService = require(ServerScriptService.Services.ExpRewardService)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
-local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
@@ -90,9 +89,6 @@ export type Context = {
 
 --[ Constants ]--
 
--- Midnight Sword: fraction of Maximum Mana restored per takedown (its old
--- Overcharged-at-full-mana half died with that aura).
-local MIDNIGHT_SWORD_MANA_FRACTION = 0.05
 -- Assist credit EXPIRES: a player counts as an assister on this mob only
 -- while their last damaging hit was within this many seconds (every hit
 -- refreshes the window). Applies to the WHOLE assist registry -- every
@@ -364,6 +360,11 @@ end
 
 --[ Foul Poison Fowl cloud ]--
 
+-- Overlapping clouds do NOT stack (2026-10-31): a mob takes one cloud tick
+-- per tick interval however many clouds it stands in, like one Poison.
+-- Keyed by the mob, weak so a despawned mob drops out.
+local cloudTickedAt: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
+
 local function runPoisonCloud(context: Context, player: Player)
 	local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Foul Poison Fowl"])
 	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(player, RelicNames["Foul Poison Fowl"]) <= 0 then
@@ -418,6 +419,13 @@ local function runPoisonCloud(context: Context, player: Player)
 			-- Relic damage breaks breakables too.
 			Breakable.HitInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, player)
 			forEachEnemyInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
+				-- One tick per mob per interval across every cloud (above).
+				local now = os.clock()
+				local lastTick = cloudTickedAt[model]
+				if lastTick and now - lastTick < MOB_BOMB_CLOUD_TICK_SECONDS * 0.9 then
+					return
+				end
+				cloudTickedAt[model] = now
 				-- Relic damage, NEUTRAL type (isMagic = false): no arcane
 				-- amplifiers, no arcane resist, white number — the same bucket
 				-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
@@ -477,23 +485,8 @@ local function handleAssists(context: Context)
 		-- assist registry whose credit is still live (the 5s window),
 		-- INCLUDING the player who landed the killing blow.
 
-		-- Midnight Sword: takedowns restore 5% of Maximum Mana.
-		if RelicService:GetSpecificRelicRegistry(player, RelicNames["Midnight Sword"]) > 0 then
-			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
-			if arcaneData and arcaneData.maxMana and arcaneData.mana < arcaneData.maxMana then
-				local refunded =
-					math.min(arcaneData.mana + arcaneData.maxMana * MIDNIGHT_SWORD_MANA_FRACTION, arcaneData.maxMana)
-				ArcaneService:SetPlayerArcaneData(player, refunded, arcaneData.maxMana)
-			end
-		end
-
-		-- Mana orb roll per killer/assister. Gear Recycler: +10pp drop
-		-- chance (its orb-restore half lives in DropService).
+		-- Mana orb roll per killer/assister.
 		local manaDropChance = 5
-
-		if RelicService:GetSpecificRelicRegistry(player, RelicNames["Gear Recycler"]) > 0 then
-			manaDropChance += 10
-		end
 
 		if math.random() * 100 <= manaDropChance then
 			DropService.OnDropRequested:Fire(context.rootPart, DropTypes.Mana, 1, 1, 1, 1, false)
@@ -534,7 +527,7 @@ end
 -- every player banks the full value once. Pot Of Gold / Dragon Lantern /
 -- Fortune multiply collector-side at credit time (DropService).
 --
--- EXCEPT in a Miniboss / Boss room: those pay Coins and Forge Ore through
+-- EXCEPT in a Miniboss / Boss room: those pay Coins and Arcane Crystals through
 -- their reward chest (EncounterChestService), not corpse Gems -- the
 -- Miniboss's own `gems` row is its chest's Gem PURSE, paid there, so it
 -- must never scatter here as well. The gate is the ROOM, not the mob, so

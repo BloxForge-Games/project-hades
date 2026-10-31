@@ -36,10 +36,8 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local ElementTreeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ElementTreeData)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
-local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
-local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Incremental Relics
 local Fireworks = require(script.Incremental.Fireworks)
@@ -1304,55 +1302,6 @@ function RelicService.Start(self: typeof(RelicService))
 		)
 		stomp:InvokeStomp()
 	end)
-
-	-- Apple Pie (Rare): clearing ANY dungeon room restores 8% Maximum
-	-- Health to relic owners. THREE signals cover every room type:
-	--   * OnSegmentCleared — Combat segment clears AND miniboss defeats
-	--     (the miniboss room is its own segment and fires this on death).
-	--   * OnDungeonCompleted — the Boss defeat (that path returns before
-	--     OnSegmentCleared fires, so it needs its own hook).
-	--   * OnRoomEntered — EVENT rooms. Nothing spawns in one, so an
-	--     event room never "clears"; walking in IS the clear (design
-	--     call). Per-player by nature: the signal fans out one call per
-	--     player as the party's cursors advance, and it fires once per
-	--     room, so there is no double-heal to guard against.
-	local APPLE_PIE_HEAL_FRACTION = 0.08
-
-	local function healApplePieOwner(player: Player)
-		if self:GetSpecificRelicRegistry(player, RelicNames["Apple Pie"]) <= 0 then
-			return
-		end
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if humanoid and humanoid.Health > 0 then
-			-- Through ApplyHealing so Holiday Ham's +50% applies, same as
-			-- every other mid-run restore.
-			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * APPLE_PIE_HEAL_FRACTION)
-		end
-	end
-
-	local function healApplePieOwners()
-		for _, player in Players:GetPlayers() do
-			healApplePieOwner(player)
-		end
-	end
-
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	if dungeonService then
-		dungeonService.Signals.OnSegmentCleared:Connect(function(_dungeon, _lastChunk)
-			healApplePieOwners()
-		end)
-
-		dungeonService.Signals.OnDungeonCompleted:Connect(function(_dungeon)
-			healApplePieOwners()
-		end)
-
-		dungeonService.Signals.OnRoomEntered:Connect(function(player: Player, room)
-			if room and room.roomType == RoomTypes.Event then
-				healApplePieOwner(player)
-			end
-		end)
-	end
 
 	for _, module in script.Active:GetChildren() do
 		if module:IsA("ModuleScript") then

@@ -7,7 +7,7 @@
 	shop (BreakableLootData.ExcludedEventPrefabs), and pots (no vein) in
 	every Treasure branch; never a Miniboss or Boss arena.
 
-	  * crystal VEINS -> Forge Ore, private per player, a fixed amount per
+	  * crystal VEINS -> Arcane Crystals, private per player, a fixed amount per
 	    vein by floor (scaled by tier) ON TOP of the chests, bursting out
 	    as several pickups. One in about half the rooms.
 	  * POTS -> a public Gem pickup, a rare public Health / Mana orb,
@@ -92,10 +92,10 @@ local BreakableLootService = {
 	-- This floor's live loot, keyed by model.
 	_veins = {} :: { [Model]: VeinState },
 	_pots = {} :: { [Model]: boolean },
-	-- What one vein UNIT pays in Ore (VEIN.oreShare x the tier's
-	-- chestOre), and one Gold handful in Gold, on the current floor (set when
-	-- the floor is built).
-	_oreUnitValue = 0,
+	-- What one vein UNIT pays in Arcane Crystals (VEIN.crystalShare x the
+	-- tier's chestCrystals), and one Gold handful in Gold, on the current
+	-- floor (set when the floor is built).
+	_crystalUnitValue = 0,
 	_goldHandfulValue = 0,
 	_warnedMissing = {} :: { [string]: boolean },
 	-- Why placements failed this floor, for the Studio debug line:
@@ -534,10 +534,10 @@ function BreakableLootService._spawnFloor(self: typeof(BreakableLootService), du
 	local floor = if dungeonService then dungeonService:GetFloor() else 1
 	local floorShare = if tier then DifficultyData.FloorShare(tier, floor) else 0
 	local goldBudget = (if tier then DifficultyData.RunGoldTake(tier) else 0) * POT.goldShare * floorShare
-	-- Ore is a fixed share of the tier's run chestOre per vein unit
-	-- (BreakableLootData.Vein.oreShare); the dungeon's rewardScale is
-	-- applied on collect (DropService).
-	self._oreUnitValue = (if tier then tier.chestOre or 0 else 0) * VEIN.oreShare
+	-- Crystals are a fixed share of the tier's run chestCrystals per vein
+	-- unit (BreakableLootData.Vein.crystalShare); the dungeon's rewardScale
+	-- is applied on collect (DropService).
+	self._crystalUnitValue = (if tier then tier.chestCrystals or 0 else 0) * VEIN.crystalShare
 	self._goldHandfulValue = if totalPots > 0 then goldBudget / (totalPots * POT.goldChance) else 0
 
 	local missText, blockerText = {}, {}
@@ -548,10 +548,10 @@ function BreakableLootService._spawnFloor(self: typeof(BreakableLootService), du
 		table.insert(blockerText, name .. "=" .. count)
 	end
 	Log.debug(
-		("[BreakableLootService] Floor loot: %d vein(s), %d pot(s), %.2f ore/vein unit. Misses: %s. Blockers: %s"):format(
+		("[BreakableLootService] Floor loot: %d vein(s), %d pot(s), %.2f crystals/vein unit. Misses: %s. Blockers: %s"):format(
 			totalUnits,
 			totalPots,
-			self._oreUnitValue,
+			self._crystalUnitValue,
 			if #missText > 0 then table.concat(missText, ", ") else "none",
 			if #blockerText > 0 then table.concat(blockerText, ", ") else "none"
 		)
@@ -571,10 +571,10 @@ function BreakableLootService._onBroken(self: typeof(BreakableLootService), mode
 	local vein = self._veins[model]
 	if vein then
 		self._veins[model] = nil
-		-- Every player in the run gets their OWN Ore from it, whoever broke
-		-- it (private pickups, DropService).
-		dropPrivate(dropOrigin(primary.Position), DropTypes.ForgeOre, VEIN.maxOrePickups, function()
-			return roundStochastic(vein.units * self._oreUnitValue)
+		-- Every player in the run gets their OWN Crystals from it, whoever
+		-- broke it (private pickups, DropService).
+		dropPrivate(dropOrigin(primary.Position), DropTypes.ArcaneCrystals, VEIN.maxCrystalPickups, function()
+			return roundStochastic(vein.units * self._crystalUnitValue)
 		end)
 		return
 	end

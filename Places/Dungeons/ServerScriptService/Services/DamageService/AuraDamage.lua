@@ -98,5 +98,13 @@ return function(player: Player, snapshot: RelicSnapshot, damage: number, isMagic
 		fraction += DamageService.RelicEffect(snapshot, RelicNames["Rolling Pin"]) or 0
 	end
 
+	-- Stonefist Gauntlet (2026-10-31): while Stonebound, the owner's live
+	-- damage REDUCTION (the payload's second value, riders included) joins
+	-- the sum as damage, weapon and arcane alike.
+	if AuraService and DamageService.RelicCount(snapshot, RelicNames["Stonefist Gauntlet"]) > 0 then
+		local _, stoneboundReduction = AuraService:GetStoneboundPayload(character)
+		fraction += stoneboundReduction
+	end
+
 	return math.round(damage * fraction)
 end

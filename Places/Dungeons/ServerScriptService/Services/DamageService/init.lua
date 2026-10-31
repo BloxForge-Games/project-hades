@@ -1088,8 +1088,10 @@ function DamageService._sumTargetConditionalBonuses(
 	-- once per hit in GetTargetStatuses).
 	local statusCount = statuses.statusCount
 
-	-- BLIGHTED: +10% per unique status on the target. Overseer's
-	-- Battleaxe (2026-10-29) adds its own per-status rate below, always on.
+	-- BLIGHTED: +15% damage, and +15% more per unique status on the target
+	-- (AuraData owns both numbers; the flat half arrived 2026-10-31).
+	-- Overseer's Battleaxe (2026-10-29) adds its own per-status rate below,
+	-- always on.
 	--
 	-- Gated on the ATTACKER's aura, not on the target being Poisoned: the
 	-- aura is what the card names. Damage-type agnostic.
@@ -1102,18 +1104,17 @@ function DamageService._sumTargetConditionalBonuses(
 	--     Black Flame is 2, Shock + Coil Shocked is 2.
 	--   * Death Venom counts ONCE however many stacks are on the target
 	--     — the attribute is "at least one instance", not a tally.
-	if statusCount > 0 then
-		local attackerHrp = getRoot.fromPlayer(player)
-		if attackerHrp and attackerHrp:FindFirstChild(AuraNames.Blighted) then
-			local perStatus = (AuraData[AuraNames.Blighted].damagePerUniqueStatus or 0)
-				* DamageService.AuraScale(snapshot)
-			bonus += perStatus * statusCount
-		end
-		-- Overseer's Battleaxe: +data.damagePerStatus per distinct status,
-		-- no aura gate.
-		if DamageService.RelicCount(snapshot, RelicNames["Overseer's Battleaxe"]) > 0 then
-			bonus += relicData(RelicNames["Overseer's Battleaxe"], "damagePerStatus", 0.10) * statusCount
-		end
+	local attackerHrp = getRoot.fromPlayer(player)
+	if attackerHrp and attackerHrp:FindFirstChild(AuraNames.Blighted) then
+		local blighted = AuraData[AuraNames.Blighted]
+		local auraScale = DamageService.AuraScale(snapshot)
+		bonus += (blighted.damagePercent or 0) * auraScale
+		bonus += (blighted.damagePerUniqueStatus or 0) * auraScale * statusCount
+	end
+	-- Overseer's Battleaxe: +data.damagePerStatus per distinct status,
+	-- no aura gate.
+	if statusCount > 0 and DamageService.RelicCount(snapshot, RelicNames["Overseer's Battleaxe"]) > 0 then
+		bonus += relicData(RelicNames["Overseer's Battleaxe"], "damagePerStatus", 0.10) * statusCount
 	end
 
 	local _ = isMagic -- damage-type-agnostic today; kept for future gates
@@ -1273,11 +1274,10 @@ function DamageService.TakeDamage(
 	self:_knockback(player, targetModel, isMelee == true, isGunShot, isMagic == true or hitOrigin ~= nil, hitOrigin)
 
 	-- Orinthian Blaster 3777: ranged weapon hits are CONVERTED to Arcane
-	-- Damage. `isConvertedRanged` keeps the shot's RANGED identity alive
-	-- for the ranged-conditional procs.
-	local isConvertedRanged = false
+	-- Damage. Orinthian Blaster 3777: the shot deals Arcane; `isGunShot`
+	-- stays true, so the ranged-conditional procs (Volleyball, Paint, the
+	-- gun relics) keep seeing a shot.
 	if isGunShot and DamageService.RelicCount(snapshot, RelicNames["Orinthian Blaster 3777"]) > 0 then
-		isConvertedRanged = true
 		isMagic = true
 	end
 
@@ -1327,10 +1327,10 @@ function DamageService.TakeDamage(
 					snapshot,
 					humanoid,
 					damage,
-					-- Converted ranged shots keep their RANGED identity for the
-					-- spike counter.
-					isMagic and not isConvertedRanged,
-					isMelee
+					-- A GUN SHOT, converted (Orinthian) or not; a spell made
+					-- Weapon Damage by Sword of the Epicredness is not one
+					-- (audit 2026-10-30: it used to count and spike).
+					isGunShot
 				)
 		)
 

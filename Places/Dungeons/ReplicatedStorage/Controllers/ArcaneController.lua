@@ -103,7 +103,7 @@ local ArcaneController = {
 -- mobile) read this, so the grey-out can never disagree with the cast
 -- gate. MUST mirror VFXService:OnVFXRequested's server-side multiplier
 -- chain, or the local precheck drifts from what the server charges:
---   * Forbidden Box (Cursed): x2 -- "Mana costs from Arcane are doubled".
+--   * Forbidden Box (Cursed): x1.5 -- "Arcane costs 50% more Mana".
 --   * Wizard Orb (2026-10-30): data.frostburstManaDiscount off while
 --     Frostburst.
 function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), vfxName: string): number
@@ -115,7 +115,7 @@ function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), 
 	local manaCostMultiplier = 1
 	local ownedRelics = RelicController:GetRelicsFromUserId(Players.LocalPlayer.UserId)
 	if ownedRelics and (ownedRelics[RelicNames["Forbidden Box"]] or 0) > 0 then
-		manaCostMultiplier = manaCostMultiplier * 2
+		manaCostMultiplier = manaCostMultiplier * 1.5
 	end
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")

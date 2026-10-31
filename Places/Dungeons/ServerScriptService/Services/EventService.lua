@@ -61,7 +61,6 @@ local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Relic
 local RelicSlotShopData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicSlotShopData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
-local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
@@ -135,10 +134,17 @@ local FORGE_OFFER_COUNT = 3
 
 -- Merchant.
 local MERCHANT_STOCK_SIZE = 5
--- Each stock slot's chance to be a Legendary, and the most a shop holds
--- (design call, 2026-10-30): ~41% of shops carry one.
-local MERCHANT_LEGENDARY_CHANCE = 0.10
-local MERCHANT_MAX_LEGENDARIES = 1
+-- Each stock slot's rarity roll, independent per slot, no cap (design
+-- call, 2026-10-30; before: 10% Legendary per slot capped at one, the
+-- rest off the vending table with Legendary removed). ~23% of shops
+-- carry a Legendary, ~23% a Duo, ~2% both. Only rarities with stock
+-- left are weighed (see _stockForRoom).
+local MERCHANT_RARITY_WEIGHTS: { [string]: number } = {
+	[ItemRarity.Rare] = 75,
+	[ItemRarity.Epic] = 15,
+	[ItemRarity.Legendary] = 5,
+	[ItemRarity.Duo] = 5,
+}
 -- RELIC PRICES ARE FIXED, IN GEMS (design call, 2026-10). Gems are the
 -- run currency, and a run's take is authored per tier (DifficultyData
 -- `gems`: 350 / 650 / 950 / 950 solo, before relic bonuses), so a price
@@ -1267,29 +1273,16 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 		return true
 	end
 
-	-- LEGENDARIES (design call, 2026-10-30; slot 1 was a guaranteed one
-	-- until then): each slot has MERCHANT_LEGENDARY_CHANCE to be one, at
-	-- most MERCHANT_MAX_LEGENDARIES a shop. Otherwise a slot rolls Rare /
-	-- Epic off the run-stage table the vending machines use
-	-- (RelicRollConfig.RarityWeights), Legendary left out. Only rarities
-	-- with stock left are weighed: an exhausted bucket hands its slots to
-	-- the others instead of leaving a hole.
-	local stageWeights = RelicRollConfig.RarityWeights[RelicService:GetRunStage()]
-		or RelicRollConfig.RarityWeights.Early
-	local legendaries = 0
+	-- Every slot rolls MERCHANT_RARITY_WEIGHTS (75 / 15 / 5 / 5; design
+	-- call, 2026-10-30; slot 1 was a guaranteed Legendary once, then a
+	-- capped 10% roll). Only rarities with stock left are weighed: an
+	-- exhausted bucket hands its slots to the others instead of leaving a
+	-- hole.
 	while #stock < MERCHANT_STOCK_SIZE do
-		if
-			legendaries < MERCHANT_MAX_LEGENDARIES
-			and math.random() < MERCHANT_LEGENDARY_CHANCE
-			and stockOne(ItemRarity.Legendary)
-		then
-			legendaries += 1
-			continue
-		end
 		local available = {}
 		local anyLeft = false
-		for rarity, weight in stageWeights do
-			if rarity ~= ItemRarity.Legendary and byRarity[rarity] and #byRarity[rarity] > 0 then
+		for rarity, weight in MERCHANT_RARITY_WEIGHTS do
+			if byRarity[rarity] and #byRarity[rarity] > 0 then
 				available[rarity] = weight
 				anyLeft = true
 			end

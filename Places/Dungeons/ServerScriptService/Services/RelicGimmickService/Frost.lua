@@ -186,7 +186,9 @@ local function spawnField(player: Player, position: Vector3)
 	local lastChill: { [Model]: number } = {}
 	task.spawn(function()
 		local endsAt = os.clock() + seconds
-		local nextDamageAt = os.clock() + 1
+		-- First tick as the zone lands, so a 5 s zone deals 5 ticks (it
+		-- dealt 4 when the first waited a second; audit 2026-10-30).
+		local nextDamageAt = os.clock()
 		while os.clock() < endsAt and player.Parent do
 			local now = os.clock()
 			local statusService = helpers.statusService()

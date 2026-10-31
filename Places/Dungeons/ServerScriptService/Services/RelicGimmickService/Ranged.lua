@@ -167,7 +167,7 @@ function Ranged.onRangedHit(player: Player, model: Model, dealt: number, wasCrit
 	if not root then
 		return
 	end
-	if helpers.owns(player, SLINGER) and countShot(slingerShots, player, helpers.data(SLINGER, "everyShots", 10)) then
+	if helpers.owns(player, SLINGER) and countShot(slingerShots, player, helpers.data(SLINGER, "everyShots", 5)) then
 		hurlBoulder(player, root.Position)
 	end
 	if wasCrit and dealt > 0 and helpers.owns(player, CHARGE) then

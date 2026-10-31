@@ -193,7 +193,16 @@ function RelicRenderController._syncPlayerRelics(
 			continue
 		end
 
+		-- A template whose PrimaryPart property was never set (an asset
+		-- authoring slip; the Rubber Chicken Launcher shipped that way,
+		-- 2026-10-30) must not throw here and abort the sync for every
+		-- relic after it: warn and skip this one.
 		local model = template:Clone() :: Model
+		if not model.PrimaryPart then
+			warn(("[RelicRenderController] %s has no PrimaryPart set on its model; not rendered"):format(relicName))
+			model:Destroy()
+			continue
+		end
 		local primaryPart = model.PrimaryPart :: BasePart
 		primaryPart.Anchored = true
 		-- Enforce PrimaryPart invisibility — anchor / adornee part, must

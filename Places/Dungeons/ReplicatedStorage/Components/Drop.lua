@@ -29,6 +29,16 @@ local PICKUP_RADIUS = 15
 local CHEST_DROP_ATTRIBUTE = "ChestDrop"
 
 local PICKUP_DELAY = 0.25
+-- The pull into the player on collect (2026-10-30). The old 0.5 s linear
+-- tween went to where the root WAS when the sweep fired, so a moving
+-- player watched the pickup land behind them. Now a Heartbeat homes on
+-- the LIVE root for COLLECT_SECONDS along a smoothstep (eases out of the
+-- float, eases into the chest), with a small lift at the midpoint so it
+-- arcs rather than slides. The image fades over the second half.
+local COLLECT_SECONDS = 0.5
+local COLLECT_LIFT_STUDS = 1.25
+-- Chest height on an R6 / R15 root (its centre is at the hips).
+local COLLECT_TARGET_OFFSET = Vector3.new(0, 0.75, 0)
 local DEFAULT_X_Z_DISTANCE = 8
 local BOSS_X_Z_DISTANCE = 20
 local Y_POS_OFFSET = -1
@@ -73,21 +83,42 @@ function Drop:_collect(root: BasePart)
 		v:Emit(1)
 	end
 
-	local coinCFrameTween = TweenService:Create(self.Instance.PrimaryPart, TweenInfo.new(0.5), { CFrame = root.CFrame })
-
 	local coinImageTransparencyTween = TweenService:Create(
 		self._billboardImage,
-		TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.25),
+		TweenInfo.new(
+			COLLECT_SECONDS / 2,
+			Enum.EasingStyle.Quad,
+			Enum.EasingDirection.Out,
+			0,
+			false,
+			COLLECT_SECONDS / 2
+		),
 		{ ImageTransparency = 1 }
 	)
-
-	coinCFrameTween:Play()
 	coinImageTransparencyTween:Play()
 
 	DungeonNetwork.CoinDropCollected.Fire(self.Instance)
 
-	coinCFrameTween.Completed:Connect(function()
-		self.Instance:Destroy()
+	-- Home on the live root (see COLLECT_SECONDS).
+	local part = self.Instance.PrimaryPart
+	local rotation = part.CFrame - part.CFrame.Position
+	local startPosition = part.Position
+	local startedAt = os.clock()
+	local connection: RBXScriptConnection
+	connection = RunService.Heartbeat:Connect(function()
+		if not part.Parent then
+			connection:Disconnect()
+			return
+		end
+		local alpha = math.clamp((os.clock() - startedAt) / COLLECT_SECONDS, 0, 1)
+		local eased = alpha * alpha * (3 - 2 * alpha)
+		local target = (if root.Parent then root.Position else startPosition) + COLLECT_TARGET_OFFSET
+		local lift = Vector3.new(0, COLLECT_LIFT_STUDS * math.sin(alpha * math.pi), 0)
+		part.CFrame = CFrame.new(startPosition:Lerp(target, eased) + lift) * rotation
+		if alpha >= 1 then
+			connection:Disconnect()
+			self.Instance:Destroy()
+		end
 	end)
 end
 

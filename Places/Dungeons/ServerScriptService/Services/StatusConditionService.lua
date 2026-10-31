@@ -70,6 +70,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local DamageService = require(ServerScriptService.Services.DamageService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local AuraService = require(ServerScriptService.Services.AuraService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
@@ -140,10 +141,26 @@ type StatusRecord = {
 
 local StatusConditionService = {
 	Name = "StatusConditionService",
-	Dependencies = { DataService, DamageIndicatorService } :: { any },
+	Dependencies = { DataService, DamageIndicatorService, TextIndicatorService } :: { any },
 }
 
 --[ Constants ]--
+
+-- Melted and Petrified (the duo statuses, 2026-10-30) are hard to read
+-- on a mob under everything else, so their APPLIER sees a floating label
+-- over the mob the moment they land (TextIndicatorService; refreshes are
+-- silent).
+local MELTED_TEXT = "Melted!"
+local MELTED_TEXT_COLOR = Color3.fromRGB(120, 255, 90)
+local PETRIFIED_TEXT = "Petrified!"
+local PETRIFIED_TEXT_COLOR = Color3.fromRGB(190, 180, 160)
+
+local function showStatusText(player: Player, model: Model, text: string, color: Color3)
+	local anchor = model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	if anchor and anchor:IsA("BasePart") then
+		TextIndicatorService:ShowIndicator(player, anchor, text, color)
+	end
+end
 
 local STATUS_ATTRIBUTE_PREFIX = "Status"
 local SLOW_ATTRIBUTE = "StatusSlowMultiplier"
@@ -312,12 +329,12 @@ function StatusConditionService:_resolveApplication(sourcePlayer: Player, config
 	return duration, dotMultiplier, slowFraction, weakenFraction
 end
 
--- Per-tick DoT cap, resolved once per application/refresh (cap follows the
--- APPLIER's level).
+-- Per-tick DoT cap, resolved once per application/refresh. Follows the
+-- APPLIER's Power (getRelicLevel: 1x at the starter loadout, ~8.5x at a
+-- maxed Level 20 Epic), the same factor every relic number scales by
+-- (2026-10-31; it followed the player's level before).
 function StatusConditionService:_resolveTickCap(sourcePlayer: Player, config: StatusConfig): number
-	local profile = DataService and DataService:GetProfileData(sourcePlayer)
-	local playerLevel = (profile and profile.Level) or 1
-	return playerLevel * (config.dotTickCapPerLevel or 25)
+	return getRelicLevel(sourcePlayer) * (config.dotTickCapPerLevel or 25)
 end
 
 -- The redirect decision for THIS application (see STATUS_REDIRECTS).
@@ -713,6 +730,7 @@ function StatusConditionService:_refreshMelted(model: Model, sourcePlayer: Playe
 		and model:GetAttribute(Attributes.Melted) ~= true
 	then
 		model:SetAttribute(Attributes.Melted, true)
+		showStatusText(sourcePlayer, model, MELTED_TEXT, MELTED_TEXT_COLOR)
 	end
 end
 
@@ -832,11 +850,13 @@ local RELIC_HIT_STATUSES: {
 			spellOnly = true,
 			auraGate = AuraNames.Frostburst,
 		},
-		-- Magenta Paintball Gun: EVERY ranged weapon hit Paints (was 35%).
+		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (2026-10-30;
+		-- every hit before that, 35% before that -- at ~5 shots a second
+		-- 15% keeps a target Painted anyway).
 		{
 			relicName = RelicNames["Magenta Paintball Gun"],
 			status = StatusConditions.Paint,
-			chance = 1,
+			chance = 0.15,
 			weaponOnly = true,
 			rangedOnly = true,
 		},
@@ -942,7 +962,11 @@ function StatusConditionService:_sumApplierChances(
 				or (if type(arcaneChance) == "number" then arcaneChance else nil)
 				or RelicService:GetRelicEffect(sourcePlayer, row.relicName)
 				or 0
-			if chance < 1 then
+			-- The gun coefficient tempers status chances written for melee /
+			-- spell cadence; a row authored FOR guns (rangedOnly: the
+			-- Hyperlasers, Paintball) already is, so it is not scaled twice
+			-- (audit 2026-10-30: "+25% chance to Burn" was landing at 12.5%).
+			if chance < 1 and not row.rangedOnly then
 				chance *= coefficient
 			end
 			chanceByStatus[row.status] = (chanceByStatus[row.status] or 0) + chance
@@ -1273,7 +1297,10 @@ function StatusConditionService:ApplyStatus(
 			and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Medusa Head"]) or 0) > 0
 			and ownerHasAura(sourcePlayer, AuraNames.Stonebound)
 		then
-			self:_applyStatusOnce(sourcePlayer, targetModel, StatusConditions.Petrified)
+			-- true = a FRESH Petrify (false is a refresh, nil blocked).
+			if self:_applyStatusOnce(sourcePlayer, targetModel, StatusConditions.Petrified) == true then
+				showStatusText(sourcePlayer, targetModel, PETRIFIED_TEXT, PETRIFIED_TEXT_COLOR)
+			end
 		end
 	end
 	return applied
@@ -1491,6 +1518,12 @@ end
 -- Venom redirect applies, and a Poison never re-triggers the rider.
 function StatusConditionService:_applyPicnicPoison(sourcePlayer: Player, targetModel: Model, status: string)
 	if status == StatusConditions.Poison or status == StatusConditions.NoxiousVenom then
+		return
+	end
+	-- Petrified is Medusa Head's side effect OF a Poison, not a status the
+	-- owner applied; riding it would Poison -> Petrify -> Poison forever
+	-- (audit 2026-10-30).
+	if status == StatusConditions.Petrified then
 		return
 	end
 	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Poison Picnic"]) or 0) <= 0 then

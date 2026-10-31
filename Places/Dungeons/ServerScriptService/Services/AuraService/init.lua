@@ -17,9 +17,9 @@
 	STONEBOUND SPREADS FROM EVERY SOURCE. Any self-grant of it carries to
 	allies within STONEBOUND_SPREAD_RADIUS and plays the shockwave once on
 	the source (_spreadStonebound, fired from SetAura's fresh-grant path).
-	Riot Shield and Spartan Sword and Shield both get this
-	for free, and so does anything added later — it is a property of the
-	aura, not of one relic.
+	Riot Shield, Robloxian Battle Shield and Spartan Sword and Shield all
+	get this for free, and so does anything added later — it is a property
+	of the aura, not of one relic.
 
 	STONEBOUND is the special one: ONE instance per target across ALL
 	owners. Its payload (+damage / +damage reduction) is computed from the

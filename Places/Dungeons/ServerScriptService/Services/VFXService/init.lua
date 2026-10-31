@@ -34,8 +34,9 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Cast-site relic knobs. MUST mirror ArcaneController's client chain.
--- Forbidden Box (Cursed): mana costs from Arcane are DOUBLED.
-local FORBIDDEN_BOX_MANA_MULTIPLIER = 2
+-- Forbidden Box (Cursed): mana costs from Arcane are x1.5 (2026-10-30; was
+-- x2, which on a mana-bound caster ate most of its +100% damage).
+local FORBIDDEN_BOX_MANA_MULTIPLIER = 1.5
 -- Cast-cutscene i-frame length when a ArcaneData `cutscene` entry sets no
 -- duration. MUST match CutsceneController's DEFAULT_ARCANE_CUTSCENE_SECONDS.
 local DEFAULT_ARCANE_CUTSCENE_SECONDS = 2
@@ -54,10 +55,25 @@ local ARCANE_CUTSCENE_INVULNERABLE_GRACE_SECONDS = 1.5
 local MYSTICAL_SIGIL_DURATION = 10
 local MYSTICAL_SIGIL_RADIUS = 26
 local MYSTICAL_SIGIL_SCALE = 2
--- Visual fade tail: emitters/beams switch off at the 5s buff end, the
--- model is destroyed this many seconds later so in-flight particles
--- finish their lifetime instead of vanishing mid-air.
-local MYSTICAL_SIGIL_FADE_SECONDS = 1
+-- Visual fade tail: the beams fade out over MYSTICAL_SIGIL_BEAM_FADE_OUT
+-- and the emitters switch off at the buff end; the model is destroyed
+-- MYSTICAL_SIGIL_FADE_SECONDS later so in-flight particles finish their
+-- lifetime instead of vanishing mid-air (2026-10-31: 1 -> 2.5, with the
+-- floor particles' lifetime lengthened below).
+local MYSTICAL_SIGIL_FADE_SECONDS = 2.5
+-- The asset's floor emitters sit on its "Main" attachment; the ring is
+-- placed so that attachment lands this far ABOVE the map floor. (It was a
+-- fixed 1.75 lift on the root, authored before the 2x scale, which put
+-- the particles ~1.6 studs under the ground; 2026-10-31.)
+local MYSTICAL_SIGIL_FLOOR_LIFT = 0.25
+-- Floor particles: the asset's rate 1.5 / lifetime 1 read as a 0.7 s
+-- flicker; these overlap four particles at a time so the ring holds.
+local MYSTICAL_SIGIL_PARTICLE_RATE = 2
+local MYSTICAL_SIGIL_PARTICLE_LIFETIME = 2
+-- The beams (constant authored transparency) ramp in and out instead of
+-- popping; the ramp interpolates towards the authored sequence.
+local MYSTICAL_SIGIL_BEAM_FADE_IN = 0.5
+local MYSTICAL_SIGIL_BEAM_FADE_OUT = 1.2
 -- How far below the caster the sigil looks for the map floor: a short ray
 -- on purpose, so a mid-jump cast over the void drops no sigil.
 local MYSTICAL_SIGIL_GROUND_RAY_STUDS = 50
@@ -593,28 +609,83 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 	if sigil:IsA("Model") then
 		sigil:ScaleTo(sigil:GetScale() * MYSTICAL_SIGIL_SCALE)
 	end
-	for _, part in sigil:GetDescendants() do
-		if part:IsA("BasePart") then
-			part.Anchored = true
-			part.CanCollide = false
-			part.CanQuery = false
+	local beams: { Beam } = {}
+	local beamSequences: { [Beam]: NumberSequence } = {}
+	local mainAttachment: Attachment? = nil
+	for _, descendant in sigil:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanQuery = false
+		elseif descendant:IsA("ParticleEmitter") then
+			descendant.Rate = MYSTICAL_SIGIL_PARTICLE_RATE
+			descendant.Lifetime = NumberRange.new(MYSTICAL_SIGIL_PARTICLE_LIFETIME)
+		elseif descendant:IsA("Beam") then
+			table.insert(beams, descendant)
+			beamSequences[descendant] = descendant.Transparency
+			descendant.Transparency = NumberSequence.new(1)
+		elseif descendant:IsA("Attachment") and descendant.Name == "Main" then
+			mainAttachment = descendant
 		end
 	end
-	sigil:PivotTo(CFrame.new(floorPosition + Vector3.new(0, 1.75, 0)))
+	-- Pivot so the floor emitters' attachment sits just above the floor
+	-- (the attachment's offset is in the model's scaled space).
+	local lift = MYSTICAL_SIGIL_FLOOR_LIFT
+	if mainAttachment then
+		lift -= mainAttachment.Position.Y
+	end
+	sigil:PivotTo(CFrame.new(floorPosition + Vector3.new(0, lift, 0)))
 	sigil.Parent = workspace.IgnoreInstances.ArcaneSpells
+
+	-- Ramps a beam's transparency between 1 (invisible) and its authored
+	-- sequence: Beam.Transparency is a NumberSequence, which TweenService
+	-- cannot drive, so step it by hand.
+	local function rampBeams(toVisible: boolean, seconds: number)
+		local startedAt = os.clock()
+		while sigil.Parent do
+			local alpha = math.clamp((os.clock() - startedAt) / seconds, 0, 1)
+			local eased = alpha * alpha * (3 - 2 * alpha)
+			local visibility = if toVisible then eased else 1 - eased
+			for _, beam in beams do
+				local authored = beamSequences[beam]
+				local keypoints = {}
+				for _, keypoint in authored.Keypoints do
+					table.insert(
+						keypoints,
+						NumberSequenceKeypoint.new(
+							keypoint.Time,
+							1 - (1 - keypoint.Value) * visibility,
+							keypoint.Envelope
+						)
+					)
+				end
+				beam.Transparency = NumberSequence.new(keypoints)
+			end
+			if alpha >= 1 then
+				break
+			end
+			task.wait()
+		end
+	end
 
 	-- Smooth lifecycle. Burst 1 particle from every emitter AFTER
 	-- parenting (:Emit on an unparented emitter silently discards -- the
 	-- parent-then-Emit rule) so the ring reads the instant it lands
-	-- instead of waiting on emitter Rate. At the 3s buff end, DISABLE
-	-- emitters and beams rather than destroying -- live particles fade
-	-- out naturally and the ring doesn't hard-pop -- then the model dies
-	-- 1s later once they've cleared.
+	-- instead of waiting on emitter Rate, and ramp the beams in. At the
+	-- buff end, ramp the beams out and DISABLE the emitters rather than
+	-- destroying -- live particles fade out through their own curves --
+	-- then the model dies once they've cleared.
 	for _, descendant in sigil:GetDescendants() do
 		if descendant:IsA("ParticleEmitter") then
 			descendant:Emit(1)
 		end
 	end
+	task.spawn(rampBeams, true, MYSTICAL_SIGIL_BEAM_FADE_IN)
+	task.delay(MYSTICAL_SIGIL_DURATION - MYSTICAL_SIGIL_BEAM_FADE_OUT, function()
+		if sigil.Parent then
+			rampBeams(false, MYSTICAL_SIGIL_BEAM_FADE_OUT)
+		end
+	end)
 	task.delay(MYSTICAL_SIGIL_DURATION, function()
 		if not sigil.Parent then
 			return
@@ -684,11 +755,6 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		manaCostMultiplier *= 1 - ((orb and orb.data and orb.data.frostburstManaDiscount) or 0.20)
 	end
 
-	-- Robloxian Battle Shield: every equipped-spell cast grants its owner a
-	-- shield (ShieldService owns the fraction/duration).
-	getShieldService():TryRobloxionShield(player)
-	getShieldService():TrySpartanStonebound(player)
-
 	local effectiveManaCost = ArcaneData[vfxName].manaCost * manaCostMultiplier
 
 	local arcaneData = ArcaneService:GetPlayerArcaneData(player)
@@ -738,6 +804,13 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Mystical Staff of Cyan"]) > 0 then
 		self:_spawnArcaneSigil(player)
 	end
+
+	-- Robloxian Battle Shield (Barrier + Stonebound) and Spartan Sword and
+	-- Shield (Stonebound): "using an Arcane ability", so a committed cast
+	-- only. These sat above the mana / cooldown checks until 2026-10-30,
+	-- where a refused cast still paid out.
+	getShieldService():TryRobloxionShield(player)
+	getShieldService():TrySpartanStonebound(player)
 
 	-- The gimmick epics that trigger on a committed cast (Frost Wyrm, the
 	-- Frost Field's arming, ...).

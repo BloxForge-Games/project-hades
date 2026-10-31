@@ -14,6 +14,13 @@
 	    / OnEliteChanged), 2026-10-30.
 	  * Answers what a player has unlocked, which RunFlowService uses to
 	    clamp the difficulty a party arrives with.
+	  * Keeps the profile's RUN HISTORY (DataTemplate RunHistory,
+	    2026-10-31): one row per run a player finishes here, cleared or
+	    not, newest first, capped at RUN_HISTORY_LIMIT. The Profile window
+	    lists them. A clear is recorded from OnFinalDungeonCompleted; a
+	    loss from the full death (LifeService.OnPlayerFullyDied) or the
+	    leave (PlayerEventService.OnPlayerLeaving) that ends the run for
+	    that player, once per run per player.
 
 	DungeonService is reached at call time (Blitz.OptionalService): this
 	service is a consumer of it.
@@ -31,12 +38,19 @@ local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 local PROGRESS_KEY = "DungeonProgress"
+local HISTORY_KEY = "RunHistory"
+-- Rows kept per profile (the Profile window shows this many).
+local RUN_HISTORY_LIMIT = 5
 local PROFILE_POLL_SECONDS = 0.25
 
 local DungeonProgressService = {
 	Name = "DungeonProgressService",
 	Dependencies = { DataService } :: { any },
 }
+
+-- The run clock and who already has a history row for this run.
+DungeonProgressService._runStartedAt = nil :: number?
+DungeonProgressService._historyRecorded = {} :: { [number]: boolean }
 
 --[ Public ]--
 
@@ -113,6 +127,53 @@ function DungeonProgressService._recordClear(
 	)
 end
 
+-- Appends this run's row to `player`'s RunHistory, once per run: the
+-- dungeon, the difficulty, whether it was cleared, how long it took
+-- (nil when the run clock never started) and when it ended.
+function DungeonProgressService._recordRun(
+	self: typeof(DungeonProgressService),
+	player: Player,
+	dungeonId: string,
+	difficulty: string,
+	cleared: boolean
+)
+	if self._historyRecorded[player.UserId] then
+		return
+	end
+	local profile = DataService:GetProfileData(player)
+	if not profile or profile.Version == nil then
+		return
+	end
+	self._historyRecorded[player.UserId] = true
+	local history = profile[HISTORY_KEY]
+	if type(history) ~= "table" then
+		history = {}
+	end
+	local now = os.time()
+	table.insert(history, 1, {
+		DungeonId = dungeonId,
+		Difficulty = difficulty,
+		Cleared = cleared,
+		Seconds = if self._runStartedAt then math.max(now - self._runStartedAt, 0) else nil,
+		EndedAt = now,
+	})
+	while #history > RUN_HISTORY_LIMIT do
+		table.remove(history)
+	end
+	DataService:SetProfileValue(player, HISTORY_KEY, history)
+end
+
+-- The active run's dungeon id and difficulty, or nil outside a run.
+local function activeRun(): (string?, string?)
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local dungeon = dungeonService and dungeonService:GetActiveDungeon()
+	local run = dungeonService and dungeonService:GetRun()
+	if not dungeon or not run then
+		return nil, nil
+	end
+	return dungeon.id, run.difficulty
+end
+
 -- A miniboss or elite kill / assist by `player` pays `xpFor(difficulty)`
 -- of Mastery XP into the active dungeon's entry.
 function DungeonProgressService._awardKillXp(
@@ -169,8 +230,47 @@ function DungeonProgressService.Start(self: typeof(DungeonProgressService))
 		end
 		for _, player in Players:GetPlayers() do
 			self:_recordClear(player, dungeon.id, rank, run.difficulty)
+			self:_recordRun(player, dungeon.id, run.difficulty, true)
 		end
 	end)
+
+	-- The run clock: the first floor's ready signal of a run starts it
+	-- (OnRunStarted where the service fires it, OnFloorReady otherwise), and
+	-- the history rows reset with it.
+	local function startClock()
+		if self._runStartedAt == nil then
+			self._runStartedAt = os.time()
+			self._historyRecorded = {}
+		end
+	end
+	if dungeonService.Signals.OnRunStarted then
+		dungeonService.Signals.OnRunStarted:Connect(startClock)
+	end
+	if dungeonService.Signals.OnFloorReady then
+		dungeonService.Signals.OnFloorReady:Connect(startClock)
+	end
+
+	-- A loss: the full death that ends the run for this player, or a leave
+	-- before the clear. After the clear both are no-ops (the row exists).
+	local lifeService = Blitz.OptionalService("LifeService")
+	if lifeService and lifeService.OnPlayerFullyDied then
+		lifeService.OnPlayerFullyDied:Connect(function(player: Player)
+			local dungeonId, difficulty = activeRun()
+			if dungeonId and difficulty and not (dungeonService:IsRunCleared() == true) then
+				self:_recordRun(player, dungeonId, difficulty, false)
+			end
+		end)
+	end
+	local playerEventService = Blitz.OptionalService("PlayerEventService")
+	if playerEventService and playerEventService.OnPlayerLeaving then
+		playerEventService.OnPlayerLeaving:Connect(function(player: Player)
+			local dungeonId, difficulty = activeRun()
+			if dungeonId and difficulty and not (dungeonService:IsRunCleared() == true) then
+				self:_recordRun(player, dungeonId, difficulty, false)
+			end
+			self._historyRecorded[player.UserId] = nil
+		end)
+	end
 end
 
 return DungeonProgressService

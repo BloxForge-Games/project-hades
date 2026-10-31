@@ -369,12 +369,13 @@ COMMANDS = {
 				-- spend; gone when the run ends.
 				RunEscrowService:AddGems(player, amount)
 				return ("Gave you %d Gems (now %d)."):format(amount, RunEscrowService:GetGems(player))
-			elseif what == "gold" or what == "ore" then
-				-- PROFILE currency, which is what the Blacksmith spends.
+			elseif what == "gold" or what == "crystals" or what == "ore" then
+				-- PROFILE currencies: Gold (the Blacksmith's) and Arcane
+				-- Crystals (the Arcane Trainer's; "ore" is the old name).
 				if not CurrencyService then
 					return "CurrencyService is unavailable."
 				end
-				local currency = if what == "ore" then CurrencyTypes.ForgeOre else CurrencyTypes.Gold
+				local currency = if what == "gold" then CurrencyTypes.Gold else CurrencyTypes.ArcaneCrystals
 				CurrencyService:SetCurrencyValue(
 					player,
 					currency,

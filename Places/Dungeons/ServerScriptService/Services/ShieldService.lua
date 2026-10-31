@@ -111,8 +111,9 @@ local BARRIER_PROC_COOLDOWN = 3
 local GOLDEN_GLOVES_DURATION = 5
 
 -- Robloxian Battle Shield: duration of the on-cast shield (the fraction
--- lives in its relic callback).
-local ROBLOXION_SHIELD_DURATION = 5
+-- lives in its relic callback). 5 -> 3 (2026-10-30, with the fraction
+-- 10% -> 5%): the cast now grants Stonebound too.
+local ROBLOXION_SHIELD_DURATION = 3
 
 -- Bundle of TNT explosion. The blast is FUSED rather than instant: the
 -- shield ending and the explosion reading as one event made it impossible
@@ -611,15 +612,14 @@ function ShieldService.GrantShield(
 	if headroom <= 0 then
 		return 0
 	end
-	-- Golem's Hammer: the HOLDER's Barriers are data.barrierBonus stronger
-	-- (still inside the cap).
+	-- Golem's Hammer and Earth Summoning Horn: the HOLDER's Barriers are
+	-- data.barrierBonus stronger each (additive; still inside the cap).
 	local strength = 1
-	if
-		RelicService
-		and (RelicService:GetSpecificRelicRegistry(targetPlayer, RelicNames["Golem's Hammer"]) or 0) > 0
-	then
-		local golem = RelicData[RelicNames["Golem's Hammer"]]
-		strength += (golem and golem.data and golem.data.barrierBonus) or 0
+	for _, relicName in { RelicNames["Golem's Hammer"], RelicNames["Earth Summoning Horn"] } do
+		if RelicService and (RelicService:GetSpecificRelicRegistry(targetPlayer, relicName) or 0) > 0 then
+			local row = RelicData[relicName]
+			strength += (row and row.data and row.data.barrierBonus) or 0
+		end
 	end
 	local value = math.min(applierHumanoid.MaxHealth * fraction * strength, headroom)
 
@@ -788,7 +788,8 @@ function ShieldService.TryGoldenGlovesBarrier(self: typeof(ShieldService), playe
 end
 
 -- Robloxian Battle Shield: called by VFXService on every successful arcane
--- cast by its owner.
+-- cast by its owner. The cast grants Stonebound as well (2026-10-30):
+-- it is Earth's arcane enabler, Riot Shield being melee-only.
 function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: Player)
 	if not RelicService then
 		return
@@ -799,6 +800,9 @@ function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: P
 	local fraction = RelicService:GetRelicEffect(player, RelicNames["Robloxian Battle Shield"]) or 0
 	if fraction > 0 then
 		self:GrantShield(player, player, fraction, ROBLOXION_SHIELD_DURATION)
+	end
+	if AuraService and player.Character then
+		AuraService:SetAura(player, AuraNames.Stonebound, player.Character)
 	end
 end
 
