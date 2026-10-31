@@ -121,7 +121,8 @@ individually designed unique items that exist only at Legendary. No Mythic.
   difficulty, elites, challenges, Keystone Trial. Rewards are only Gold, EXP, titles and cosmetics
   (milestones at 5, 10, 15, 20, 25, and a title plus mount at 30). **Never combat power or drop
   rate.**
-- **Wardrobe** (hub menu, 2026-10-31): every cosmetic the player owns, a tab per kind (Titles,
+- **Wardrobe** (hub menu, 2026-10-31; built, its button held back until the cosmetics are ready
+  to show): every cosmetic the player owns, a tab per kind (Titles,
   Banners, Cloaks, Mounts; armor, weapon and aura skins later), one worn per kind. Banners and
   cloaks are worn on the back in both places; a mount is summoned in the hub (M, or the Wardrobe's
   button) and carries the player faster. The three Runegrove pieces are placeholder models.
