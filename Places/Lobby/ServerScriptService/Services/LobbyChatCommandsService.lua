@@ -67,6 +67,7 @@ local ExperienceService =
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DungeonIds)
+local dungeonProgress = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonProgress)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
 
@@ -256,6 +257,38 @@ COMMANDS = {
 				return "Your profile isn't loaded yet -- try again in a moment."
 			end
 			return ("Level set to %d."):format(level)
+		end,
+	},
+	mastery = {
+		usage = "/mastery <dungeon> <xp>",
+		description = "Adds Dungeon Mastery XP to YOUR dungeon (e.g. /mastery runegrove 5000); 0 resets it.",
+		handler = function(player: Player, args: { string }): string?
+			local dungeonId: string? = nil
+			for _, id in DungeonIds :: { [string]: string } do
+				if string.lower(id) == (args[1] or "") then
+					dungeonId = id
+				end
+			end
+			local xp = tonumber(args[2])
+			if not dungeonId or not xp then
+				return "Usage: /mastery <dungeon> <xp>"
+			end
+			local profile = DataService:GetProfileData(player)
+			if next(profile) == nil then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			local progress = profile.DungeonProgress
+			if type(progress) ~= "table" then
+				progress = {}
+			end
+			if xp <= 0 then
+				progress[dungeonId] = nil
+				DataService:SetProfileValue(player, "DungeonProgress", progress)
+				return ("%s Mastery reset."):format(dungeonId)
+			end
+			local before, after = dungeonProgress.addMasteryXp(progress, dungeonId, xp)
+			DataService:SetProfileValue(player, "DungeonProgress", progress)
+			return ("%s: +%d Mastery XP (level %d -> %d)."):format(dungeonId, xp, before, after)
 		end,
 	},
 	wipedata = {
