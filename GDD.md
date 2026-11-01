@@ -72,17 +72,32 @@ Enter one dungeon, procedural encounters, pick relics, boss, loot, return to Hub
 resets afterwards. Roughly **6 to 15 gear drops** per run.
 
 - A run is **one floor on every tier** (several floors made runs too long). Combat rooms by
-  tier: Easy 4, Normal 5, Hard 6, Nightmare 6, with the miniboss after the middle one and the
-  boss last. One event sits on a random door between the first combat room and the boss, and a
-  second rolls at 50% on another door, never back to back (for example C E C M C E C B).
+  tier: Easy 3, Normal 4, Hard 5, Nightmare 5, with the miniboss after the middle one and the
+  boss last. Every combat room is two waves, except that Nightmare's rooms past the miniboss are
+  three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door between the first combat room and the boss, and a
+  second rolls at 50% on another door, never back to back (for example C E C M E C B).
+- **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
+  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03); run Gold 250 / 500 / 1000 / 2000 is 60% chests (150 /
+  300 / 600 / 1200, split 40% miniboss chest / 60% boss chest) and 40% grunt drops (100 / 200 /
+  400 / 800, about 3 to 5 a kill on Easy and 13 to 18 on Nightmare, scaled from the old Gem
+  rows); Crystals 25 / 50 / 100 / 200 are per run from the two chests; the boss chest drops 1 /
+  2 / 3 / 4 gear pieces and the miniboss 1; expected gear sales are 160 / 300 / 540 / 970 Gold, so
+  a run's Gold take is 410 / 800 / 1540 / 2970 and Blacksmith prices follow.
+- **Gold sinks:** Blacksmith upgrades (half a run for a Common up to two runs for a Legendary,
+  50% of it back on a sale) and **line rerolls** (one gear line becomes another stat from its slot's
+  pool with a fresh roll, a quarter of a run of the item's level, flat). A hub gear merchant for
+  Gold is specced separately.
 - **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
   add the Coffin and the Cursed Shrine; Nightmare adds the Sword in the Stone. The Merchant Shop
   is out of the pool (its code stays).
 - The exit portal rises after the boss. Chest rewards all land on that one floor.
 - **Relic picks** come from the vending machines and the Cursed Shrine; the pick count and a
   Legendary pity are open tuning after the first test.
-- **Death, wipe or leaving before the clear ends the run.** Gear in escrow is **kept**. Half the
-  run's Gold and Arcane Crystals are lost; Gems are lost. Lives: 1 on every tier.
+- **Death, wipe or leaving before the clear ends the run.** Nothing picked up is lost: gear banks
+  at pickup and the run's Gold and Arcane Crystals bank in full. Dying only costs the chests not
+  yet opened. Lives: 1 on every tier. Gems no longer drop (no sink without the Merchant); grunts
+  drop Gold in their place, which stays until the next combat room like Gems did. The HUD shows
+  banked Gold and Crystals plus the run's gains.
 
 ## Statuses
 
@@ -220,6 +235,75 @@ Blaster 3777 and Sword of the Epicredness (redundant without auras) and Regenera
 is the Orb Potency line). Korblox Mage Staff and Newtrat's Tuskinator returned as Neutral cards and
 Midnight Sword is new, all 2026-10-31.
 
+## Roguelite mode (future)
+
+The 2026-10-31 relic cut shelved 57 relics to make the gear-first game. They are not deleted: every
+one keeps its data row with `retired = true`, its gimmick code where it had one, and its model in
+Studio, and the aura system that half of them keyed off is dormant rather than removed. A separate
+**Roguelite** mode could bring them back as-is: longer runs, no gear chase, a big relic pool with
+auras, duos and the percentage relics, picked from the same vending machines. The card text below is
+what each said when it was shelved, so the design is recoverable without digging through history.
+
+| Tree | Rarity | Relic | Card at the time |
+|---|---|---|---|
+| Blaze | Rare | Faux Firebrand | While Enflamed, gain +25% Weapon Damage. |
+| Blaze | Rare | Fire Breathing Dragon Friend | Deal +20% Weapon Damage to Burning enemies. |
+| Blaze | Rare | Flaming Bo Staff | Weapon Damage has a 15% chance to grant Enflamed. |
+| Blaze | Rare | Flaming Mace | While Enflamed, Burns last 50% longer and deal 25% more damage. |
+| Blaze | Rare | Linked Sword | Gain +20% Weapon Damage. Weapon hits on Burning enemies extend the Burn by 1s (up to 8s). |
+| Blaze | Rare | Red Hyperlaser Gun | Ranged Weapon Damage has +25% chance to Burn, and deals +20% damage to Burning enemies. |
+| Blaze | Epic | Phoenix | Your Dodge leaves a 4s fire trail that Burns and deals damage per second. |
+| Blaze | Epic | Red Laser Scythe | Gain +30% Melee Weapon Damage. While Enflamed, swing 25% faster. |
+| Blaze | Duo | HEX Spitter | While Enflamed and Stormcharged, Critical Hits burst in a plasma nova dealing 60% of the hit to nearby enemies, Burning and Shocking them. |
+| Frost | Rare | Frostbrand | While Frostburst, gain +25% Arcane Damage. |
+| Frost | Rare | Frozen Flail | Deal +20% Arcane Damage to Chilled enemies. |
+| Frost | Rare | Hyperlaser Gun | Ranged Weapon Damage has +20% chance to Chill. While Frostburst, gain +30% Ranged Weapon Damage. |
+| Frost | Rare | Ice Cream | While Frostburst, Arcane Spells Chill every enemy hit. |
+| Frost | Rare | Korblox Spell Book | Arcane Damage has a 20% chance to grant Frostburst. |
+| Frost | Rare | Wizard Orb | Gain +25% Arcane Damage. While Frostburst, Arcane costs 20% less Mana. |
+| Frost | Epic | Blue Laser Scythe | While Frostburst, your Melee Weapon Damage becomes Arcane Damage and gains +30%. |
+| Frost | Duo | Blizzard Wand | Arcane Spells call a 4s hailstorm where they land. Its shards deal Arcane Damage, can Critically Hit, and Chill. |
+| Frost | Duo | Korblox Ice Claws | Your Barriers become an ice shell. When your last one ends, it shatters outward for Arcane Damage and Chills nearby enemies (once every 3s). |
+| Venom | Rare | Korblox Evil Eye | All damage has +10% chance to grant you Blight. (Increased to +25% on hits that apply a Status) |
+| Venom | Rare | Murder Knife | Deal +25% damage to nearby enemies. Your hits on nearby enemies have +15% chance to Poison. |
+| Venom | Rare | Noxious Chocolate | Your Poison lasts 3s longer, and Poisoned enemies are slowed 15%. |
+| Venom | Rare | Overseer's Short Sword | While Blighted, gain +25% chance to apply your Elemental Statuses. |
+| Venom | Rare | Poison Picnic | While Blighted, applying any Status also applies Poison. |
+| Venom | Rare | Poisonous Butterfly | Deal +25% damage to Poisoned enemies. |
+| Venom | Epic | Mechatronic Spider | Each Status you apply has a 40% chance to also apply another random Status. |
+| Venom | Epic | Overseer's Battleaxe | You deal +15% more damage to enemies for each Status on them. |
+| Venom | Duo | Fire Breathing Friend | Enemies both Burning and Poisoned are Melted, taking +40% damage from all sources. |
+| Storm | Rare | Lightning Orb | All damage has a +10% chance to grant Stormcharged (+20% on Critical Hits). |
+| Storm | Rare | Lightning Wand | While Stormcharged, gain +40% Critical Damage. |
+| Storm | Rare | Ninja Whip | While Stormcharged, Critical Hits apply Shock. |
+| Storm | Rare | Shuriken of the Crescent Moon | Gain +10% Critical Hit Chance. Critical Hits on Shocked enemies restore 3% Maximum Mana. |
+| Storm | Rare | Silver Ninja Star | Gain +15% Critical Hit Chance. While Stormcharged, gain +30% Critical Damage. |
+| Storm | Rare | Throwing Bolts | Gain +10% Critical Hit Chance against Shocked enemies. |
+| Storm | Epic | Katana | Your attacks have a 10% chance to chain lightning through 3 enemies for damage. (Increased to 30% for Arcane Spells) |
+| Storm | Epic | Rubber Chicken Launcher | Ranged Critical Hits stick a static charge on the enemy. After 1.5s it detonates for 100% of the hit and Shocks nearby enemies. |
+| Earth | Rare | Cheezburger | Taking damage grants a 5% Barrier for 3s (once every 5s). |
+| Earth | Rare | Earth Protection Orb | While Stonebound, hits deal bonus damage equal to 25% of your current Barrier. |
+| Earth | Rare | Leland the Lolturtle | Your Stonebound gives its users +20% Damage Reduction. |
+| Earth | Rare | Riot Shield | Melee Weapon Damage has a 20% chance to grant Stonebound. |
+| Earth | Rare | Rolling Pin | Melee hits while Stonebound deal +25% damage. |
+| Earth | Rare | Space Sandwich | While Stonebound, taking damage grants a +15% Barrier for 4s, once every 8s. |
+| Earth | Rare | Stonefist Gauntlet | While Stonebound, your Damage Reduction is added to your damage too (+30%, more with Leland). |
+| Earth | Epic | Earth Summoning Horn | Your own Barriers are +25% stronger and last +50% longer. Allies within 15 studs get 75% of each Barrier you give yourself. |
+| Earth | Epic | War Rocks | Every 5th Ranged shot hurls a boulder that deals damage in an area and grants you a 5% Barrier for 3s. |
+| Earth | Duo | Medusa Head | While Stonebound, your Poison Petrifies enemies for 4s: they are slowed 75% and take +25% damage from all sources. |
+| Neutral | Rare | Fluffy Unicorn | Deal +30% damage to Minibosses and Bosses. |
+| Neutral | Rare | Regeneration Coil | Health Orbs heal you 50% more, and heal nearby allies too. |
+| Neutral | Epic | Ghost Dragon | Every 1s, deal damage to nearby enemies. |
+| Neutral | Epic | Orinthian Blaster 3777 | Ranged Weapon Damage becomes Arcane Damage. |
+| Neutral | Epic | Sword of the Epicredness | Spells deal Weapon Damage instead. |
+| Neutral | Legendary | Astral Cloak Of Transportation | Gain +1 Dodge stack and Dodge 35% further. Dodging heals 50% of damage taken in the last 2s. |
+| Neutral | Legendary | Glorious Sword | Deal 40% more Melee Weapon Damage and gain 8 studs of Melee Range. |
+| Neutral | Legendary | Holiday Ham | Gain +50% max health and +50% healing from all sources, and grow bigger. |
+| Neutral | Legendary | Mystical Staff of Cyan | Deal 40% more Arcane Damage. Spells create a large 10s Sigil giving anyone inside +25% Arcane Damage. |
+| Neutral | Legendary | Neon Rainbow Phoenix | Gain +25% chance to apply any Status on all damage. |
+| Neutral | Cursed | Flaming Orb of Divine Pain | Double the base effects of your Auras, but take +50% more damage while an Aura is active. |
+| Neutral | Cursed | Pinata | Vending Machines offer only 2 Relic choices, but all are Epic or higher. |
+
 ## Auras
 
 **Auras are cosmetics.** No relic grants or reads one any more (2026-10-31); `AuraService` and its
@@ -279,10 +363,18 @@ different ones. Weapon particles for each are Studio work.
 | Blight | +15% Damage to enemies with a Status | Every lane, any status |
 | Stonebound | +20% Damage Reduction | While equipped |
 
-- **Roll on drop** by rarity: Common 0%, Uncommon 15%, Rare 30%, Epic 60%, Legendary 100%; which
-  one is uniform.
-- **Imbue** at the Blacksmith adds or rerolls one for Arcane Crystals: 25 / 35 / 50 / 75 / 100 by
-  rarity. Never fails, never destroys, a reroll never repeats. Equipped weapons allowed.
+- **Roll on drop** by rarity: Common 0%, Uncommon 5%, Rare 10%, Epic 25%, Legendary 60%; which
+  one is uniform over the live pool. The first cut drops only Enflamed, Frostburst and
+  Stormcharged; Blight and Stonebound are built and work on a weapon that has one, they just do
+  not roll yet.
+- **Imbue** at the Blacksmith adds or rerolls one for Gold: half a run of the weapon's level, flat
+  (about 205 / 400 / 770 / 1485 at each tier's entry level). Never fails, never destroys, a reroll
+  never repeats. Equipped weapons allowed.
+- **Look:** an enchanted weapon wears its status's particles on each blade's handle, locked to the
+  part and still (Enflamed shows Burn, Frostburst Chill, Stormcharged Shock, Blight Poison,
+  Stonebound Shielded), so daggers glow on both blades. Only the drawn weapon glows; holstering or
+  switching weapons turns it off, and the copy on the back never shows it. Hovering the
+  Enchantment row in the bag shows a tooltip with the enchantment's sentence.
 - Looter is gone (its Gold went to the Gold Find line). Saved Looter weapons became unenchanted
   (profile v4).
 
@@ -329,7 +421,7 @@ Power still gates it.
 - **Arcane Crystals buy spells:** Arcane Chests are priced in Crystals, and Crystals can be fed
   straight into an owned spell as rank XP at a worse rate than the chest's expected value.
   Crystals come from ore veins, chests, bosses and higher difficulties.
-- Selling gear refunds 80% of its Gold upgrade spend. Sales pay Gold only.
+- Selling gear refunds 50% of its Gold upgrade spend. Sales pay Gold only.
 - Run income per tier (Gold 500 / 1,000 / 2,000 / 4,000 split between chests and gear sales;
   Crystals 25 / 50 / 100 / 200) with treasure chests and pots as a 20% bonus on top.
 

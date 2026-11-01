@@ -70,6 +70,8 @@ local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Dungeo
 local dungeonProgress = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonProgress)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
+local BonusStatData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BonusStatData)
+local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollBonusStats)
 
 -- The spells the profile now has equipped, for the /wipedata reply. It
 -- reads the WIPED profile, so it shows what this server's template holds:
@@ -292,8 +294,8 @@ COMMANDS = {
 		end,
 	},
 	bonusstat = {
-		usage = "/bonusstat <text | clear>",
-		description = "Studio-only: stamps a display-only Bonus Stat on YOUR primary weapon (e.g. /bonusstat +5% Critical Hit Chance), or clears them.",
+		usage = "/bonusstat <StatKey percent | roll | clear>",
+		description = "Studio-only: sets a real gear line on YOUR primary weapon (e.g. /bonusstat CritChance 8), rerolls its lines for its rarity (roll), or clears them. Keys: the BonusStatData rows.",
 		handler = function(player: Player, args: { string }): string?
 			local profile = DataService:GetProfileData(player)
 			if next(profile) == nil then
@@ -314,28 +316,52 @@ COMMANDS = {
 			if type(target) ~= "table" then
 				return "You have no weapons."
 			end
-			-- The parser lowercases every token; title-case the words back.
-			local words = {}
-			for _, word in args do
-				table.insert(words, string.upper(string.sub(word, 1, 1)) .. string.sub(word, 2))
+			-- Lines are the rolled map { [statKey] = fraction } (2026-10-31,
+			-- rollBonusStats); the key is matched ignoring case against
+			-- BonusStatData's rows since the parser lowercases tokens.
+			local first = string.lower(args[1] or "")
+			if first == "" then
+				return "Usage: /bonusstat <StatKey percent | roll | clear>"
 			end
-			local text = table.concat(words, " ")
-			if text == "" then
-				return "Usage: /bonusstat <text | clear>"
-			end
-			if string.lower(text) == "clear" then
+			if first == "clear" then
 				target.bonusStats = {}
 				DataService:SetProfileValue(player, "Inventory", inventory)
-				return ("%s: bonus stats cleared."):format(tostring(target.name))
+				return ("%s: gear lines cleared."):format(tostring(target.name))
+			end
+			if first == "roll" then
+				target.bonusStats = rollBonusStats("Weapon", target.rarity)
+				DataService:SetProfileValue(player, "Inventory", inventory)
+				local texts = {}
+				for _, line in BonusStatData.Describe(target.bonusStats) do
+					table.insert(texts, line.text)
+				end
+				return ("%s: rolled %s."):format(
+					tostring(target.name),
+					if #texts > 0 then table.concat(texts, ", ") else "no lines"
+				)
+			end
+			local key = nil
+			for _, row in BonusStatData.Order do
+				if string.lower(row.key) == first and row.slot == "Weapon" then
+					key = row.key
+				end
+			end
+			if not key then
+				local keys = {}
+				for _, k in BonusStatData.BySlot.Weapon do
+					table.insert(keys, k)
+				end
+				return "Unknown weapon line. Keys: " .. table.concat(keys, ", ")
+			end
+			local percent = tonumber(args[2])
+			if not percent then
+				return ("Usage: /bonusstat %s <percent>"):format(key)
 			end
 			local stats = if type(target.bonusStats) == "table" then target.bonusStats else {}
-			if #stats >= 3 then
-				return "That weapon already shows three; /bonusstat clear first."
-			end
-			table.insert(stats, { name = text, text = text })
+			stats[key] = math.round(percent) / 100
 			target.bonusStats = stats
 			DataService:SetProfileValue(player, "Inventory", inventory)
-			return ("%s: Bonus Stat %d set to '%s' (display only)."):format(tostring(target.name), #stats, text)
+			return ("%s: %s."):format(tostring(target.name), BonusStatData.Format(key, stats[key]))
 		end,
 	},
 	wipedata = {
