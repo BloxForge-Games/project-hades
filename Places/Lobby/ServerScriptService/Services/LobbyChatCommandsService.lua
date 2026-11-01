@@ -291,6 +291,53 @@ COMMANDS = {
 			return ("%s: +%d Mastery XP (level %d -> %d)."):format(dungeonId, xp, before, after)
 		end,
 	},
+	bonusstat = {
+		usage = "/bonusstat <text | clear>",
+		description = "Studio-only: stamps a display-only Bonus Stat on YOUR primary weapon (e.g. /bonusstat +5% Critical Hit Chance), or clears them.",
+		handler = function(player: Player, args: { string }): string?
+			local profile = DataService:GetProfileData(player)
+			if next(profile) == nil then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			local inventory = profile.Inventory
+			local weapons = if type(inventory) == "table" then inventory[InventoryType.Weapon] else nil
+			if type(weapons) ~= "table" then
+				return "You have no weapons."
+			end
+			local target = nil
+			for _, item in weapons do
+				if type(item) == "table" and item.equipSlot == 1 then
+					target = item
+				end
+			end
+			target = target or weapons[1]
+			if type(target) ~= "table" then
+				return "You have no weapons."
+			end
+			-- The parser lowercases every token; title-case the words back.
+			local words = {}
+			for _, word in args do
+				table.insert(words, string.upper(string.sub(word, 1, 1)) .. string.sub(word, 2))
+			end
+			local text = table.concat(words, " ")
+			if text == "" then
+				return "Usage: /bonusstat <text | clear>"
+			end
+			if string.lower(text) == "clear" then
+				target.bonusStats = {}
+				DataService:SetProfileValue(player, "Inventory", inventory)
+				return ("%s: bonus stats cleared."):format(tostring(target.name))
+			end
+			local stats = if type(target.bonusStats) == "table" then target.bonusStats else {}
+			if #stats >= 3 then
+				return "That weapon already shows three; /bonusstat clear first."
+			end
+			table.insert(stats, { name = text, text = text })
+			target.bonusStats = stats
+			DataService:SetProfileValue(player, "Inventory", inventory)
+			return ("%s: Bonus Stat %d set to '%s' (display only)."):format(tostring(target.name), #stats, text)
+		end,
+	},
 	wipedata = {
 		usage = "/wipedata",
 		description = "Wipes YOUR player data back to defaults and kicks you so it reloads.",
