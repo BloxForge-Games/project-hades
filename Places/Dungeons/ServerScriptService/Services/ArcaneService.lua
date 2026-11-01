@@ -16,9 +16,16 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+
+-- Korblox Evil Eye (2026-11-01): the Mana cost multiplier of the player's
+-- NEXT cast, stamped for the client's precheck (1 when not discounted).
+local NEXT_SPELL_COST_MULTIPLIER_ATTRIBUTE = "NextSpellCostMultiplier"
 
 local ArcaneService = {
 	Name = "ArcaneService",
@@ -26,6 +33,12 @@ local ArcaneService = {
 
 	_playerArcaneRegistry = {},
 	_playerArcaneCooldownRegistry = {},
+
+	-- Korblox Evil Eye: committed casts since the last discounted one, and
+	-- [player][spell] = whether that spell's latest cast was the discounted
+	-- one (its hits Poison; RelicGimmickService/Venom).
+	_evilEyeCasts = {} :: { [Player]: number },
+	_evilEyeTagged = {} :: { [Player]: { [string]: boolean } },
 }
 
 -- Mana / max mana per player, replicated (was a replicated property).
@@ -124,6 +137,66 @@ end
 -- RecomputeMana adds the flat relic total on top of this — keep it as
 -- the single source so the two can't drift.
 ArcaneService.BASE_MAX_MANA = 100
+
+--[ Korblox Evil Eye ]--
+
+-- Korblox Evil Eye (2026-11-01, Venom's enabler): every data.everyCasts-th
+-- committed cast is charged data.costMultiplier of its Mana and tagged, so
+-- each of that cast's hits Poisons (RelicGimmickService/Venom onSpellHit).
+-- VFXService multiplies a cast's cost by GetEvilEyeCostMultiplier as it
+-- prices it (after the Mana Cost Reduction gear line) and calls
+-- CommitEvilEyeCast once the cast is paid for, so a refused cast never
+-- advances the count. The tag is per spell: a multi-hit spell's late hits
+-- still read their own cast, and another spell cast meanwhile has its own.
+
+local function ownsEvilEye(player: Player): boolean
+	local relicService = Blitz.OptionalService("RelicService")
+	if not relicService then
+		return false
+	end
+	return (relicService:GetSpecificRelicRegistry(player, RelicNames["Korblox Evil Eye"]) or 0) > 0
+end
+
+local function evilEyeData(field: string, fallback: number): number
+	local row = RelicData[RelicNames["Korblox Evil Eye"]]
+	local value = row and row.data and row.data[field]
+	return if type(value) == "number" then value else fallback
+end
+
+-- True when the owner's NEXT committed cast is the discounted one.
+function ArcaneService.IsNextCastEvilEye(self: typeof(ArcaneService), player: Player): boolean
+	if not ownsEvilEye(player) then
+		return false
+	end
+	local every = math.max(1, math.floor(evilEyeData("everyCasts", 2)))
+	return (self._evilEyeCasts[player] or 0) % every == every - 1
+end
+
+-- The Mana cost multiplier for the player's next cast: costMultiplier on
+-- the discounted one, 1 otherwise.
+function ArcaneService.GetEvilEyeCostMultiplier(self: typeof(ArcaneService), player: Player): number
+	return if self:IsNextCastEvilEye(player) then evilEyeData("costMultiplier", 0.5) else 1
+end
+
+-- Counts a committed cast of `vfxName` (a discounted one restarts the
+-- count) and tags whether it was the discounted one.
+function ArcaneService.CommitEvilEyeCast(self: typeof(ArcaneService), player: Player, vfxName: string)
+	local discounted = self:IsNextCastEvilEye(player)
+	self._evilEyeCasts[player] = if discounted then 0 else (self._evilEyeCasts[player] or 0) + 1
+	local tags = self._evilEyeTagged[player] or {}
+	self._evilEyeTagged[player] = tags
+	tags[vfxName] = discounted
+	-- The client's cost preview (ArcaneController.GetEffectiveManaCost)
+	-- reads this so the discounted cast is not refused client-side.
+	player:SetAttribute(NEXT_SPELL_COST_MULTIPLIER_ATTRIBUTE, self:GetEvilEyeCostMultiplier(player))
+end
+
+-- True while `vfxName`'s latest committed cast by `player` was the
+-- discounted one.
+function ArcaneService.IsEvilEyeCast(self: typeof(ArcaneService), player: Player, vfxName: string): boolean
+	local tags = self._evilEyeTagged[player]
+	return tags ~= nil and tags[vfxName] == true
+end
 
 --[ Public Functions ]--
 
@@ -264,6 +337,8 @@ function ArcaneService.Start(self: typeof(ArcaneService))
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		self._playerArcaneRegistry[player] = nil
 		self._playerArcaneCooldownRegistry[player] = nil
+		self._evilEyeCasts[player] = nil
+		self._evilEyeTagged[player] = nil
 	end)
 
 	-- Passive 1%/sec regen for every player. Runs as a daemon thread for

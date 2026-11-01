@@ -51,6 +51,15 @@
 	floor's layout (its miniboss, floor count) is already built and stays.
 	No argument reports the current tier.
 
+	--- /bonusstat <StatKey percent | roll | clear> ---
+	--- /enchant <name | roll | clear> ---
+
+	Test edits to YOUR primary weapon's gear lines and enchantment (the
+	Lobby has the same two). Each saves the inventory and then recomputes
+	what reads it (PlayerStatsService) and re-instances the held weapon
+	(WeaponLoadoutService), the Blacksmith's commit sequence, so the aura
+	and the numbers change at once.
+
 	--- /wipedata ---
 
 	Resets the CALLER's own profile to the DataTemplate defaults
@@ -89,6 +98,14 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local BonusStatData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BonusStatData)
+local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollBonusStats)
+local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
+local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
+local rollWeaponEnchantment =
+	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
 
 -- RunFlowService's Studio-only difficulty pick; /difficulty writes it so a
 -- Studio restart replays the chosen tier.
@@ -168,6 +185,64 @@ local function describeEquippedArcane(player: Player): string
 	return if #equipped > 0 then table.concat(equipped, ", ") else "none"
 end
 
+-- The caller's PRIMARY weapon (equipSlot 1, else their first) and the
+-- Inventory table it sits in, for /enchant and /bonusstat; nil and the
+-- reply to give when there is none.
+local function findPrimaryWeapon(player: Player): ({ [string]: any }?, { [string]: any }?, string?)
+	local profile = DataService:GetProfileData(player)
+	if next(profile) == nil then
+		return nil, nil, "Your profile isn't loaded yet -- try again in a moment."
+	end
+	local inventory = profile.Inventory
+	local weapons = if type(inventory) == "table" then inventory[InventoryType.Weapon] else nil
+	if type(weapons) ~= "table" then
+		return nil, nil, "You have no weapons."
+	end
+	local target = nil
+	for _, item in weapons do
+		if type(item) == "table" and item.equipSlot == 1 then
+			target = item
+		end
+	end
+	target = target or weapons[1]
+	if type(target) ~= "table" then
+		return nil, nil, "You have no weapons."
+	end
+	return target, inventory, nil
+end
+
+-- Saves an edited weapon and brings the live state in line with it, the
+-- way BlacksmithService._commit does after an Imbue: the enchantment and
+-- gear-line sums, the stat attributes, then the held model (its
+-- Enchantment attribute is what the aura particles follow).
+local function commitWeaponEdit(player: Player, inventory: { [string]: any })
+	DataService:SetProfileValue(player, "Inventory", inventory)
+	PlayerStatsService:RecomputeGearStats(player)
+	PlayerStatsService:RecomputeStatAttributes(player)
+	WeaponLoadoutService:SetWeaponLoadout(player)
+end
+
+-- An enchantment's stored key from its key or its shown name, ignoring
+-- case ("frostbite" -> Frostburst, "corrosion" -> Blight).
+local function matchEnchantment(arg: string): string?
+	local lowered = string.lower(arg)
+	for key, row in EnchantmentData do
+		if string.lower(key) == lowered or string.lower(row.displayName) == lowered then
+			return key
+		end
+	end
+	return nil
+end
+
+local function enchantmentNames(): string
+	local names = {}
+	for _, row in EnchantmentData do
+		table.insert(names, row.displayName)
+	end
+	table.sort(names)
+	return table.concat(names, ", ")
+end
+
 -- [player] = their group rank, looked up ONCE per session (GetRankInGroup
 -- is a web call). Weak keys: a leaver takes their entry with it.
 local groupRankCache: { [Player]: number } = setmetatable({}, { __mode = "k" }) :: any
@@ -210,6 +285,8 @@ local ChatCommandsService = {
 		DataService,
 		ExperienceService,
 		CoffinEventService,
+		PlayerStatsService,
+		WeaponLoadoutService,
 	} :: { any },
 }
 
@@ -559,6 +636,99 @@ COMMANDS = {
 
 			local equipped = describeEquippedArcane(player)
 			return ("Data wiped (arcane %s). Kicking you so it reloads..."):format(equipped)
+		end,
+	},
+
+	-- The Lobby's /bonusstat, here too (2026-11-01) so a line can be tried
+	-- against live mobs. Lines are the rolled map { [statKey] = fraction }
+	-- (rollBonusStats); the key is matched ignoring case against
+	-- BonusStatData's rows since the parser lowercases tokens.
+	bonusstat = {
+		usage = "/bonusstat <StatKey percent | roll | clear>",
+		description = "Studio-only: sets a real gear line on YOUR primary weapon (e.g. /bonusstat CritChance 8), rerolls its lines for its rarity (roll), or clears them. Keys: the BonusStatData rows.",
+		handler = function(player: Player, args: { string }): string?
+			local target, inventory, reason = findPrimaryWeapon(player)
+			if not target or not inventory then
+				return reason
+			end
+			local first = string.lower(args[1] or "")
+			if first == "" then
+				return "Usage: /bonusstat <StatKey percent | roll | clear>"
+			end
+			if first == "clear" then
+				target.bonusStats = {}
+				commitWeaponEdit(player, inventory)
+				return ("%s: gear lines cleared."):format(tostring(target.name))
+			end
+			if first == "roll" then
+				target.bonusStats = rollBonusStats("Weapon", target.rarity)
+				commitWeaponEdit(player, inventory)
+				local texts = {}
+				for _, line in BonusStatData.Describe(target.bonusStats) do
+					table.insert(texts, line.text)
+				end
+				return ("%s: rolled %s."):format(
+					tostring(target.name),
+					if #texts > 0 then table.concat(texts, ", ") else "no lines"
+				)
+			end
+			local key = nil
+			for _, row in BonusStatData.Order do
+				if string.lower(row.key) == first and row.slot == "Weapon" then
+					key = row.key
+				end
+			end
+			if not key then
+				local keys = {}
+				for _, k in BonusStatData.BySlot.Weapon do
+					table.insert(keys, k)
+				end
+				return "Unknown weapon line. Keys: " .. table.concat(keys, ", ")
+			end
+			local percent = tonumber(args[2])
+			if not percent then
+				return ("Usage: /bonusstat %s <percent>"):format(key)
+			end
+			local stats = if type(target.bonusStats) == "table" then target.bonusStats else {}
+			stats[key] = math.round(percent) / 100
+			target.bonusStats = stats
+			commitWeaponEdit(player, inventory)
+			return ("%s: %s."):format(tostring(target.name), BonusStatData.Format(key, stats[key]))
+		end,
+	},
+
+	enchant = {
+		usage = "/enchant <name | roll | clear>",
+		description = "Puts an enchantment on YOUR primary weapon by name (Enflamed, Frostbite, Stormcharged, Corrosion, Stonebound), rolls one from the drop pool (roll), or removes it (clear).",
+		handler = function(player: Player, args: { string }): string?
+			local target, inventory, reason = findPrimaryWeapon(player)
+			if not target or not inventory then
+				return reason
+			end
+			local first = args[1] or ""
+			if first == "" then
+				return "Usage: /enchant <name | roll | clear>"
+			end
+			local enchantment: string
+			if first == "clear" then
+				enchantment = EnchantmentNames.None
+			elseif first == "roll" then
+				enchantment = rollWeaponEnchantment.pick(nil)
+			else
+				local matched = matchEnchantment(first)
+				if not matched then
+					return "Unknown enchantment. Names: " .. enchantmentNames()
+				end
+				enchantment = matched
+			end
+			-- The same field the drop roll and the Blacksmith's Imbue write;
+			-- the commit re-instances the held weapon so its aura follows.
+			target.enchantment = enchantment
+			commitWeaponEdit(player, inventory)
+			if enchantment == EnchantmentNames.None then
+				return ("%s: enchantment cleared."):format(tostring(target.name))
+			end
+			return ("%s: now %s."):format(tostring(target.name), EnchantmentData[enchantment].displayName)
 		end,
 	},
 

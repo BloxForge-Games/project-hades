@@ -19,8 +19,18 @@
 	  Hoverboard             enemy along its line. (Its length, invisibility
 	                         and sound live in DodgeController / DodgeService /
 	                         LightningDashController.)
+	  Katana                 PRIMED (2026-11-01, the tree's enabler): a
+	                         Perfect Dodge primes the owner for
+	                         `primedSeconds`; their next Arcane damage is a
+	                         guaranteed Critical Strike (DamageService's
+	                         one-shot forced crit, Arcane lane) and Shocks
+	                         its target, and the prime is spent.
 
-	The clients draw the bolts (helpers.fx).
+	Lightning Horn of the Heavens' strike (any damage has a chance, a
+	Critical Strike always) stays in DamageService._postDamage.
+
+	The clients draw the bolts (helpers.fx); the Katana's primed sparks are
+	a StormPrime packet kept up for the prime and ended when it is spent.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -33,10 +43,12 @@ local helpers = require(script.Parent.Lib.gimmickHelpers)
 
 local BOLT_SWORD = RelicNames["Lightning Bolt Sword"]
 local HOVERBOARD = RelicNames["Sparkle Time Hoverboard"]
+local KATANA = RelicNames.Katana
 
 -- Chain Lightning: the beat between jumps (so the chain reads as
 -- travelling, enemy to enemy). Its reach is data.jumpRange.
-local CHAIN_JUMP_SECONDS = 0.07
+-- 0.07 -> 0.14 (2026-11-01): the hop was too quick to follow with the eye.
+local CHAIN_JUMP_SECONDS = 0.14
 local CHAIN_FANOUT_SECONDS = 0.1
 -- Lightning Dash: how close to the dash line an enemy must be.
 local DASH_WIDTH = 3.5
@@ -127,6 +139,34 @@ function Storm.onDodge(player: Player, from: Vector3, to: Vector3)
 		if root and helpers.flatDistanceToSegment(root.Position, from, to) <= DASH_WIDTH then
 			boltHit(player, model, humanoid, damage)
 		end
+	end)
+end
+
+--[ Katana: Primed ]--
+
+-- The primed sparks on `player`: up for `seconds`, or ended (Duration 0
+-- dismisses the client's copy) when the prime is spent.
+local function showPrime(player: Player, seconds: number)
+	local root = getRoot.fromPlayer(player)
+	if root then
+		helpers.fx("StormPrime", root.Position, nil, nil, seconds, player)
+	end
+end
+
+-- A Perfect Dodge (RelicService -> RelicGimmickService.OnPerfectDodge)
+-- primes the owner: DamageService's Arcane forced crit for primedSeconds,
+-- whose onHit Shocks the target as the crit is spent and ends the sparks.
+-- An unspent prime lapses with the arm and the sparks' Duration together;
+-- another dodge meanwhile re-primes (the arm and the sparks both refresh).
+function Storm.onPerfectDodge(player: Player)
+	if not helpers.owns(player, KATANA) then
+		return
+	end
+	local seconds = helpers.data(KATANA, "primedSeconds", 5)
+	showPrime(player, seconds)
+	helpers.damageService():ForceNextCrit(player, "Arcane", seconds, function(target: Model)
+		helpers.statusService():ApplyStatus(player, target, StatusConditions.Shock, false)
+		showPrime(player, 0)
 	end)
 end
 

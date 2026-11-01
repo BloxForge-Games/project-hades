@@ -10,6 +10,7 @@
 
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 local CollectionService = game:GetService("CollectionService")
 local RunService = game:GetService("RunService")
 
@@ -27,6 +28,7 @@ local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTyp
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 
@@ -202,6 +204,26 @@ function GearDropService._getActiveRarityWeights(_self: typeof(GearDropService))
 	local dungeonConfig = DungeonData[active.id]
 	local difficultyConfig = dungeonConfig and dungeonConfig.difficulties[active.difficulty]
 	return difficultyConfig and difficultyConfig.rarityWeights or nil
+end
+
+-- The active weights with the collector's Luck gear line applied
+-- (BonusStatData, 2026-11-01): every rarity above Common keeps its share
+-- times (1 + Luck), so Luck shifts the roll away from Common and leaves
+-- the ratios between the higher tiers alone. nil weights stay nil.
+function GearDropService._getLuckyRarityWeights(self: typeof(GearDropService), player: Player?): { [string]: number }?
+	local weights: { [string]: number }? = self:_getActiveRarityWeights()
+	if not weights or not player then
+		return weights
+	end
+	local luck = PlayerStatsService:GetGearStat(player, "Luck")
+	if luck <= 0 then
+		return weights
+	end
+	local lucky: { [string]: number } = {}
+	for rarity, weight in weights do
+		lucky[rarity] = if rarity == ItemRarity.Common then weight else weight * (1 + luck)
+	end
+	return lucky
 end
 
 -- Returns the active difficulty's gear-drop level range, or nil if no
@@ -911,7 +933,7 @@ function GearDropService._fireSingleDrop(
 		-- DropGear rolled it before choosing the pool (the Legendary gate).
 		rarity = rolledRarity
 	else
-		local weights = self:_getActiveRarityWeights()
+		local weights = self:_getLuckyRarityWeights(player)
 		rarity = rollItemRarity(weights or {}, ItemRarity.Common)
 	end
 	local description = (gearData and gearData.description) or ""
@@ -1023,7 +1045,7 @@ function GearDropService.DropGear(
 		-- Legendary in their data), never from the common pool -- a
 		-- Legendary Steel Sword cannot exist (GDD). A dungeon with no uniques
 		-- yet downgrades the roll to Epic rather than dropping nothing.
-		local rolledRarity = rollItemRarity(self:_getActiveRarityWeights() or {}, ItemRarity.Common)
+		local rolledRarity = rollItemRarity(self:_getLuckyRarityWeights(player) or {}, ItemRarity.Common)
 		local slotPool = pool
 		if rolledRarity == ItemRarity.Legendary then
 			if dropConfig.legendaryPool and #dropConfig.legendaryPool > 0 then

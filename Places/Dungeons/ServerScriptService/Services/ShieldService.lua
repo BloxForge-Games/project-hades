@@ -2,40 +2,28 @@
 --[[
 	Module: Server/Services/ShieldService.lua
 	Description:
-	The Barrier system (user-facing name for shields since the element
-	rework). A player's pool is a list of independent BUCKETS; each bucket
-	remembers its APPLIER — players can shield OTHER players now (Earth
-	Summoning Horn), and two Earth relics key off exactly who applied what:
+	The Shield system (the user-facing name since the 2026-11-01 Earth
+	rework; "Barrier" between the element rework and that). A player's pool
+	is a list of independent BUCKETS; each bucket remembers its APPLIER
+	(players can shield other players) and an optional TAG.
 
-	  * Bundle of TNT: when the LAST bucket applier X owns on a holder
-	    ends — absorbed dry by damage OR expired, both count — it explodes
-	    to enemies near the holder for
-	        (X's Level x 20) + 35% of X's BONUS Maximum Health
-	    Both terms read X, not the holder: the blast belongs to whoever
-	    applied the shield. Two TNT owners shielding one target chain two
-	    independent explosions.
-	  * Earth Summoning Horn: Barriers X applies to THEMSELVES are shared
-	    (75% of the value) with allies within its radius, and X's own
-	    Barriers last longer (data.durationBonus).
+	The tag is how a relic keys off ITS shields ending without this module
+	knowing the relic: GrantShield(..., tag) stamps the bucket, and when an
+	applier's LAST bucket with that tag on a holder ends -- absorbed dry by
+	damage OR expired, both count -- OnTaggedShieldEnded fires (holder,
+	applier, tag). Bundle of TNT (RelicGimmickService/Earth) grants
+	tagged shields on Orb pickups and explodes on that signal.
 
-	Other Earth hooks living here:
-	  * Earth Protection Orb is a DAMAGE relic now (DamageService reads
-	    GetShieldValue); nothing here.
-	  * Golden Steampunk Gloves: +5% Barrier for 5s on a MELEE hit, rate
-	    limited by BARRIER_PROC_COOLDOWN (MeleeWeapon calls
-	    TryGoldenGlovesBarrier).
-	  * Space Sandwich: while Stonebound, a hit taken grants a Barrier, on
-	    its own cooldown (DamageService calls TrySpaceSandwichBarrier).
-	  * Cheezburger: any hit taken grants a Barrier, on its own cooldown
-	    (DamageService calls TryPebblePouchBarrier; 2026-10-30).
-	  * Korblox Ice Claws (duo): when a holder who owns it loses their last Barrier,
-	    it shatters for Arcane Damage and Chills (_shatterIceShell).
-	  * Spartan Sword and Shield: grants Stonebound on a arcane cast
-	    (its Stonebound half left with the auras, 2026-10-31).
-	  * Golem's Hammer: while holding a Barrier, the Empower rig sits on
-	    the HRP and a Tremor pulses every second for (Level x the relic
-	    callback, 50) damage in a radius. (Its Stonebound clause was dropped in the 2026-09
-	    un-gating pass.)
+	Non-Earth hook living here:
+	  * Korblox Ice Claws (duo): when a holder who owns it loses their last
+	    Shield, it shatters for Arcane Damage and Chills (_shatterIceShell).
+
+	Every other relic that used to live here (Golden Steampunk Gloves, Space
+	Sandwich, Cheezburger, Robloxian Battle Shield, Spartan Sword and
+	Shield, Earth Summoning Horn's share, Golem's Hammer's hit-shield and
+	tremor loop, the old "your Shields explode" TNT) is retired with the
+	2026-11-01 Earth rework. Their entry points stay as no-ops (see
+	"Retired entry points") until their callers are removed.
 
 	Cap: the SUM of live buckets never exceeds 100% of the holder's
 	MaxHealth. Absorption drains soonest-expiring buckets first, after all
@@ -61,6 +49,7 @@ local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
+local Signal = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- DamageService requires this module at load, so this side reaches it
@@ -78,6 +67,12 @@ local ShieldService = {
 	Dependencies = { TextIndicatorService, RelicService } :: { any },
 }
 
+--[ Signals ]--
+
+-- (holder, applier, tag): applier's last `tag` bucket on holder ended,
+-- expired or absorbed dry. Fired only for TAGGED grants.
+ShieldService.OnTaggedShieldEnded = Signal.new() :: Signal.Signal<Player, Player, string>
+
 --[ Constants ]--
 
 -- Bucket-expiry poll cadence. Poll-don't-delay: buckets are pruned by
@@ -90,60 +85,9 @@ local SHIELD_ATTRIBUTE = "ShieldValue"
 -- MaxHealth. Raised to 100% with the element rework.
 local SHIELD_CAP_FRACTION = 1.00
 
--- Earth Summoning Horn: allies within this radius receive this
--- fraction of shields the owner applies to themselves.
-local SUMMONING_HORN_RADIUS = 15
-
--- GLOBAL Barrier cooldown, per applier+target pair. Every proc-driven
--- Barrier source respects it, so a new one cannot be added without a
--- rate limit by accident — Golden Steampunk Gloves rolls on every melee
--- hit, which without this would keep a Barrier permanently up and make
--- its +35% damage unconditional.
---
--- Deliberately NOT applied to the TNT detonation path or to any grant
--- that is already once-per-cast (Robloxian fires on a cast the player
--- paid mana for, and rate-limiting that would feel like a dropped input).
-local BARRIER_PROC_COOLDOWN = 3
--- Fallback only: RelicData's `barrierSeconds` is the authored value and
--- is what actually applies. Kept equal so a missing data table cannot
--- silently shorten the Barrier.
-local GOLDEN_GLOVES_DURATION = 5
-
--- Robloxian Battle Shield: duration of the on-cast shield (the fraction
--- lives in its relic callback). 5 -> 3 (2026-10-30, with the fraction
--- 10% -> 5%): the cast now grants Stonebound too.
-
--- Bundle of TNT explosion. The blast is FUSED rather than instant: the
--- shield ending and the explosion reading as one event made it impossible
--- to tell which one killed you, and a beat of delay is what sells it as a
--- bundle of dynamite going off.
-local TNT_EXPLOSION_RADIUS = 10
-local TNT_FUSE_SECONDS = 0
-
--- Golem's Hammer tremor loop. The rig is dropped BELOW the character so it
--- reads as ground shaking under them rather than a ring at the waist.
---
--- Only the ground MESH blooms in. The particle bursts emit at full authored
--- opacity, because ParticleEmitter.Transparency applies to particles that
--- are already ALIVE — ramping it in spends the whole lifetime of a
--- short-lived spark while it's still invisible, so the burst reads as
--- half-missing. Everything fades OUT together; that end was the genuinely
--- abrupt one, and at a 1s pulse interval two tremors overlap, so a hard cut
--- there reads as a strobe.
-local TREMOR_INTERVAL = 1
--- 12 since 2026-10-28 (was 20, doubled from 10 on 2026-10-25); the visual
--- scales with it.
-local TREMOR_RADIUS = 12
--- The radius the Tremor VFX asset was authored at.
-local TREMOR_VFX_AUTHORED_RADIUS = 10
-local TREMOR_Y_OFFSET = 1.5
-local TREMOR_EMIT_COUNT = 5
-local TREMOR_FADE_OUT_SECONDS = 0.9
--- Total on-screen life; the hold is whatever the two fades don't spend.
-
 --[ Properties ]--
 
-type ShieldBucket = { value: number, expiresAt: number, ownerId: number }
+type ShieldBucket = { value: number, expiresAt: number, ownerId: number, tag: string? }
 type ShieldState = {
 	character: Model,
 	userId: number,
@@ -151,25 +95,13 @@ type ShieldState = {
 	emitters: { ParticleEmitter },
 	attachments: { Instance },
 	running: boolean,
-	golemRunning: boolean,
 }
 
--- [userId] = { character, userId, buckets, emitters, attachments,
---              running, golemRunning }
--- buckets: { { value, expiresAt, ownerId }, ... }
+-- [userId] = { character, userId, buckets, emitters, attachments, running }
+-- buckets: { { value, expiresAt, ownerId, tag? }, ... }
 ShieldService._pools = {} :: { [number]: ShieldState }
 
--- Golden Steampunk Gloves per-player last-proc clock.
-ShieldService._barrierProcLastAt = {}
--- Space Sandwich per-player last-proc clock (its own cooldown, RelicData
--- data.cooldownSeconds).
-ShieldService._sandwichLastAt = {} :: { [number]: number }
--- Bundle of TNT per-OWNER last-blast clock (data.cooldownSeconds), and
--- Cheezburger and Korblox Ice Claws per-player last-proc clocks.
-ShieldService._tntLastAt = {} :: { [number]: number }
-ShieldService._pebbleLastAt = {} :: { [number]: number }
--- Golem's Hammer's hit-taken Barrier: [userId] = os.clock() of the last.
-ShieldService._golemLastAt = {} :: { [number]: number }
+-- Korblox Ice Claws per-player last-proc clock.
 ShieldService._iceShellLastAt = {} :: { [number]: number }
 
 --[ Private ]--
@@ -192,7 +124,6 @@ function ShieldService._getState(self: typeof(ShieldService), player: Player): S
 			emitters = {},
 			attachments = {},
 			running = false,
-			golemRunning = false,
 		}
 		self._pools[player.UserId] = fresh
 		state = fresh
@@ -208,14 +139,21 @@ local function totalOf(state: ShieldState): number
 	return total
 end
 
--- The set of appliers with at least one live bucket in this pool —
--- Bundle of TNT diffs it across every removal to find whose shields ended.
-local function ownerSetOf(state: ShieldState): { [number]: boolean }
-	local owners = {}
+-- The key an applier's tagged buckets share.
+local function tagKey(ownerId: number, tag: string): string
+	return tostring(ownerId) .. "|" .. tag
+end
+
+-- The set of (applier, tag) pairs with at least one live bucket in this
+-- pool: diffed across every removal to find whose tagged shields ended.
+local function taggedSetOf(state: ShieldState): { [string]: { ownerId: number, tag: string } }
+	local tagged = {}
 	for _, bucket in state.buckets do
-		owners[bucket.ownerId] = true
+		if bucket.tag then
+			tagged[tagKey(bucket.ownerId, bucket.tag)] = { ownerId = bucket.ownerId, tag = bucket.tag }
+		end
 	end
-	return owners
+	return tagged
 end
 
 -- Drops buckets whose clock has run out. Returns true if anything was
@@ -239,7 +177,7 @@ function ShieldService._stamp(_self: typeof(ShieldService), state: ShieldState)
 	end
 end
 
--- Bursts every tracked emitter so a grant reads INSTANTLY — the authored
+-- Bursts every tracked emitter so a grant reads INSTANTLY -- the authored
 -- Rate is slow (ambient shimmer).
 function ShieldService._burstEmitters(_self: typeof(ShieldService), state: ShieldState)
 	for _, emitter in state.emitters do
@@ -280,85 +218,29 @@ function ShieldService._spawnVisuals(self: typeof(ShieldService), state: ShieldS
 	end
 end
 
--- Bundle of TNT: applier X's last bucket on this holder just ended.
--- Explodes AT THE HOLDER for (X's Level x 20) + 35% of X's BONUS max health.
-function ShieldService._detonateTnt(_self: typeof(ShieldService), ownerId: number, holderCharacter: Model)
-	local owner = Players:GetPlayerByUserId(ownerId)
-	if not owner or not RelicService then
-		return
-	end
-	if (RelicService:GetSpecificRelicRegistry(owner, RelicNames["Bundle of TNT"]) or 0) <= 0 then
-		return
-	end
-
-	local hrp = getRoot(holderCharacter)
-	local ownerHumanoid = owner.Character and owner.Character:FindFirstChildOfClass("Humanoid")
-	if not hrp or not ownerHumanoid then
-		return
-	end
-
-	-- Blast math, read off the OWNER (the applier), never the holder. The
-	-- callback IS the per-level damage, so this number has one home in
-	-- RelicData and cannot drift from the card.
-	local damagePerLevel = RelicService:GetRelicEffect(owner, RelicNames["Bundle of TNT"]) or 0
-	local blastDamage = math.round(getRelicLevel(owner) * damagePerLevel)
-	if blastDamage <= 0 then
-		return
-	end
-	-- One blast per owner per data.cooldownSeconds (2026-10-30).
-	local tnt = RelicData[RelicNames["Bundle of TNT"]]
-	local now = os.clock()
-	if
-		now - (ShieldService._tntLastAt[ownerId] or -math.huge) < ((tnt and tnt.data and tnt.data.cooldownSeconds) or 3)
-	then
-		return
-	end
-	ShieldService._tntLastAt[ownerId] = now
-
-	-- Fuse. Position is captured NOW so the blast lands where the shield
-	-- ended even if the holder walks off, and so the VFX and the damage
-	-- sweep share one point.
-	local blastPosition = hrp.Position
-	task.delay(TNT_FUSE_SECONDS, function()
-		-- Explosion VFX: every client plays GameAssets.VFX.BundleOfTNT
-		-- .Explosion at this point, each emitter on its own authored
-		-- EmitCount / EmitDelay / EmitDuration (RelicController's handler).
-		-- A broadcast rather than a server-built rig: :Emit is a client
-		-- call, so the server copy could only stream or fire blind.
-		RelicNetwork.TntExplosionEffect.FireAll(blastPosition)
-
-		-- Relic damage breaks breakables too.
-		Breakable.HitInRadius(blastPosition, TNT_EXPLOSION_RADIUS, owner)
-		if getDamageService() then
-			forEachEnemyInRadius(blastPosition, TNT_EXPLOSION_RADIUS, function(_model, targetHumanoid)
-				-- Relic-sourced flat damage (never rolls appliers as a weapon
-				-- swing would).
-				getDamageService():TakeDamage(owner, targetHumanoid, blastDamage, false, false, nil, true)
-			end)
-		end
-	end)
-end
-
--- Fires the TNT check for every applier who was in `before` but has no
--- bucket left now.
-function ShieldService._detonateEndedOwners(
+-- Fires OnTaggedShieldEnded for every (applier, tag) that was in `before`
+-- but has no bucket left now.
+function ShieldService._fireEndedTags(
 	self: typeof(ShieldService),
 	state: ShieldState,
-	before: { [number]: boolean }
+	before: { [string]: { ownerId: number, tag: string } }
 )
-	local after = ownerSetOf(state)
-	for ownerId in before do
-		if not after[ownerId] then
-			task.spawn(function()
-				self:_detonateTnt(ownerId, state.character)
-			end)
+	local after = taggedSetOf(state)
+	local holder = Players:GetPlayerFromCharacter(state.character)
+	for key, entry in before do
+		if after[key] then
+			continue
+		end
+		local applier = Players:GetPlayerByUserId(entry.ownerId)
+		if holder and applier then
+			self.OnTaggedShieldEnded:Fire(holder, applier, entry.tag)
 		end
 	end
 end
 
--- Korblox Ice Claws (duo, 2026-10-30): the holder's Barriers are gone, so their
--- ice shell shatters: per-level Arcane Damage and a Chill to every enemy
--- in data.radius, at most once per data.cooldownSeconds.
+-- Korblox Ice Claws (duo, 2026-10-30): the holder's Shields are gone, so
+-- their ice shell shatters: per-level Arcane Damage and a Chill to every
+-- enemy in data.radius, at most once per data.cooldownSeconds.
 function ShieldService._shatterIceShell(self: typeof(ShieldService), state: ShieldState)
 	local player = Players:GetPlayerFromCharacter(state.character)
 	local hrp = getRoot(state.character)
@@ -433,9 +315,9 @@ function ShieldService._teardown(self: typeof(ShieldService), state: ShieldState
 end
 
 -- One watcher per shielded player. Prunes expired buckets on a poll and
--- exits when the last bucket dies — absorbed dry or expired — or the
--- character goes away. TNT owners whose buckets lapse mid-window detonate
--- from here.
+-- exits when the last bucket dies -- absorbed dry or expired -- or the
+-- character goes away. Tagged buckets that lapse mid-window report from
+-- here.
 function ShieldService._ensureWatcher(self: typeof(ShieldService), state: ShieldState)
 	if state.running then
 		return
@@ -444,10 +326,10 @@ function ShieldService._ensureWatcher(self: typeof(ShieldService), state: Shield
 	task.spawn(function()
 		while state.character.Parent and #state.buckets > 0 do
 			task.wait(EXPIRY_POLL_SECONDS)
-			local before = ownerSetOf(state)
+			local before = taggedSetOf(state)
 			if pruneExpired(state) then
 				self:_stamp(state)
-				self:_detonateEndedOwners(state, before)
+				self:_fireEndedTags(state, before)
 			end
 		end
 		state.running = false
@@ -455,145 +337,20 @@ function ShieldService._ensureWatcher(self: typeof(ShieldService), state: Shield
 	end)
 end
 
--- Golem's Hammer: while the holder is Shielded, keep the Empower rig on
--- their HRP and pulse a Tremor every second — (Level x callback) damage to
--- everything in the radius.
-function ShieldService._ensureGolemLoop(_self: typeof(ShieldService), state: ShieldState, player: Player)
-	if state.golemRunning then
-		return
-	end
-	if not RelicService or (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) <= 0 then
-		return
-	end
-	state.golemRunning = true
-
-	task.spawn(function()
-		local empowerClone: Instance? = nil
-
-		local function clearEmpower()
-			if empowerClone then
-				for _, descendant in empowerClone:GetDescendants() do
-					if descendant:IsA("ParticleEmitter") then
-						descendant.Enabled = false
-					end
-				end
-				Debris:AddItem(empowerClone, 1)
-				empowerClone = nil
-			end
-		end
-
-		while state.character.Parent and #state.buckets > 0 do
-			local hrp = getRoot(state.character)
-			local humanoid = state.character:FindFirstChildOfClass("Humanoid")
-			local owned = (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) > 0
-
-			if hrp and humanoid and humanoid.Health > 0 and owned then
-				-- Empower rig up (GameAssets.Auras.Empower under the HRP).
-				if not empowerClone or not empowerClone.Parent then
-					local aurasFolder = ReplicatedStorage.GameAssets:FindFirstChild("Auras")
-					local template = aurasFolder and aurasFolder:FindFirstChild(AuraNames.Empower)
-					if template then
-						local clone = template:Clone()
-						clone.Name = AuraNames.Empower
-						clone.Parent = hrp
-						empowerClone = clone
-					end
-				end
-
-				-- Tremor pulse: VFX + AoE damage. The callback IS the per-level
-				-- per-second damage, so the pulse always pays out and the number
-				-- lives only in RelicData.
-				local damagePerLevel = RelicService:GetRelicEffect(player, RelicNames["Golem's Hammer"]) or 0
-				local tremorDamage = math.round(getRelicLevel(player) * damagePerLevel)
-
-				local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
-				local tremorFolder = vfxFolder and vfxFolder:FindFirstChild("Tremor")
-				local tremorTemplate = tremorFolder and tremorFolder:FindFirstChild("Tremor")
-				if tremorTemplate then
-					local tremor = tremorTemplate:Clone()
-					if tremor:IsA("Model") then
-						tremor:ScaleTo(tremor:GetScale() * TREMOR_RADIUS / TREMOR_VFX_AUTHORED_RADIUS)
-					end
-					for _, part in tremor:GetDescendants() do
-						if part:IsA("BasePart") then
-							part.Anchored = true
-							part.CanCollide = false
-							part.CanQuery = false
-						end
-					end
-					tremor:PivotTo(CFrame.new(hrp.Position - Vector3.new(0, TREMOR_Y_OFFSET, 0)))
-
-					tremor.Parent = workspace.IgnoreInstances.ArcaneSpells
-
-					for _, descendant in tremor.EarthTremor.Explode:GetDescendants() do
-						if descendant:IsA("ParticleEmitter") then
-							descendant:Emit(TREMOR_EMIT_COUNT)
-						end
-					end
-
-					for _, descendant in tremor.EarthTremor.Main:GetDescendants() do
-						if descendant:IsA("ParticleEmitter") then
-							descendant:Emit(0.25)
-						end
-					end
-
-					-- EVERY authored Sound on the rig, not a named subset: the
-					-- asset carries more than one (Explosion1 + Stomp) and they
-					-- sit on EarthTremor itself, outside the Explode attachment
-					-- the emitters are scoped to. Same recipe as the Bundle of
-					-- TNT blast, so adding a sound in Studio needs no code change.
-					for _, descendant in tremor:GetDescendants() do
-						if descendant:IsA("Sound") then
-							descendant:Play()
-						end
-					end
-
-					task.spawn(function()
-						task.wait(0.5)
-
-						for _, descendant in tremor:GetDescendants() do
-							if descendant:IsA("ParticleEmitter") then
-								descendant.Enabled = false
-							end
-						end
-
-						task.wait(TREMOR_FADE_OUT_SECONDS)
-
-						tremor:Destroy()
-					end)
-				end
-
-				if tremorDamage > 0 and getDamageService() then
-					Breakable.HitInRadius(hrp.Position, TREMOR_RADIUS, player)
-					forEachEnemyInRadius(hrp.Position, TREMOR_RADIUS, function(_model, targetHumanoid)
-						getDamageService():TakeDamage(player, targetHumanoid, tremorDamage, false, false, nil, true)
-					end)
-				end
-			else
-				clearEmpower()
-			end
-
-			task.wait(TREMOR_INTERVAL)
-		end
-
-		clearEmpower()
-		state.golemRunning = false
-	end)
-end
-
 --[ Public API ]--
 
 -- Grants a NEW shield bucket on `targetPlayer`, applied by
 -- `applierPlayer`, worth `fraction` of the APPLIER's MaxHealth, lasting
--- `duration` seconds. Self-grants pass the same player twice. Returns the
--- granted value (0 when nothing landed) so sharers (Earth Summoning Horn)
--- know what to mirror.
+-- `duration` seconds. Self-grants pass the same player twice. `tag`
+-- (optional) marks the bucket for OnTaggedShieldEnded. Returns the
+-- granted value (0 when nothing landed).
 function ShieldService.GrantShield(
 	self: typeof(ShieldService),
 	applierPlayer: Player,
 	targetPlayer: Player,
 	fraction: number,
-	duration: number
+	duration: number,
+	tag: string?
 ): number
 	local state = self:_getState(targetPlayer)
 	if not state then
@@ -612,35 +369,15 @@ function ShieldService.GrantShield(
 	if headroom <= 0 then
 		return 0
 	end
-	-- Golem's Hammer and Earth Summoning Horn: the HOLDER's Barriers are
-	-- data.barrierBonus stronger each (additive; still inside the cap).
-	local strength = 1
-	for _, relicName in { RelicNames["Golem's Hammer"], RelicNames["Earth Summoning Horn"] } do
-		if RelicService and (RelicService:GetSpecificRelicRegistry(targetPlayer, relicName) or 0) > 0 then
-			local row = RelicData[relicName]
-			strength += (row and row.data and row.data.barrierBonus) or 0
-		end
-	end
-	local value = math.min(applierHumanoid.MaxHealth * fraction * strength, headroom)
-
-	-- Earth Summoning Horn's solo half: a holder who owns it keeps every
-	-- Barrier they gain longer (data.durationBonus). Shares to allies
-	-- below use the ORIGINAL duration.
-	local holderDuration = duration
-	if
-		RelicService
-		and (RelicService:GetSpecificRelicRegistry(targetPlayer, RelicNames["Earth Summoning Horn"]) or 0) > 0
-	then
-		local horn = RelicData[RelicNames["Earth Summoning Horn"]]
-		holderDuration *= 1 + ((horn and horn.data and horn.data.durationBonus) or 0)
-	end
+	local value = math.min(applierHumanoid.MaxHealth * fraction, headroom)
 
 	local wasEmpty = #state.buckets == 0
 
 	table.insert(state.buckets, {
 		value = value,
-		expiresAt = os.clock() + holderDuration,
+		expiresAt = os.clock() + duration,
 		ownerId = applierPlayer.UserId,
+		tag = tag,
 	})
 	self:_stamp(state)
 
@@ -656,15 +393,15 @@ function ShieldService.GrantShield(
 		self:_burstEmitters(state)
 	end
 
-	-- Pop on EVERY grant — fresh or stacked.
+	-- Pop on EVERY grant -- fresh or stacked.
 	if TextIndicatorService then
 		local head = (state.character:FindFirstChild("Head") or getRoot(state.character)) :: BasePart?
 		if head then
 			TextIndicatorService:ShowIndicator(
 				targetPlayer,
 				head,
-				-- "Barrier" is the USER-FACING name; the enum stays "Shielded"
-				-- because marker names and the aura ASSET folder are keyed on it.
+				-- The enum stays "Shielded" because marker names and the aura
+				-- ASSET folder are keyed on it.
 				"Shield!",
 				Color3.fromRGB(220, 220, 220)
 			)
@@ -672,179 +409,24 @@ function ShieldService.GrantShield(
 	end
 	self:_ensureWatcher(state)
 
-	-- Earth Summoning Horn: SELF-applied Barriers mirror 75% of the value
-	-- to allies in radius. Gated to self-applies so the mirror can never
-	-- recurse (mirrored grants are applier ~= target).
-	--
-	-- Allies no longer need to be Stonebound: the card says "Allies also
-	-- receive", full stop, and the relic is NC now — requiring an aura the
-	-- player may not be able to produce would make it dead on pickup.
-	if
-		applierPlayer == targetPlayer
-		and RelicService
-		and (RelicService:GetSpecificRelicRegistry(applierPlayer, RelicNames["Earth Summoning Horn"]) or 0) > 0
-	then
-		local shareFraction = RelicService:GetRelicEffect(applierPlayer, RelicNames["Earth Summoning Horn"]) or 0
-		local hrp = getRoot(state.character)
-		if shareFraction > 0 and hrp then
-			for _, ally in Players:GetPlayers() do
-				if ally ~= applierPlayer then
-					local allyHrp = getRoot.fromPlayer(ally)
-					if allyHrp and (allyHrp.Position - hrp.Position).Magnitude <= SUMMONING_HORN_RADIUS then
-						self:GrantShield(applierPlayer, ally, fraction * shareFraction, duration)
-					end
-				end
-			end
-		end
-	end
-
-	-- Golem's Hammer wants a loop whenever its owner is shielded.
-	self:_ensureGolemLoop(state, targetPlayer)
-
 	return value
-end
-
--- Space Sandwich (Earth bridge Rare): called by DamageService on every hit
--- its owner takes. While Stonebound, grants the card's Barrier, at most
--- once per data.cooldownSeconds so a swarm cannot keep it topped.
-function ShieldService.TrySpaceSandwichBarrier(self: typeof(ShieldService), player: Player)
-	if not RelicService then
-		return
-	end
-	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Space Sandwich"]) or 0) <= 0 then
-		return
-	end
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	if not hrp or not hrp:FindFirstChild(AuraNames.Stonebound) then
-		return
-	end
-	local entry = RelicData[RelicNames["Space Sandwich"]]
-	local data = entry and entry.data or {}
-	local now = os.clock()
-	if now - (self._sandwichLastAt[player.UserId] or -math.huge) < (data.cooldownSeconds or 8) then
-		return
-	end
-	local fraction = RelicService:GetRelicEffect(player, RelicNames["Space Sandwich"]) or 0
-	if fraction <= 0 then
-		return
-	end
-	self._sandwichLastAt[player.UserId] = now
-	self:GrantShield(player, player, fraction, data.barrierSeconds or 4)
-end
-
--- Cheezburger (Earth Rare, 2026-10-30): called by DamageService on every
--- hit its owner takes. Grants the card's Barrier, at most once per
--- data.cooldownSeconds.
-function ShieldService.TryPebblePouchBarrier(self: typeof(ShieldService), player: Player)
-	if not RelicService or (RelicService:GetSpecificRelicRegistry(player, RelicNames["Cheezburger"]) or 0) <= 0 then
-		return
-	end
-	local entry = RelicData[RelicNames["Cheezburger"]]
-	local data = (entry and entry.data) or {}
-	local now = os.clock()
-	if now - (self._pebbleLastAt[player.UserId] or -math.huge) < (data.cooldownSeconds or 5) then
-		return
-	end
-	local fraction = RelicService:GetRelicEffect(player, RelicNames["Cheezburger"]) or 0
-	if fraction <= 0 then
-		return
-	end
-	self._pebbleLastAt[player.UserId] = now
-	self:GrantShield(player, player, fraction, data.barrierSeconds or 3)
-end
-
--- Golden Steampunk Gloves: a MELEE hit rolls for a Barrier on its owner.
---
--- Chance, size and duration all come from RelicData so the card stays the
--- one source of truth.
-function ShieldService.TryGoldenGlovesBarrier(self: typeof(ShieldService), player: Player)
-	if not RelicService then
-		return
-	end
-	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golden Steampunk Gloves"]) or 0) <= 0 then
-		return
-	end
-
-	local entry = RelicData[RelicNames["Golden Steampunk Gloves"]]
-	local data = entry and entry.data
-	if not data then
-		return
-	end
-	-- The relic's own cooldown gates BEFORE the roll (2026-10-31), so a
-	-- fast weapon cannot buy extra rolls inside the window.
-	local now = os.clock()
-	if
-		now - (self._barrierProcLastAt[player.UserId] or -math.huge) < (data.barrierCooldown or BARRIER_PROC_COOLDOWN)
-	then
-		return
-	end
-	if math.random() > (data.barrierChance or 0) then
-		return
-	end
-	self._barrierProcLastAt[player.UserId] = now
-
-	local fraction = data.barrierPercent or 0
-	if fraction > 0 then
-		self:GrantShield(player, player, fraction, data.barrierSeconds or GOLDEN_GLOVES_DURATION)
-	end
-end
-
--- Robloxian Battle Shield: called by VFXService on every successful arcane
--- cast by its owner: the card's Barrier for data.barrierSeconds. (Its
--- Stonebound half left with the auras, 2026-10-31.)
-function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: Player)
-	if not RelicService then
-		return
-	end
-	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Robloxian Battle Shield"]) or 0) <= 0 then
-		return
-	end
-	local fraction = RelicService:GetRelicEffect(player, RelicNames["Robloxian Battle Shield"]) or 0
-	local entry = RelicData[RelicNames["Robloxian Battle Shield"]]
-	local seconds = (entry and entry.data and entry.data.barrierSeconds) or 5
-	if fraction > 0 then
-		self:GrantShield(player, player, fraction, seconds)
-	end
-end
-
--- Golem's Hammer (2026-10-31): called by DamageService on every hit its
--- owner takes. Grants data.hitBarrierPercent for data.hitBarrierSeconds,
--- at most once per data.hitBarrierCooldown; the Barrier then keeps the
--- Tremor loop running.
-function ShieldService.TryGolemBarrier(self: typeof(ShieldService), player: Player)
-	if not RelicService or (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) <= 0 then
-		return
-	end
-	local entry = RelicData[RelicNames["Golem's Hammer"]]
-	local data = (entry and entry.data) or {}
-	local now = os.clock()
-	if now - (self._golemLastAt[player.UserId] or -math.huge) < (data.hitBarrierCooldown or 1) then
-		return
-	end
-	local fraction = data.hitBarrierPercent or 0
-	if fraction <= 0 then
-		return
-	end
-	self._golemLastAt[player.UserId] = now
-	self:GrantShield(player, player, fraction, data.hitBarrierSeconds or 3)
 end
 
 -- Spends buckets against `damage`, returning what they couldn't absorb.
 -- Called by DamageService:PlayerTakeDamage after every damage reduction
 -- and before Humanoid application. Buckets drain soonest-expiring first;
--- a TNT applier whose buckets are absorbed dry detonates from here.
+-- tagged buckets absorbed dry report from here.
 function ShieldService.AbsorbShieldDamage(self: typeof(ShieldService), player: Player, damage: number): number
 	local state = self._pools[player.UserId]
 	if not state or state.character ~= player.Character then
 		return damage
 	end
 
-	local before = ownerSetOf(state)
+	local before = taggedSetOf(state)
 
 	pruneExpired(state)
 	if #state.buckets == 0 then
-		self:_detonateEndedOwners(state, before)
+		self:_fireEndedTags(state, before)
 		return damage
 	end
 
@@ -870,7 +452,7 @@ function ShieldService.AbsorbShieldDamage(self: typeof(ShieldService), player: P
 	end
 
 	self:_stamp(state)
-	self:_detonateEndedOwners(state, before)
+	self:_fireEndedTags(state, before)
 
 	if #state.buckets == 0 then
 		self:_teardown(state)
@@ -888,16 +470,24 @@ function ShieldService.GetShieldValue(self: typeof(ShieldService), player: Playe
 	return totalOf(state)
 end
 
+--[ Retired entry points ]--
+
+-- The relics behind these left with the 2026-11-01 Earth rework (their
+-- RelicData rows are `retired`). DamageService, VFXService and
+-- MeleeWeapon still call in; each is a no-op so nothing dead runs, and
+-- the method can go the day its caller does.
+function ShieldService.TrySpaceSandwichBarrier(_self: typeof(ShieldService), _player: Player) end
+function ShieldService.TryPebblePouchBarrier(_self: typeof(ShieldService), _player: Player) end
+function ShieldService.TryGoldenGlovesBarrier(_self: typeof(ShieldService), _player: Player) end
+function ShieldService.TryRobloxionShield(_self: typeof(ShieldService), _player: Player) end
+function ShieldService.TryGolemBarrier(_self: typeof(ShieldService), _player: Player) end
+
 --[ Lifecycle ]--
 
 function ShieldService.Start(self: typeof(ShieldService))
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self._pools[player.UserId] = nil
-		self._barrierProcLastAt[player.UserId] = nil
-		self._sandwichLastAt[player.UserId] = nil
-		self._pebbleLastAt[player.UserId] = nil
 		self._iceShellLastAt[player.UserId] = nil
-		self._tntLastAt[player.UserId] = nil
 	end)
 end
 

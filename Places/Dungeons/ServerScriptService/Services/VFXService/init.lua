@@ -764,6 +764,11 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	--     replicated ManaCostReductionPercent attribute by PlayerStatsService.
 	manaCostMultiplier *= 1 - ((player:GetAttribute("ManaCostReductionPercent") :: number?) or 0)
 
+	--   * Korblox Evil Eye (2026-11-01): every everyCasts-th cast at
+	--     costMultiplier. ArcaneService prices it here and counts it once
+	--     the cast is committed below.
+	manaCostMultiplier *= ArcaneService:GetEvilEyeCostMultiplier(player)
+
 	local effectiveManaCost = ArcaneData[vfxName].manaCost * manaCostMultiplier
 
 	-- Korblox Mage Staff: the owner's every castsPerFree-th cast costs
@@ -816,6 +821,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 
 	ArcaneService:SetPlayerArcaneCooldown(player, vfxName, newCooldown)
 	self:_commitCast(player, freeCast)
+	ArcaneService:CommitEvilEyeCast(player, vfxName)
 
 	-- Mystical Staff of Cyan: the cast is COMMITTED (mana paid, cooldown
 	-- stamped), so drop a sigil at the caster's feet. Equipped casts

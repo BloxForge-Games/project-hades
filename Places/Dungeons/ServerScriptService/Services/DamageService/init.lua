@@ -34,7 +34,6 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local RelicService = require(ServerScriptService.Services.RelicService)
 local Breakable = require(ServerScriptService.Components.Breakable)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
-local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
 local ShieldService = require(ServerScriptService.Services.ShieldService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
@@ -62,8 +61,6 @@ local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
-local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
-local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 
 -- Second-value reader. Relics whose card reads "base X, increased to Y"
 -- keep X in the callback and Y in RelicData's `data` table, because a
@@ -118,6 +115,10 @@ export type TargetStatuses = {
 	statusCount: number,
 }
 
+-- A one-shot guaranteed crit a relic armed (ForceNextCrit): when it lapses
+-- unspent, and what to do to the target as it is spent.
+type ForcedCrit = { expiresAt: number?, onHit: ((targetModel: Model) -> ())? }
+
 local DamageService = {
 	Name = "DamageService",
 	Dependencies = {
@@ -140,6 +141,10 @@ local DamageService = {
 	-- Rolling per-player log of damage that actually reached HEALTH (post
 	-- shield / post-mitigation) — Astral Cloak's dodge heal consumes it.
 	_recentDamageTaken = {} :: { [number]: { { t: number, amount: number } } },
+	-- Forced crits (2026-11-01): [userId][lane] = the one-shot a relic armed
+	-- (ForceNextCrit). "Melee" is spent by the next melee weapon hit,
+	-- "Arcane" by the next spell / arcane hit; TakeDamage consumes them.
+	_forcedCrits = {} :: { [number]: { [string]: ForcedCrit } },
 }
 
 -- StatusConditionService requires this module at load (its DoT ticks land
@@ -158,7 +163,9 @@ end
 --[ Constants ]--
 
 -- Baseline crit chance every hit has before any relic or aura.
-local DEFAULT_CRITICAL_CHANCE = 5
+-- 5 -> 10 (2026-11-01): with guaranteed crits in every tree, ordinary hits
+-- crit often enough for the Critical Damage line to be felt.
+local DEFAULT_CRITICAL_CHANCE = 10
 -- x1.5 -> x1.75 (2026-10-28) so crit chance is worth taking.
 local DEFAULT_CRITICAL_MULTIPLIER = 1.75
 local RESISTED_COLOR3 = DamageIndicatorColors.Resisted
@@ -399,12 +406,6 @@ function DamageService.PlayerTakeDamage(
 	-- callback owns the 0.50 multiplier).
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Slateskin Potion"]) > 0 then
 		damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Slateskin Potion"]) or 1)
-	end
-
-	-- Stonebound, the weapon enchantment (2026-10-31): its Damage Reduction
-	-- while any equipped weapon carries it (EnchantmentData owns the number).
-	if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Stonebound) then
-		damage = damage * (1 - (EnchantmentData[EnchantmentNames.Stonebound].damageReduction or 0))
 	end
 
 	-- Gear lines (BonusStatData "DamageReduction"): the worn armor's summed
@@ -691,6 +692,84 @@ function DamageService.WithRelicKnockback(_self: typeof(DamageService), fn: () -
 	end
 end
 
+--[ Forced crits ]--
+
+-- Arms a one-shot guaranteed Critical Strike for `player` (2026-11-01):
+-- the next damage instance on `lane` -- "Melee" (a melee weapon hit,
+-- isMelee) or "Arcane" (a spell or other arcane hit, isMagic) -- rolls its
+-- crit at 100, and the arm is spent. Relic bursts (the untyped lane) and
+-- the gimmicks' own typed hits (made under WithRelicKnockback: Flame Wave,
+-- the frost orbs) never consume it, so the Flaming Bo Staff's Nth weapon
+-- hit and the Katana's next spell hit are exactly the hits that crit.
+-- `seconds` lapses an unspent arm (nil = until spent); `onHit` runs with
+-- the target as the arm is spent, before the damage lands, for the status
+-- the relic rides on the crit. Re-arming a lane replaces its arm.
+function DamageService.ForceNextCrit(
+	self: typeof(DamageService),
+	player: Player,
+	lane: "Melee" | "Arcane",
+	seconds: number?,
+	onHit: ((targetModel: Model) -> ())?
+)
+	local lanes = self._forcedCrits[player.UserId] or {}
+	self._forcedCrits[player.UserId] = lanes
+	lanes[lane] = {
+		expiresAt = if seconds then os.clock() + seconds else nil,
+		onHit = onHit,
+	}
+end
+
+-- Drops an unspent arm on `lane`.
+function DamageService.ClearForcedCrit(self: typeof(DamageService), player: Player, lane: "Melee" | "Arcane")
+	local lanes = self._forcedCrits[player.UserId]
+	if lanes then
+		lanes[lane] = nil
+	end
+end
+
+-- The live arm on `lane`, if any (a lapsed one is dropped here).
+function DamageService._liveForcedCrit(self: typeof(DamageService), player: Player, lane: string): ForcedCrit?
+	local lanes = self._forcedCrits[player.UserId]
+	local arm = if lanes then lanes[lane] else nil
+	if not arm then
+		return nil
+	end
+	if arm.expiresAt and os.clock() >= arm.expiresAt then
+		lanes[lane] = nil
+		return nil
+	end
+	return arm
+end
+
+-- True while `player` has an unspent arm on `lane`.
+function DamageService.HasForcedCrit(self: typeof(DamageService), player: Player, lane: "Melee" | "Arcane"): boolean
+	return self:_liveForcedCrit(player, lane) ~= nil
+end
+
+-- Spends the arm this hit matches -- Melee for a melee hit, else Arcane for
+-- an arcane one -- and returns it, or nil when none is up.
+function DamageService._consumeForcedCrit(
+	self: typeof(DamageService),
+	player: Player,
+	isMelee: boolean,
+	isMagic: boolean
+): ForcedCrit?
+	local lanes = self._forcedCrits[player.UserId]
+	if not lanes then
+		return nil
+	end
+	local lane: string? = if isMelee and self:_liveForcedCrit(player, "Melee")
+		then "Melee"
+		elseif isMagic and self:_liveForcedCrit(player, "Arcane") then "Arcane"
+		else nil
+	if not lane then
+		return nil
+	end
+	local arm = lanes[lane]
+	lanes[lane] = nil
+	return arm
+end
+
 -- Pushes a regular sim mob away from the hit (see KNOCKBACK_*). Called
 -- once per landed hit, before the damage branches split, with the hit's
 -- kind read BEFORE any conversion flips it.
@@ -759,13 +838,16 @@ function DamageService._postDamage(
 	self._onDamageModules["Jail"](player, humanoid, procCoefficient, isMagic == true)
 	-- Lightning Horn (2026-10-31; crits only before): ANY damage instance
 	-- has data.strikeChance (arcaneStrikeChance on a spell) to call a strike
-	-- (data.cooldown paces it).
+	-- (data.cooldown paces it). 2026-11-01: a Critical Strike ALWAYS calls
+	-- one when data.critAlways is set, the same cooldown pacing it.
 	local hornChance = relicData(
 		RelicNames["Lightning Horn of the Heavens"],
 		if isMagic == true then "arcaneStrikeChance" else "strikeChance",
 		0.2
 	)
-	if math.random() < hornChance then
+	local hornRow: any = RelicData[RelicNames["Lightning Horn of the Heavens"]]
+	local hornCritAlways = hornRow ~= nil and hornRow.data ~= nil and hornRow.data.critAlways == true
+	if (wasCrit and hornCritAlways) or math.random() < hornChance then
 		self:_tryLightningHornStrike(player, humanoid)
 	end
 
@@ -823,27 +905,6 @@ function DamageService._tryLightningOrbStormcharge(
 	if chance > 0 and math.random() <= chance then
 		AuraService:SetAura(player, AuraNames.Stormcharged, character)
 	end
-end
-
--- Earth Protection Orb (Earth Rare): flat bonus damage = the callback's
--- fraction of the attacker's live Barrier, while they are Stonebound.
-function DamageService._protectionOrbBonus(
-	_self: typeof(DamageService),
-	player: Player,
-	snapshot: RelicSnapshot
-): number
-	if DamageService.RelicCount(snapshot, RelicNames["Earth Protection Orb"]) <= 0 then
-		return 0
-	end
-	local hrp = getRoot.fromPlayer(player)
-	if not hrp or not hrp:FindFirstChild(AuraNames.Stonebound) then
-		return 0
-	end
-	local fraction = DamageService.RelicEffect(snapshot, RelicNames["Earth Protection Orb"])
-	if type(fraction) ~= "number" then
-		return 0
-	end
-	return ShieldService:GetShieldValue(player) * fraction
 end
 
 -- Ninja Whip (Storm bridge Rare): while its owner is Stormcharged, a
@@ -999,11 +1060,9 @@ function DamageService.GetCritParameters(
 		critChance += relicData(RelicNames["Shuriken of the Crescent Moon"], "critChanceBonus", 5)
 	end
 
-	-- Stormcharged, the weapon enchantment (2026-10-31): flat points on every
-	-- hit while any equipped weapon carries it.
-	if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Stormcharged) then
-		critChance += EnchantmentData[EnchantmentNames.Stormcharged].critChanceBonus or 0
-	end
+	-- Stormcharged, the weapon enchantment (2026-11-01 rules): points on
+	-- every hit, both equipped weapons adding (PlayerStatsService).
+	critChance += PlayerStatsService:GetEnchantmentStat(player, "CritChance")
 
 	local casterHrp = getRoot.fromPlayer(player)
 	local isStormcharged = casterHrp ~= nil and casterHrp:FindFirstChild(AuraNames.Stormcharged) ~= nil
@@ -1138,11 +1197,11 @@ end
 -- +5% Throwing Bolts = x1.25, never compounding), with Painted on top,
 -- capped at VULNERABILITY_CAP so stacked debuffs cannot run away.
 function DamageService._targetVulnerabilityMultiplier(
-	self: typeof(DamageService),
+	_self: typeof(DamageService),
 	player: Player,
 	targetModel: Model,
 	isMagic: boolean?,
-	statuses: TargetStatuses?
+	_statuses: TargetStatuses?
 ): number
 	local vulnerability = 0
 
@@ -1196,13 +1255,6 @@ function DamageService._targetVulnerabilityMultiplier(
 
 	-- Blight, the weapon enchantment (2026-10-31): +15% to a target carrying
 	-- ANY Status, every lane, outside the Shock cap like Petrified.
-	if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Blight) then
-		local targetStatuses: TargetStatuses = statuses or self:GetTargetStatuses(targetModel)
-		if targetStatuses.statusCount > 0 then
-			multiplier *= 1 + (EnchantmentData[EnchantmentNames.Blight].statusDamageBonus or 0)
-		end
-	end
-
 	return multiplier
 end
 
@@ -1222,16 +1274,14 @@ function DamageService._gearDamageBonus(
 	isMelee: boolean,
 	isConvertedSpell: boolean
 ): number
+	-- Enchantment stats (2026-11-01 rules): always on from both equipped
+	-- weapons, adding, whichever weapon is drawn (PlayerStatsService).
 	local fraction = 0
 	if isMagic then
-		if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Frostburst) then
-			fraction += EnchantmentData[EnchantmentNames.Frostburst].arcaneDamageBonus or 0
-		end
+		fraction += PlayerStatsService:GetEnchantmentStat(player, "ArcaneDamage")
 		fraction += PlayerStatsService:GetGearStat(player, "ArcaneDamage")
 	elseif not isConvertedSpell then
-		if WeaponLoadoutService:GetEnchantmentForHit(player, isMelee) == EnchantmentNames.Enflamed then
-			fraction += EnchantmentData[EnchantmentNames.Enflamed].weaponDamageBonus or 0
-		end
+		fraction += PlayerStatsService:GetEnchantmentStat(player, "WeaponDamage")
 		fraction += PlayerStatsService:GetWeaponLineDamage(player, isMelee)
 	end
 	return damage * fraction
@@ -1386,13 +1436,6 @@ function DamageService.TakeDamage(
 				)
 		)
 
-	-- Earth Protection Orb: while Stonebound, weapon and spell hits add a
-	-- share of the attacker's live Barrier as flat damage. Typed: relic
-	-- bursts skip it.
-	if not untypedOnly then
-		totalDamage += self:_protectionOrbBonus(player, snapshot)
-	end
-
 	-- Weapon Mastery set bonus (all 3 Ruinseeker pieces): +10% weapon
 	-- damage, additive with the relic sum. Typed — skipped on the
 	-- untyped lane.
@@ -1434,6 +1477,17 @@ function DamageService.TakeDamage(
 	local critChance, critMultiplier = self:GetCritParameters(player, isMagic, isMelee, targetModel, snapshot, statuses)
 	if untypedOnly then
 		critChance = -1 -- relic bursts never crit on the untyped lane
+	elseif DamageService._relicPushDepth == 0 then
+		-- A forced crit (ForceNextCrit): a weapon's or a spell's own hit
+		-- spends the arm its lane matches and crits for certain. The
+		-- gimmicks' typed hits run under WithRelicKnockback and pass it by.
+		local forced = self:_consumeForcedCrit(player, isMelee == true, isMagic == true)
+		if forced then
+			critChance = 100
+			if forced.onHit then
+				forced.onHit(targetModel)
+			end
+		end
 	end
 
 	local mobName = targetModel.Name
@@ -1591,6 +1645,7 @@ function DamageService.Start(self: typeof(DamageService))
 		self._shurikenLastRefund[player.UserId] = nil
 		self._stormExtendLast[player.UserId] = nil
 		self._recentDamageTaken[player.UserId] = nil
+		self._forcedCrits[player.UserId] = nil
 	end)
 end
 
