@@ -41,6 +41,9 @@ local ROOM_BOUND_TYPES: { [string]: boolean } = {
 	[DropTypes.Mana] = true,
 	[DropTypes.Health] = true,
 }
+-- A Coin that spawned in a Gem's place (DropService: the grunt rows while
+-- Gems are off) is room-bound too; the spawner stamps this.
+local ROOM_BOUND_ATTRIBUTE = "RoomBound"
 
 -- The one emitter DropData `particleScale` resizes (Base.Attachment.Shine);
 -- the drop sparkle and the Collected burst keep their authored size.
@@ -134,7 +137,8 @@ function Drop:Start()
 		end)
 	end
 
-	local dungeonService = if ROOM_BOUND_TYPES[self._dropType] then Blitz.OptionalService("DungeonService") else nil
+	local roomBound = ROOM_BOUND_TYPES[self._dropType] or self.Instance:GetAttribute(ROOM_BOUND_ATTRIBUTE) == true
+	local dungeonService = if roomBound then Blitz.OptionalService("DungeonService") else nil
 	if dungeonService then
 		-- Connected at spawn, so only a combat room entered AFTER this drop
 		-- appeared counts as the next one.

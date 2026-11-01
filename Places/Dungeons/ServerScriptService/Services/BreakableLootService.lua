@@ -597,11 +597,14 @@ function BreakableLootService._onBroken(self: typeof(BreakableLootService), mode
 		end
 	end
 
-	-- Orb: one roll per pot; on a hit, one public Health or Mana orb, a
-	-- coin flip between them, exactly as a grunt's corpse drops them.
-	if math.random() < POT.orbChance then
-		local orbType = if math.random() < 0.5 then DropTypes.Health else DropTypes.Mana
-		DropService.OnDropRequested:Fire(origin, orbType, 1, 1, 1, 1, false)
+	-- Orbs: a Health roll and a Mana roll per pot (BreakableLootData
+	-- healthOrbChance / manaOrbChance); each hit is one public orb,
+	-- exactly as a grunt's corpse drops them.
+	if math.random() < POT.healthOrbChance then
+		DropService.OnDropRequested:Fire(origin, DropTypes.Health, 1, 1, 1, 1, false)
+	end
+	if math.random() < POT.manaOrbChance then
+		DropService.OnDropRequested:Fire(origin, DropTypes.Mana, 1, 1, 1, 1, false)
 	end
 end
 

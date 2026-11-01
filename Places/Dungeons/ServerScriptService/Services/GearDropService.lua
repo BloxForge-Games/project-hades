@@ -28,6 +28,7 @@ local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRa
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 
 -- DungeonService is never required here: consumers reach it through
 -- Blitz.OptionalService at call time or its signals (the service graph runs
@@ -992,6 +993,17 @@ function GearDropService.DropGear(
 	local countMin = enemyConfig.dropCount[1]
 	local countMax = enemyConfig.dropCount[2]
 	local dropCount = math.random(countMin, countMax)
+	-- The Boss chest pays the TIER's piece count when the tier names one
+	-- (DifficultyData bossGearPieces: 1 / 2 / 3 / 4 Easy -> Nightmare,
+	-- 2026-10-31); the dungeon's dropCount row is the fallback. Reached at
+	-- call time: DungeonService is a consumer of this service.
+	if enemyType == EnemyTypes.Boss then
+		local dungeonService = Blitz.OptionalService("DungeonService")
+		local tier = dungeonService and dungeonService:GetDifficultyScale()
+		if tier and typeof(tier.bossGearPieces) == "number" and tier.bossGearPieces > 0 then
+			dropCount = tier.bossGearPieces
+		end
+	end
 
 	-- GUARANTEED COUNT. A rolled entry can fail to BUILD — its prefab or
 	-- armor-set folder missing under GameAssets (_buildDropModel /

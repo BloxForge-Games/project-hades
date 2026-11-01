@@ -771,12 +771,15 @@ function ShieldService.TryGoldenGlovesBarrier(self: typeof(ShieldService), playe
 	if not data then
 		return
 	end
-	if math.random() > (data.barrierChance or 0) then
+	-- The relic's own cooldown gates BEFORE the roll (2026-10-31), so a
+	-- fast weapon cannot buy extra rolls inside the window.
+	local now = os.clock()
+	if
+		now - (self._barrierProcLastAt[player.UserId] or -math.huge) < (data.barrierCooldown or BARRIER_PROC_COOLDOWN)
+	then
 		return
 	end
-
-	local now = os.clock()
-	if now - (self._barrierProcLastAt[player.UserId] or -math.huge) < BARRIER_PROC_COOLDOWN then
+	if math.random() > (data.barrierChance or 0) then
 		return
 	end
 	self._barrierProcLastAt[player.UserId] = now

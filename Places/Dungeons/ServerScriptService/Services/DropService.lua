@@ -48,14 +48,15 @@ local function difficultyMultiplier(field: string): number
 	return if dungeonService then dungeonService:GetRewardScale(field) else 1
 end
 
--- The run tier's Gem multiplier (DifficultyData.GemScale: the tier's
--- per-run `gems` target over its floors' authored rows). 1 with no run.
-local function gemScale(): number
+-- The run tier's multiplier on the grunt rows (DifficultyData.MobCoinScale:
+-- the tier's per-run `mobCoins` target over its authored rows). 1 with
+-- no run.
+local function mobCoinScale(): number
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	if not dungeonService or not dungeonService:GetRun() then
 		return 1
 	end
-	return DifficultyData.GemScale(dungeonService:GetDifficultyScale())
+	return DifficultyData.MobCoinScale(dungeonService:GetDifficultyScale())
 end
 
 -- `value` x `scale` as a whole number WITHOUT per-pickup rounding bias: the
@@ -66,6 +67,15 @@ local function scaleStochastic(value: number, scale: number): number
 	local whole = math.floor(scaled)
 	return whole + (if math.random() < scaled - whole then 1 else 0)
 end
+
+-- Gem drops. Off since 2026-10-31: Gems have no sink (the Merchant left
+-- the event pool). While off, every Gem request (the grunt rows, the
+-- Miniboss purse, the treasure chests' and the Coffin's Gem bits) spawns
+-- as a COIN pickup instead (2026-11-01), its value scaled at spawn by the
+-- tier's MobCoinScale so a run's grunts pay DifficultyData `mobCoins`,
+-- and room-bound like a Gem was. Flip it back on with the Merchant;
+-- the Gem escrow and HUD readout are still wired.
+local GEMS_ENABLED = false
 
 -- Relic bonuses on currency pickups (Pot Of Gold +50%), summed into one
 -- BONUS fraction. Each magnitude comes from its own callback, so the
@@ -295,11 +305,26 @@ function DropService.Start(self: typeof(DropService))
 			ownerId: number?,
 			fromChest: boolean?
 		)
+			-- Gems have no sink since the Merchant left (2026-10-31): the
+			-- rows stay authored and pay Coins (see GEMS_ENABLED).
+			local asMobCoins = dropType == DropTypes.Gems and not GEMS_ENABLED
+			if asMobCoins then
+				dropType = DropTypes.Coins
+			end
 			for _ = 1, math.random(minDropRate, maxDropRate) do
 				task.wait(IS_BOSS_COIN_DROP_DELAY)
 
+				local value = math.random(minValue or 1, maxValue or 1)
+				if asMobCoins then
+					value = math.max(1, scaleStochastic(value, mobCoinScale()))
+				end
 				local drop = game.ReplicatedStorage.GameAssets.Drops.Default:Clone()
 				drop:SetAttribute(Attributes.IsBoss, isBoss or false)
+				if asMobCoins then
+					-- Stays until the next combat room, like a Gem did
+					-- (Server/Components/Drop ROOM_BOUND_ATTRIBUTE).
+					drop:SetAttribute("RoomBound", true)
+				end
 				if ownerId then
 					-- Private drop: spawned invisible (below), revealed only by
 					-- the owner's Drop component, and the server refuses anyone
@@ -311,7 +336,7 @@ function DropService.Start(self: typeof(DropService))
 					-- stays silent (it would be constant).
 					drop:SetAttribute("ChestDrop", true)
 				end
-				drop:SetAttribute(Attributes.DropValue, math.random(minValue or 1, maxValue or 1))
+				drop:SetAttribute(Attributes.DropValue, value)
 				drop:SetAttribute(Attributes.DropType, dropType)
 				drop:SetAttribute(Attributes.ImageId, DropData[dropType].image)
 
@@ -348,11 +373,11 @@ function DropService.Start(self: typeof(DropService))
 			--   * Dragon Lantern (Cursed): x3 Gems and Coins, both taxed on
 			--     hit (DamageService). Callback returns the multiplier.
 			--   * Greater Shrine "Fortune": Gems DROPS only, run-scoped.
-			-- Before the bonuses, the TIER's GemScale (DifficultyData): the
-			-- rows are authored once, the scale lands the run on its tier's
-			-- `gems` target. No dungeon scale: Gems are the run currency.
+			-- Before the bonuses, the TIER's MobCoinScale (DifficultyData):
+			-- the rows are authored once, the scale lands the run on its
+			-- tier's target. No dungeon scale: Gems are the run currency.
 			value = math.round(
-				scaleStochastic(value, gemScale())
+				scaleStochastic(value, mobCoinScale())
 					* (1 + getRelicCoinBonus(player))
 					* getDragonLanternMultiplier(player)
 					* (1 + PlayerStatsService:GetGreaterShrineEffect(player, "Coin"))
@@ -360,9 +385,10 @@ function DropService.Start(self: typeof(DropService))
 			RunEscrowService:AddGems(player, value)
 			self.OnCoinCollected:Fire(player.Name, value)
 		elseif dropType == DropTypes.Coins then
-			-- COINS, permanent Gold: the miniboss / boss chests only
-			-- (EncounterChestService splits DifficultyData `chestCoins`).
-			-- Bonuses:
+			-- COINS, permanent Gold: the miniboss / boss chests
+			-- (EncounterChestService splits DifficultyData `chestCoins`) and,
+			-- since 2026-11-01, every grunt (the Gem rows paid as Coins,
+			-- already scaled to `mobCoins` at spawn). Bonuses:
 			--   * Pot Of Gold (+25% Coins and Gems, getRelicCoinBonus).
 			--   * Dragon Lantern (x3 Coins and Gems, taxed on hit).
 			--   * Explorer set bonus (all 3 Adventurers pieces): x1.10.

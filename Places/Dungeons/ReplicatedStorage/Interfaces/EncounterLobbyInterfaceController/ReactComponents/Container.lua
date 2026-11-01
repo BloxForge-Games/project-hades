@@ -59,7 +59,10 @@ end
 --[ Component ]--
 
 local function Container(props: any)
-	local data = props.data
+	-- A relic offer on screen fades the banner out (2026-10-31): treat the
+	-- lobby as absent for the fade effect below, and it comes back the
+	-- same way when the pick resolves.
+	local data = if props.offerOpen then nil else props.data
 
 	local secondsRef = React.useRef(nil)
 	local secondsStrokeRef = React.useRef(nil)

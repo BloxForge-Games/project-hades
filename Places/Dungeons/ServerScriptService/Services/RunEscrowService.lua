@@ -19,12 +19,14 @@
 	How a run ends decides the share (design call, 2026-10-30):
 	  * CLEAR (the exit portal, :ClaimRewards; or a leave / death after the
 	    final boss is down): ALL the Coins and Crystals bank.
-	  * FULL DEATH, WIPE or LEAVE before the clear: HALF the Coins and
-	    Crystals bank (OUT_OF_RUN_KEEP), the rest is lost. A DOWNED player
-	    (revive window open) loses nothing yet: the bank waits for
-	    LifeService.OnPlayerFullyDied, so a revive bought in the window
+	  * FULL DEATH, WIPE or LEAVE before the clear: ALL of it banks too
+	    (OUT_OF_RUN_KEEP = 1 since 2026-10-31; half from 2026-10-30 until
+	    then). Nothing a player picks up is ever lost; the run ending early
+	    only costs the chests not yet opened. The bank still waits for
+	    LifeService.OnPlayerFullyDied for a DOWNED player, so a revive
 	    keeps the run intact.
-	  * Gems die with the run on every path.
+	  * Gems die with the run on every path (and no longer drop: Gems have
+	    no sink since the Merchant left, DropService GEMS_ENABLED).
 
 	Beating the boss is not the same as getting out. The escrow stays on
 	screen after the boss dies, until the player walks through the exit
@@ -98,9 +100,10 @@ local RUN_GEMS_ATTRIBUTE = "RunGems"
 -- escrow is then safe -- a death banks it rather than losing it.
 -- DungeonService is a consumer of this module, so it is reached at call time.
 -- The share of the Coins and Arcane Crystals a player keeps when they are out
--- of a run they did not clear: fully dead, wiped, or gone (design call,
--- 2026-10-30). Their run gear spills either way.
-local OUT_OF_RUN_KEEP = 0.5
+-- of a run they did not clear: fully dead, wiped, or gone. ALL of it since
+-- 2026-10-31 (design call: dying costs the rest of the run, never what
+-- was picked up); half from 2026-10-30 until then. Kept as a knob.
+local OUT_OF_RUN_KEEP = 1
 
 local function runIsCleared(): boolean
 	local dungeonService = Blitz.OptionalService("DungeonService")

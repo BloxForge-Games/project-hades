@@ -16,6 +16,7 @@ local Players = game:GetService("Players")
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 
 local Container = require(script.ReactComponents.Container)
@@ -47,6 +48,27 @@ EncounterLobbyInterfaceController.EncounterLobbyData = RemoteProperty.Client({
 function EncounterLobbyInterfaceController._render(_self: typeof(EncounterLobbyInterfaceController))
 	return function()
 		local lobbyData, setLobbyData = React.useState(nil :: EncounterLobbyData?)
+		-- True between a relic hand being dealt and its outcome: the banner
+		-- fades out under the cards (RelicOfferInterfaceController's signals,
+		-- reached at mount so neither interface requires the other).
+		local offerOpen, setOfferOpen = React.useState(false)
+
+		React.useEffect(function()
+			local offer = Blitz.OptionalController("RelicOfferInterfaceController")
+			if not offer or not offer.Signals then
+				return function() end
+			end
+			local offered = offer.Signals.OnOffered:Connect(function()
+				setOfferOpen(true)
+			end)
+			local resolved = offer.Signals.OnResolved:Connect(function()
+				setOfferOpen(false)
+			end)
+			return function()
+				offered:Disconnect()
+				resolved:Disconnect()
+			end
+		end, {})
 
 		React.useEffect(function()
 			local disconnect = EncounterLobbyInterfaceController.EncounterLobbyData:Observe(
@@ -70,6 +92,7 @@ function EncounterLobbyInterfaceController._render(_self: typeof(EncounterLobbyI
 			-- handles both miniboss and boss approach lobbies.
 			Container = React.createElement(Container, {
 				data = lobbyData,
+				offerOpen = offerOpen,
 			}),
 		})
 	end
