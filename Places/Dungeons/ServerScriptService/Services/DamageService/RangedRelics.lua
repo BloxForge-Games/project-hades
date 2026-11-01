@@ -6,7 +6,6 @@
 	only:
 	  Red Hyperlaser Gun    (Blaze) +data.burningBonus against Burning enemies.
 	  Hyperlaser Gun        (Frost) +data.frostburstBonus while Frostburst.
-	  Newtrat's Tuskinator  (Neutral) its callback, always.
 	Their status halves are StatusConditionService rangedOnly rows; the
 	gimmick ranged relics (War Rocks, Rubber Chicken Launcher, Toxic
 	Mortar) are RelicGimmickService/Ranged. Returns BONUS damage for the
@@ -48,9 +47,6 @@ return function(
 		if root and root:FindFirstChild(AuraNames.Frostburst) then
 			fraction += dataOf(RelicNames["Hyperlaser Gun"], "frostburstBonus", 0.30)
 		end
-	end
-	if DamageService.RelicCount(snapshot, RelicNames["Newtrat's Tuskinator"]) > 0 then
-		fraction += DamageService.RelicEffect(snapshot, RelicNames["Newtrat's Tuskinator"]) or 0
 	end
 	if fraction <= 0 then
 		return 0

@@ -97,6 +97,21 @@ function RelicInterfaceController.IsOpen(self: typeof(RelicInterfaceController))
 	return self._isOpen
 end
 
+-- Opens or closes the tray: the C key and the toolbar's C button
+-- (ToolBarInterface, 2026-10-31) both land here. Opening asks the Windows
+-- scope first and is refused while the toggle is disallowed (downed,
+-- dead, a cutscene).
+function RelicInterfaceController.Toggle(self: typeof(RelicInterfaceController))
+	if self._isOpen then
+		self.Signals.SetVisible:Fire(false)
+		return
+	end
+	if not self._toggleAllowed or not InterfaceManagerController:RequestOpen(INTERFACE_ID) then
+		return
+	end
+	self.Signals.SetVisible:Fire(true)
+end
+
 function RelicInterfaceController._render(_self: typeof(RelicInterfaceController))
 	return function()
 		local relicData, setRelicData = React.useState(nil :: { hashmap: RelicList, list: { RelicNames.RelicNames } }?)
@@ -220,21 +235,13 @@ function RelicInterfaceController.Start(self: typeof(RelicInterfaceController))
 	end)
 
 	-- C toggles the tray (2026-10-31; it opened the run inventory until
-	-- gear started banking at pickup). Opening asks the Windows scope
-	-- first, as the tray's own button does through its registration, and
-	-- is refused while the toggle is hidden (downed, dead, a cutscene).
+	-- gear started banking at pickup). The toolbar's C button is the same
+	-- call.
 	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
 		if processed or input.KeyCode ~= TOGGLE_KEY then
 			return
 		end
-		if self._isOpen then
-			self.Signals.SetVisible:Fire(false)
-			return
-		end
-		if not self._toggleAllowed or not InterfaceManagerController:RequestOpen(INTERFACE_ID) then
-			return
-		end
-		self.Signals.SetVisible:Fire(true)
+		self:Toggle()
 	end)
 
 	-- The Merchant's "sell relics" option: force the tray open with the

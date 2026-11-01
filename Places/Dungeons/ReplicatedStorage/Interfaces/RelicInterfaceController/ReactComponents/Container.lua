@@ -8,20 +8,16 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextService = game:GetService("TextService")
 local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local RelicListFragment = require(script.Parent.RelicListFragment)
 local RelicEntryContainer = require(script.Parent.RelicEntryContainer)
-local RelicHoverTooltip = require(script.Parent.RelicHoverTooltip)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
-local shineStroke = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.shineStroke)
 local ShineRing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.ShineRing)
-local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 local localPlayer = Players.LocalPlayer
 
@@ -38,8 +34,6 @@ local localPlayer = Players.LocalPlayer
 -- The toggle plate's ring (see the effect in Container): the inventory
 -- tiles' animated shine outline in the tray's accent blue, at the plate
 -- stroke's own thickness, for as long as the toggle exists.
-local TOGGLE_RING_COLOR = Color3.fromRGB(105, 158, 186)
-local TOGGLE_RING_THICKNESS = 0.04
 local LOCKED_SLOT_NAME = "Relic Slot"
 local LOCKED_SLOT_RARITY = "Locked"
 local LOCKED_SLOT_RARITY_COLOR = Color3.fromRGB(141, 141, 141)
@@ -51,7 +45,7 @@ local LOCKED_SLOT_RARITY_COLOR = Color3.fromRGB(141, 141, 141)
 -- measured with TextService for the label's live size, so it follows the
 -- card on any screen, phones included. A description longer than that
 -- budget shrinks to fit instead of spilling.
-local DESCRIPTION_REFERENCE_RELIC = "Spartan Sword and Shield"
+local DESCRIPTION_REFERENCE_RELIC = "Golem's Hammer"
 local DESCRIPTION_FONT =
 	Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
 local DESCRIPTION_MIN_TEXT_SIZE = 8
@@ -86,8 +80,12 @@ local function fitTextSize(text: string, box: Vector2): number
 	return low
 end
 
-local LOCKED_SLOT_DESCRIPTION =
-	"You can unlock this <font color='rgb(108,196,255)'>Relic Slot</font> by purchasing it from the <font color='rgb(108,196,255)'>Merchant Shop</font> event."
+-- Slots follow the tier (RelicCapData.SlotsByDifficulty, 2026-10-31).
+local LOCKED_SLOT_DESCRIPTION = string.format(
+	"This <font color='rgb(108,196,255)'>Relic Slot</font> opens on harder difficulties: <font color='rgb(85,255,127)'>%d</font> slots on <font color='rgb(108,196,255)'>Normal</font>, <font color='rgb(85,255,127)'>%d</font> on <font color='rgb(108,196,255)'>Hard</font> and <font color='rgb(108,196,255)'>Nightmare</font>.",
+	RelicCapData.SlotsByDifficulty.Normal,
+	RelicCapData.SlotsByDifficulty.Hard
+)
 -- The card's own copy of the locked box sits on a lighter panel than the
 -- tray, so it carries its own tints, and drops the shadow.
 local LOCKED_CARD_LOOK = {
@@ -105,8 +103,10 @@ local DROP_MASKED_COLOR = Color3.fromRGB(61, 26, 23)
 -- The description card slides RIGHT as it fades in. Authored positions --
 -- keep these two in step with the card's own Position below, which is the
 -- resting pose it is re-snapped to before each slide.
-local DESCRIPTION_HIDDEN_POSITION = UDim2.fromScale(0.444, 0.372)
-local DESCRIPTION_SHOWN_POSITION = UDim2.fromScale(0.48401, 0.372)
+-- The card rests just right of the slim panel (2026-10-31; it sat at
+-- 0.484 when the panel was a 3 x 5 grid) and slides in from 0.04 left.
+local DESCRIPTION_HIDDEN_POSITION = UDim2.fromScale(0.34, 0.372)
+local DESCRIPTION_SHOWN_POSITION = UDim2.fromScale(0.38, 0.372)
 -- The appear: the slide keeps its quick-then-settle Quint, but the fade
 -- rides a Sine curve -- a Quint fade front-loads two thirds of the
 -- opacity into the first few frames and reads as a snap. The retract
@@ -117,9 +117,9 @@ local DESCRIPTION_APPEAR_FADE_SECONDS = 0.6
 -- Tray slide: the whole Container shifts left to park the relic list
 -- off-screen, and the toggle button counter-shifts so it stays reachable.
 local CONTAINER_SHOWN_POSITION = UDim2.fromScale(0.5, 0.5)
-local CONTAINER_HIDDEN_POSITION = UDim2.fromScale(0.27, 0.5)
-local TOGGLE_SHOWN_POSITION = UDim2.fromScale(0.222694, 0.486962)
-local TOGGLE_HIDDEN_POSITION = UDim2.fromScale(0.272694, 0.486962)
+-- The panel is one slim column (2026-10-31), so the park shift is a
+-- tenth of the screen.
+local CONTAINER_HIDDEN_POSITION = UDim2.fromScale(0.38, 0.5)
 
 local taskConnection = nil
 
@@ -127,7 +127,6 @@ local function Container(props: any)
 	local visible, setVisible = React.useState(false)
 	local selectedRelic, setSelectedRelic = React.useState(nil)
 	local descriptionSelectedRelic, setDescriptionSelectedRelic = React.useState(nil)
-	local notificationVisible, setNotificationVisible = React.useState(false)
 	-- Merchant sell session. Only ever true between the Merchant's
 	-- "sell relics" dialogue option and this tray closing.
 	local sellMode, setSellMode = React.useState(false)
@@ -135,53 +134,9 @@ local function Container(props: any)
 	-- (the two events cannot run at once), but tracked separately so each
 	-- button only ever answers to its own event.
 	local reforgeMode, setReforgeMode = React.useState(false)
-	-- The toggle button hides for a cutscene (2026-10-23), following the
-	-- local character's CutscenePlaying attribute the same way the topbar
-	-- icons do. The tray itself is already slid shut by the Windows scope
-	-- lock; this is the one piece of relic chrome that stayed on screen.
-	--
-	-- EXCEPT during a sell / reforge session: the Merchant and the Forge
-	-- run their dialogue under the same cutscene flag, force the tray open,
-	-- and wait on the tray CLOSING to move their "..." node on. The toggle
-	-- is the only way to close it, so hiding it there trapped the player
-	-- in the conversation (the first cut of this did exactly that).
-	local cutscenePlaying, setCutscenePlaying = React.useState(false)
-	-- The toggle also hides while the local player is downed or dead
-	-- (LifeController's death HUD hide, through toggleVisibleSignal).
-	local toggleAllowed, setToggleAllowed = React.useState(true)
-
-	React.useEffect(function()
-		local signal = props.toggleVisibleSignal
-		if not signal then
-			return nil
-		end
-		local connection = signal:Connect(function(allowed: boolean)
-			setToggleAllowed(allowed)
-		end)
-		return function()
-			connection:Disconnect()
-		end
-	end, {})
-
-	React.useEffect(function()
-		local connections: { RBXScriptConnection } = {}
-		local function bind(character: Model)
-			local function refresh()
-				setCutscenePlaying(character:GetAttribute(Attributes.CutscenePlaying) == true)
-			end
-			table.insert(connections, character:GetAttributeChangedSignal(Attributes.CutscenePlaying):Connect(refresh))
-			refresh()
-		end
-		table.insert(connections, localPlayer.CharacterAdded:Connect(bind))
-		if localPlayer.Character then
-			bind(localPlayer.Character)
-		end
-		return function()
-			for _, connection in connections do
-				connection:Disconnect()
-			end
-		end
-	end, {})
+	-- The tray has no toggle of its own since 2026-10-31: the toolbar's C
+	-- button and the C key open it (RelicInterfaceController.Toggle), and
+	-- the controller refuses while the player is downed or in a cutscene.
 
 	-- Unavailable buttons keep a DIM of their identity color (gold Sell,
 	-- blue Reforge) and mask their label as "???" until their event
@@ -222,53 +177,10 @@ local function Container(props: any)
 	local descriptionFrameRef = React.useRef(nil)
 	local descriptionLabelRef = React.useRef(nil)
 	local descriptionTextSize, setDescriptionTextSize = React.useState(14)
-	-- The hover tooltip (RelicHoverTooltip): the relic under the mouse and
-	-- its slot's rect, in pixels relative to the tray root. Mouse only --
-	-- a touch tap selects the slot and opens the description card, which
-	-- says the same things, so touch never shows it.
-	local hoveredRelic, setHoveredRelic = React.useState(nil :: any)
-	local hoverEnabled = UserInputService.MouseEnabled or not UserInputService.TouchEnabled
-	local function onSlotHover(relicName: string?, slot: GuiObject?)
-		if not hoverEnabled then
-			return
-		end
-		local root = containerRef.current
-		if not relicName or not slot or not root then
-			setHoveredRelic(nil)
-			return
-		end
-		setHoveredRelic({
-			relicName = relicName,
-			anchorPosition = slot.AbsolutePosition - root.AbsolutePosition,
-			anchorSize = slot.AbsoluteSize,
-		})
-	end
-	-- Closing the tray drops the tooltip: no MouseLeave fires for a slot
-	-- that slides away under the cursor.
-	React.useEffect(function()
-		if not visible then
-			setHoveredRelic(nil)
-		end
-	end, { visible })
-	local toggleButtonRef = React.useRef(nil)
-	local toggleRingAnchorRef = React.useRef(nil)
-	local notificationButtonRef = React.useRef(nil)
 
 	local visibleRef = React.useRef(visible)
 
-	-- The toggle's ring (TOGGLE_RING_*).
-	React.useEffect(function()
-		local anchor = toggleRingAnchorRef.current
-		if not anchor then
-			return nil
-		end
-		return shineStroke(anchor, TOGGLE_RING_THICKNESS, TOGGLE_RING_COLOR)
-	end, {})
 	local selectedRelicRef = React.useRef(selectedRelic)
-
-	React.useEffect(function()
-		setNotificationVisible(true)
-	end, { relicData })
 
 	-- A selected LOCKED slot that has since become open (a future unlock
 	-- raised the count) is no longer the thing the card describes: clear
@@ -443,15 +355,6 @@ local function Container(props: any)
 				TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
 				{ BackgroundTransparency = 0.5 }
 			):Play()
-
-			tweenGui.position(
-				toggleButtonRef.current,
-				TOGGLE_SHOWN_POSITION,
-				Enum.EasingDirection.Out,
-				Enum.EasingStyle.Quint,
-				0.5,
-				true
-			)
 		else
 			tweenGui.position(
 				containerRef.current,
@@ -473,68 +376,8 @@ local function Container(props: any)
 				TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
 				{ GroupTransparency = 1 }
 			):Play()
-
-			tweenGui.position(
-				toggleButtonRef.current,
-				TOGGLE_HIDDEN_POSITION,
-				Enum.EasingDirection.Out,
-				Enum.EasingStyle.Quint,
-				0.25,
-				true
-			)
 		end
 	end, { visible })
-
-	React.useEffect(function()
-		-- Stopped on unmount; the loop used to outlive the component.
-		local cancelled = false
-		task.spawn(function()
-			while not cancelled and task.wait(1) do
-				local button = notificationButtonRef.current
-				if not button then
-					continue
-				end
-				TweenService
-					:Create(
-						button,
-						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{ Rotation = 15 }
-					)
-					:Play()
-				task.wait(0.15)
-				TweenService:Create(
-					button,
-					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Rotation = -15 }
-				):Play()
-				task.wait(0.15)
-				TweenService
-					:Create(
-						button,
-						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{ Rotation = 15 }
-					)
-					:Play()
-				task.wait(0.15)
-				TweenService:Create(
-					button,
-					TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-					{ Rotation = -15 }
-				):Play()
-				task.wait(0.15)
-				TweenService
-					:Create(
-						button,
-						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{ Rotation = 0 }
-					)
-					:Play()
-			end
-		end)
-		return function()
-			cancelled = true
-		end
-	end, {})
 
 	-- Resolve the description for the currently-hovered relic ONCE per
 	-- render and reuse across the 4 label / visibility sites below.
@@ -623,11 +466,12 @@ local function Container(props: any)
 			end,
 		}),
 
+		-- The card sits just right of the slim panel (2026-10-31).
 		RelicDescriptionFrame = React.createElement("CanvasGroup", {
 			ref = descriptionFrameRef,
 
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.48401, 0.372),
+			Position = UDim2.fromScale(0.38, 0.372),
 			Size = UDim2.fromScale(0.424019, 0.291),
 			BackgroundTransparency = 1,
 		}, {
@@ -975,24 +819,22 @@ local function Container(props: any)
 		-- Sized for the slot ceiling (Shared/Data/RelicCapData.MaxSlots),
 		-- wrapped by the list layout. RelicListFragment draws exactly that
 		-- many boxes -- owned, empty, then locked past the run's open count.
+		-- The list shares the panel's rect, so the column of six centres on
+		-- it (box height 0.14 + padding 0.045 each, the 2026-10-31 export;
+		-- the box squares itself).
 		RelicListFrame = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.161879, 0.496712),
-			Size = UDim2.fromScale(0.287337, 0.512406),
+			Position = UDim2.fromScale(0.058, 0.496712),
+			Size = UDim2.fromScale(0.095, 0.512406),
 			BackgroundTransparency = 1,
 			ZIndex = 1,
 		}, {
-			-- Square, so the 3 x 5 wrap of square boxes fills it exactly.
-			UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
-				AspectRatio = 1,
-			}),
-
-			-- FillDirection / alignments are left at their defaults (Vertical,
-			-- Left, Top) -- the authored layout relies on exactly those.
 			UIListLayout = React.createElement("UIListLayout", {
 				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0.05, 0),
-				Wraps = true,
+				FillDirection = Enum.FillDirection.Vertical,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				Padding = UDim.new(0.045, 0),
 			}),
 
 			RelicListFragment = React.createElement(RelicListFragment, {
@@ -1003,158 +845,15 @@ local function Container(props: any)
 				setSelectedRelic = function(selectedData: { [any]: any })
 					setSelectedRelic(selectedData)
 				end,
-				onHover = onSlotHover,
 			}),
 		}),
 
-		-- The hover tooltip, at the root so it draws over the list and the
-		-- card alike (its own ZIndex puts it above both).
-		RelicHoverTooltip = React.createElement(RelicHoverTooltip, {
-			hovered = hoveredRelic,
-			rootSize = if containerRef.current then containerRef.current.AbsoluteSize else nil,
-		}),
-
-		ToggleButtonFrame = React.createElement("Frame", {
-			ref = toggleButtonRef,
-
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = TOGGLE_SHOWN_POSITION,
-			Size = UDim2.fromScale(0.035, 0.062),
-			BackgroundTransparency = 1,
-			Visible = toggleAllowed and (not cutscenePlaying or sellMode or reforgeMode),
-			ZIndex = 1,
-		}, {
-			UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
-				AspectRatio = 1,
-			}),
-
-			NotificationButtonFrame = React.createElement("Frame", {
-				ref = notificationButtonRef,
-
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.968, -0.01),
-				Rotation = -15,
-				Size = UDim2.fromScale(0.575, 0.575),
-				BackgroundTransparency = 0,
-				BackgroundColor3 = Color3.fromRGB(255, 102, 102),
-				ZIndex = 6,
-				Visible = notificationVisible,
-			}, {
-				UICorner = React.createElement("UICorner", {
-					CornerRadius = UDim.new(1, 0),
-				}),
-
-				UIStroke = React.createElement("UIStroke", {
-					ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-					Color = Color3.fromRGB(22, 22, 22),
-					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.075,
-					ZIndex = 6,
-				}),
-
-				TextLabel = React.createElement("TextLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(0.85, 0.85),
-					Text = "!",
-					TextColor3 = Color3.fromRGB(255, 255, 255),
-					TextScaled = true,
-					BackgroundTransparency = 1,
-					FontFace = Font.new(
-						"rbxasset://fonts/families/Montserrat.json",
-						Enum.FontWeight.Bold,
-						Enum.FontStyle.Normal
-					),
-				}),
-			}),
-
-			-- The tray toggle wears the toolbar's slot plate (2026-10-22): the
-			-- same flat blue-grey square, black border and bevel overlay as a
-			-- weapon slot, with the relic icon in it and no number.
-			ToggleImageButton = React.createElement("ImageButton", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromScale(1.15, 1.15),
-				BackgroundColor3 = Color3.fromRGB(43, 65, 85),
-				BackgroundTransparency = 0,
-				Image = "",
-				ImageColor3 = Color3.fromRGB(255, 255, 255),
-				ImageTransparency = 0,
-				ScaleType = Enum.ScaleType.Stretch,
-				ZIndex = 6,
-
-				[React.Event.Activated] = function()
-					setNotificationVisible(false)
-
-					setVisible(not visible)
-				end,
-			}, {
-				UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {
-					AspectRatio = 1,
-					AspectType = Enum.AspectType.FitWithinMaxSize,
-				}),
-
-				UICorner = React.createElement("UICorner", {
-					CornerRadius = UDim.new(0.1, 0),
-				}),
-
-				UIStroke = React.createElement("UIStroke", {
-					ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-					Color = Color3.fromRGB(0, 0, 0),
-					StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-					Thickness = 0.04,
-					ZIndex = 6,
-				}),
-
-				-- The ring's anchor (see TOGGLE_RING_*): a child frame's stroke
-				-- draws above the plate's own black border.
-				RingAnchor = React.createElement("Frame", {
-					ref = toggleRingAnchorRef,
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(1, 1),
-					BackgroundTransparency = 1,
-					ZIndex = 8,
-				}, {
-					UICorner = React.createElement("UICorner", {
-						CornerRadius = UDim.new(0.1, 0),
-					}),
-				}),
-
-				OuterOutlineImageLabel = React.createElement("ImageLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(1, 1),
-					BackgroundTransparency = 1,
-					Image = "rbxassetid://6096768861",
-					ScaleType = Enum.ScaleType.Stretch,
-					ImageColor3 = Color3.fromRGB(255, 255, 255),
-					ImageTransparency = 0.6,
-					ZIndex = 7,
-				}, {
-					UICorner = React.createElement("UICorner", {
-						CornerRadius = UDim.new(0.1, 0),
-					}),
-				}),
-
-				ToggleImageLabel = React.createElement("ImageLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromScale(0.8, 0.8),
-					BackgroundTransparency = 1,
-					Image = "rbxassetid://72334652371090",
-					ImageColor3 = Color3.fromRGB(255, 255, 255),
-					ImageTransparency = 0,
-					ScaleType = Enum.ScaleType.Fit,
-					ZIndex = 5,
-				}),
-			}),
-		}),
-
+		-- One slim column for the six boxes (2026-10-31), hugging the
+		-- left edge; the description card keeps its place.
 		RelicBackgroundFrame = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.106003, 0.496374),
-			Size = UDim2.fromScale(0.233005, 0.580662),
+			Position = UDim2.fromScale(0.058, 0.499879),
+			Size = UDim2.fromScale(0.095, 0.6087),
 			BackgroundColor3 = Color3.fromRGB(20, 31, 40),
 			BackgroundTransparency = 0,
 			ZIndex = 0,
@@ -1172,12 +871,12 @@ local function Container(props: any)
 			-- The animated shine ring (ShineRing), over the static stroke.
 			ShineRing = React.createElement(ShineRing, {
 				color = Color3.fromRGB(43, 65, 85),
-				thickness = 0.008,
-				cornerRadius = UDim.new(0.025, 0),
+				thickness = 0.02,
+				cornerRadius = UDim.new(0.085, 0),
 				active = visible,
 			}),
 			UICorner = React.createElement("UICorner", {
-				CornerRadius = UDim.new(0.025, 0),
+				CornerRadius = UDim.new(0.085, 0),
 			}),
 
 			-- A soft top-down shade on the plate (the 2026-10-22 export).
@@ -1203,14 +902,14 @@ local function Container(props: any)
 				ZIndex = 2,
 			}, {
 				UICorner = React.createElement("UICorner", {
-					CornerRadius = UDim.new(0.025, 0),
+					CornerRadius = UDim.new(0.12, 0),
 				}),
 			}),
 
 			UIStroke = React.createElement("UIStroke", {
 				Color = Color3.fromRGB(43, 65, 85),
 				StrokeSizingMode = Enum.StrokeSizingMode.ScaledSize,
-				Thickness = 0.008,
+				Thickness = 0.005,
 			}, {
 				UIGradient = React.createElement("UIGradient", {
 					Color = ColorSequence.new({

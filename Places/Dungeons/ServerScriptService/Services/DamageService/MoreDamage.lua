@@ -15,7 +15,7 @@
 --   Mystical Staff of Cyan   40% more Arcane Damage (owner)   typed; the
 --                            Sigil's +25% stays additive (MysticalSigil)
 --   Double-Bladed Scythe     100% more Weapon, Arcane deals 0 typed
---   Forbidden Box            100% more Arcane Damage          typed
+--   Forbidden Box            100% more Arcane, Weapon 50% less typed
 --   Sword of Eternal Abyss   50% more Damage                  every lane
 --
 -- "Typed" relics skip the untyped relic-burst lane like every Weapon /
@@ -64,6 +64,14 @@ return function(
 		end
 	elseif isMelee then
 		multiplier *= effect(snapshot, RelicNames["Glorious Sword"]) or 1
+	end
+
+	-- Forbidden Box's drawback (2026-10-31; a mana cost before): every
+	-- weapon lane deals data.weaponLess less.
+	if not isMagic and DamageService.RelicCount(snapshot, RelicNames["Forbidden Box"]) > 0 then
+		local box = RelicData[RelicNames["Forbidden Box"]]
+		local less = box and box.data and box.data.weaponLess
+		multiplier *= 1 - (if type(less) == "number" then less else 0.5)
 	end
 
 	-- Double-Bladed Scythe: the callback is the magnitude (1.00), less on

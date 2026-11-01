@@ -325,25 +325,13 @@ function RelicMachine:Start()
 			-- different primary archetype. Rarity weights are untouched -- only
 			-- the archetype spread is guaranteed.
 
-			-- CONTROLLED RANDOMNESS -- the pull's roles, at SHUFFLED positions
-			-- so nobody learns "the left one is the build pick":
-			--   3 offers: Synergy + Neutral + Wildcard.
-			--   2 offers (Pinata): Synergy + Wildcard -- the premium filter
-			--     already narrows the pool, so the Neutral slot is the one to
-			--     drop.
-			--   First machine: all Neutral. Nothing is owned yet, so Synergy
-			--     and Wildcard would both be no-ops; its archetype allowlist +
-			--     diversity rules do the shaping instead.
+			-- Every slot rolls RelicService.RollRandomRelicFromPool: a tree
+			-- drawn uniformly, a rarity from RelicRollConfig, a card drawn
+			-- uniformly. No slot roles, no affinity, no weighting of any kind
+			-- (design call, 2026-10-31).
 			-- STARTER MACHINE: STARTER_GUARANTEED_ELEMENTS slots (currently
-			-- ONE) are forced to an
-			-- ungated relic from a random element tree; the rest roll
-			-- normally and can come up elemental or Neutral on luck alone.
-			--
-			-- The guaranteed tree is picked fresh HERE, not locked for the run.
-			-- Nothing is ever removed from the pool -- the four trees this
-			-- machine skips can still appear at any later machine. What narrows a
-			-- run is element affinity (RelicService:GetElementAffinityWeight):
-			-- whichever of these the player takes gets heavier from then on.
+			-- ZERO) would be forced to an ungated relic from a random element
+			-- tree; the rest roll normally.
 			--
 			-- Which SLOT carries the guarantee is shuffled in with the frees,
 			-- so the pull cannot be read by position.

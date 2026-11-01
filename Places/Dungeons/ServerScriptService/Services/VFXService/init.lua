@@ -19,6 +19,13 @@ local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Ser
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
+
+-- Korblox Mage Staff (2026-10-31): stamped true on the Player while the
+-- owner's NEXT cast is the free one, so ArcaneController's cost and
+-- cooldown previews agree with the server. A literal, not an Attributes
+-- row, to keep that shared enum untouched; ArcaneController spells it the
+-- same way.
+local NEXT_SPELL_FREE_ATTRIBUTE = "NextSpellFree"
 local ArcaneLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.ArcaneLoadoutService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
 local Arcane = require(ServerScriptService.Submodules.Core.Source.Network.Arcane)
@@ -34,9 +41,8 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 -- Cast-site relic knobs. MUST mirror ArcaneController's client chain.
--- Forbidden Box (Cursed): mana costs from Arcane are x1.5 (2026-10-30; was
--- x2, which on a mana-bound caster ate most of its +100% damage).
-local FORBIDDEN_BOX_MANA_MULTIPLIER = 1.5
+-- (Forbidden Box's mana multiplier left 2026-10-31: its drawback is
+-- -50% weapon damage now, DamageService/MoreDamage.)
 -- Cast-cutscene i-frame length when a ArcaneData `cutscene` entry sets no
 -- duration. MUST match CutsceneController's DEFAULT_ARCANE_CUTSCENE_SECONDS.
 local DEFAULT_ARCANE_CUTSCENE_SECONDS = 2
@@ -146,6 +152,9 @@ local vfxServer = script.VFXServer
 
 local VFXService = {
 	Name = "VFXService",
+	-- [userId] = committed casts since the last free one (Korblox Mage
+	-- Staff); the castsPerFree-th is free.
+	_spellCastCounts = {} :: { [number]: number },
 	Dependencies = {
 		IgnoreListService,
 		PlayerEventService,
@@ -738,11 +747,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- ArcaneController:GetEffectiveManaCost -- that helper drives both the
 	-- cast precheck and the toolbar grey-out, and a drift here means the
 	-- UI lies about affordability:
-	--   * Forbidden Box (Cursed): x2 -- "Mana costs from Arcane are doubled".
 	local manaCostMultiplier = 1
-	if getRelicService():GetSpecificRelicRegistry(player, RelicNames["Forbidden Box"]) > 0 then
-		manaCostMultiplier = manaCostMultiplier * FORBIDDEN_BOX_MANA_MULTIPLIER
-	end
 	--   * Wizard Orb (2026-10-30): data.frostburstManaDiscount off while
 	--     Frostburst.
 	local discountRoot = getRoot.fromPlayer(player)
@@ -755,7 +760,18 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		manaCostMultiplier *= 1 - ((orb and orb.data and orb.data.frostburstManaDiscount) or 0.20)
 	end
 
+	--   * Mana Cost Reduction gear lines (BonusStatData), stamped as the
+	--     replicated ManaCostReductionPercent attribute by PlayerStatsService.
+	manaCostMultiplier *= 1 - ((player:GetAttribute("ManaCostReductionPercent") :: number?) or 0)
+
 	local effectiveManaCost = ArcaneData[vfxName].manaCost * manaCostMultiplier
+
+	-- Korblox Mage Staff: the owner's every castsPerFree-th cast costs
+	-- nothing and leaves no cooldown (_isNextCastFree; committed below).
+	local freeCast = self:_isNextCastFree(player)
+	if freeCast then
+		effectiveManaCost = 0
+	end
 
 	local arcaneData = ArcaneService:GetPlayerArcaneData(player)
 	if not arcaneData or arcaneData.mana - effectiveManaCost < 0 then
@@ -789,12 +805,17 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].duration, ArcaneData[vfxName].cooldown)
 	end
 
+	if freeCast then
+		newCooldown = 0
+	end
+
 	-- Re-read: the cooldown checks above may have yielded.
 	local latest = ArcaneService:GetPlayerArcaneData(player) or arcaneData
 	ArcaneService:SetPlayerArcaneData(player, latest.mana - effectiveManaCost, latest.maxMana)
 	ArcaneService:SetPlayerArcaneLastUsed(player, vfxName, tick())
 
 	ArcaneService:SetPlayerArcaneCooldown(player, vfxName, newCooldown)
+	self:_commitCast(player, freeCast)
 
 	-- Mystical Staff of Cyan: the cast is COMMITTED (mana paid, cooldown
 	-- stamped), so drop a sigil at the caster's feet. Equipped casts
@@ -810,7 +831,6 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- only. These sat above the mana / cooldown checks until 2026-10-30,
 	-- where a refused cast still paid out.
 	getShieldService():TryRobloxionShield(player)
-	getShieldService():TrySpartanStonebound(player)
 
 	-- The gimmick epics that trigger on a committed cast (Frost Wyrm, the
 	-- Frost Field's arming, ...).
@@ -1171,7 +1191,42 @@ end
 
 --[ Initializers ]--
 
+-- Korblox Mage Staff: true when the owner's next committed cast is the
+-- free one (every data.castsPerFree-th).
+function VFXService._isNextCastFree(self: typeof(VFXService), player: Player): boolean
+	local relicService = getRelicService()
+	if
+		not relicService
+		or (relicService:GetSpecificRelicRegistry(player, RelicNames["Korblox Mage Staff"]) or 0) <= 0
+	then
+		return false
+	end
+	local row = RelicData[RelicNames["Korblox Mage Staff"]]
+	local castsPerFree = (row and row.data and row.data.castsPerFree) or 3
+	return (self._spellCastCounts[player.UserId] or 0) % castsPerFree == castsPerFree - 1
+end
+
+-- Counts a committed cast (a free one restarts the count) and restamps
+-- the client's preview attribute.
+function VFXService._commitCast(self: typeof(VFXService), player: Player, wasFree: boolean)
+	self._spellCastCounts[player.UserId] = if wasFree then 0 else (self._spellCastCounts[player.UserId] or 0) + 1
+	player:SetAttribute(NEXT_SPELL_FREE_ATTRIBUTE, self:_isNextCastFree(player))
+end
+
 function VFXService.Start(self: typeof(VFXService))
+	game:GetService("Players").PlayerRemoving:Connect(function(player: Player)
+		self._spellCastCounts[player.UserId] = nil
+	end)
+	-- Picking the staff up (or dropping it) changes whether the next cast
+	-- is free: restamp so the toolbar's cost preview follows at once.
+	task.defer(function()
+		local relicService = getRelicService()
+		if relicService and relicService.Signals and relicService.Signals.OnRelicsUpdated then
+			relicService.Signals.OnRelicsUpdated:Connect(function(player: Player)
+				player:SetAttribute(NEXT_SPELL_FREE_ATTRIBUTE, self:_isNextCastFree(player))
+			end)
+		end
+	end)
 	-- Arcane domain requests. Every one is attributed to the SENDER: the
 	-- old methods took an explicit caster from the packet (with a TODO
 	-- about exploiters naming someone else); now the caster is `player`.

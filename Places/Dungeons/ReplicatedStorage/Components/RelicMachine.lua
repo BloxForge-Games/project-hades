@@ -25,6 +25,9 @@ local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
+-- Taps closer than this are one tap (the prompt is never locked locally).
+local TAP_DEBOUNCE_SECONDS = 0.5
+
 --[ Component Root ]--
 
 local RelicMachine = Component.new({
@@ -192,40 +195,39 @@ function RelicMachine:Start()
 		self.Instance:ScaleTo(value)
 	end)
 
+	-- The client never disables the prompt itself (2026-10-31): the SERVER
+	-- does on a real pull, and the instance replicates, so a refused tap
+	-- (relics full, dead, a stale attribute) leaves the machine usable. The
+	-- old local disable stranded the prompt whenever the server refused.
+	-- A short debounce stands in for the lock against double taps.
+	local lastTap = 0
 	self._proximityPrompt.Triggered:Connect(function(player: Player)
 		if self._ownerId ~= player.UserId then
 			return
 		end
-		-- At the relic cap the server refuses the pull (its red pop and
-		-- Error sound) and the machine stays whole, so the prompt must stay
-		-- up too: fire the tap through untouched, no bounce, no disable.
-		-- Both counts are server-stamped Player attributes (RelicService).
-		local owned = tonumber(player:GetAttribute(Attributes.OwnedRelicCount)) or 0
-		local slots = tonumber(player:GetAttribute(Attributes.RelicSlots))
-		if slots and owned >= slots then
-			DungeonNetwork.RelicMachinePromptTriggered.Fire({
-				Machine = self.Instance,
-				CFrame = self.Instance.PrimaryPart.CFrame,
-			})
+		local now = os.clock()
+		if now - lastTap < TAP_DEBOUNCE_SECONDS then
 			return
 		end
-		if self._canClick then
-			self._proximityPrompt.Enabled = false
-			self._canClick = false
-
+		lastTap = now
+		-- At the relic cap the server refuses (its red pop and Error sound)
+		-- and the machine stays whole: no bounce. Both counts are
+		-- server-stamped Player attributes (RelicService).
+		local owned = tonumber(player:GetAttribute(Attributes.OwnedRelicCount)) or 0
+		local slots = tonumber(player:GetAttribute(Attributes.RelicSlots))
+		local capped = slots ~= nil and owned >= slots
+		if not capped then
 			self._numberValue.Value = 1.25
-
 			TweenService:Create(
 				self._numberValue,
 				TweenInfo.new(1, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
 				{ Value = 1 }
 			):Play()
-
-			DungeonNetwork.RelicMachinePromptTriggered.Fire({
-				Machine = self.Instance,
-				CFrame = self.Instance.PrimaryPart.CFrame,
-			})
 		end
+		DungeonNetwork.RelicMachinePromptTriggered.Fire({
+			Machine = self.Instance,
+			CFrame = self.Instance.PrimaryPart.CFrame,
+		})
 	end)
 end
 

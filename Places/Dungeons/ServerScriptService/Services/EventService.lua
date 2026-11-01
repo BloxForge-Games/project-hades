@@ -412,6 +412,7 @@ function EventService._rollUsableRelics(
 	for relicName, data in RelicData do
 		if
 			data.rarity == rarity
+			and not data.retired
 			and RelicService:GetSpecificRelicRegistry(player, relicName) == 0
 			and (ignoreGates or RelicService:IsRelicRollEligible(relicName, granted :: any, player))
 		then
@@ -648,8 +649,10 @@ function EventService._wireDungeon(self: typeof(EventService), dungeon)
 						CollectionService:AddTag(pedestal, TagList.MerchantPedestal)
 						slotCFrames[slotIndex] = standCFrame(pedestal)
 					elseif pedestal.Name == RelicSlotShopData.PedestalName then
-						CollectionService:AddTag(pedestal, TagList.MerchantSlotPedestal)
-						slotUpgradeCFrame = standCFrame(pedestal)
+						-- The Relic Slot stand retired 2026-10-31: the open
+						-- count follows the run's tier (RelicCapData), so the
+						-- stand is removed from the room rather than tagged.
+						pedestal:Destroy()
 					end
 				end
 			end
@@ -1172,6 +1175,7 @@ function EventService._onReforgeRelic(
 	for candidateName, data in RelicData do
 		if
 			data.rarity == rarity
+			and not data.retired
 			and candidateName ~= relicName
 			and RelicService:GetSpecificRelicRegistry(player, candidateName) == 0
 		then
@@ -1235,14 +1239,18 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 		return byPlayer[roomId]
 	end
 
-	-- Distinct and unowned, NO combo gating: the merchant sells C and C2
-	-- relics the player cannot use YET (design call — a shop can sell
-	-- you ambition; vending machines are where usability is enforced).
-	-- Bucketed by rarity with each bucket shuffled, so a slot "rolls a
-	-- rarity, then takes the next unowned relic of it".
+	-- Distinct and unowned, NO combo gating: the merchant sells C relics
+	-- the player cannot use YET (design call -- a shop can sell you
+	-- ambition; vending machines are where usability is enforced). Shelved
+	-- relics never stock. Bucketed by rarity with each bucket shuffled, so
+	-- a slot "rolls a rarity, then takes the next unowned relic of it".
 	local byRarity: { [string]: { string } } = {}
 	for relicName, data in RelicData do
-		if BUY_PRICES[data.rarity] and RelicService:GetSpecificRelicRegistry(player, relicName) == 0 then
+		if
+			BUY_PRICES[data.rarity]
+			and not data.retired
+			and RelicService:GetSpecificRelicRegistry(player, relicName) == 0
+		then
 			local bucket = byRarity[data.rarity]
 			if not bucket then
 				bucket = {}

@@ -27,7 +27,14 @@ function Fireworks.new(
 end
 
 function Fireworks:PlayEffect()
-	local fireworks = (getRelicModelTemplate(RelicNames["Summer Fireworks"]) :: Model):Clone()
+	-- No model (GameAssets.Relics has none under any folder): the hit still
+	-- lands server-side, only the visual is skipped.
+	local template = getRelicModelTemplate(RelicNames["Summer Fireworks"])
+	if not template then
+		warn("[Fireworks] No model for Summer Fireworks under GameAssets.Relics; effect skipped")
+		return
+	end
+	local fireworks = (template :: Model):Clone()
 	local character = self._character
 	local targetCharacter = self._targetCharacter
 

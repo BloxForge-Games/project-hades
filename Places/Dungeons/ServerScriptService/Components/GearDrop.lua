@@ -38,18 +38,15 @@ local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Networ
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
+local rollWeaponEnchantment =
+	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
+local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollBonusStats)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
 
--- Weapon-drop enchantment roll: ENCHANTMENT_CHANCE of rolling one at all,
--- then a uniform pick from the pool. Looter only — the status
--- enchantments were removed (relics own status application now).
--- Armor never rolls enchantments.
-local ENCHANTMENT_CHANCE = 0.25
-local ENCHANTMENT_POOL = {
-	EnchantmentNames.Looter,
-}
+-- Weapon-drop enchantment roll: rollWeaponEnchantment (by rarity, then a
+-- uniform pick of the five). Armor never rolls one.
 
 --[ Constants ]--
 
@@ -138,23 +135,17 @@ function GearDrop:_buildInventoryEntry(
 	) / 100
 
 	if gearType == GearTypes.Weapon then
-		local enchantment = EnchantmentNames.None
-		if math.random() <= ENCHANTMENT_CHANCE then
-			enchantment = ENCHANTMENT_POOL[math.random(1, #ENCHANTMENT_POOL)]
-		end
 		return {
 			uuid = uuid,
 			name = gearName,
-			enchantment = enchantment,
+			enchantment = rollWeaponEnchantment.roll(rarity),
 			rarity = rarity,
 			level = level,
 			upgrades = 0,
 			equipSlot = 0,
 			scalarMultiplier = scalarMultiplier,
-			-- Placeholder retained per design decision; bonusStats is
-			-- shelved but the field stays so a future re-enable
-			-- doesn't require a profile migration.
-			bonusStats = {},
+			-- The gear lines (BonusStatData): LinesFor(rarity) weapon stats.
+			bonusStats = rollBonusStats(gearType, rarity),
 			shiny = false,
 		}
 	else
@@ -174,7 +165,8 @@ function GearDrop:_buildInventoryEntry(
 			upgrades = 0,
 			equipped = false,
 			scalarMultiplier = scalarMultiplier,
-			bonusStats = {},
+			-- The gear lines (BonusStatData): LinesFor(rarity) armor stats.
+			bonusStats = rollBonusStats(gearType, rarity),
 			shiny = false,
 		}
 	end

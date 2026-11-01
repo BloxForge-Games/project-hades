@@ -103,7 +103,6 @@ local ArcaneController = {
 -- mobile) read this, so the grey-out can never disagree with the cast
 -- gate. MUST mirror VFXService:OnVFXRequested's server-side multiplier
 -- chain, or the local precheck drifts from what the server charges:
---   * Forbidden Box (Cursed): x1.5 -- "Arcane costs 50% more Mana".
 --   * Wizard Orb (2026-10-30): data.frostburstManaDiscount off while
 --     Frostburst.
 function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), vfxName: string): number
@@ -114,9 +113,6 @@ function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), 
 
 	local manaCostMultiplier = 1
 	local ownedRelics = RelicController:GetRelicsFromUserId(Players.LocalPlayer.UserId)
-	if ownedRelics and (ownedRelics[RelicNames["Forbidden Box"]] or 0) > 0 then
-		manaCostMultiplier = manaCostMultiplier * 1.5
-	end
 	local character = Players.LocalPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if
@@ -127,6 +123,16 @@ function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), 
 	then
 		local orb = RelicData[RelicNames["Wizard Orb"]]
 		manaCostMultiplier *= 1 - ((orb and orb.data and orb.data.frostburstManaDiscount) or 0.20)
+	end
+
+	-- Mana Cost Reduction gear lines (ManaCostReductionPercent, stamped by
+	-- PlayerStatsService), mirroring VFXService's server chain.
+	manaCostMultiplier *= 1 - ((Players.LocalPlayer:GetAttribute("ManaCostReductionPercent") :: number?) or 0)
+
+	-- Korblox Mage Staff: the server stamps NextSpellFree while the next
+	-- cast is the free one (VFXService._commitCast).
+	if Players.LocalPlayer:GetAttribute("NextSpellFree") == true then
+		return 0
 	end
 
 	return arcaneIndexData.manaCost * manaCostMultiplier
@@ -228,6 +234,12 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].lifetime, ArcaneData[vfxName].cooldown)
 	else
 		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].duration, ArcaneData[vfxName].cooldown)
+	end
+
+	-- Korblox Mage Staff's free cast leaves no cooldown (the server mirrors
+	-- this in VFXService._onCastRequested).
+	if Players.LocalPlayer:GetAttribute("NextSpellFree") == true then
+		newCooldown = 0
 	end
 
 	self._arcaneData.mana = self._arcaneData.mana - effectiveManaCost
@@ -337,6 +349,14 @@ function ArcaneController.Start(self: typeof(ArcaneController))
 	-- Relic pickups can change effective COSTS with mana untouched
 	-- (Forbidden Box at full mana). Re-announce so slot UIs re-evaluate.
 	RelicController.Signals.OnRelicsUpdated:Connect(function()
+		self.Signals.OnManaCostsChanged:Fire()
+	end)
+	-- So does the worn armor's Mana Cost Reduction (gear lines).
+	Players.LocalPlayer:GetAttributeChangedSignal("ManaCostReductionPercent"):Connect(function()
+		self.Signals.OnManaCostsChanged:Fire()
+	end)
+	-- And Korblox Mage Staff's free cast coming up.
+	Players.LocalPlayer:GetAttributeChangedSignal("NextSpellFree"):Connect(function()
 		self.Signals.OnManaCostsChanged:Fire()
 	end)
 

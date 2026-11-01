@@ -74,6 +74,10 @@ local FIELD_SCAN_SECONDS = 0.25
 
 local Frost = {}
 
+-- Icy Arctic Fowl: the next volley's time per player (every
+-- data.intervalSeconds; 2026-10-31, every second while Frostburst before).
+local fowlNextVolley: { [Player]: number } = {}
+
 type Wyrm = { expiresAt: number, nextBreath: number }
 local wyrms: { [Player]: Wyrm } = {}
 -- Mage Staff: [player][spell] = a field is still owed by that cast.
@@ -91,10 +95,24 @@ local function frostHit(player: Player, model: Model, humanoid: Humanoid, damage
 end
 
 -- A frost burst of `radius` at `position`, now.
-local function burstAt(player: Player, position: Vector3, radius: number, damage: number, chills: boolean)
+-- `chilledMultiplier` (Icy Arctic Fowl, 2026-10-31): an enemy already
+-- Chilled takes the burst that many times over.
+local function burstAt(
+	player: Player,
+	position: Vector3,
+	radius: number,
+	damage: number,
+	chills: boolean,
+	chilledMultiplier: number?
+)
 	helpers.hitBreakables(player, position, radius)
+	local statusService = if chilledMultiplier then helpers.statusService() else nil
 	forEachEnemyInRadius(position, radius, function(model: Model, humanoid: Humanoid)
-		frostHit(player, model, humanoid, damage, chills)
+		local amount = damage
+		if statusService and chilledMultiplier and statusService:IsStatusActive(model, StatusConditions.Chill) then
+			amount = damage * chilledMultiplier
+		end
+		frostHit(player, model, humanoid, amount, chills)
 	end)
 end
 
@@ -105,11 +123,12 @@ local function burstAfter(
 	position: Vector3,
 	radius: number,
 	damage: number,
-	chills: boolean
+	chills: boolean,
+	chilledMultiplier: number?
 )
 	task.delay(seconds, function()
 		if player.Parent then
-			burstAt(player, position, radius, damage, chills)
+			burstAt(player, position, radius, damage, chills, chilledMultiplier)
 		end
 	end)
 end
@@ -242,7 +261,15 @@ local function launchVolley(player: Player, root: BasePart)
 			end
 			local from = liveRoot.Position + Vector3.new(0, 2, 0)
 			helpers.fx("IceShard", from, target.Position, radius, SHARD_FLIGHT_SECONDS)
-			burstAfter(player, SHARD_FLIGHT_SECONDS, target.Position, radius, damage, false)
+			burstAfter(
+				player,
+				SHARD_FLIGHT_SECONDS,
+				target.Position,
+				radius,
+				damage,
+				false,
+				helpers.data(FOWL, "chilledMultiplier", 2)
+			)
 		end
 	end)
 end
@@ -309,15 +336,19 @@ function Frost.onTick(player: Player)
 	end
 
 	if not helpers.owns(player, FOWL) then
+		fowlNextVolley[player] = nil
 		return
 	end
 	local root = getRoot.fromPlayer(player)
-	if root and root:FindFirstChild(AuraNames.Frostburst) then
+	local now = os.clock()
+	if root and now >= (fowlNextVolley[player] or 0) then
+		fowlNextVolley[player] = now + helpers.data(FOWL, "intervalSeconds", 3)
 		launchVolley(player, root)
 	end
 end
 
 function Frost.onPlayerRemoved(player: Player)
+	fowlNextVolley[player] = nil
 	wyrms[player] = nil
 	pendingFields[player] = nil
 end
