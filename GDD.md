@@ -311,9 +311,11 @@ beats a Level 2 one of the same quality.
 ## Dungeon Mastery
 
 - **Dungeon Mastery**, per dungeon, levels 1 to 30, never resets. XP from clears, bosses,
-  difficulty, elites, challenges, Keystone Trial. Rewards are only Gold, EXP, titles, aura
-  cosmetics and other cosmetics (milestones at 5, 10, 15, 20, 25, and a title plus mount at 30).
-  **Never combat power or drop rate.**
+  difficulty, elites, challenges, Keystone Trial. Rewards are only Gold, EXP, Arcane Crystals
+  (every third level), titles, aura cosmetics and other cosmetics (milestones at 5, 10, 15, 20,
+  25, and a title plus mount at 30; a milestone pays both Gold and EXP). A level pays at most two
+  currencies: a milestone on a Crystals level pays Gold and Crystals. **Never combat power or
+  drop rate.**
 - **Wardrobe** (hub menu, 2026-10-31; built, its button held back until the cosmetics are ready
   to show): every cosmetic the player owns, a tab per kind (Titles,
   Banners, Cloaks, Mounts; armor, weapon and aura skins later), one worn per kind. Banners and
