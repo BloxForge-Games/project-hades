@@ -30,6 +30,9 @@
 	  dodges
 	      DodgeService.OnDodgeStarted / OnDodgeLanded, subscribed here; a
 	      tree module gets (player, from, to) once the dodge lands.
+	  OnPerfectDodge(player)
+	      RelicService.OnPlayerPerfectDodged, every Perfect Dodge
+	      (2026-11-01; the Katana's prime).
 	  clocks
 	      onHeartbeat(now) every frame, onTick(player) once a second for
 	      every player -- for the summons and the auras that fire on a
@@ -37,7 +40,7 @@
 
 	Each tree module is a table of optional handlers with the same names
 	(onMeleeSwing, onMeleeHit, onSpellCast, onSpellHit, onDodge,
-	onHeartbeat, onTick, onPlayerRemoved), so a new tree is a new child
+	onPerfectDodge, onHeartbeat, onTick, onPlayerRemoved), so a new tree is a new child
 	module and nothing else.
 
 	Damage typing is the trees' own (see each module): Blaze's waves and
@@ -63,6 +66,7 @@ type TreeModule = {
 	) -> ())?,
 	onMeleeHit: ((player: Player, model: Model, damage: number) -> ())?,
 	onDodge: ((player: Player, from: Vector3, to: Vector3) -> ())?,
+	onPerfectDodge: ((player: Player) -> ())?,
 	onSpellCast: ((player: Player, vfxName: string) -> ())?,
 	onSpellHit: ((player: Player, vfxName: string, model: Model) -> ())?,
 	onStatusTick: ((player: Player, model: Model, status: string) -> ())?,
@@ -182,6 +186,14 @@ function RelicGimmickService.OnAttackHit(
 	for _, tree in self._trees do
 		if tree.onAttackHit then
 			tree.onAttackHit(player, model, isMagic == true)
+		end
+	end
+end
+
+function RelicGimmickService.OnPerfectDodge(self: typeof(RelicGimmickService), player: Player)
+	for _, tree in self._trees do
+		if tree.onPerfectDodge then
+			tree.onPerfectDodge(player)
 		end
 	end
 end

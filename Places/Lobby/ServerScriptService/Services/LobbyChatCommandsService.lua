@@ -44,6 +44,15 @@
 	get none). A weapon whose data pins a rarity keeps it. A fresh uuid
 	is not in profile.Seen, so the piece wears the bag's NEW tag.
 
+	--- /bonusstat <StatKey percent | roll | clear> ---
+	--- /enchant <name | roll | clear> ---
+
+	Test edits to YOUR primary weapon's gear lines and enchantment (the
+	Dungeons place has the same two). Each saves the inventory and then
+	recomputes what reads it (PlayerStatsService) and re-instances the
+	held weapon (WeaponLoadoutService), the Blacksmith's commit sequence,
+	so the aura and the numbers change at once.
+
 	--- /tp [dungeon] [difficulty] ---
 
 	A TEST stand-in for the hub's queue. Reserves ONE private server of the
@@ -118,6 +127,59 @@ local function matchRarity(arg: string?): string?
 	return nil
 end
 
+local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
+
+-- The caller's PRIMARY weapon (equipSlot 1, else their first) and the
+-- Inventory table it sits in, for /enchant and /bonusstat; nil and the
+-- reply to give when there is none.
+local function findPrimaryWeapon(player: Player): ({ [string]: any }?, { [string]: any }?, string?)
+	local profile = DataService:GetProfileData(player)
+	if next(profile) == nil then
+		return nil, nil, "Your profile isn't loaded yet -- try again in a moment."
+	end
+	local inventory = profile.Inventory
+	local weapons = if type(inventory) == "table" then inventory[InventoryType.Weapon] else nil
+	if type(weapons) ~= "table" then
+		return nil, nil, "You have no weapons."
+	end
+	local target = nil
+	for _, item in weapons do
+		if type(item) == "table" and item.equipSlot == 1 then
+			target = item
+		end
+	end
+	target = target or weapons[1]
+	if type(target) ~= "table" then
+		return nil, nil, "You have no weapons."
+	end
+	return target, inventory, nil
+end
+
+-- Saves an edited weapon and brings the live state in line with it, the
+-- way BlacksmithService._commit does after an Imbue: the enchantment and
+-- gear-line sums, the stat attributes, then the held model (its
+-- Enchantment attribute is what the aura particles follow).
+local function commitWeaponEdit(player: Player, inventory: { [string]: any })
+	DataService:SetProfileValue(player, "Inventory", inventory)
+	PlayerStatsService:RecomputeGearStats(player)
+	PlayerStatsService:RecomputeStatAttributes(player)
+	WeaponLoadoutService:SetWeaponLoadout(player)
+end
+
+-- An enchantment's stored key from its key or its shown name, ignoring
+-- case ("frostbite" -> Frostburst, "corrosion" -> Blight).
+local function matchEnchantment(arg: string): string?
+	local lowered = string.lower(arg)
+	for key, row in EnchantmentData do
+		if string.lower(key) == lowered or string.lower(row.displayName) == lowered then
+			return key
+		end
+	end
+	return nil
+end
+
 -- The names of the weapons the data authors (both catalogues) and of the
 -- armor pieces, sorted so a draw is reproducible to read.
 local function catalogueNames(...: { [string]: any }): { string }
@@ -129,6 +191,15 @@ local function catalogueNames(...: { [string]: any }): { string }
 	end
 	table.sort(names)
 	return names
+end
+
+local function enchantmentNames(): string
+	local names = {}
+	for _, row in EnchantmentData do
+		table.insert(names, row.displayName)
+	end
+	table.sort(names)
+	return table.concat(names, ", ")
 end
 
 -- The spells the profile now has equipped, for the /wipedata reply. It
@@ -203,7 +274,14 @@ local teleportInFlight = false
 
 local LobbyChatCommandsService = {
 	Name = "LobbyChatCommandsService",
-	Dependencies = { TextIndicatorService, DataService, CurrencyService, ExperienceService } :: { any },
+	Dependencies = {
+		TextIndicatorService,
+		DataService,
+		CurrencyService,
+		ExperienceService,
+		PlayerStatsService,
+		WeaponLoadoutService,
+	} :: { any },
 }
 
 --[ Registry ]--
@@ -451,24 +529,9 @@ COMMANDS = {
 		usage = "/bonusstat <StatKey percent | roll | clear>",
 		description = "Studio-only: sets a real gear line on YOUR primary weapon (e.g. /bonusstat CritChance 8), rerolls its lines for its rarity (roll), or clears them. Keys: the BonusStatData rows.",
 		handler = function(player: Player, args: { string }): string?
-			local profile = DataService:GetProfileData(player)
-			if next(profile) == nil then
-				return "Your profile isn't loaded yet -- try again in a moment."
-			end
-			local inventory = profile.Inventory
-			local weapons = if type(inventory) == "table" then inventory[InventoryType.Weapon] else nil
-			if type(weapons) ~= "table" then
-				return "You have no weapons."
-			end
-			local target = nil
-			for _, item in weapons do
-				if type(item) == "table" and item.equipSlot == 1 then
-					target = item
-				end
-			end
-			target = target or weapons[1]
-			if type(target) ~= "table" then
-				return "You have no weapons."
+			local target, inventory, reason = findPrimaryWeapon(player)
+			if not target or not inventory then
+				return reason
 			end
 			-- Lines are the rolled map { [statKey] = fraction } (2026-10-31,
 			-- rollBonusStats); the key is matched ignoring case against
@@ -479,12 +542,12 @@ COMMANDS = {
 			end
 			if first == "clear" then
 				target.bonusStats = {}
-				DataService:SetProfileValue(player, "Inventory", inventory)
+				commitWeaponEdit(player, inventory)
 				return ("%s: gear lines cleared."):format(tostring(target.name))
 			end
 			if first == "roll" then
 				target.bonusStats = rollBonusStats("Weapon", target.rarity)
-				DataService:SetProfileValue(player, "Inventory", inventory)
+				commitWeaponEdit(player, inventory)
 				local texts = {}
 				for _, line in BonusStatData.Describe(target.bonusStats) do
 					table.insert(texts, line.text)
@@ -514,8 +577,42 @@ COMMANDS = {
 			local stats = if type(target.bonusStats) == "table" then target.bonusStats else {}
 			stats[key] = math.round(percent) / 100
 			target.bonusStats = stats
-			DataService:SetProfileValue(player, "Inventory", inventory)
+			commitWeaponEdit(player, inventory)
 			return ("%s: %s."):format(tostring(target.name), BonusStatData.Format(key, stats[key]))
+		end,
+	},
+	enchant = {
+		usage = "/enchant <name | roll | clear>",
+		description = "Puts an enchantment on YOUR primary weapon by name (Enflamed, Frostbite, Stormcharged, Corrosion, Stonebound), rolls one from the drop pool (roll), or removes it (clear).",
+		handler = function(player: Player, args: { string }): string?
+			local target, inventory, reason = findPrimaryWeapon(player)
+			if not target or not inventory then
+				return reason
+			end
+			local first = args[1] or ""
+			if first == "" then
+				return "Usage: /enchant <name | roll | clear>"
+			end
+			local enchantment: string
+			if first == "clear" then
+				enchantment = EnchantmentNames.None
+			elseif first == "roll" then
+				enchantment = rollWeaponEnchantment.pick(nil)
+			else
+				local matched = matchEnchantment(first)
+				if not matched then
+					return "Unknown enchantment. Names: " .. enchantmentNames()
+				end
+				enchantment = matched
+			end
+			-- The same field the drop roll and the Blacksmith's Imbue write;
+			-- the commit re-instances the held weapon so its aura follows.
+			target.enchantment = enchantment
+			commitWeaponEdit(player, inventory)
+			if enchantment == EnchantmentNames.None then
+				return ("%s: enchantment cleared."):format(tostring(target.name))
+			end
+			return ("%s: now %s."):format(tostring(target.name), EnchantmentData[enchantment].displayName)
 		end,
 	},
 	wipedata = {

@@ -78,10 +78,12 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local computePower = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.computePower)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
 local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
@@ -284,8 +286,25 @@ end
 
 -- One DoT tick's damage: the record's share of its applier's Power, the
 -- relic multiplier on top, never under 1.
+-- Corrosion (2026-11-01): the applier's summed Status Damage enchantment
+-- stat multiplies every tick (PlayerStatsService, both weapons adding).
+local function statusDamageMultiplier(player: Player?): number
+	if not player then
+		return 1
+	end
+	return 1 + PlayerStatsService:GetEnchantmentStat(player, "StatusDamage")
+end
+
 local function tickDamageOf(record: StatusRecord): number
-	return math.max(1, math.floor(powerOf(record.sourcePlayer) * (record.powerPerTick or 0) * record.dotMultiplier))
+	return math.max(
+		1,
+		math.floor(
+			powerOf(record.sourcePlayer)
+				* (record.powerPerTick or 0)
+				* record.dotMultiplier
+				* statusDamageMultiplier(record.sourcePlayer)
+		)
+	)
 end
 
 local function ownerHasAura(player: Player?, auraName: string?): boolean
@@ -817,14 +836,10 @@ local RELIC_HIT_STATUSES: {
 	}
 } =
 	{
-		-- The four tree openers (NC): weapon hits at the callback's chance,
-		-- spell hits at data.arcaneChance. The only applier rows left after
-		-- the 2026-10-31 cut; every other status comes from a relic's own
-		-- proc (a wave, a cloud, a strike, a shard).
-		{ relicName = RelicNames["Ye Olde Fire Breath Potion"], status = StatusConditions.Burn },
-		{ relicName = RelicNames["Frozen Blue Ice Crossbow"], status = StatusConditions.Chill },
-		{ relicName = RelicNames["Zombie Axe"], status = StatusConditions.Poison },
-		{ relicName = RelicNames["Static Shock Sheep"], status = StatusConditions.Shock },
+		-- The four tree openers left on 2026-11-01: statuses open from the
+		-- weapon ENCHANTMENTS (EnchantmentData openerStatus / openerChance,
+		-- read in ApplyWeaponOnHitStatuses) and from each tree's own relics
+		-- (a wave, an arrow, a cloud, a strike, a shard).
 		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (the
 		-- callback is its damage multiplier, so the chance lives here).
 		{
@@ -953,6 +968,17 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 		else 1
 
 	local chanceByStatus = self:_sumApplierChances(sourcePlayer, true, isRanged, procCoefficient)
+
+	-- The hitting weapon's enchantment opener (2026-11-01): its row's
+	-- chance per hit, the gun's proc coefficient and the Status Chance line
+	-- on top, like a relic applier. Only the weapon that lands the hit.
+	local enchantment = WeaponLoadoutService:GetEnchantmentForHit(sourcePlayer, not isRanged)
+	local row = if enchantment then EnchantmentData[enchantment] else nil
+	if row then
+		local chance = (row.openerChance + self:_getStatusChanceBonus(sourcePlayer)) * procCoefficient
+		chanceByStatus[row.openerStatus] = (chanceByStatus[row.openerStatus] or 0) + chance
+	end
+
 	for status, chance in chanceByStatus do
 		if math.random() <= chance then
 			self:ApplyStatus(sourcePlayer, targetModel, status, true)

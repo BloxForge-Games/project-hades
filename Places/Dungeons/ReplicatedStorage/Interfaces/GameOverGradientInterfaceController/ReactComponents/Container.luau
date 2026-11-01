@@ -19,7 +19,9 @@
           back to the fixed GameOverDuration countdown.
        5. A REVIVE button, shown with the bar while the window is open,
           that prompts the paid dev product (PlayerNetwork.PromptRevivePurchase;
-          the server refuses it once the window is closed).
+          the server refuses it once the window is closed). When the bar
+          reaches zero the button greys out and stops taking clicks
+          (2026-11-01); it sinks away once the server flips the phase.
 
      Everything else (gradient pulse, text fly-in, progress bar
      countdown, token race protection) is byte-for-byte the same
@@ -100,6 +102,11 @@ local REVIVE_BORDER_THICKNESS = 0.06
 local REVIVE_TEXT_STROKE_COLOR = Color3.fromRGB(25, 25, 25)
 local REVIVE_RING_COLOR = Color3.fromRGB(105, 158, 186)
 local REVIVE_RING_THICKNESS = 0.07
+-- Once the bar has run out (2026-11-01) the button stays where it is but
+-- goes grey and inert (the bag's Max / Locked plate colours) until the
+-- screen tears down: no ring, no hover tint, no prompt.
+local REVIVE_PLATE_DISABLED_COLOR = Color3.fromRGB(42, 66, 85)
+local REVIVE_TEXT_DISABLED_COLOR = Color3.fromRGB(110, 149, 161)
 local REVIVE_CORNER = UDim.new(0.1, 0)
 
 -- Fixed subtitle per spec. No randomization (the death screen picks
@@ -275,17 +282,10 @@ local function Container(props: any)
 	-- subtitle when the button is told to hide first.
 	local reviveGroupRef = React.useRef(nil)
 	local reviveShowTokenRef = React.useRef(nil)
-	-- The REVIVE plate's shine ring (REVIVE_RING_*). The group stays
-	-- mounted, so the ring lives for the screen's whole life and fades with
-	-- the group.
+	-- The REVIVE plate's shine ring (REVIVE_RING_*): built while the button
+	-- is live (the effect below reviveEnabled), torn down when the window
+	-- runs out so the grey plate reads as dead.
 	local reviveRingAnchorRef = React.useRef(nil)
-	React.useEffect(function()
-		local anchor = reviveRingAnchorRef.current
-		if not anchor then
-			return nil
-		end
-		return shineStroke(anchor, REVIVE_RING_THICKNESS, REVIVE_RING_COLOR)
-	end, {})
 
 	local imageColor3 = props.ImageColor3
 
@@ -298,9 +298,12 @@ local function Container(props: any)
 	-- True from the bar's fly-in until pulse-out: the button shows with
 	-- the bar, never before the title lands.
 	local barShown, setBarShown = React.useState(false)
-	-- True once the window's remaining time has run out on this client,
-	-- as a belt-and-braces hide: the server flips the phase to "dead" on
-	-- the same beat, which nils the window through props anyway.
+	-- True once the window's remaining time has run out on this client
+	-- (the armed timer, or the bar's own tween landing on zero): the
+	-- REVIVE button greys out and stops taking clicks. The server flips
+	-- the phase to "dead" a beat later, which nils the window through
+	-- props and sinks the whole control; its prompt handler refuses a
+	-- late press in between.
 	local windowExpired, setWindowExpired = React.useState(false)
 	local expiryTokenRef = React.useRef(nil)
 
@@ -345,6 +348,17 @@ local function Container(props: any)
 			{ Size = UDim2.fromScale(0, 1) }
 		)
 		barCountdownTweenRef.current = countdownTween
+		-- The bar reaching zero IS the window closing (2026-11-01): the
+		-- button disables on the same frame the fill vanishes, whatever
+		-- the armed timer's rounding. Cancelled tweens (a re-sync) don't
+		-- count, nor does the fallback bar with no window behind it.
+		if window then
+			countdownTween.Completed:Connect(function(state: Enum.PlaybackState)
+				if state == Enum.PlaybackState.Completed and barCountdownTweenRef.current == countdownTween then
+					setWindowExpired(true)
+				end
+			end)
+		end
 		countdownTween:Play()
 	end
 
@@ -508,9 +522,20 @@ local function Container(props: any)
 	-- REVIVE button visibility, as a tween rather than a Visible flip. It
 	-- rises in after the subtitle has finished its own fly-in (stagger +
 	-- the tween's length, measured from the bar appearing, which is what
-	-- flips barShown) and sinks out the moment the window closes, the
-	-- player revives, or the screen pulses out.
-	local reviveShown = barShown and reviveWindow ~= nil and not windowExpired
+	-- flips barShown) and sinks out the moment the server closes the
+	-- window (the phase flips to "dead" and the window prop nils), the
+	-- player revives, or the screen pulses out. It is LIVE only while the
+	-- bar still has time on it (2026-11-01): at zero it greys and goes
+	-- inert in place, so a press on a spent window can never prompt.
+	local reviveShown = barShown and reviveWindow ~= nil
+	local reviveEnabled = reviveShown and not windowExpired
+	React.useEffect(function()
+		local anchor = reviveRingAnchorRef.current
+		if not reviveEnabled or not anchor then
+			return nil
+		end
+		return shineStroke(anchor, REVIVE_RING_THICKNESS, REVIVE_RING_COLOR)
+	end, { reviveEnabled })
 	React.useEffect(function()
 		local group = reviveGroupRef.current
 		if not group then
@@ -632,11 +657,13 @@ local function Container(props: any)
 		--[ REVIVE button (paid) ]--
 		-- Only while the bar is up AND the local player's revive window is
 		-- open. Fires PlayerNetwork.PromptRevivePurchase; the server checks
-		-- the player is still DOWNED and prompts the dev product. On
-		-- purchase, ProcessReceipt -> :Revive stands the player up in place
-		-- and LifeController tears this screen down. Once the window has
-		-- closed the player is fully dead: no button, and the server would
-		-- refuse the prompt anyway.
+		-- the player is still DOWNED with time left and prompts the dev
+		-- product. On purchase, ProcessReceipt -> :Revive stands the player
+		-- up in place and LifeController tears this screen down. Once the
+		-- bar is at zero the button is grey and inert (reviveEnabled); once
+		-- the server has flipped the phase the player is fully dead and the
+		-- control sinks away. The /revive command is unaffected: it calls
+		-- LifeService:Revive directly, never this prompt.
 		-- Wrapped in a CanvasGroup so the whole control (fill, strokes,
 		-- text) fades as one; the group is what the effect above tweens.
 		-- The button stays mounted and only becomes clickable while shown,
@@ -655,16 +682,23 @@ local function Container(props: any)
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = REVIVE_PLATE_SIZE,
-				BackgroundColor3 = REVIVE_PLATE_COLOR,
+				BackgroundColor3 = if reviveEnabled then REVIVE_PLATE_COLOR else REVIVE_PLATE_DISABLED_COLOR,
 				Text = "Revive",
-				TextColor3 = Color3.fromRGB(255, 255, 255),
+				TextColor3 = if reviveEnabled then Color3.fromRGB(255, 255, 255) else REVIVE_TEXT_DISABLED_COLOR,
 				TextScaled = true,
 				FontFace = REVIVE_BUTTON_FONT,
 				BorderSizePixel = 0,
-				AutoButtonColor = true,
-				Interactable = reviveShown,
+				AutoButtonColor = reviveEnabled,
+				Interactable = reviveEnabled,
 				ZIndex = 1,
 				[React.Event.Activated] = function()
+					-- Re-checked against the server clock at the press: a click
+					-- that lands on the frame the bar empties is dropped here
+					-- rather than bounced by the server.
+					local window = reviveWindowRef.current
+					if not reviveEnabled or not window or workspace:GetServerTimeNow() >= window.endsAt then
+						return
+					end
 					PlayerNetwork.PromptRevivePurchase.Fire()
 				end,
 			}, {

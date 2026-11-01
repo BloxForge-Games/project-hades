@@ -169,7 +169,10 @@ function RelicMachine:_getStarterRelicData(tree: string)
 	return RelicData[picked]
 end
 
-function RelicMachine:_getRandomRelicData(premiumOnly: boolean?)
+-- `onlyTree` (2026-11-01) restricts the candidates to one tree; with
+-- Neutral it also leaves the Cursed tier out, so the guaranteed Neutral
+-- slot of a hand is a plain Neutral card.
+function RelicMachine:_getRandomRelicData(premiumOnly: boolean?, onlyTree: string?)
 	if #self._relics == 0 then
 		return nil
 	end
@@ -196,7 +199,13 @@ function RelicMachine:_getRandomRelicData(premiumOnly: boolean?)
 		-- never show a C / C2 relic, regardless of what eligibility
 		-- math would otherwise allow.
 		local comboOk = not self._isStarterMachine or RelicData[relicName].combo == RelicCombo.NC
-		if rarityOk and comboOk and (ownedRegistry[relicName] or 0) == 0 then
+		local treeOk = true
+		if onlyTree then
+			local data = RelicData[relicName]
+			treeOk = (data.tree or ElementTrees.Neutral) == onlyTree
+				and not (onlyTree == ElementTrees.Neutral and data.rarity == ItemRarity.Cursed)
+		end
+		if rarityOk and comboOk and treeOk and (ownedRegistry[relicName] or 0) == 0 then
 			table.insert(candidates, relicName)
 		end
 	end
@@ -373,6 +382,41 @@ function RelicMachine:Start()
 				relicData = relicData or self:_getRandomRelicData(ownsPinata)
 				if relicData then
 					table.insert(offers, relicData.name)
+				end
+			end
+
+			-- At least one plain Neutral card in every hand (design call,
+			-- 2026-11-01): the tree draw stays as it is for the other slots,
+			-- and only when no slot rolled Neutral does one random free slot
+			-- (never a starter-guaranteed one) swap its card for a Neutral
+			-- pick. The displaced card goes back into the machine's pool.
+			-- Cursed does not count as the Neutral card.
+			local hasNeutral = false
+			for _, offerName in offers do
+				local offerData = RelicData[offerName]
+				if
+					offerData
+					and (offerData.tree or ElementTrees.Neutral) == ElementTrees.Neutral
+					and offerData.rarity ~= ItemRarity.Cursed
+				then
+					hasNeutral = true
+					break
+				end
+			end
+			if not hasNeutral and #offers > 0 then
+				local freeSlots = {}
+				for slot = 1, #offers do
+					if not (starterTrees and starterTrees[slot]) then
+						table.insert(freeSlots, slot)
+					end
+				end
+				if #freeSlots > 0 then
+					local slot = freeSlots[math.random(1, #freeSlots)]
+					local neutralData = self:_getRandomRelicData(ownsPinata, ElementTrees.Neutral)
+					if neutralData then
+						table.insert(self._relics, offers[slot])
+						offers[slot] = neutralData.name
+					end
 				end
 			end
 

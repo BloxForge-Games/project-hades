@@ -1042,6 +1042,16 @@ function LifeService._onPromptRevivePurchase(self: typeof(LifeService), player: 
 		warn(("[LifeService] %s tried to prompt revive but isn't downed"):format(player.Name))
 		return
 	end
+	-- The window's own clock, not just the phase (2026-11-01): the
+	-- downed -> dead flip runs on a timer that lands a beat after the
+	-- replicated end time, and the client's bar is at zero by then. A
+	-- prompt that arrives in that beat is refused like one after it. The
+	-- /revive command and a paid receipt go through :Revive and never here.
+	local entry = self._deathState[player.UserId]
+	if entry and workspace:GetServerTimeNow() >= entry.windowEndsAtServerTime then
+		warn(("[LifeService] %s tried to prompt revive after the window closed"):format(player.Name))
+		return
+	end
 	MarketplaceService:PromptProductPurchase(player, REVIVE_PRODUCT_ID)
 end
 

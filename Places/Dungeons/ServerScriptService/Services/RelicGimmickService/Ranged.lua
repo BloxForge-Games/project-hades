@@ -6,9 +6,8 @@
 	driven by onRangedHit (every gun shot that lands) and counts its own
 	shots per player:
 
-	  War Rocks            (Earth) every `everyShots` shot hurls a
-	                          boulder at the target: per-level damage in
-	                          `radius` and a `barrierPercent` Barrier.
+	  (War Rocks moved to RelicGimmickService/Earth on 2026-11-01: a
+	  chance per Weapon hit, melee or ranged, that Fractures.)
 	  Rubber Chicken Launcher  (Storm) a ranged Critical Hit sticks a charge
 	                          on the enemy; after `fuseSeconds` it detonates
 	                          for the callback's share of that hit in
@@ -32,19 +31,16 @@ local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Fu
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 
-local SLINGER = RelicNames["War Rocks"]
 local CHARGE = RelicNames["Rubber Chicken Launcher"]
 local MORTAR = RelicNames["Witches Brew"]
 
--- How long the boulder and the bubble fly.
-local BOULDER_FLIGHT_SECONDS = 0.35
+-- How long the bubble flies.
 local BUBBLE_FLIGHT_SECONDS = 0.5
 -- How often a puddle looks for enemies standing in it.
 local PUDDLE_SCAN_SECONDS = 0.5
 
 local Ranged = {}
 
-local slingerShots: { [Player]: number } = {}
 local mortarShots: { [Player]: number } = {}
 -- [player][model] = a charge is already ticking there (one at a time).
 local charges: { [Player]: { [Model]: boolean } } = {}
@@ -71,29 +67,6 @@ local function splash(player: Player, position: Vector3, radius: number, damage:
 		if status then
 			statusService:ApplyStatus(player, model, status)
 		end
-	end)
-end
-
---[ War Rocks ]--
-
-local function hurlBoulder(player: Player, target: Vector3)
-	local root = getRoot.fromPlayer(player)
-	if not root then
-		return
-	end
-	local radius = helpers.data(SLINGER, "radius", 8)
-	helpers.fx("Boulder", root.Position + Vector3.new(0, 2, 0), target, radius, BOULDER_FLIGHT_SECONDS, player)
-	task.delay(BOULDER_FLIGHT_SECONDS, function()
-		if not player.Parent then
-			return
-		end
-		splash(player, target, radius, helpers.levelDamage(player, helpers.data(SLINGER, "damagePerLevel", 25)))
-		helpers.service("ShieldService"):GrantShield(
-			player,
-			player,
-			helpers.data(SLINGER, "barrierPercent", 0.05),
-			helpers.data(SLINGER, "barrierSeconds", 3)
-		)
 	end)
 end
 
@@ -167,9 +140,6 @@ function Ranged.onRangedHit(player: Player, model: Model, dealt: number, wasCrit
 	if not root then
 		return
 	end
-	if helpers.owns(player, SLINGER) and countShot(slingerShots, player, helpers.data(SLINGER, "everyShots", 5)) then
-		hurlBoulder(player, root.Position)
-	end
 	if wasCrit and dealt > 0 and helpers.owns(player, CHARGE) then
 		stickCharge(player, model, dealt)
 	end
@@ -179,7 +149,6 @@ function Ranged.onRangedHit(player: Player, model: Model, dealt: number, wasCrit
 end
 
 function Ranged.onPlayerRemoved(player: Player)
-	slingerShots[player] = nil
 	mortarShots[player] = nil
 	charges[player] = nil
 end

@@ -25,7 +25,10 @@
 	while the attribute is set; that one is watched here, not sent.
 
 	The 2026-10-30 relics (ranged and duo) are PROTOTYPE visuals: simple
-	parts and the status emitters, to be replaced with authored VFX.
+	parts and the status emitters, to be replaced with authored VFX. The
+	Earth rework (2026-11-01) adds the Horn's SHOCKWAVE disc and the
+	Golem's QUAKE, which plays the authored Tremor rig (it was built on
+	the server before).
 
 	See bfg-core/Network/Relic.blink (GimmickEffectPayload) for the kinds.
 ]]
@@ -38,6 +41,7 @@ local TweenService = game:GetService("TweenService")
 local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local SpiritCompanionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SpiritCompanionData)
 
@@ -78,14 +82,26 @@ local TRAIL_DROP = 2.5
 
 -- Lightning bolts: a white-hot core inside a wider blue glow, a fork or
 -- two off the main line, and a flash where it lands.
-local BOLT_SEGMENTS = 6
-local BOLT_JITTER = 1.1
-local BOLT_FADE_SECONDS = 0.22
+-- The chain bolt (2026-11-01: thicker, brighter and about twice as long on
+-- screen as the first cut, which read as a flicker). A bolt is drawn
+-- BOLT_STROKES times with fresh jitter, BOLT_RESTRIKE_SECONDS apart, so
+-- it crackles instead of flashing once; each stroke holds for
+-- BOLT_HOLD_SECONDS before it fades over BOLT_FADE_SECONDS.
+local BOLT_SEGMENTS = 7
+local BOLT_JITTER = 1.3
+local BOLT_STROKES = 3
+local BOLT_RESTRIKE_SECONDS = 0.08
+local BOLT_HOLD_SECONDS = 0.12
+local BOLT_FADE_SECONDS = 0.3
 local BOLT_CORE_COLOR = Color3.fromRGB(235, 248, 255)
-local BOLT_CORE_THICKNESS = 0.18
-local BOLT_GLOW_THICKNESS = 0.55
-local BOLT_FORK_CHANCE = 0.35
-local BOLT_FLASH_RADIUS = 1.6
+local BOLT_CORE_THICKNESS = 0.34
+local BOLT_GLOW_THICKNESS = 1.1
+local BOLT_GLOW_TRANSPARENCY = 0.35
+local BOLT_FORK_CHANCE = 0.85
+local BOLT_FORKS = 2
+local BOLT_FLASH_RADIUS = 2.6
+local BOLT_LIGHT_BRIGHTNESS = 9
+local BOLT_LIGHT_RANGE = 16
 
 -- Lobbed bubbles arc high; Blizzard's ice shards hop fast and low (a
 -- quadratic bezier with its control point just above the line).
@@ -141,6 +157,28 @@ local HAIL_CLOUD_HEIGHT = 16
 local ICE_SHELL_SIZE = 8
 local ICE_SHELL_TRANSPARENCY = 0.75
 local ICE_SHELL_FADE_SECONDS = 0.3
+-- The Katana's primed sparks (2026-11-01): a small Shock orb over the
+-- caster, throwing a short bolt every so often.
+local PRIME_SIZE = 1.2
+local PRIME_HEIGHT = 3.4
+local PRIME_SPARK_SECONDS = 0.3
+local PRIME_SPARK_REACH = 2.5
+local PRIME_FADE_SECONDS = 0.2
+
+-- Earth (2026-11-01): the Horn's shockwave disc, and the Golem's quake,
+-- which scales GameAssets.VFX.Tremor.Tremor (authored at
+-- QUAKE_VFX_AUTHORED_RADIUS) to the payload's radius and drops it
+-- QUAKE_Y_OFFSET below the caster so it reads as ground shaking. Its
+-- emitters burst at full authored opacity (ramping Transparency in spends
+-- a short spark's whole life invisible) and everything fades out together.
+local SHOCKWAVE_COLOR = Color3.fromRGB(190, 170, 130)
+local SHOCKWAVE_THICKNESS = 0.4
+local SHOCKWAVE_LIFT = 0.3
+local QUAKE_VFX_AUTHORED_RADIUS = 10
+local QUAKE_Y_OFFSET = 1.5
+local QUAKE_EMIT_COUNT = 5
+local QUAKE_HOLD_SECONDS = 0.5
+local QUAKE_FADE_OUT_SECONDS = 0.9
 
 --[ Types ]--
 
@@ -174,6 +212,8 @@ type Shield = { parts: { BasePart }, expiresAt: number, fading: boolean }
 
 type Shell = { part: BasePart, expiresAt: number, fading: boolean }
 
+type Prime = { part: BasePart, emitters: { ParticleEmitter }, expiresAt: number, lastSpark: number, fading: boolean }
+
 --[ Module ]--
 
 local RelicGimmickFXController = {
@@ -184,6 +224,7 @@ local wyrms: { [Player]: Wyrm } = {}
 local orbitRandom = Random.new()
 local shields: { [Player]: Shield } = {}
 local shells: { [Player]: Shell } = {}
+local primes: { [Player]: Prime } = {}
 -- Melted mobs' green fire, by mob.
 local meltedFire: { [Model]: { ParticleEmitter } } = {}
 
@@ -300,45 +341,80 @@ local function drawLine(points: { Vector3 }, thickness: number, color: Color3, t
 		segment.Transparency = transparency
 		segment.CFrame = CFrame.lookAt(a:Lerp(b, 0.5), b)
 		segment.Parent = effectsFolder()
-		TweenService
-			:Create(segment, TweenInfo.new(BOLT_FADE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-				Transparency = 1,
-				Size = Vector3.new(thickness * 0.3, thickness * 0.3, length),
-			})
-			:Play()
-		Debris:AddItem(segment, BOLT_FADE_SECONDS + 0.05)
+		-- Holds at full for a beat, then thins out as it fades.
+		local fade = TweenInfo.new(
+			BOLT_FADE_SECONDS,
+			Enum.EasingStyle.Quad,
+			Enum.EasingDirection.In,
+			0,
+			false,
+			BOLT_HOLD_SECONDS
+		)
+		TweenService:Create(segment, fade, {
+			Transparency = 1,
+			Size = Vector3.new(thickness * 0.3, thickness * 0.3, length),
+		}):Play()
+		Debris:AddItem(segment, BOLT_HOLD_SECONDS + BOLT_FADE_SECONDS + 0.05)
+	end
+end
+
+-- One stroke of a bolt: glow, core and up to BOLT_FORKS short forks off
+-- its middle points. `scale` thins the later strokes of a crackle.
+local function boltStroke(from: Vector3, to: Vector3, scale: number)
+	local points = boltPoints(from, to, BOLT_SEGMENTS, BOLT_JITTER)
+	drawLine(points, BOLT_GLOW_THICKNESS * scale, BOLT_COLOR, BOLT_GLOW_TRANSPARENCY)
+	drawLine(points, BOLT_CORE_THICKNESS * scale, BOLT_CORE_COLOR, 0)
+	local span = (to - from).Magnitude
+	for _ = 1, BOLT_FORKS do
+		if math.random() < BOLT_FORK_CHANCE and #points > 3 then
+			local root = points[math.random(2, #points - 2)]
+			local tip = root
+				+ ((to - from).Unit + Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5)).Unit
+					* span
+					* 0.3
+			drawLine(
+				boltPoints(root, tip, 3, BOLT_JITTER * 0.6),
+				BOLT_CORE_THICKNESS * scale * 0.7,
+				BOLT_CORE_COLOR,
+				0.15
+			)
+		end
 	end
 end
 
 local function bolt(from: Vector3, to: Vector3)
-	local points = boltPoints(from, to, BOLT_SEGMENTS, BOLT_JITTER)
-	drawLine(points, BOLT_GLOW_THICKNESS, BOLT_COLOR, 0.55)
-	drawLine(points, BOLT_CORE_THICKNESS, BOLT_CORE_COLOR, 0)
-	-- A short fork off a middle point.
-	if math.random() < BOLT_FORK_CHANCE and #points > 3 then
-		local root = points[math.random(2, #points - 2)]
-		local tip = root
-			+ ((to - from).Unit + Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5)).Unit
-				* (to - from).Magnitude
-				* 0.25
-		drawLine(boltPoints(root, tip, 3, BOLT_JITTER * 0.6), BOLT_CORE_THICKNESS, BOLT_CORE_COLOR, 0.2)
+	-- The crackle: the first stroke at once, the rest re-jittered a beat
+	-- apart and a little thinner, so the arc dances for half a second.
+	boltStroke(from, to, 1)
+	for stroke = 2, BOLT_STROKES do
+		task.delay(BOLT_RESTRIKE_SECONDS * (stroke - 1), boltStroke, from, to, 1 - (stroke - 1) * 0.2)
 	end
-	-- The landing flash: a quick bright pop and a light.
-	local flash = makePart("GimmickBoltFlash", Vector3.one * 0.4, BOLT_CORE_COLOR)
+	-- The landing flash: a bright pop, a ring on the ground and a light.
+	local flash = makePart("GimmickBoltFlash", Vector3.one * 0.6, BOLT_CORE_COLOR)
 	flash.Shape = Enum.PartType.Ball
 	flash.Position = to
 	local light = Instance.new("PointLight")
 	light.Color = BOLT_COLOR
-	light.Brightness = 4
-	light.Range = 10
+	light.Brightness = BOLT_LIGHT_BRIGHTNESS
+	light.Range = BOLT_LIGHT_RANGE
 	light.Parent = flash
 	flash.Parent = effectsFolder()
-	TweenService:Create(flash, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	TweenService:Create(flash, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Size = Vector3.one * BOLT_FLASH_RADIUS * 2,
 		Transparency = 1,
 	}):Play()
-	TweenService:Create(light, TweenInfo.new(0.25), { Brightness = 0 }):Play()
-	Debris:AddItem(flash, 0.3)
+	TweenService:Create(light, TweenInfo.new(0.45), { Brightness = 0 }):Play()
+	Debris:AddItem(flash, 0.5)
+	local ring = makePart("GimmickBoltRing", Vector3.new(0.8, 0.12, 0.8), BOLT_COLOR)
+	ring.Shape = Enum.PartType.Cylinder
+	ring.CFrame = CFrame.new(to - Vector3.new(0, 2.4, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Transparency = 0.2
+	ring.Parent = effectsFolder()
+	TweenService:Create(ring, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = Vector3.new(0.12, BOLT_FLASH_RADIUS * 3, BOLT_FLASH_RADIUS * 3),
+		Transparency = 1,
+	}):Play()
+	Debris:AddItem(ring, 0.4)
 end
 
 -- A slash travelling From -> To over Duration (Flame Wave, Thunder Blade).
@@ -897,6 +973,72 @@ local function iceShellShatter(payload: Payload)
 	end
 end
 
+-- The Katana's PRIMED state (2026-11-01): Shock sparks riding over the
+-- caster for Duration; the server re-sends it with Duration 0 to end it
+-- early once the prime is spent.
+local function dismissPrime(caster: Player)
+	local prime = primes[caster]
+	if not prime or prime.fading then
+		return
+	end
+	prime.fading = true
+	primes[caster] = nil
+	retire(prime.part, prime.emitters, PRIME_FADE_SECONDS)
+end
+
+local function keepStormPrime(payload: Payload)
+	local caster = payload.Caster
+	if not caster then
+		return
+	end
+	if payload.Duration <= 0 then
+		dismissPrime(caster)
+		return
+	end
+	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
+	local prime = primes[caster]
+	if prime and not prime.fading then
+		prime.expiresAt = expiresAt
+		return
+	end
+	local part = makePart("StormPrime", Vector3.one * PRIME_SIZE, SHOCK_COLOR)
+	part.Shape = Enum.PartType.Ball
+	part.Transparency = 0.5
+	part.Position = payload.From + Vector3.new(0, PRIME_HEIGHT, 0)
+	part.Parent = effectsFolder()
+	local light = Instance.new("PointLight")
+	light.Color = SHOCK_COLOR
+	light.Brightness = 1.5
+	light.Range = 8
+	light.Parent = part
+	primes[caster] = {
+		part = part,
+		emitters = statusEmitters("Shock", part),
+		expiresAt = expiresAt,
+		lastSpark = 0,
+		fading = false,
+	}
+end
+
+local function stepPrimes()
+	local now = os.clock()
+	for caster, prime in primes do
+		local character = caster.Character
+		local found = character and character:FindFirstChild("HumanoidRootPart")
+		local root: BasePart? = if found and found:IsA("BasePart") then found else nil
+		if not root or not caster.Parent or now >= prime.expiresAt then
+			dismissPrime(caster)
+			continue
+		end
+		prime.part.Position = root.Position + Vector3.new(0, PRIME_HEIGHT, 0)
+		if now - prime.lastSpark > PRIME_SPARK_SECONDS then
+			prime.lastSpark = now
+			local away = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
+			bolt(prime.part.Position, prime.part.Position + away * PRIME_SPARK_REACH)
+		end
+	end
+end
+
 -- Melted (Fire Breathing Friend): GameAssets.Auras.Melted on the mob while
 -- the attribute is set (a temporary green-fire stand-in for now).
 local function setMelted(model: Model, melted: boolean)
@@ -932,13 +1074,12 @@ end
 
 --[ Ban Hammer ]--
 
--- The Ban Hammer relic model (GameAssets.Relics.Legendary["Ban Hammer"])
--- drops onto the executed enemy head-first and slams down in Duration,
--- then bursts and fades. A plain red block stands in if the asset is gone.
+-- The Ban Hammer relic model (getRelicModelTemplate: the tree / rarity
+-- layout, the old flat one, or anywhere under Relics by name) drops onto
+-- the executed enemy head-first and slams down in Duration, then bursts
+-- and fades. A plain red block stands in if the asset is gone.
 local function banHammer(payload: Payload)
-	local relics = ReplicatedStorage.GameAssets:FindFirstChild("Relics")
-	local legendary = relics and relics:FindFirstChild("Legendary")
-	local template = legendary and legendary:FindFirstChild(RelicNames["Ban Hammer"])
+	local template = getRelicModelTemplate(RelicNames["Ban Hammer"])
 	local hammer: PVInstance
 	if template and (template:IsA("Model") or template:IsA("BasePart")) then
 		local clone = template:Clone()
@@ -978,6 +1119,80 @@ local function banHammer(payload: Payload)
 		burst(payload.From, payload.Radius, BAN_COLOR)
 		burst(payload.From, payload.Radius * 0.5, GOLD_COLOR)
 		Debris:AddItem(hammer, BAN_HAMMER_LINGER_SECONDS)
+	end)
+end
+
+--[ Earth ]--
+
+-- Earth Summoning Horn: a flat stone disc racing out to Radius over
+-- Duration and thinning to nothing, with a small burst at its centre.
+local function shockwave(payload: Payload)
+	local radius = math.max(payload.Radius, 1)
+	local duration = math.max(payload.Duration, 0.2)
+	local disc = makePart("Shockwave", Vector3.new(SHOCKWAVE_THICKNESS, 0.5, 0.5), SHOCKWAVE_COLOR, Enum.Material.Slate)
+	disc.Shape = Enum.PartType.Cylinder
+	disc.Transparency = 0.2
+	disc.CFrame = CFrame.new(payload.From + Vector3.new(0, SHOCKWAVE_LIFT, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	disc.Parent = effectsFolder()
+	burst(payload.From, radius * 0.35, SHOCKWAVE_COLOR)
+	animate(duration, elapsedOf(payload), function(alpha: number)
+		local eased = 1 - (1 - alpha) * (1 - alpha)
+		local diameter = math.max(eased * radius * 2, 0.5)
+		disc.Size = Vector3.new(SHOCKWAVE_THICKNESS, diameter, diameter)
+		disc.Transparency = 0.2 + alpha * 0.8
+	end, function()
+		disc:Destroy()
+	end)
+end
+
+-- Golem's Hammer: the Tremor rig under the caster's feet, scaled to
+-- Radius; its Explode and Main emitters burst and every authored Sound on
+-- it plays (so a sound added in Studio needs no code change). A stone
+-- burst stands in when the asset is missing.
+local function quake(payload: Payload)
+	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
+	local tremorFolder = vfxFolder and vfxFolder:FindFirstChild("Tremor")
+	local template = tremorFolder and tremorFolder:FindFirstChild("Tremor")
+	if not template or not template:IsA("Model") then
+		burst(payload.From, payload.Radius, STONE_COLOR)
+		return
+	end
+	local tremor = template:Clone()
+	tremor:ScaleTo(tremor:GetScale() * math.max(payload.Radius, 1) / QUAKE_VFX_AUTHORED_RADIUS)
+	local emitters: { ParticleEmitter } = {}
+	for _, descendant in tremor:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanQuery = false
+			descendant.CanTouch = false
+		elseif descendant:IsA("ParticleEmitter") then
+			table.insert(emitters, descendant)
+		end
+	end
+	tremor:PivotTo(CFrame.new(payload.From - Vector3.new(0, QUAKE_Y_OFFSET, 0)))
+	tremor.Parent = effectsFolder()
+
+	local earthTremor = tremor:FindFirstChild("EarthTremor")
+	local explode = earthTremor and earthTremor:FindFirstChild("Explode")
+	local main = earthTremor and earthTremor:FindFirstChild("Main")
+	for _, emitter in emitters do
+		if explode and emitter:IsDescendantOf(explode) then
+			emitter:Emit(QUAKE_EMIT_COUNT)
+		elseif main and emitter:IsDescendantOf(main) then
+			emitter:Emit(1)
+		end
+	end
+	for _, descendant in tremor:GetDescendants() do
+		if descendant:IsA("Sound") then
+			descendant:Play()
+		end
+	end
+	task.delay(QUAKE_HOLD_SECONDS, function()
+		for _, emitter in emitters do
+			emitter.Enabled = false
+		end
+		Debris:AddItem(tremor, QUAKE_FADE_OUT_SECONDS)
 	end)
 end
 
@@ -1022,6 +1237,11 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	HailShard = hailShard,
 	IceShell = keepIceShell,
 	IceShellShatter = iceShellShatter,
+	-- Earth (2026-11-01).
+	Shockwave = shockwave,
+	Quake = quake,
+	-- Storm (2026-11-01): the Katana's primed sparks on Caster for Duration (0 ends it).
+	StormPrime = keepStormPrime,
 }
 
 function RelicGimmickFXController.Start(_self: typeof(RelicGimmickFXController))
@@ -1039,6 +1259,7 @@ function RelicGimmickFXController.Start(_self: typeof(RelicGimmickFXController))
 
 	RunService.RenderStepped:Connect(stepShields)
 	RunService.RenderStepped:Connect(stepShells)
+	RunService.RenderStepped:Connect(stepPrimes)
 
 	-- Melted: every mob under the Mobs folder, as it arrives.
 	task.spawn(function()
