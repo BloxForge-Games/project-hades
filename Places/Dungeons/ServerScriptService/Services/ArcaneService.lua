@@ -18,6 +18,7 @@ local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 
 local ArcaneService = {
 	Name = "ArcaneService",
@@ -108,7 +109,10 @@ function ArcaneService._runPassiveManaRegenLoop(self: typeof(ArcaneService))
 				if not self:_isPlayerInCombat(player) then
 					continue -- out of combat: the bar holds still
 				end
-				local regenAmount = data.maxMana * PASSIVE_MANA_REGEN_RATE
+				-- Mana Regen gear lines (BonusStatData) scale the tick.
+				local regenAmount = data.maxMana
+					* PASSIVE_MANA_REGEN_RATE
+					* (1 + PlayerStatsService:GetGearStat(player, "ManaRegen"))
 				local newMana = math.min(data.mana + regenAmount, data.maxMana)
 				self:SetPlayerArcaneData(player, newMana, data.maxMana)
 			end

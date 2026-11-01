@@ -72,7 +72,6 @@ local DamageService = require(ServerScriptService.Services.DamageService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local RelicService = require(ServerScriptService.Services.RelicService)
-local AuraService = require(ServerScriptService.Services.AuraService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -81,6 +80,8 @@ local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNam
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
+local computePower = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.computePower)
+local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
@@ -105,8 +106,7 @@ type StatusConfig = {
 	duration: number,
 	tickInterval: number?,
 	stackLimit: number?,
-	dotPercentOfMaxHealth: number?,
-	dotTickCapPerLevel: number?,
+	dotPowerFractionPerSecond: number?,
 	slowFraction: number?,
 	outgoingDamageMultiplier: number?,
 	incomingDamageMultiplier: number?,
@@ -124,7 +124,6 @@ type StatusRecord = {
 	expiresAt: number,
 	sourcePlayer: Player,
 	dotMultiplier: number,
-	dotTickDamageCap: number,
 	slowFraction: number,
 	weakenFraction: number,
 	visualKey: string,
@@ -134,7 +133,8 @@ type StatusRecord = {
 	userId: number?,
 	config: StatusConfig,
 	-- DoT records only.
-	percentPerTick: number?,
+	-- The fraction of the applier's Power one tick deals (DoT records).
+	powerPerTick: number?,
 	tickInterval: number?,
 	nextTickAt: number?,
 }
@@ -275,6 +275,19 @@ StatusConditionService._spiderResolving = {} :: { [number]: boolean }
 
 --[ Private Functions ]--
 
+-- The applier's Power (PlayerStatsService stamps it); the starter's when
+-- the stamp has not landed yet. Every DoT tick is a fraction of it.
+local function powerOf(player: Player?): number
+	local power = player and player:GetAttribute(Attributes.Power)
+	return if typeof(power) == "number" and power > 0 then power else computePower.REFERENCE_POWER
+end
+
+-- One DoT tick's damage: the record's share of its applier's Power, the
+-- relic multiplier on top, never under 1.
+local function tickDamageOf(record: StatusRecord): number
+	return math.max(1, math.floor(powerOf(record.sourcePlayer) * (record.powerPerTick or 0) * record.dotMultiplier))
+end
+
 local function ownerHasAura(player: Player?, auraName: string?): boolean
 	if not player or not auraName then
 		return false
@@ -327,14 +340,6 @@ function StatusConditionService:_resolveApplication(sourcePlayer: Player, config
 	end
 
 	return duration, dotMultiplier, slowFraction, weakenFraction
-end
-
--- Per-tick DoT cap, resolved once per application/refresh. Follows the
--- APPLIER's Power (getRelicLevel: 1x at the starter loadout, ~8.5x at a
--- maxed Level 20 Epic), the same factor every relic number scales by
--- (2026-10-31; it followed the player's level before).
-function StatusConditionService:_resolveTickCap(sourcePlayer: Player, config: StatusConfig): number
-	return getRelicLevel(sourcePlayer) * (config.dotTickCapPerLevel or 25)
 end
 
 -- The redirect decision for THIS application (see STATUS_REDIRECTS).
@@ -657,13 +662,7 @@ function StatusConditionService:DetonateBlackFlame(sourcePlayer: Player, model: 
 	for _, record: StatusRecord in table.clone(stack) :: { StatusRecord } do
 		local tickInterval = record.tickInterval or 1
 		local ticksLeft = math.max(1, math.ceil((record.expiresAt - now) / tickInterval))
-		local perTick = math.floor(
-			math.clamp(
-				humanoid.MaxHealth * (record.percentPerTick or 0) * record.dotMultiplier,
-				1,
-				record.dotTickDamageCap
-			)
-		)
+		local perTick = tickDamageOf(record)
 		total += perTick * ticksLeft
 		color = record.config.color
 		self:_expireInstance(model, StatusConditions.BlackFlame, sourcePlayer.UserId, record)
@@ -818,41 +817,16 @@ local RELIC_HIT_STATUSES: {
 	}
 } =
 	{
-		-- The four tree status enablers (NC).
+		-- The four tree openers (NC): weapon hits at the callback's chance,
+		-- spell hits at data.arcaneChance. The only applier rows left after
+		-- the 2026-10-31 cut; every other status comes from a relic's own
+		-- proc (a wave, a cloud, a strike, a shard).
 		{ relicName = RelicNames["Ye Olde Fire Breath Potion"], status = StatusConditions.Burn },
 		{ relicName = RelicNames["Frozen Blue Ice Crossbow"], status = StatusConditions.Chill },
 		{ relicName = RelicNames["Zombie Axe"], status = StatusConditions.Poison },
 		{ relicName = RelicNames["Static Shock Sheep"], status = StatusConditions.Shock },
-		-- Deluxe Coil Gun's applier half. Its OTHER half is the Shock ->
-		-- Coil Shocked redirect above; this row is what lets an NC pickup
-		-- actually produce the Shock it then upgrades.
-		{ relicName = RelicNames["Deluxe Coil Gun"], status = StatusConditions.Shock },
-		-- Skeletal Scythe's applier half: +10% Poison chance on every hit
-		-- (the roll-time callback read), so the NC pickup PRODUCES the
-		-- Poison it then upgrades — Deluxe Coil Gun's exact pattern.
-		{ relicName = RelicNames["Skeletal Scythe"], status = StatusConditions.Poison },
-		-- Neon Rainbow Phoenix: its flat chance (the callback) on EACH of the
-		-- four tree statuses, every hit -- an applier on its own.
-		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Burn },
-		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Chill },
-		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Poison },
-		{ relicName = RelicNames["Neon Rainbow Phoenix"], status = StatusConditions.Shock },
-		-- The four aura-gated chance boosters that used to live here (Faux
-		-- Firebrand, Frostbrand, Lightning Wand, Overseer's Short Sword)
-		-- are all gone: the 2026-08 pass turned the first three into damage
-		-- relics, and Short Sword's boost now covers EVERY elemental status
-		-- rather than Poison alone, so it lives in _getStatusChanceBonus.
-		-- The bridge Rares (2026-10-27): guaranteed while their aura is up.
-		-- Ice Cream: spell hits Chill while Frostburst.
-		{
-			relicName = RelicNames["Ice Cream"],
-			status = StatusConditions.Chill,
-			spellOnly = true,
-			auraGate = AuraNames.Frostburst,
-		},
-		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (2026-10-30;
-		-- every hit before that, 35% before that -- at ~5 shots a second
-		-- 15% keeps a target Painted anyway).
+		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (the
+		-- callback is its damage multiplier, so the chance lives here).
 		{
 			relicName = RelicNames["Magenta Paintball Gun"],
 			status = StatusConditions.Paint,
@@ -860,35 +834,6 @@ local RELIC_HIT_STATUSES: {
 			weaponOnly = true,
 			rangedOnly = true,
 		},
-		-- The ranged relics' status halves (2026-10-30; the callback is the
-		-- chance). Their damage halves are DamageService/RangedRelics.
-		{
-			relicName = RelicNames["Red Hyperlaser Gun"],
-			status = StatusConditions.Burn,
-			weaponOnly = true,
-			rangedOnly = true,
-		},
-		{
-			relicName = RelicNames["Hyperlaser Gun"],
-			status = StatusConditions.Chill,
-			weaponOnly = true,
-			rangedOnly = true,
-		},
-	}
-
--- Relic -> on-hit AURA grants, rolled at the damage entry points (per HIT
--- per TARGET — a fireball clipping three mobs rolls three times; DoT ticks
--- never roll). Each row is an independent roll gated to its damage side;
--- the grant routes through AuraService:SetAura so duration bonuses and the
--- Abyss lockout apply for free.
---
--- Lightning Orb is deliberately NOT here: its trigger is CRITICAL HITS
--- (any instance, either damage side), which only DamageService can see —
--- it rolls from _postDamage's crit branch instead.
-local RELIC_HIT_AURAS: { { relicName: string, aura: string, chance: number?, weaponOnly: boolean?, magicOnly: boolean? } } =
-	{
-		{ relicName = RelicNames["Flaming Bo Staff"], aura = AuraNames.Enflamed, weaponOnly = true },
-		{ relicName = RelicNames["Korblox Spell Book"], aura = AuraNames.Frostburst, magicOnly = true },
 	}
 
 -- Status Chance: percentage points added to EVERY status the player
@@ -915,13 +860,16 @@ local ELEMENTAL_STATUSES: { [string]: boolean } = {
 }
 
 function StatusConditionService:_getStatusChanceBonus(sourcePlayer: Player): number
+	-- Gear lines (BonusStatData "StatusChance", 2026-10-31): a fraction on
+	-- every elemental status the player can already apply, like the relic's.
+	local bonus = PlayerStatsService:GetGearStat(sourcePlayer, "StatusChance")
 	if not RelicService or not ownerHasAura(sourcePlayer, AuraNames.Blighted) then
-		return 0
+		return bonus
 	end
 	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Overseer's Short Sword"]) or 0) <= 0 then
-		return 0
+		return bonus
 	end
-	return RelicService:GetRelicEffect(sourcePlayer, RelicNames["Overseer's Short Sword"]) or 0
+	return bonus + (RelicService:GetRelicEffect(sourcePlayer, RelicNames["Overseer's Short Sword"]) or 0)
 end
 
 -- Sums the qualifying rows for one hit into { [status] = chance }.
@@ -984,78 +932,7 @@ function StatusConditionService:_sumApplierChances(
 		end
 	end
 
-	-- Korblox Mage Staff (2026-10-30): while its owner is Frostburst, a
-	-- SPELL hit gets +data.glyphChillChance Chill (additive, like an
-	-- applier row; after the bonus so it is the Glyph's own).
-	if
-		isSpell
-		and ownerHasAura(sourcePlayer, AuraNames.Frostburst)
-		and (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Korblox Mage Staff"]) or 0) > 0
-	then
-		local staff = RelicData[RelicNames["Korblox Mage Staff"]]
-		local bonus = (staff and staff.data and staff.data.glyphChillChance) or 0.35
-		chanceByStatus[StatusConditions.Chill] = (chanceByStatus[StatusConditions.Chill] or 0) + bonus * coefficient
-	end
-
 	return chanceByStatus
-end
-
--- Rolls the aura-grant rows for one hit. `isWeaponHit` picks which side's
--- rows qualify (Flaming Bo Staff is weapon-only, Korblox Spell Book
--- arcane-only). `procCoefficient` scales each chance (a bullet's; 1
--- otherwise).
-function StatusConditionService:_rollAuraGrants(sourcePlayer: Player, isWeaponHit: boolean, procCoefficient: number?)
-	if not RelicService or not AuraService then
-		return
-	end
-	local character = sourcePlayer.Character
-	if not character then
-		return
-	end
-	for _, row in RELIC_HIT_AURAS do
-		if row.weaponOnly and not isWeaponHit then
-			continue
-		end
-		if row.magicOnly and isWeaponHit then
-			continue
-		end
-		local chance = (row.chance or RelicService:GetRelicEffect(sourcePlayer, row.relicName) or 0)
-			* (procCoefficient or 1)
-		if RelicService:GetSpecificRelicRegistry(sourcePlayer, row.relicName) > 0 and math.random() <= chance then
-			AuraService:SetAura(sourcePlayer, row.aura, character)
-		end
-	end
-end
-
--- Korblox Evil Eye: ONE roll per hit to Blight the owner. The chance is
--- the relic callback's base normally, and RelicData's `onStatusChance`
--- when the same hit actually landed a status — "increased TO", so the
--- two REPLACE each other rather than stacking. Rolled once per hit, not
--- once per status, so a hit that applies two statuses is not two chances.
-
-function StatusConditionService:_rollEvilEyeBlight(
-	sourcePlayer: Player,
-	appliedStatus: boolean,
-	procCoefficient: number?
-)
-	if not AuraService or not RelicService or not sourcePlayer.Character then
-		return
-	end
-	if (RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Korblox Evil Eye"]) or 0) <= 0 then
-		return
-	end
-
-	local eyeData = RelicData[RelicNames["Korblox Evil Eye"]]
-	local onStatus = eyeData and eyeData.data and eyeData.data.onStatusChance
-	local chance = if appliedStatus
-		then onStatus or 0.25
-		else RelicService:GetRelicEffect(sourcePlayer, RelicNames["Korblox Evil Eye"]) or 0
-	chance *= procCoefficient or 1
-	if chance > 0 and math.random() <= chance then
-		-- Through SetAura, so the Abyss lockout, duration bonuses and the
-		-- extend-only rule all apply for free.
-		AuraService:SetAura(sourcePlayer, AuraNames.Blighted, sourcePlayer.Character)
-	end
 end
 
 -- Weapon-hit status entry point — the ONE call both weapon damage paths
@@ -1075,30 +952,11 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 		then getGunProcCoefficient(sourcePlayer, weaponModel and weaponModel.Name)
 		else 1
 
-	self:_rollAuraGrants(sourcePlayer, true, procCoefficient)
-
 	local chanceByStatus = self:_sumApplierChances(sourcePlayer, true, isRanged, procCoefficient)
-	local appliedStatus = false
 	for status, chance in chanceByStatus do
 		if math.random() <= chance then
 			self:ApplyStatus(sourcePlayer, targetModel, status, true)
-			appliedStatus = true
 		end
-	end
-
-	-- AFTER the status rolls resolve: the Evil Eye chance depends on
-	-- whether this hit landed one.
-	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus, procCoefficient)
-
-	-- Linked Sword (2026-10-30): a weapon hit on a Burning enemy extends
-	-- the owner's Burn there.
-	if
-		(RelicService:GetSpecificRelicRegistry(sourcePlayer, RelicNames["Linked Sword"]) or 0) > 0
-		and self:IsBurning(targetModel)
-	then
-		local linked = RelicData[RelicNames["Linked Sword"]]
-		local data = (linked and linked.data) or {}
-		self:ExtendBurn(sourcePlayer, targetModel, data.burnExtend or 1, data.burnMaxSeconds or 8)
 	end
 end
 
@@ -1110,19 +968,12 @@ function StatusConditionService:ApplyArcaneOnHitStatuses(sourcePlayer: Player, t
 		return
 	end
 
-	self:_rollAuraGrants(sourcePlayer, false)
-
 	local chanceByStatus = self:_sumApplierChances(sourcePlayer, false, false, 1, isSpell)
-
-	local appliedStatus = false
 	for status, chance in chanceByStatus do
 		if math.random() <= chance then
 			self:ApplyStatus(sourcePlayer, targetModel, status, false)
-			appliedStatus = true
 		end
 	end
-
-	self:_rollEvilEyeBlight(sourcePlayer, appliedStatus)
 end
 
 -- True while the record still sits in its slot — a superseded or already
@@ -1140,17 +991,14 @@ function StatusConditionService:_isRecordLive(record: StatusRecord): boolean
 	return (value :: any) == record
 end
 
--- One DoT tick. Per-tick damage = total % of max health spread over the
--- BASE duration's ticks — refresh/bonus-duration extends the ticking at
--- the same rate. Each STACK ticks on its own applier's magnitudes. DoT
--- ticks sit OUTSIDE the damage amplifier chain and can never crit or roll
--- appliers.
+-- One DoT tick: a fraction of the APPLIER's Power (2026-10-31; a share of
+-- the target's max health, capped, before). Each STACK ticks on its own
+-- applier's magnitudes. DoT ticks sit OUTSIDE the damage amplifier chain
+-- and can never crit or roll appliers.
 function StatusConditionService:_dotTick(record: StatusRecord)
 	local config = record.config
 	local humanoid = record.humanoid
-	local damage = math.floor(
-		math.clamp(humanoid.MaxHealth * (record.percentPerTick or 0) * record.dotMultiplier, 1, record.dotTickDamageCap)
-	)
+	local damage = tickDamageOf(record)
 	-- Tick number renders in THIS status's colour — the same
 	-- StatusConditionData tint the proc burst uses.
 	DamageService:TakeDamage(record.sourcePlayer, humanoid, damage, false, true, nil, nil, nil, config.color)
@@ -1174,10 +1022,9 @@ end
 -- it isn't already running.
 function StatusConditionService:_armRecord(record: StatusRecord)
 	local config = record.config
-	if config.dotPercentOfMaxHealth then
+	if config.dotPowerFractionPerSecond then
 		local tickInterval = config.tickInterval or 1
-		local ticksInBaseDuration = math.max(1, math.floor(config.duration / tickInterval))
-		record.percentPerTick = config.dotPercentOfMaxHealth / ticksInBaseDuration
+		record.powerPerTick = config.dotPowerFractionPerSecond * tickInterval
 		record.tickInterval = tickInterval
 		self:_dotTick(record)
 		record.nextTickAt = os.clock() + tickInterval
@@ -1412,7 +1259,6 @@ function StatusConditionService:_applyStatusOnce(
 		record.expiresAt = os.clock() + duration
 		record.sourcePlayer = sourcePlayer
 		record.dotMultiplier = dotMultiplier
-		record.dotTickDamageCap = self:_resolveTickCap(sourcePlayer, config)
 		record.weakenFraction = weakenFraction
 		if slowFraction > 0 then
 			record.slowFraction = slowFraction
@@ -1458,15 +1304,11 @@ function StatusConditionService:_applyStatusOnce(
 
 	-- FRESH application (a new stack for stackables below the limit).
 	local visualKey = config.auraName
-	-- Through any: the checker loses the method's declared number return
-	-- on this self-call and leaves a free type behind.
-	local dotTickDamageCap: number = (self:_resolveTickCap(sourcePlayer :: Player, config) :: any) :: number
 	local record: StatusRecord = {
 		expiresAt = os.clock() + duration,
 		-- `sourcePlayer` is a plain Player (see the userId note above).
 		sourcePlayer = sourcePlayer :: Player,
 		dotMultiplier = dotMultiplier,
-		dotTickDamageCap = dotTickDamageCap,
 		slowFraction = slowFraction,
 		weakenFraction = weakenFraction,
 		visualKey = visualKey,

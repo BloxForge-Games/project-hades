@@ -111,7 +111,7 @@ function RelicTrayPreviewInterface.Start(_self: typeof(RelicTrayPreviewInterface
 		Container = React.createElement(Container, {
 			Visible = true,
 			relicData = relics,
-			relicSlots = RelicCapData.DefaultSlots,
+			relicSlots = RelicCapData.MaxSlots,
 			toggleY = TOGGLE_Y,
 			setVisibleSignal = setVisible,
 			toggleVisibleSignal = toggleVisible,

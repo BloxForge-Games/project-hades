@@ -19,9 +19,6 @@ local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 
-local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
-local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
-local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local resolveArcLanding = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.resolveArcLanding)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
@@ -44,9 +41,6 @@ local COIN_BONUS_RELICS = {
 	RelicNames["Pot Of Gold"],
 }
 
--- Looter enchantment: ×1.10 coin credit when the COLLECTOR has a
--- Looter-enchanted weapon EQUIPPED (either slot). Reads the persisted
--- profile so it can't drift from the inventory UI's source of truth.
 -- The run's reward multiplier (DungeonService.GetRewardScale: difficulty
 -- ladder x dungeon rewardScale). 1 with no run (lobby, tests).
 local function difficultyMultiplier(field: string): number
@@ -73,7 +67,7 @@ local function scaleStochastic(value: number, scale: number): number
 	return whole + (if math.random() < scaled - whole then 1 else 0)
 end
 
--- Relic bonuses on currency pickups (Pot Of Gold +25%), summed into one
+-- Relic bonuses on currency pickups (Pot Of Gold +50%), summed into one
 -- BONUS fraction. Each magnitude comes from its own callback, so the
 -- numbers live only in RelicData. Applies to Gems AND chest Coins.
 local function getRelicCoinBonus(player: Player): number
@@ -91,24 +85,6 @@ end
 local function getDragonLanternMultiplier(player: Player): number
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon Lantern"]) > 0 then
 		return RelicService:GetRelicEffect(player, RelicNames["Dragon Lantern"]) or 1
-	end
-	return 1
-end
-
-local function getLooterCoinMultiplier(player: Player): number
-	local looterConfig = EnchantmentData[EnchantmentNames.Looter]
-	if not looterConfig or not looterConfig.coinMultiplier or not DataService then
-		return 1
-	end
-	local profile = DataService:GetProfileData(player)
-	local weapons = profile and profile.Inventory and profile.Inventory[InventoryType.Weapon]
-	if not weapons then
-		return 1
-	end
-	for _, entry in weapons do
-		if entry.equipSlot and entry.equipSlot > 0 and entry.enchantment == EnchantmentNames.Looter then
-			return looterConfig.coinMultiplier
-		end
 	end
 	return 1
 end
@@ -390,16 +366,16 @@ function DropService.Start(self: typeof(DropService))
 			--   * Pot Of Gold (+25% Coins and Gems, getRelicCoinBonus).
 			--   * Dragon Lantern (x3 Coins and Gems, taxed on hit).
 			--   * Explorer set bonus (all 3 Adventurers pieces): x1.10.
-			--   * Looter (equipped enchanted weapon): x1.10.
 			--   * The dungeon's rewardScale (DungeonService.GetRewardScale:
 			--     +50% per dungeon tier; the difficulty's take is already in
 			--     the chest row).
+			--   * Gold Find gear lines (BonusStatData): Coins only, not Gems.
 			value = math.round(
 				value
 					* (1 + getRelicCoinBonus(player))
 					* getDragonLanternMultiplier(player)
 					* ArmorSetBonusService:GetCoinMultiplier(player)
-					* getLooterCoinMultiplier(player)
+					* (1 + PlayerStatsService:GetGearStat(player, "GoldFind"))
 					* difficultyMultiplier("gold")
 			)
 			-- Death economy: run coins go to the ESCROW, not the profile --
@@ -427,7 +403,9 @@ function DropService.Start(self: typeof(DropService))
 			end
 			local currentMana = arcaneData.mana
 			local maxMana = arcaneData.maxMana
-			local manaRestored = currentMana + maxMana * BASE_MANA_FRACTION
+			-- Orb Potency gear lines (BonusStatData) scale the restore.
+			local manaRestored = currentMana
+				+ maxMana * BASE_MANA_FRACTION * (1 + PlayerStatsService:GetGearStat(player, "OrbPotency"))
 
 			ArcaneService:SetPlayerArcaneData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
 		elseif dropType == DropTypes.Health then
@@ -455,7 +433,10 @@ function DropService.Start(self: typeof(DropService))
 
 			-- Regeneration Coil (2026-10-30): the orb heals its multiplier more,
 			-- and every ally inside data.shareRadius gets the same heal.
-			local coil = RelicService:GetRelicEffect(player, RelicNames["Regeneration Coil"]) or 1
+			-- Orb Potency gear lines (BonusStatData) scale the heal, the
+			-- collector's lines for the allies' share too.
+			local coil = (RelicService:GetRelicEffect(player, RelicNames["Regeneration Coil"]) or 1)
+				* (1 + PlayerStatsService:GetGearStat(player, "OrbPotency"))
 			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
 			if coil > 1 then
 				local row = RelicData[RelicNames["Regeneration Coil"]]

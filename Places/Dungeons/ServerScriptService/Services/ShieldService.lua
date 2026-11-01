@@ -31,7 +31,7 @@
 	  * Korblox Ice Claws (duo): when a holder who owns it loses their last Barrier,
 	    it shatters for Arcane Damage and Chills (_shatterIceShell).
 	  * Spartan Sword and Shield: grants Stonebound on a arcane cast
-	    (VFXService calls TrySpartanStonebound).
+	    (its Stonebound half left with the auras, 2026-10-31).
 	  * Golem's Hammer: while holding a Barrier, the Empower rig sits on
 	    the HRP and a Tremor pulses every second for (Level x the relic
 	    callback, 50) damage in a radius. (Its Stonebound clause was dropped in the 2026-09
@@ -54,7 +54,6 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local RelicService = require(ServerScriptService.Services.RelicService)
 local Breakable = require(ServerScriptService.Components.Breakable)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
-local AuraService = require(ServerScriptService.Services.AuraService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
@@ -76,7 +75,7 @@ end
 
 local ShieldService = {
 	Name = "ShieldService",
-	Dependencies = { TextIndicatorService, RelicService, AuraService } :: { any },
+	Dependencies = { TextIndicatorService, RelicService } :: { any },
 }
 
 --[ Constants ]--
@@ -113,7 +112,6 @@ local GOLDEN_GLOVES_DURATION = 5
 -- Robloxian Battle Shield: duration of the on-cast shield (the fraction
 -- lives in its relic callback). 5 -> 3 (2026-10-30, with the fraction
 -- 10% -> 5%): the cast now grants Stonebound too.
-local ROBLOXION_SHIELD_DURATION = 3
 
 -- Bundle of TNT explosion. The blast is FUSED rather than instant: the
 -- shield ending and the explosion reading as one event made it impossible
@@ -170,6 +168,8 @@ ShieldService._sandwichLastAt = {} :: { [number]: number }
 -- Cheezburger and Korblox Ice Claws per-player last-proc clocks.
 ShieldService._tntLastAt = {} :: { [number]: number }
 ShieldService._pebbleLastAt = {} :: { [number]: number }
+-- Golem's Hammer's hit-taken Barrier: [userId] = os.clock() of the last.
+ShieldService._golemLastAt = {} :: { [number]: number }
 ShieldService._iceShellLastAt = {} :: { [number]: number }
 
 --[ Private ]--
@@ -665,7 +665,7 @@ function ShieldService.GrantShield(
 				head,
 				-- "Barrier" is the USER-FACING name; the enum stays "Shielded"
 				-- because marker names and the aura ASSET folder are keyed on it.
-				"Barrier!",
+				"Shield!",
 				Color3.fromRGB(220, 220, 220)
 			)
 		end
@@ -788,8 +788,8 @@ function ShieldService.TryGoldenGlovesBarrier(self: typeof(ShieldService), playe
 end
 
 -- Robloxian Battle Shield: called by VFXService on every successful arcane
--- cast by its owner. The cast grants Stonebound as well (2026-10-30):
--- it is Earth's arcane enabler, Riot Shield being melee-only.
+-- cast by its owner: the card's Barrier for data.barrierSeconds. (Its
+-- Stonebound half left with the auras, 2026-10-31.)
 function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: Player)
 	if not RelicService then
 		return
@@ -798,30 +798,33 @@ function ShieldService.TryRobloxionShield(self: typeof(ShieldService), player: P
 		return
 	end
 	local fraction = RelicService:GetRelicEffect(player, RelicNames["Robloxian Battle Shield"]) or 0
+	local entry = RelicData[RelicNames["Robloxian Battle Shield"]]
+	local seconds = (entry and entry.data and entry.data.barrierSeconds) or 5
 	if fraction > 0 then
-		self:GrantShield(player, player, fraction, ROBLOXION_SHIELD_DURATION)
-	end
-	if AuraService and player.Character then
-		AuraService:SetAura(player, AuraNames.Stonebound, player.Character)
+		self:GrantShield(player, player, fraction, seconds)
 	end
 end
 
--- Spartan Sword and Shield: the same arcane cast also grants Stonebound.
--- Its OTHER half (the +25% damage rider on everyone Stonebound touches)
--- lives in AuraService's payload, not here.
---
--- No cooldown: this is gated by the mana the cast already cost, and
--- SetAura extends rather than stacks.
-function ShieldService.TrySpartanStonebound(_self: typeof(ShieldService), player: Player)
-	if not RelicService or not player.Character then
+-- Golem's Hammer (2026-10-31): called by DamageService on every hit its
+-- owner takes. Grants data.hitBarrierPercent for data.hitBarrierSeconds,
+-- at most once per data.hitBarrierCooldown; the Barrier then keeps the
+-- Tremor loop running.
+function ShieldService.TryGolemBarrier(self: typeof(ShieldService), player: Player)
+	if not RelicService or (RelicService:GetSpecificRelicRegistry(player, RelicNames["Golem's Hammer"]) or 0) <= 0 then
 		return
 	end
-	if (RelicService:GetSpecificRelicRegistry(player, RelicNames["Spartan Sword and Shield"]) or 0) <= 0 then
+	local entry = RelicData[RelicNames["Golem's Hammer"]]
+	local data = (entry and entry.data) or {}
+	local now = os.clock()
+	if now - (self._golemLastAt[player.UserId] or -math.huge) < (data.hitBarrierCooldown or 1) then
 		return
 	end
-	if AuraService then
-		AuraService:SetAura(player, AuraNames.Stonebound, player.Character)
+	local fraction = data.hitBarrierPercent or 0
+	if fraction <= 0 then
+		return
 	end
+	self._golemLastAt[player.UserId] = now
+	self:GrantShield(player, player, fraction, data.hitBarrierSeconds or 3)
 end
 
 -- Spends buckets against `damage`, returning what they couldn't absorb.

@@ -71,20 +71,16 @@ Two numbers, two jobs, shown together ("Lv 14 · Power 820").
 Enter one dungeon, procedural encounters, pick relics, boss, loot, return to Hub. The relic build
 resets afterwards. Roughly **6 to 15 gear drops** per run.
 
-- A run is **one to three floors by difficulty** (Easy 1, Normal 2, Hard and Nightmare 3).
-  Every floor before the last is four combat rooms, one event, the Merchant Shop and the boss:
-  a combat room first, the boss last, and the event and the shop at random doors in between, never
-  back to back (for example C E C C S C B). Its event never rolls a second shop.
-- **Only the run's last floor has a miniboss:** two combat rooms, the miniboss, two combat rooms,
-  the boss. Its shop sits at the last door before the boss and its event before the miniboss
-  (never a second shop on Easy's single floor). Normal and above may roll a third event there
-  (30 / 40 / 50%).
-- A floor's boss room ends on a Descend pad to the next floor; the exit portal rises only after the
-  final floor's boss. Gems, relics and the loot escrow carry across floors. Chest rewards are
-  back-loaded (40/60 on two floors, 25/35/40 on three).
-- **Relic picks: one per floor plus one from the final boss** (Easy 2, Normal 3, Hard and Nightmare
-  4; the Merchant Shop and Cursed Shrine add to that). Each pick is 1 of 3. A Legendary pity
-  guarantees one by the last pick.
+- A run is **one floor on every tier** (several floors made runs too long). Combat rooms by
+  tier: Easy 4, Normal 5, Hard 6, Nightmare 6, with the miniboss after the middle one and the
+  boss last. One event sits on a random door between the first combat room and the boss, and a
+  second rolls at 50% on another door, never back to back (for example C E C M C E C B).
+- **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
+  add the Coffin and the Cursed Shrine; Nightmare adds the Sword in the Stone. The Merchant Shop
+  is out of the pool (its code stays).
+- The exit portal rises after the boss. Chest rewards all land on that one floor.
+- **Relic picks** come from the vending machines and the Cursed Shrine; the pick count and a
+  Legendary pity are open tuning after the first test.
 - **Death, wipe or leaving before the clear ends the run.** Gear in escrow is **kept**. Half the
   run's Gold and Arcane Crystals are lost; Gems are lost. Lives: 1 on every tier.
 
@@ -95,139 +91,141 @@ statuses coexist. No stacking except Death Venom.
 
 | Status | Effect | Notes |
 |---|---|---|
-| Burn | 25% of Power per second for 4s | DoT. Black Flame (Katana) doubles it. |
-| Chill | 30% slow for 4s | Control. |
-| Poison | 12% of Power per second for 6s, target deals 10% less | DoT plus Weaken. Death Venom (Skeletal Scythe) stacks to 3. |
-| Shock | +10% damage taken for 6s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
-| Barrier | Shield worth x% of max health | On the player. Blocks damage before health. |
+| Burn | 25% of Power per second for 5s | DoT. Black Flame (Katana) doubles it. |
+| Chill | 30% slow for 5s | Control. |
+| Poison | 10% of Power per second for 5s, target deals 10% less | DoT plus Weaken. Death Venom (Skeletal Scythe) stacks to 3. |
+| Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
+| Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
   the same Burn and a bigger weapon means a bigger Burn. Bosses take the same Burn as grunts.
-- Melted (Burning + Poisoned) makes DoTs tick twice as fast. Petrified (Medusa) is a 2s stun.
+- Every status lasts 5s; a reapply refreshes the timer. Melted (Burning + Poisoned) makes DoTs
+  tick twice as fast. Petrified (Medusa, shelved) is a stun on the same 5s.
   Neither increases damage taken.
 
 ## Relics
 
-**46 relics plus 5 Duos.** Five per element (Blaze, Frost, Venom, Storm, Earth), ten Ancient
-(no element), six Cursed. Each element tree is 2 Rare, 2 Epic, 1 Legendary.
+**Relic slots: 5 at most.** Easy opens 3, Normal 4, Hard and Nightmare 5. The tray always draws
+five boxes; a locked one shows a lock and says which tier opens it. The Merchant's slot stand is
+retired (slots come from the tier, not Gems).
+
+**45 live relics.** Five per element (Blaze, Frost, Venom, Storm, Earth: 2 Rare, 2 Epic,
+1 Legendary), 14 Neutral (8 Rare, 5 Epic, 1 Legendary) and 6 Cursed. Everything else in
+`RelicData` is `retired`: shelved, never rolled, sold, forged or audited, its code dormant, kept
+for a later rotation. Duos are shelved too until the pool is tested.
 
 **Rules**
 
 - A relic is never a percentage on the player. No +% damage, crit, speed, mana or reduction.
-  The exceptions are Cursed relics (a big number with a cost) and Ancient utility (Speed Coil,
-  Gravity Coil), which gear does not roll.
-- **Triggered relics scale off the hit** that fired them (Flame Wave 75% of the swing). **Passive
-  relics scale off Power** (Wyrm orbs, Fireworks, puddles, every DoT). Each damage relic is
-  budgeted at about +20% of gear DPS, so five of them roughly double it and a utility pick costs a
-  fifth of that.
-- **NC / C.** Four relics per tree are **NC** (no condition, work on their own). One is **C** and
-  needs the tree's status; it is offered only once the player holds a relic from that tree, so no
-  one is locked out of half the pool on pick one.
-- **Roll:** pick a tree first (six, equal weight), then a card by rarity (Rare 80 / Epic 18 /
-  Legendary 1 / Duo 1). Cursed come only from the Cursed Shrine. The offer, the Shop and the vending
-  machines use one eligibility check.
-- **Duos** need a relic from both trees this run and roll at Legendary weight.
-- Co-op: a relic reads the status on the enemy whoever applied it. Barrier relics read your own.
-- Card text is one sentence, one coloured keyword, and is the source of truth for the number.
+  The exceptions are Cursed relics (a big number with a cost) and the two Neutral utility coils.
+- **Triggered relics scale off the hit** that fired them (Flame Wave 75% of the swing, Volleyball
+  250% of the shot). **Passive relics and DoTs scale off Power.** Each damage relic is budgeted
+  at about +20% of gear DPS.
+- **NC / C.** Four relics per tree are **NC** (no condition). One is **C**, offered only once the
+  player holds any relic of that tree, so no one is locked out of a tree on pick one.
+- **Roll:** pick a tree first (one ticket each, plus half a ticket per relic you already hold in
+  that tree, capped at two; Neutral stays at one), then a rarity (Rare 77 / Epic 18 / Legendary
+  5), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
+  Shop and the vending machines use one eligibility check (`IsRelicRollEligible`).
+- Statuses come from relics. The four tree openers apply theirs on 15% of weapon hits and 45% of
+  spell hits; every other status source is a relic's own proc. Relic bursts (pumpkins, Shatter,
+  strikes, the Volleyball) ride the universal lane: Power-scaled, no weapon or arcane lines, no
+  enchantment, no crit; Shock, Blight and Abyss still multiply them.
+- Card text is the source of truth for the number.
 
 **Blaze** (Burn)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Ye Olde Fire Breath Potion | Rare | NC | Hits have a chance to Burn (25% weapon hits, 50% spell hits). |
-| Dragon's Flame Sword | Epic | NC | Every 3rd Melee swing fires a Flame Wave for 75% of the swing that Burns. |
-| Berserker's Claymore | Epic | NC | Weapon hits on Burning enemies splash 40% of the hit to nearby enemies. |
-| Trick Or Trap | Epic | NC | Takedowns drop an Explosive Pumpkin that deals damage and Burns. |
-| Flame Ronin Katana | Legendary | C | Burn becomes Black Flame, dealing double. Crits on Black-Flamed enemies detonate it. |
+| Ye Olde Fire Breath Potion | Rare | NC | Your damage has a chance to apply Burn. |
+| Dragon's Flame Sword | Rare | NC | Every 3rd Melee swing fires a Flame Wave that deals 75% of the swing's damage and Burns. |
+| Trick Or Trap | Epic | NC | Takedowns drop 1-3 Explosive Pumpkins that deal damage and Burn. |
+| Berserker's Claymore | Epic | NC | Your Melee hits splash 35% of their damage to nearby enemies, doubled on Burning enemies. |
+| Flame Ronin Katana | Legendary | C | Your Burns become Black Flame, doubling their damage. Critical Hits detonate the Black Flame, dealing the remaining Burn damage at once. |
 
 **Frost** (Chill)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Frozen Blue Ice Crossbow | Rare | NC | Hits have a chance to Chill (25% weapon hits, 50% spell hits). |
-| Ice Breaker | Rare | C | Chilling a Chilled enemy Shatters it for damage, removing the Chill. |
-| Ice Dragon Slayer | Epic | NC | A Frost Wyrm follows you, firing an orb every 1.5s that deals Power damage and Chills. |
-| Icy Arctic Fowl | Epic | NC | Every 3s, fire 3 ice shards at nearby enemies for Power damage. |
-| Staff of Azure Ever Ice | Legendary | NC | Spells leave a 5s Frost Zone that Chills and deals Power damage per second. |
+| Frozen Blue Ice Crossbow | Rare | NC | Your damage has a chance to apply Chill. |
+| Ice Breaker | Rare | C | Chilling a Chilled enemy Shatters them for damage. |
+| Ice Dragon Slayer | Epic | NC | A Frost Dragon follows you, firing icy blasts that deal damage and Chill. |
+| Icy Arctic Fowl | Epic | NC | Every 3s, fire ice shards at nearby enemies for damage. Chilled enemies take double damage. |
+| Staff of Azure Ever Ice | Legendary | NC | Spells leave a Frost Zone that Chills and deals damage to enemies inside. |
 
 **Venom** (Poison)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Zombie Axe | Rare | NC | Hits have a chance to Poison (25% weapon hits, 50% spell hits). |
-| Witches Brew | Rare | NC | Every 5th Ranged shot lobs a poison bubble that leaves a 3s Poison puddle. |
-| Foul Poison Fowl | Epic | NC | Takedowns leave a 5s Poison cloud that damages and Poisons. |
-| Skeletal Scythe | Epic | C | Poison becomes Death Venom, stacking up to 3 times. |
-| Zombie Bomb | Legendary | NC | Hits have 20% chance to spit poison goop at nearby enemies, Poisoning them. |
+| Zombie Axe | Rare | NC | Your damage has a chance to apply Poison. |
+| Witches Brew | Rare | NC | Every 5th Ranged shot lobs a Brewed Potion that leaves a Poison puddle. |
+| Foul Poison Fowl | Epic | NC | Takedowns leave a Poison Cloud for 3s dealing damage each second. |
+| Skeletal Scythe | Epic | C | Your Poison becomes Death Venom, which is Poison that can stack up to 3 times. |
+| Zombie Bomb | Legendary | NC | Your damage has a chance to spit Poison Goop at nearby enemies, dealing damage and Poisoning them. |
 
 **Storm** (Shock)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Static Shock Sheep | Rare | NC | Hits have a chance to Shock (25% weapon hits, 50% spell hits). |
-| Sparkle Time Hoverboard | Rare | NC | Your dodge becomes a longer lightning dash that damages and Shocks enemies you pass through. |
-| Deluxe Coil Gun | Epic | C | Shock becomes Coil Shocked: +20% damage taken from all sources. |
-| Lightning Bolt Sword | Epic | NC | Hits have a chance to chain lightning to up to 3 enemies for 50% of the hit, Shocking them. |
-| Lightning Horn of the Heavens | Legendary | NC | Hits have 20% chance to call a lightning strike for area Power damage (0.25s cooldown). |
+| Static Shock Sheep | Rare | NC | Your damage has a chance to apply Shock. |
+| Sparkle Time Hoverboard | Rare | NC | Your Dodge becomes a lightning dash that deals damage and Shocks enemies you pass through. |
+| Deluxe Coil Gun | Epic | C | Your Shocks become Coil Shocked, making enemies take +20% more damage. |
+| Lightning Bolt Sword | Epic | NC | Your damage has a chance to chain lightning through nearby enemies, dealing damage and Shocking them. |
+| Lightning Horn of the Heavens | Legendary | NC | Your damage has a chance to call down a lightning strike that Shocks and deals damage to nearby enemies. |
 
-**Earth** (Barrier)
+**Earth** (Shield)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Robloxian Battle Shield | Rare | NC | Casting a spell grants a 10% Barrier for 5s. |
-| Golden Steampunk Gloves | Rare | NC | Weapon hits have a chance to grant a 5% Barrier for 3s and knock back harder. |
-| Bundle of TNT | Epic | C | Barriers explode when they end, dealing damage to nearby enemies. |
-| Spartan Sword and Shield | Epic | NC | 2 shields orbit you, dealing damage and granting a 1% Barrier per hit for 3s. |
-| Golem's Hammer | Legendary | NC | Taking damage grants a 10% Barrier for 3s. While Barriered, the earth quakes under you each second. |
+| Robloxian Battle Shield | Rare | NC | Casting an Arcane Spell gives you a +10% Shield. |
+| Golden Steampunk Gloves | Rare | NC | Your Weapon damage has a chance to grant you a +5% Shield. |
+| Bundle of TNT | Epic | C | Your Shields explode when they end, dealing damage to nearby enemies. |
+| Spartan Sword and Shield | Epic | NC | You gain 2 shields that circle around you, dealing damage and granting you +5% Shields. |
+| Golem's Hammer | Legendary | NC | Taking damage grants you a +15% Shield. While Shielded, the earth quakes beneath you dealing damage. |
 
-**Ancient** (no element, all NC)
+**Neutral** (all NC)
 
 | Relic | Rarity | Effect |
 |---|---|---|
-| Fuse Bomb | Rare | Takedowns drop a Fuse Bomb. |
-| Speed Coil | Rare | +8 Movement Speed. |
-| Gravity Coil | Rare | +1 Dodge stack. |
-| Summer Fireworks | Rare | Every 3s, launch 3 Fireworks for Power damage. |
+| Gravity Coil | Rare | Gain +1 Dodge stack. |
+| Newtrat's Tuskinator | Rare | Gain +15 Ammo Capacity, and reload 35% faster. |
+| Pot Of Gold | Rare | Gain +50% Gold and Gems, and auto-collect them. |
+| Fuse Bomb | Rare | On Takedown, drop a Fuse Bomb dealing damage. |
+| Speed Coil | Rare | Gain +8 Movement Speed. |
 | Experimental Jetpack | Rare | Perfect Dodges grant an invulnerable Jetpack for 2s. |
-| Orinthian Blaster 3777 | Epic | Ranged Weapon Damage becomes Arcane Damage. |
-| Sword of the Epicredness | Epic | Spells deal Weapon Damage instead. |
-| Super Stomp Boots | Epic | Your dodge ends in a Ground Stomp. |
-| Volleyball | Epic | Every 3rd Ranged attack spikes a Volleyball for 250% of the shot. |
-| Portable Justice | Epic | Hits have 10% chance (50% spells) to Jail non-Boss enemies for 3s, 5s cooldown per enemy. |
-| Ban Hammer | Legendary | Enemies below 20% health (5% on Bosses) are executed by a falling Ban Hammer. |
-
-**Duo** (hold a relic from both trees)
-
-| Relic | Trees | Effect |
-|---|---|---|
-| HEX Spitter | Blaze + Storm | When a Shocked enemy starts Burning it bursts in a plasma nova for 100% Power nearby. |
-| Fire Breathing Friend | Blaze + Venom | Enemies both Burning and Poisoned are Melted: your DoTs on them tick twice as fast. |
-| Blizzard Wand | Frost + Storm | Shocking a Chilled enemy calls a 3s hailstorm on it; shards deal Power damage and Chill. |
-| Korblox Ice Claws | Frost + Earth | When your Barrier ends it shatters for Power damage, Chilling nearby enemies. |
-| Medusa Head | Earth + Venom | Poisoning an enemy while Barriered Petrifies it for 2s. |
+| Summer Fireworks | Rare | Every 3s, launch 3 Fireworks that deal damage. |
+| Super Stomp Boots | Rare | Your Dodge ends with a Ground Stomp that deals damage. |
+| Korblox Mage Staff | Epic | Every 3rd Arcane Spell you cast costs no Mana and resets its cooldown. |
+| Midnight Sword | Epic | Your Weapon damage restores 3% of your Mana. |
+| Volleyball | Epic | Every 3rd Ranged hit spikes a Volleyball that deals damage. |
+| Magenta Paintball Gun | Epic | Your Ranged damage has a chance to Paint. Painted enemies take +20% Arcane Damage. |
+| Portable Justice | Epic | Your damage has a chance to Jail enemies for 3s. |
+| Ban Hammer | Legendary | Enemies below 20% health are executed by a falling Ban Hammer that deals damage. |
 
 **Cursed** (Cursed Shrine only)
 
 | Relic | Effect |
 |---|---|
-| Double-Bladed Scythe | +100% Weapon Damage, but Arcane deals no damage. |
-| Dragon Lantern | +200% Gold and Gems, but lose 10% of both when you take damage. |
-| Forbidden Box | +100% Arcane Damage, but Weapon Damage −50%. |
-| Slateskin Potion | +50% Damage Reduction, but lose 1 Dodge stack. |
-| Sword of Eternal Abyss | +50% damage, but you can't apply Statuses. |
-| Teddy Trap | +5% Lifesteal, but Health Orbs don't heal you and you take +100% damage. |
+| Double-Bladed Scythe | Deal +100% Weapon Damage, but your Arcane deals no damage. |
+| Dragon Lantern | Gain +200% Gold and Gems, but lose 10% of both when you take damage. |
+| Forbidden Box | Deal +100% Arcane Damage, but your Weapon deals 50% less. |
+| Slateskin Potion | Gain +50% Damage Reduction, but lose 1 Dodge stack. |
+| Sword of Eternal Abyss | Deal +50% damage, but you can't apply Statuses. |
+| Teddy Trap | Gain 5% Lifesteal, but Health Orbs don't heal you and you take double damage. |
 
-**Shelved, not deleted** (models and data kept behind a flag for a later rotation): Astral Cloak,
-Holiday Ham, Mystical Staff of Cyan, Glorious Sword, Neon Rainbow Phoenix, Flaming Orb of Divine
-Pain, Magenta Paintball Gun, Rubber Chicken Launcher, Mechatronic Spider, Overseer's Battleaxe,
-Earth Summoning Horn, War Rocks, Korblox Mage Staff, Frozen Flail, Shuriken of the Crescent Moon,
-Regeneration Coil, Pot Of Gold, Wizard Orb, Linked Sword, Red Laser Scythe, Blue Laser Scythe.
-Retired outright: every aura opener and "while <aura>" relic, every flat +% relic.
+**Shelved (`retired = true`, models and code kept):** every aura opener and "while <aura>" relic,
+every flat +% relic, the five Duos, Pinata, and the Neutral Legendaries Astral Cloak, Holiday Ham,
+Mystical Staff of Cyan, Glorious Sword, Neon Rainbow Phoenix, and the two lane converters Orinthian
+Blaster 3777 and Sword of the Epicredness (redundant without auras) and Regeneration Coil (its job
+is the Orb Potency line). Korblox Mage Staff and Newtrat's Tuskinator returned as Neutral cards and
+Midnight Sword is new, all 2026-10-31.
 
 ## Auras
 
-**Auras are cosmetics.** The five rigs (Enflamed, Frostburst, Blighted, Stormcharged, Stonebound)
-play on the character in the Hub and the dungeon and change no number. The base aura of each
+**Auras are cosmetics.** No relic grants or reads one any more (2026-10-31); `AuraService` and its
+five rigs (Enflamed, Frostburst, Blighted, Stormcharged, Stonebound) stay in the codebase, dormant,
+until the Wardrobe wears them. They will play on the character in the Hub and the dungeon and
+change no number. The base aura of each
 element unlocks from that element's Mastery or a Nightmare clear with its weapon; colour and
 particle variants sell for Robux and rank up on duplicates like Arcane. A purchased aura never
 changes a combat number.
@@ -265,12 +263,59 @@ beats a Level 2 one of the same quality.
   - Easy mostly Common; Normal better Rare; Hard makes Rare and Epic common and allows Legendary;
     Nightmare is the same pool with much better high-rarity odds. No Nightmare-exclusive gear.
 - **No character stats**, ever. What a stat point would do, a gear line does.
+
+### Weapon enchantments
+
+One per weapon, bound to that weapon, hidden from its Damage and from Power: the card says 50,
+the hit says 57. Live while the weapon is equipped (either hand slot); two weapons with the same
+enchantment count once. The names are the old aura names; the Wardrobe's cosmetic glows get
+different ones. Weapon particles for each are Studio work.
+
+| Enchantment | Effect | Where it applies |
+|---|---|---|
+| Enflamed | +15% Weapon Damage | That weapon's own hits |
+| Frostburst | +20% Arcane Damage | Your spells while equipped |
+| Stormcharged | +15% Critical Hit Chance | Every hit while equipped (base crit stays 5%) |
+| Blight | +15% Damage to enemies with a Status | Every lane, any status |
+| Stonebound | +20% Damage Reduction | While equipped |
+
+- **Roll on drop** by rarity: Common 0%, Uncommon 15%, Rare 30%, Epic 60%, Legendary 100%; which
+  one is uniform.
+- **Imbue** at the Blacksmith adds or rerolls one for Arcane Crystals: 25 / 35 / 50 / 75 / 100 by
+  rarity. Never fails, never destroys, a reroll never repeats. Equipped weapons allowed.
+- Looter is gone (its Gold went to the Gold Find line). Saved Looter weapons became unenchanted
+  (profile v4).
+
+### Gear lines (bonus stats)
+
+Secondary stats rolled into a weapon or armor piece. Like enchantments they never touch the shown
+Damage / Health or Power; they change the hit, the heal or the cooldown. Spells roll none.
+
+- **Count by rarity:** Common 0, Uncommon 1, Rare 1, Epic 2, Legendary 3. A full Legendary set is
+  15 lines; mid-game is 5 to 8.
+- **Roll:** uniform inside the range, independent of Quality. Never two of the same stat on one
+  item; the same stat on different items sums. Reroll at the Blacksmith for Gold is still to come.
+- **Weapons roll offence, armor rolls defence and casting.** Weapon Damage lines belong to the
+  weapon that landed the hit, like Enflamed; every other line is yours while the piece is worn.
+
+| Weapon line | Range | Armor line | Range |
+|---|---|---|---|
+| Weapon Damage | +4 to 10% | Health | +4 to 10% |
+| Arcane Damage | +5 to 12% | Damage Reduction | +2 to 5% |
+| Critical Chance | +3 to 8 pts | Movement Speed | +2 to 5% |
+| Critical Damage | +10 to 25% | Cooldown Reduction | +3 to 8% (cap 40%) |
+| Status Chance | +3 to 8 pts | Mana Cost Reduction | +3 to 8% (cap 40%) |
+| | | Mana Regen | +5 to 15% |
+| | | Orb Potency | +10 to 25% (cap 100%) |
+| | | Dodge Recovery | +5 to 12% |
+| | | Gold Find | +5 to 15%, Gold only |
+
+Every reduction together (Slateskin, Stonebound, lines, set bonus, shrine) caps at 75% of a hit.
+A perfect 15-line Legendary set with Enflamed is about +85% weapon output and +50% effective
+health over no lines: a little under one tier, so lines decide how comfortable a tier feels while
+Power still gates it.
+
 - **Post-launch, after the first test:**
-  - **Secondary lines** rolled by rarity (Common 0, Rare 1, Epic 2, Legendary 3), magnitude by
-    quality: weapons roll Critical Chance, Critical Damage, Attack Speed, Status Chance, Ammo;
-    armor rolls Damage Reduction, Movement Speed, Dodge Recovery, Healing Received, Gold Find;
-    spells roll Cooldown Reduction, Mana Cost. The Set Bonus folds into lines. The Blacksmith
-    rerolls lines for Gold.
   - **A Staff weapon type** whose mana-free bolt deals Arcane Damage, so a mage's Power is their
     staff. Only if testers ask to be a pure mage; Minecraft Dungeons never did this.
 
@@ -335,8 +380,9 @@ Stonehorn Boar (melee), Rootfang Wolf (fast melee), Thornshot Shaman (ranged), R
 (tank), Briarhorn Caribou (support and healer). Readable silhouettes, stone, wood and foliage,
 restrained glowing runes.
 
-Tier scaling: mob health ×1.5 / 3 / 6 / 12 and damage ×1 / 1.47 / 1.68 / 2.14 by tier, re-solved
-after the relic refactor removes the aura stat half from every build.
+Tier scaling: mob health ×1.2 / 2.4 / 4.8 / 9.6 (×0.8 from 1.5 / 3 / 6 / 12 on 2026-10-31, the
+aura stat half having left every build) and damage ×1 / 1.47 / 1.68 / 2.14 by tier. A first-order
+re-solve; the survival sim reruns after the first play-test.
 
 ## Art and production
 
@@ -354,9 +400,9 @@ after the relic refactor removes the aura stat half from every build.
 2. Power: computed, stamped, shown on nameplate and tier select; warning gate; relic scaling reads
    Power instead of player level.
 3. Death keeps gear.
-4. Relic refactor: the 46 + 5 above, NC/C gating, tree-first roll, Duos, every proc and DoT on
-   Power; auras converted to cosmetics.
-5. Mob re-solve against the new damage composition.
+4. Relic refactor: the 45 above, NC/C gating, tree-first roll, every proc and DoT on Power;
+   auras dormant until the Wardrobe wears them. (Done 2026-10-31; Duos shelved.)
+5. Mob re-solve against the new damage composition. (First-order ×0.8 done 2026-10-31.)
 6. External play-test: 10 to 20 players, half on phones, no explanations. Then the 30-day freeze.
 
 After the test: gear secondary lines, Staff weapon type, aura variants for Robux, rank perks,

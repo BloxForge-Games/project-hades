@@ -194,7 +194,7 @@ local FUSE_BOMBS: BombSpec = {
 -- Poison on everything inside every tick. LIMIT bounds live clouds PER
 -- PLAYER, same shape as the pumpkin cap. The card shows the duration
 -- (RelicData) and the visual scales with the radius.
-local MOB_BOMB_CLOUD_DURATION = 5
+local MOB_BOMB_CLOUD_DURATION = 3
 local MOB_BOMB_CLOUD_TICK_SECONDS = 1
 -- 7 studs since 2026-10-30 (10 before; cloud and hit area both -30%).
 local MOB_BOMB_CLOUD_RADIUS = 7
@@ -370,13 +370,9 @@ local function runPoisonCloud(context: Context, player: Player)
 	if not damagePerLevel or RelicService:GetSpecificRelicRegistry(player, RelicNames["Foul Poison Fowl"]) <= 0 then
 		return
 	end
-	-- Only a POISONED mob's takedown (Poison or Death Venom), read before
-	-- the stack watchers release.
+	-- Every takedown (2026-10-31; a Poisoned mob's only before): the cloud
+	-- is Venom's own Poison source now.
 	if not StatusConditionService then
-		return
-	end
-	local carried: { string } = StatusConditionService:GetLiveStatuses(context.model)
-	if not table.find(carried, StatusConditions.Poison) and not table.find(carried, StatusConditions.NoxiousVenom) then
 		return
 	end
 

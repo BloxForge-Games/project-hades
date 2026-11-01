@@ -21,12 +21,12 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 
 local SPARTAN = RelicNames["Spartan Sword and Shield"]
+local GLOVES = RelicNames["Golden Steampunk Gloves"]
 
 local ORBIT_HIT_RADIUS = 2.5
 -- The client keeps a shield this long past each re-send (sent once a
@@ -70,7 +70,7 @@ function Earth.onHeartbeat(now: number)
 	local offsets = shieldOffsets()
 	for player, orbit in orbits do
 		local root = getRoot.fromPlayer(player)
-		if not root or not root:FindFirstChild(AuraNames.Stonebound) or not helpers.owns(player, SPARTAN) then
+		if not root or not helpers.owns(player, SPARTAN) then
 			orbits[player] = nil
 			continue
 		end
@@ -103,19 +103,29 @@ function Earth.onHeartbeat(now: number)
 	end
 end
 
--- Once a second: Stonebound owners get (or keep) their shield.
+-- Once a second: Spartan owners get (or keep) their shields (2026-10-31;
+-- they orbited only while Stonebound before).
 function Earth.onTick(player: Player)
 	if not helpers.owns(player, SPARTAN) then
 		return
 	end
 	local root = getRoot.fromPlayer(player)
-	if not root or not root:FindFirstChild(AuraNames.Stonebound) then
+	if not root then
 		return
 	end
 	if not orbits[player] then
 		orbits[player] = { lastHit = {}, lastBarrier = 0, breakSeen = {}, breakReset = 0 }
 	end
 	helpers.fx("OrbitShield", root.Position, nil, nil, ORBIT_KEEPALIVE_SECONDS, player)
+end
+
+-- A weapon hit by `player` (DamageService): Golden Steampunk Gloves'
+-- Barrier roll (ShieldService owns the chance, size and cooldown).
+function Earth.onAttackHit(player: Player, _model: Model, isMagic: boolean)
+	if isMagic or not helpers.owns(player, GLOVES) then
+		return
+	end
+	shieldService():TryGoldenGlovesBarrier(player)
 end
 
 function Earth.onPlayerRemoved(player: Player)

@@ -27,7 +27,12 @@ function Volleyball.new(
 end
 
 function Volleyball:PlayEffect()
-	local volleyball = (getRelicModelTemplate(RelicNames.Volleyball) :: Model):Clone()
+	local template = getRelicModelTemplate(RelicNames.Volleyball)
+	if not template then
+		warn("[Volleyball] No model for Volleyball under GameAssets.Relics; effect skipped")
+		return
+	end
+	local volleyball = (template :: Model):Clone()
 	local character = self._character
 	local targetCharacter = self._targetCharacter
 

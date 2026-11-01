@@ -18,7 +18,8 @@
 	  and can never crit or roll appliers.
 
 	INCOMING (PlayerTakeDamage): variance -> Susanoo -> Teddy Trap ->
-	armor set -> poison weaken -> Slateskin -> Stonebound DR -> Flaming Orb
+	armor set -> poison weaken -> Slateskin -> Stonebound (the weapon
+	enchantment, then the aura's) DR -> Flaming Orb
 	-> shield absorb -> Space Sandwich proc -> ragdoll/lethal-clamp.
 ]]
 
@@ -33,6 +34,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local RelicService = require(ServerScriptService.Services.RelicService)
 local Breakable = require(ServerScriptService.Components.Breakable)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
 local ShieldService = require(ServerScriptService.Services.ShieldService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
@@ -60,6 +62,8 @@ local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
+local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 
 -- Second-value reader. Relics whose card reads "base X, increased to Y"
 -- keep X in the callback and Y in RelicData's `data` table, because a
@@ -173,6 +177,10 @@ local STATUS_ATTRIBUTE_PREFIX = "Status"
 -- blessing per run), but a per-floor exclusion rule later would, and
 -- damage immunity should never be reachable from a free pickup.
 local GREATER_SHRINE_MAX_REDUCTION = 0.60
+-- The most ALL reductions together may take off a mob hit (2026-10-31):
+-- Slateskin, Stonebound, the gear lines, the set bonus and the shrine
+-- multiply freely up to here, never to immunity.
+local MAX_TOTAL_DAMAGE_REDUCTION = 0.75
 
 -- Flaming Orb of Divine Pain (Cursed): +50% damage TAKEN while any of
 -- these auras is up -- the price of doubling their base effects. The
@@ -363,6 +371,8 @@ function DamageService.PlayerTakeDamage(
 	-- ±10% variance on every mob → player hit. Keep intermediate values as
 	-- floats; the final humanoid:TakeDamage below rounds once.
 	damage = rollDamageVariance(damage)
+	-- What the reductions below work from, for the total cap after them.
+	local mitigationBase = damage
 
 	-- Susanoo Armor: its damageReduction (ArcaneData, shown on the card).
 	if character:GetAttribute(Attributes.SusanooEnabled) == true then
@@ -391,12 +401,15 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Slateskin Potion"]) or 1)
 	end
 
-	-- Sword of Eternal Abyss (Cursed): +50% Damage Reduction, the defensive
-	-- half of the trade it makes for locking out auras and statuses. Its
-	-- callback carries the OFFENSIVE half, so the reduction lives in `data`.
-	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Sword of Eternal Abyss"]) > 0 then
-		damage = damage * (1 - relicData(RelicNames["Sword of Eternal Abyss"], "damageReduction", 0.50))
+	-- Stonebound, the weapon enchantment (2026-10-31): its Damage Reduction
+	-- while any equipped weapon carries it (EnchantmentData owns the number).
+	if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Stonebound) then
+		damage = damage * (1 - (EnchantmentData[EnchantmentNames.Stonebound].damageReduction or 0))
 	end
+
+	-- Gear lines (BonusStatData "DamageReduction"): the worn armor's summed
+	-- fraction, one multiplier.
+	damage = damage * (1 - PlayerStatsService:GetGearStat(player, "DamageReduction"))
 
 	-- Stonebound: its damage reduction (plus the owner's Leland rider), read
 	-- straight off the marker's replicated payload.
@@ -439,6 +452,10 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * (1 - math.min(bulwark, GREATER_SHRINE_MAX_REDUCTION))
 	end
 
+	-- The total cap (MAX_TOTAL_DAMAGE_REDUCTION): whatever the chain above
+	-- multiplied down to, at least this share of the hit lands.
+	damage = math.max(damage, mitigationBase * (1 - MAX_TOTAL_DAMAGE_REDUCTION))
+
 	-- Everything above is discarded for a fixedDamage hit (see the top of
 	-- this function): the caller's number is the number.
 	if fixedAmount then
@@ -452,6 +469,9 @@ function DamageService.PlayerTakeDamage(
 	ShieldService:TrySpaceSandwichBarrier(player)
 	-- Cheezburger: any hit taken grants a Barrier, on its own cooldown.
 	ShieldService:TryPebblePouchBarrier(player)
+	-- Golem's Hammer (2026-10-31): any hit taken grants its Barrier, on its
+	-- own cooldown.
+	ShieldService:TryGolemBarrier(player)
 
 	local rootPart = getRoot(character)
 	if rootPart then
@@ -737,14 +757,16 @@ function DamageService._postDamage(
 
 	-- "All damage" relics (2026-10-25): every damage instance rolls them.
 	self._onDamageModules["Jail"](player, humanoid, procCoefficient, isMagic == true)
-	-- Lightning Horn (2026-10-30): a Critical Hit has data.strikeChance to
-	-- call a strike (data.cooldown paces it), and every Critical Hit
-	-- extends Stormcharged.
-	if wasCrit then
-		self:_extendStormchargedOnCrit(player)
-		if math.random() < relicData(RelicNames["Lightning Horn of the Heavens"], "strikeChance", 0.5) then
-			self:_tryLightningHornStrike(player, humanoid)
-		end
+	-- Lightning Horn (2026-10-31; crits only before): ANY damage instance
+	-- has data.strikeChance (arcaneStrikeChance on a spell) to call a strike
+	-- (data.cooldown paces it).
+	local hornChance = relicData(
+		RelicNames["Lightning Horn of the Heavens"],
+		if isMagic == true then "arcaneStrikeChance" else "strikeChance",
+		0.2
+	)
+	if math.random() < hornChance then
+		self:_tryLightningHornStrike(player, humanoid)
 	end
 
 	if wasCrit then
@@ -842,13 +864,12 @@ function DamageService._tryNinjaWhipShock(_self: typeof(DamageService), player: 
 	end
 end
 
--- Lightning Horn of the Heavens (Legendary), THUNDERLORD (2026-10-29): a
--- Critical Hit on a Shocked enemy (Coil Shocked counts) always calls down a
--- Lightning Strike, at most once per data.cooldown -- per-level damage
--- from the relic callback, in a radius, every enemy inside. The strike
--- rolls its OWN crit (it rides the untyped lane, which never crits), and
--- a crit strike extends its owner's Stormcharged by data.stormExtend.
--- The resolving latch stops a strike's own damage chaining another.
+-- Lightning Horn of the Heavens (Legendary), THUNDERLORD (2026-10-31): any
+-- damage instance has data.strikeChance to call down a Lightning Strike,
+-- at most once per data.cooldown -- per-level damage from the relic
+-- callback, in a radius, every enemy inside, each Shocked. The strike
+-- rolls its OWN crit (it rides the untyped lane, which never crits). The
+-- resolving latch stops a strike's own damage chaining another.
 function DamageService._tryLightningHornStrike(self: typeof(DamageService), player: Player, humanoid: Humanoid)
 	if self._lightningStrikeResolving[player.UserId] then
 		return
@@ -902,31 +923,11 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 		-- arcane flag would wrongly pick up Painted's arcane vulnerability.
 		self:TakeDamage(player, targetHumanoid, strikeDamage, false, false, nil, true)
 		if getStatusConditionService() then
+			getStatusConditionService():ApplyStatus(player, model, StatusConditions.Shock)
 			getStatusConditionService():ApplyArcaneOnHitStatuses(player, model)
 		end
 	end)
 	self._lightningStrikeResolving[player.UserId] = nil
-end
-
--- Lightning Horn: every Critical Hit extends its owner's Stormcharged by
--- data.stormExtend, latched so one AoE crit extends once.
-function DamageService._extendStormchargedOnCrit(self: typeof(DamageService), player: Player)
-	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Lightning Horn of the Heavens"]) <= 0 then
-		return
-	end
-	local now = os.clock()
-	local last = self._stormExtendLast[player.UserId]
-	if last and now - last < SHURIKEN_FANOUT_SECONDS then
-		return
-	end
-	self._stormExtendLast[player.UserId] = now
-	if AuraService and player.Character then
-		AuraService:ExtendAura(
-			player.Character,
-			AuraNames.Stormcharged,
-			relicData(RelicNames["Lightning Horn of the Heavens"], "stormExtend", 1)
-		)
-	end
 end
 
 -- Shuriken of the Crescent Moon: refund 1% of Maximum Mana on a critical
@@ -983,6 +984,8 @@ function DamageService.GetCritParameters(
 	-- Greater Shrine "Precision". Pooled as a fraction like every other
 	-- blessing; crit CHANCE is in points here, so x100.
 	critChance += PlayerStatsService:GetGreaterShrineEffect(player, "CritChance") * 100
+	-- Gear lines (BonusStatData "CritChance"): a fraction, so x100 too.
+	critChance += PlayerStatsService:GetGearStat(player, "CritChance") * 100
 
 	-- Silver Ninja Star: flat points, no gate (callback = points); its
 	-- Critical Damage half, while Stormcharged, is in the multiplier block.
@@ -994,6 +997,12 @@ function DamageService.GetCritParameters(
 	-- callback slot carries the crit-mana-refund fraction instead.
 	if DamageService.RelicCount(relics, RelicNames["Shuriken of the Crescent Moon"]) > 0 then
 		critChance += relicData(RelicNames["Shuriken of the Crescent Moon"], "critChanceBonus", 5)
+	end
+
+	-- Stormcharged, the weapon enchantment (2026-10-31): flat points on every
+	-- hit while any equipped weapon carries it.
+	if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Stormcharged) then
+		critChance += EnchantmentData[EnchantmentNames.Stormcharged].critChanceBonus or 0
 	end
 
 	local casterHrp = getRoot.fromPlayer(player)
@@ -1018,6 +1027,8 @@ function DamageService.GetCritParameters(
 	-- Greater Shrine "Ferocity". Crit DAMAGE is already a fraction, so
 	-- the pooled value adds as-is.
 	critMultiplier += PlayerStatsService:GetGreaterShrineEffect(player, "CritDamage")
+	-- Gear lines (BonusStatData "CritDamage"): the same additive fraction.
+	critMultiplier += PlayerStatsService:GetGearStat(player, "CritDamage")
 
 	-- Stormcharged itself is crit CHANCE only (AuraData); the crit-DAMAGE
 	-- on its window is the relic riders below.
@@ -1127,10 +1138,11 @@ end
 -- +5% Throwing Bolts = x1.25, never compounding), with Painted on top,
 -- capped at VULNERABILITY_CAP so stacked debuffs cannot run away.
 function DamageService._targetVulnerabilityMultiplier(
-	_self: typeof(DamageService),
+	self: typeof(DamageService),
 	player: Player,
 	targetModel: Model,
-	isMagic: boolean?
+	isMagic: boolean?,
+	statuses: TargetStatuses?
 ): number
 	local vulnerability = 0
 
@@ -1152,8 +1164,8 @@ function DamageService._targetVulnerabilityMultiplier(
 
 	local multiplier = 1 + vulnerability
 
-	-- Painted: +20% ARCANE damage, from the APPLIER only (Magenta Paintball
-	-- Gun's "from you").
+	-- Painted: +20% ARCANE damage from everyone (2026-10-31; the applier
+	-- only before -- StatusConditionData's `applierOnly` keeps the seam).
 	if isMagic and targetModel:GetAttribute(STATUS_ATTRIBUTE_PREFIX .. StatusConditions.Paint) == true then
 		local paintConfig = StatusConditionData[StatusConditions.Paint]
 		if
@@ -1182,7 +1194,47 @@ function DamageService._targetVulnerabilityMultiplier(
 		multiplier *= 1 + relicData(RelicNames["Fire Breathing Friend"], "meltedBonus", 0.40)
 	end
 
+	-- Blight, the weapon enchantment (2026-10-31): +15% to a target carrying
+	-- ANY Status, every lane, outside the Shock cap like Petrified.
+	if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Blight) then
+		local targetStatuses: TargetStatuses = statuses or self:GetTargetStatuses(targetModel)
+		if targetStatuses.statusCount > 0 then
+			multiplier *= 1 + (EnchantmentData[EnchantmentNames.Blight].statusDamageBonus or 0)
+		end
+	end
+
 	return multiplier
+end
+
+-- GEAR in the ADDITIVE pool (2026-10-31), beside the relic modules: the
+-- weapon enchantments and the gear lines (BonusStatData).
+--   Weapon lane: Enflamed and the Weapon Damage lines of the weapon that
+--   landed the hit (the melee or the gun slot).
+--   Arcane lane: Frostburst and the Arcane Damage lines while equipped.
+-- A spell Sword of the Epicredness made Weapon Damage is neither weapon's
+-- hit; a shot Orinthian made Arcane reads as a spell here (isMagic already
+-- flipped). Returns BONUS damage, like the modules.
+function DamageService._gearDamageBonus(
+	_self: typeof(DamageService),
+	player: Player,
+	damage: number,
+	isMagic: boolean,
+	isMelee: boolean,
+	isConvertedSpell: boolean
+): number
+	local fraction = 0
+	if isMagic then
+		if WeaponLoadoutService:HasEnchantment(player, EnchantmentNames.Frostburst) then
+			fraction += EnchantmentData[EnchantmentNames.Frostburst].arcaneDamageBonus or 0
+		end
+		fraction += PlayerStatsService:GetGearStat(player, "ArcaneDamage")
+	elseif not isConvertedSpell then
+		if WeaponLoadoutService:GetEnchantmentForHit(player, isMelee) == EnchantmentNames.Enflamed then
+			fraction += EnchantmentData[EnchantmentNames.Enflamed].weaponDamageBonus or 0
+		end
+		fraction += PlayerStatsService:GetWeaponLineDamage(player, isMelee)
+	end
+	return damage * fraction
 end
 
 function DamageService.TakeDamage(
@@ -1348,6 +1400,12 @@ function DamageService.TakeDamage(
 		totalDamage += ArmorSetBonusService:GetWeaponDamageAmplifier(player, damage, isMagic)
 	end
 
+	-- Gear: the weapon enchantments (Enflamed / Frostburst) and the damage
+	-- lines, additive like the set bonus and typed the same way.
+	if not untypedOnly then
+		totalDamage += self:_gearDamageBonus(player, damage, isMagic == true, isMelee == true, isConvertedSpell == true)
+	end
+
 	do
 		-- Target-conditional relic bonuses join the SAME additive pool.
 		totalDamage += damage * self:_sumTargetConditionalBonuses(
@@ -1360,7 +1418,7 @@ function DamageService.TakeDamage(
 		)
 
 		-- Then the mob's own vulnerability factor multiplies the total.
-		totalDamage *= self:_targetVulnerabilityMultiplier(player, targetModel, isMagic)
+		totalDamage *= self:_targetVulnerabilityMultiplier(player, targetModel, isMagic, statuses)
 	end
 
 	-- TRUE "more" multipliers: Legendary and Cursed damage relics multiply

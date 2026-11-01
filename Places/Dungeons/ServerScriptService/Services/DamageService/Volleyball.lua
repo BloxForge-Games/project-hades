@@ -1,30 +1,39 @@
 --!strict
--- Volleyball: now does TWO things on ranged weapon attacks.
---   1) Always-on +25 damage bonus (immediate, returned as a number
---      so the orchestrator's totalDamage sum picks it up alongside
---      Linked Sword + friends).
---   2) Every 3rd hit, a delayed +150% spike (kept as the original
---      task.delay-into-humanoid:TakeDamage pattern so the spike VFX
---      lands a beat after the original hit).
+-- Volleyball (2026-10-31 shape): every data.spikeEvery-th gun shot that
+-- lands drops a Volleyball on the target a beat later, for
+-- data.powerMultiple x the owner's Power on the UNIVERSAL relic lane
+-- (DamageService:TakeDamage with isRelicSourced: variance, Shock, Blight,
+-- Abyss, never weapon lines, never a crit). Returns 0 to the additive
+-- pool: the spike is its own hit now, not a share of the shot.
 --
 -- Gating: gun shots only (the orchestrator's isGunShot, 2026-10-30; it
 -- used to infer "ranged" as not-magic-and-not-melee, which let a
 -- Sword-of-the-Epicredness spell count and spike).
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
-local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
-local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
 local DamageService = require(script.Parent)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local computePower = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.computePower)
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
 local VOLLEY_BALL_DESYNC_DELAY = 0.5
-local SPIKE_INTERVAL = 3
+
+local function volleyballData(key: string, default: number): number
+	local row = RelicData[RelicNames["Volleyball"]]
+	local value = row and row.data and row.data[key]
+	return if typeof(value) == "number" then value else default
+end
+
+-- The owner's Power (PlayerStatsService stamps it), the reference before.
+local function powerOf(player: Player): number
+	local power = player:GetAttribute(Attributes.Power)
+	return if typeof(power) == "number" and power > 0 then power else computePower.REFERENCE_POWER
+end
 
 -- PRIVATE ranged-only hit counter. The orchestrator used to hand every
 -- module a shared counter of EVERY damage event — melee swings, arcane hits,
@@ -42,7 +51,7 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	rangedHitCounts[player.UserId] = nil
 end)
 
-return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, damage: number, isGunShot: boolean)
+return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, _damage: number, isGunShot: boolean)
 	-- Ranged WEAPON attacks only: the orchestrator passes isGunShot (true
 	-- for a bullet, Orinthian-converted or not; false for melee, spells and
 	-- Epicredness-converted spells), so nothing else can advance the count.
@@ -50,26 +59,16 @@ return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, dam
 		return 0
 	end
 
-	local volleyballEffect = DamageService.RelicEffect(snapshot, RelicNames["Volleyball"]) or 1
-	if volleyballEffect == 1 then
+	if DamageService.RelicCount(snapshot, RelicNames["Volleyball"]) <= 0 then
 		return 0
 	end
 
-	-- Every 3rd RANGED hit spikes. `damage` here is post-variance —
-	-- TakeDamage rolled ±10% before fanning out, so the spike inherits
-	-- the same roll via the multiplication (no double-rolling).
+	-- Every spikeEvery-th RANGED hit spikes, for a multiple of Power.
 	local rangedCount = (rangedHitCounts[player.UserId] or 0) + 1
 	rangedHitCounts[player.UserId] = rangedCount
 
-	if rangedCount % SPIKE_INTERVAL == 0 then
-		local spikeDamage = math.round(damage * volleyballEffect) - math.round(damage)
-
-		-- Weapon Mastery set bonus: the spike is Weapon Damage (Ranged)
-		-- per the relic description, but it lands via a direct
-		-- humanoid:TakeDamage below (bypassing TakeDamage's amplifier
-		-- sum), so the +10% has to be applied here explicitly. Returns 0
-		-- when the set isn't active.
-		spikeDamage += math.round(ArmorSetBonusService:GetWeaponDamageAmplifier(player, spikeDamage, false))
+	if rangedCount % volleyballData("spikeEvery", 3) == 0 then
+		local spikeDamage = math.round(powerOf(player) * volleyballData("powerMultiple", 2))
 
 		RelicNetwork.VolleyballEffect.FireAll({
 			Character = player.Character,
@@ -85,12 +84,9 @@ return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, dam
 			if humanoid.Health <= 0 or (humanoid.Parent :: Instance):GetAttribute(Attributes.Invulnerable) == true then
 				return
 			end
-			DamageIndicatorService:ShowIndicator(player, humanoid.Parent :: Model, spikeDamage, false)
-			humanoid:TakeDamage(spikeDamage)
-
-			-- Direct-damage path (bypasses TakeDamage's exits), so it asks
-			-- for Ban Hammer's execute itself: the spike is a weapon attack.
-			DamageService:TryExecute(player, humanoid, false)
+			-- The universal relic lane (isRelicSourced): TakeDamage owns the
+			-- indicator, the execute check and every universal multiplier.
+			DamageService:TakeDamage(player, humanoid, spikeDamage, false, false, false, true)
 		end)
 	end
 

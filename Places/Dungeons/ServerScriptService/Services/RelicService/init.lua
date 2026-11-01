@@ -29,11 +29,9 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 
--- The tiers the capstone pity tracks (RelicRollConfig.CapstonePityStep).
-local CAPSTONE_TIERS = { ItemRarity.Legendary, ItemRarity.Duo }
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local ElementTreeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ElementTreeData)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
@@ -90,9 +88,6 @@ local RelicService = {
 	} :: { any },
 
 	_relicLimitRegistry = {},
-	-- [userId][tier] = vending cards in a row that could have shown that
-	-- capstone tier (Legendary / Duo) and did not (RelicRollConfig pity).
-	_capstonePity = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = count held.
 	_relicRegistry = {} :: { [number]: { [string]: number } },
 	-- [userId][relicName] = { id, name } — who ORIGINALLY put this relic
@@ -138,7 +133,7 @@ local RelicService = {
 -- the bounds, so the relic interface can size itself off the same numbers.
 
 -- PURE RANDOM SELECTION -- rarity is rolled from the run-stage table in
--- Shared/Data/RelicRollConfig, then the relic is picked uniformly from that
+-- Shared/Data/RelicRollConfig (tree first since 2026-10-31), then uniformly from that
 -- rarity. No build weighting of any kind.
 
 -- Build rarity buckets from RelicData once at module load. Each bucket holds
@@ -779,20 +774,29 @@ function RelicService._publishRelicSlots(self: typeof(RelicService), player: Pla
 	player:SetAttribute(Attributes.RelicSlots, self:GetRelicSlots(player))
 end
 
--- How many relic slots are OPEN for this player this run: the number of
--- DISTINCT relics they may hold. Falls back to the run's starting count
--- for a player whose registry has not been set up yet, so a grant that
--- races the join is judged by the same rule as everyone else.
-function RelicService.GetRelicSlots(self: typeof(RelicService), player: Player): number
-	return self._relicSlots[player.UserId] or RelicCapData.StartingSlots
+-- The open count the run's tier grants (RelicCapData.SlotsFor: Easy 3,
+-- Normal 4, Hard and Nightmare 5). DungeonService is reached at call
+-- time, never required (see the top of this file).
+function RelicService._difficultySlots(_self: typeof(RelicService)): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local run = dungeonService and dungeonService:GetRun()
+	return RelicCapData.SlotsFor(run and run.difficulty)
 end
 
--- Sets the OPEN slot count for this run, clamped to
--- [DefaultSlots, MaxSlots]: a run can never fall below the default nor
--- open a box the tray does not draw. This is what the shop's slot unlock
--- will call. Per run only; nothing here touches the profile.
+-- How many relic slots are OPEN for this player this run: the number of
+-- DISTINCT relics they may hold. The tier's count unless something set
+-- an explicit one (SetRelicSlots: the chat command), so a grant that
+-- races the join is judged by the same rule as everyone else.
+function RelicService.GetRelicSlots(self: typeof(RelicService), player: Player): number
+	return self._relicSlots[player.UserId] or self:_difficultySlots()
+end
+
+-- Sets the OPEN slot count for this run, clamped to [the tier's count,
+-- MaxSlots]: a run can never fall below its tier nor open a box the tray
+-- does not draw. The chat command's lever. Per run only; nothing here
+-- touches the profile.
 function RelicService.SetRelicSlots(self: typeof(RelicService), player: Player, count: number): number
-	local clamped = math.clamp(math.floor(count), RelicCapData.DefaultSlots, RelicCapData.MaxSlots)
+	local clamped = math.clamp(math.floor(count), self:_difficultySlots(), RelicCapData.MaxSlots)
 	self._relicSlots[player.UserId] = clamped
 	self:_publishRelicSlots(player)
 	return clamped
@@ -891,72 +895,6 @@ function RelicService.GetOwnedElementalCount(self: typeof(RelicService), player:
 	return count
 end
 
--- The roll-weight multiplier for one relic's tree, from how much of that
--- tree the player has already committed to.
---
--- NOTHING IS EVER LOCKED OUT: every tree can always appear. A run narrows
--- because the trees you are actually building get heavier, not because the
--- others are removed -- so a fifth-element relic stays possible to the end,
--- just increasingly rare. Neutral is exempt and always returns 1.
-function RelicService.GetElementAffinityWeight(self: typeof(RelicService), relicName: string, player: Player?): number
-	local data = RelicData[relicName]
-	local tree = data and data.tree
-	if not player or not tree then
-		return 1
-	end
-
-	local elemental = self:GetOwnedElementalCount(player)
-
-	-- NEUTRAL. Shrinks as the player commits, on its own curve. It has no
-	-- tree to be committed TO, so it reads the elemental total instead.
-	if tree == ElementTrees.Neutral then
-		local neutralCurve = RelicRollConfig.NeutralAffinityWeights
-		if not neutralCurve or #neutralCurve == 0 then
-			return 1
-		end
-		return neutralCurve[math.clamp(elemental + 1, 1, #neutralCurve)]
-	end
-
-	local curve = RelicRollConfig.ElementAffinityWeights
-	if not curve or #curve == 0 then
-		return 1
-	end
-	-- index 1 == owning none of that tree; anything past the curve's end
-	-- holds at its last value.
-	local count = self:GetOwnedTreeCount(player, tree)
-	local weight = curve[math.clamp(count + 1, 1, #curve)]
-
-	-- A tree the player has NO foothold in, once committed. This is the
-	-- only subtractive term in the whole roll — everything else only ever
-	-- adds tickets, which is why affinity alone could never narrow a run.
-	if count == 0 and elemental >= (RelicRollConfig.UnexploredDampenerGate or math.huge) then
-		weight *= RelicRollConfig.UnexploredDampener or 1
-	end
-	return weight
-end
-
--- The roll-weight multiplier for a KEYSTONE relic — the card its tree is
--- built around (RelicData's `keystone`). Worth more only once the player
--- has a foothold in that tree, so a first-ever Frost offer is not steered
--- toward Ice Breaker; from the moment they own one Frost relic, the tree's
--- centrepiece is what it tries to complete them with. 1 for everything
--- else, so the multiply is a no-op on the rest of the pool.
-function RelicService.GetKeystoneWeight(self: typeof(RelicService), relicName: string, player: Player?): number
-	local data = RelicData[relicName]
-	if not player or not data or not data.keystone then
-		return 1
-	end
-	local tree = data.tree
-	if not tree or tree == ElementTrees.Neutral then
-		return 1
-	end
-	local gate = RelicRollConfig.KeystoneFootholdGate or 1
-	if self:GetOwnedTreeCount(player, tree) < gate then
-		return 1
-	end
-	return RelicRollConfig.KeystoneWeight or 1
-end
-
 -- The UNOWNED, ungated (NC) relics of one tree. The starter machine uses
 -- this to guarantee a foothold in each of the run's two elements.
 function RelicService.GetUnownedNCRelicsForTree(self: typeof(RelicService), player: Player, tree: string): { string }
@@ -972,63 +910,28 @@ function RelicService.GetUnownedNCRelicsForTree(self: typeof(RelicService), play
 	return found
 end
 
--- May this relic be OFFERED to this player? Combo gating (the sheet's
--- NC / C / C2 column, RelicData's `combo` field):
+-- May this relic be OFFERED to this player? (2026-10-31, GDD.md "Relics")
 --   NC  always offerable.
---   C   the player can produce the relic's tree STATUS or AURA.
---   C2  the player can produce BOTH.
--- A relic carrying `requiredTags` / `requiredRelics` REPLACES the
--- tree-pair check with those explicit prerequisites: every listed tag
--- must be producible and every listed relic OWNED (Staff of Azure Ever
--- Ice: Frostburst + Ice Breaker — the relic it upgrades, not just the
--- tree's status). `ownerPlayer` is only needed for the ownership half.
--- "Can produce" = GetGrantedMechanics (union of owned `grants`), checked
--- against the tree's pair in ElementTreeData. Neutral relics carry no
--- pair and are always offerable. An offer should never be something you
--- cannot use.
+--   C   offerable once the player HOLDS any relic of the same tree.
+-- A retired (shelved) relic never is. `granted` is kept for the callers'
+-- signature; the tag machinery it fed is gone.
 function RelicService.IsRelicRollEligible(
 	self: typeof(RelicService),
 	relicName: string,
-	granted: { [string]: boolean },
+	_granted: { [string]: boolean }?,
 	ownerPlayer: Player?
 ): boolean
 	local data = RelicData[relicName]
-	if not data then
+	if not data or data.retired then
 		return false
 	end
-
-	-- Explicit prerequisites replace the tree-pair check entirely.
-	if data.requiredTags or data.requiredRelics then
-		for _, tag in (data.requiredTags or {}) :: { string } do
-			if granted[tag] ~= true then
-				return false
-			end
-		end
-		for _, requiredName in (data.requiredRelics or {}) :: { string } do
-			if not ownerPlayer or (self:GetSpecificRelicRegistry(ownerPlayer, requiredName) or 0) <= 0 then
-				return false
-			end
-		end
-		return true
-	end
-
 	if data.combo == nil or data.combo == RelicCombo.NC then
 		return true
 	end
-
-	local treeData = data.tree and ElementTreeData[data.tree]
-	local statusTag = treeData and treeData.statusTag
-	local auraTag = treeData and treeData.auraTag
-	if not statusTag or not auraTag then
-		return true -- no pair to gate on (Neutral) -- never lock a relic out
+	if not ownerPlayer or not data.tree or data.tree == ElementTrees.Neutral then
+		return false
 	end
-
-	local hasStatus = granted[statusTag] == true
-	local hasAura = granted[auraTag] == true
-	if data.combo == RelicCombo.C then
-		return hasStatus or hasAura
-	end
-	return hasStatus and hasAura -- C2
+	return self:GetOwnedTreeCount(ownerPlayer, data.tree) > 0
 end
 
 -- Run stage, used ONLY to pick the rarity table (RelicRollConfig). A run is
@@ -1045,20 +948,18 @@ end
 -- many relics each rarity holds (41 Epics vs 40 Rares must not skew the
 -- odds), from the run-stage table in RelicRollConfig. Rarities with no
 -- candidate are simply absent from the plan, which IS the graceful fallback.
--- Cursed never appears -- it has no entry in any stage table.
--- `bonus` adds per-rarity weight on top of the table (capstone pity).
+-- Cursed never appears -- it has no entry in any stage table. No pity, no
+-- per-relic weight: the table is the whole roll (2026-10-31).
 function RelicService.RollRelicRarity(
 	_self: typeof(RelicService),
 	poolByRarity: { [string]: { string } },
 	stage: string,
-	luck: number?,
-	bonus: { [string]: number }?
+	luck: number?
 ): string?
 	local weights = RelicRollConfig.RarityWeights[stage] or RelicRollConfig.RarityWeights.Early
 	local plan = LootPlan.new("single")
 	local any = false
-	for rarity, baseWeight in weights do
-		local weight = baseWeight + ((bonus and bonus[rarity]) or 0)
+	for rarity, weight in weights do
 		if weight > 0 and poolByRarity[rarity] and #poolByRarity[rarity] > 0 then
 			plan:AddLoot(rarity, weight)
 			any = true
@@ -1070,25 +971,25 @@ function RelicService.RollRelicRarity(
 	return plan:GetRandomLoot(luck or 1)
 end
 
--- Rolls ONE relic for an offer slot. TWO steps, and nothing else:
---   1. Drop candidates the player cannot USE (rollPrerequisites unmet).
---   2. Roll a RARITY from the run-stage table (rarity pacing is the only
---      weighting in the system).
---   3. Pick UNIFORMLY at random from that rarity's bucket.
---
--- Past that eligibility filter there is NO build weighting -- no synergy or
--- wildcard slots, no tag multipliers. Every USABLE relic is equally likely
--- within its rarity; playtesting found weighted offers felt steered.
--- `ownerPlayer` is whose ownership the eligibility check reads; nil skips
--- the filter entirely.
+-- Rolls ONE relic for an offer slot (2026-10-31, GDD.md "Relics"):
+--   1. Drop candidates the player cannot be offered (IsRelicRollEligible:
+--      retired, or a C relic of a tree they hold nothing of).
+--   2. Draw a TREE among those with an eligible candidate: one ticket
+--      each plus RelicRollConfig.TreeAffinity per relic the owner holds in
+--      it (capped), Neutral at one -- so Neutral's larger pool never
+--      crowds the elements and a build leans toward itself.
+--   3. Roll a RARITY from the run-stage table within that tree.
+--   4. Pick UNIFORMLY from that bucket.
+-- No pity, keystone or combo weighting: every offerable card of a rarity
+-- in the drawn tree is equally likely.
 --
 --   `availableRelics`  caller's candidate list (already ownership- and
 --                      duplicate-filtered -- RelicMachine owns those rules).
---   `weights`          legacy per-rarity override; nil uses the run-stage
---                      table (the normal path). Pinata passes one.
+--   `weights`          per-rarity override; nil uses the run-stage table.
+--                      The Forge forces one rarity through it.
 --   `luck`             LootPlan luck passthrough.
 --
--- Returns (relicName, rarity), or (nil, nil) when the pool is empty.
+-- Returns (relicName, rarity), or (nil, nil) when nothing is offerable.
 function RelicService.RollRandomRelicFromPool(
 	self: typeof(RelicService),
 	availableRelics: { string },
@@ -1100,24 +1001,62 @@ function RelicService.RollRandomRelicFromPool(
 		return nil, nil
 	end
 
-	local granted = if ownerPlayer then self:GetGrantedMechanics(ownerPlayer) else nil
-
-	-- Bucket the USABLE pool by rarity. Filtering BEFORE the rarity roll
-	-- matters: a rarity whose every candidate is gated must not stay in the
-	-- plan, or the roll could land on a bucket with nothing pickable in it.
-	local poolByRarity: { [string]: { string } } = {}
+	-- Bucket the offerable pool by tree, then rarity. Filtering BEFORE the
+	-- draws matters: a tree or rarity whose every candidate is gated must
+	-- not stay in the plan.
+	local byTree: { [string]: { [string]: { string } } } = {}
+	local trees: { string } = {}
 	for _, relicName in availableRelics do
 		local data = RelicData[relicName]
-		local comboOk = not granted or self:IsRelicRollEligible(relicName, granted, ownerPlayer)
-		if data and comboOk then
-			poolByRarity[data.rarity] = poolByRarity[data.rarity] or {}
-			table.insert(poolByRarity[data.rarity], relicName)
+		if not data or not self:IsRelicRollEligible(relicName, nil, ownerPlayer) then
+			continue
+		end
+		if weights and not (weights[data.rarity] and weights[data.rarity] > 0) then
+			continue
+		end
+		local tree = data.tree or ElementTrees.Neutral
+		local byRarity = byTree[tree]
+		if not byRarity then
+			byRarity = {}
+			byTree[tree] = byRarity
+			table.insert(trees, tree)
+		end
+		byRarity[data.rarity] = byRarity[data.rarity] or {}
+		table.insert(byRarity[data.rarity], relicName)
+	end
+	if #trees == 0 then
+		return nil, nil
+	end
+
+	-- The tree draw (RelicRollConfig.TreeAffinity): one ticket each, plus
+	-- PerOwned for every relic the owner holds in that tree, capped at Cap;
+	-- Neutral stays at one. No owner (the Forge's stock) draws flat.
+	local chosenTree = trees[1]
+	do
+		local affinity = RelicRollConfig.TreeAffinity
+		local tickets: { number } = {}
+		local total = 0
+		for index, tree in trees do
+			local weight = 1
+			if ownerPlayer and tree ~= ElementTrees.Neutral then
+				weight = math.min(1 + self:GetOwnedTreeCount(ownerPlayer, tree) * affinity.PerOwned, affinity.Cap)
+			end
+			tickets[index] = weight
+			total += weight
+		end
+		local roll = math.random() * total
+		for index, tree in trees do
+			roll -= tickets[index]
+			if roll <= 0 then
+				chosenTree = tree
+				break
+			end
 		end
 	end
+	local poolByRarity = byTree[chosenTree]
 
 	local rolledRarity
 	if weights then
-		-- Legacy explicit-weights path (Pinata's premium filter).
 		local plan = LootPlan.new("single")
 		local any = false
 		for rarity, weight in weights do
@@ -1128,30 +1067,7 @@ function RelicService.RollRandomRelicFromPool(
 		end
 		rolledRarity = if any then plan:GetRandomLoot(luck or 1) else nil
 	else
-		-- Capstone pity (RelicRollConfig): misses on an eligible Legendary /
-		-- Duo raise that tier for this player until one is shown.
-		local pity = ownerPlayer and self._capstonePity[ownerPlayer.UserId]
-		if ownerPlayer and not pity then
-			pity = {}
-			self._capstonePity[ownerPlayer.UserId] = pity
-		end
-		local bonus: { [string]: number } = {}
-		if pity then
-			for _, tier in CAPSTONE_TIERS do
-				bonus[tier] =
-					math.min((pity[tier] or 0) * RelicRollConfig.CapstonePityStep, RelicRollConfig.CapstonePityMax)
-			end
-		end
-		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck, bonus)
-		if pity then
-			for _, tier in CAPSTONE_TIERS do
-				if rolledRarity == tier then
-					pity[tier] = 0
-				elseif poolByRarity[tier] and #poolByRarity[tier] > 0 then
-					pity[tier] = (pity[tier] or 0) + 1
-				end
-			end
-		end
+		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck)
 	end
 	if not rolledRarity then
 		return nil, nil
@@ -1161,44 +1077,7 @@ function RelicService.RollRandomRelicFromPool(
 	if not bucket or #bucket == 0 then
 		return nil, nil
 	end
-
-	-- Weighted pick INSIDE the bucket, from TWO independent multipliers:
-	--
-	--   ComboWeights     how deep the relic sits in its tree. Everything
-	--                    here already passed the combo filter, so a C / C2
-	--                    tag means the player unlocked it.
-	--   element affinity how committed the player already is to that tree.
-	--                    This is what narrows a run: no tree is ever
-	--                    removed, the ones you are building just get more
-	--                    tickets. Neutral always weighs 1.
-	--   keystone         a tree's CENTREPIECE, once the player has any
-	--                    foothold in it (Ice Breaker for Frost). 1 for
-	--                    everything else.
-	local function weightOf(relicName: string): number
-		local combo = RelicData[relicName] and RelicData[relicName].combo
-		local comboWeight = RelicRollConfig.ComboWeights[combo] or 1
-		return comboWeight
-			* self:GetElementAffinityWeight(relicName, ownerPlayer)
-			* self:GetKeystoneWeight(relicName, ownerPlayer)
-	end
-
-	local totalWeight = 0
-	for _, relicName in bucket do
-		totalWeight += weightOf(relicName)
-	end
-	if totalWeight <= 0 then
-		return bucket[math.random(1, #bucket)], rolledRarity
-	end
-
-	local roll = math.random() * totalWeight
-	for _, relicName in bucket do
-		roll -= weightOf(relicName)
-		if roll <= 0 then
-			return relicName, rolledRarity
-		end
-	end
-	-- Float drift only; the loop above all but always returns.
-	return bucket[#bucket], rolledRarity
+	return bucket[math.random(1, #bucket)], rolledRarity
 end
 
 --[ Initializers ]--
@@ -1275,6 +1154,18 @@ function RelicService.Start(self: typeof(RelicService))
 		return self:_onDropRelic(player, relicName)
 	end)
 
+	-- The open slot count follows the run's tier (RelicCapData.SlotsFor):
+	-- re-stamp everyone's once a floor is up, for a player who joined
+	-- before the run existed.
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if dungeonService then
+		dungeonService.Signals.OnFloorReady:Connect(function()
+			for _, player in Players:GetPlayers() do
+				self:_publishRelicSlots(player)
+			end
+		end)
+	end
+
 	-- Super Stomp Boots — constructed per dodge-land event for owners.
 	-- Mirrors the Fireworks pattern (`SuperStompBoots.new(...):InvokeStomp()`)
 	-- rather than the old singleton .Start() style; one short-lived
@@ -1335,7 +1226,8 @@ function RelicService.Start(self: typeof(RelicService))
 		self._relicsList[player.UserId] = {}
 		-- The open slot count starts over with the registry: it is a
 		-- per-run number, so it must never outlive the relics it caps.
-		self._relicSlots[player.UserId] = RelicCapData.StartingSlots
+		-- Nil = the tier's count (GetRelicSlots).
+		self._relicSlots[player.UserId] = nil
 		self:_publishRelicSlots(player)
 
 		-- The joiner gets everyone's relics once; everyone else learns the
@@ -1362,7 +1254,6 @@ function RelicService.Start(self: typeof(RelicService))
 	end)
 
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
-		self._capstonePity[player.UserId] = nil
 		self._relicRegistry[player.UserId] = nil
 		self._incrementalRegistry[player.UserId] = nil
 		self._incrementalOwners[player.UserId] = nil

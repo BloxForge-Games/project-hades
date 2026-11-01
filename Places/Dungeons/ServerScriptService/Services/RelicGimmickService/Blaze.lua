@@ -11,11 +11,11 @@
 	                        deals a share of the swing's damage as MELEE
 	                        weapon damage (crits, weapon relics, on-hit
 	                        statuses), more to Burning enemies.
-	  Berserker's Claymore  INFERNO CLEAVE: while Enflamed, a melee hit
-	                        erupts in fire around its target, splashing a
-	                        share of the hit to the enemies around it as
-	                        melee weapon damage and Burning them all. Once
-	                        per swing (the first mob it damages).
+	  Berserker's Claymore  INFERNO CLEAVE: a melee hit erupts in fire
+	                        around its target, splashing a share of the hit
+	                        to the enemies around it as melee weapon damage,
+	                        doubled on Burning ones. Once per swing (the
+	                        first mob it damages).
 	  Phoenix               PHOENIX DASH: a dodge leaves a fire trail along
 	                        its path; every second it Burns and damages the
 	                        enemies on it (a per-level relic burst).
@@ -76,7 +76,6 @@ local nextSwingSpeedPoll = 0
 
 local function launchFlameWave(player: Player, origin: Vector3, look: Vector3, swingDamage: number)
 	local damage = swingDamage * helpers.data(FLAME_SWORD, "waveDamage", 0.75)
-	local burningBonus = helpers.data(FLAME_SWORD, "burningBonus", 0.5)
 	local start = origin - Vector3.new(0, WAVE_DROP, 0)
 
 	helpers.fx("FlameWave", start, start + look * WAVE_RANGE, nil, WAVE_RANGE / WAVE_SPEED)
@@ -90,16 +89,11 @@ local function launchFlameWave(player: Player, origin: Vector3, look: Vector3, s
 				return
 			end
 			hit[model] = true
+			-- The wave Burns outright (2026-10-31; it paid +50% vs Burning
+			-- before) and still rolls the weapon appliers like any hit.
 			local statusService = helpers.statusService()
-			local burning = statusService:IsBurning(model)
-			helpers.takeDamage(
-				player,
-				humanoid,
-				if burning then damage * (1 + burningBonus) else damage,
-				false,
-				false,
-				true
-			)
+			helpers.takeDamage(player, humanoid, damage, false, false, true)
+			statusService:ApplyStatus(player, model, StatusConditions.Burn)
 			statusService:ApplyWeaponOnHitStatuses(player, nil, model, false)
 		end)
 	end)
@@ -126,12 +120,13 @@ end
 
 --[ Inferno Cleave ]--
 
-function Blaze.onMeleeHit(player: Player, model: Model, damage: number)
+-- One cleave around `model` for a melee hit that dealt `damage`: every
+-- OTHER enemy within splashRadius takes splashFraction of it as melee
+-- weapon damage, burningMultiplier times when that enemy is Burning. No
+-- status of its own (2026-10-31). Latched per swing so a cleave through
+-- three mobs splashes once.
+local function cleave(player: Player, model: Model, damage: number)
 	if not helpers.owns(player, CLAYMORE) then
-		return
-	end
-	local playerRoot = getRoot.fromPlayer(player)
-	if not playerRoot or not playerRoot:FindFirstChild(AuraNames.Enflamed) then
 		return
 	end
 	local now = os.clock()
@@ -145,19 +140,23 @@ function Blaze.onMeleeHit(player: Player, model: Model, damage: number)
 		return
 	end
 	local radius = helpers.data(CLAYMORE, "splashRadius", 7)
-	local splash = damage * helpers.data(CLAYMORE, "splashFraction", 0.4)
+	local splash = damage * helpers.data(CLAYMORE, "splashFraction", 0.35)
+	local burningMultiplier = helpers.data(CLAYMORE, "burningMultiplier", 2)
 	helpers.fx("FireBurst", targetRoot.Position, nil, radius)
 	helpers.hitBreakables(player, targetRoot.Position, radius)
 
 	local statusService = helpers.statusService()
-	statusService:ApplyStatus(player, model, StatusConditions.Burn)
 	forEachEnemyInRadius(targetRoot.Position, radius, function(other: Model, humanoid: Humanoid)
 		if other == model then
 			return
 		end
-		helpers.takeDamage(player, humanoid, splash, false, false, true)
-		statusService:ApplyStatus(player, other, StatusConditions.Burn)
+		local amount = if statusService:IsBurning(other) then splash * burningMultiplier else splash
+		helpers.takeDamage(player, humanoid, amount, false, false, true)
 	end)
+end
+
+function Blaze.onMeleeHit(player: Player, model: Model, damage: number)
+	cleave(player, model, damage)
 end
 
 --[ Flame Ronin Katana: Detonate ]--

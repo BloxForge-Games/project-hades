@@ -38,7 +38,6 @@ local TweenService = game:GetService("TweenService")
 local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
-local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local SpiritCompanionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SpiritCompanionData)
 
@@ -123,7 +122,10 @@ local BAN_HAMMER_SCALE = 3
 local BAN_HAMMER_LINGER_SECONDS = 0.5
 
 -- Orbiting Shield: its slab and how it fades in and out.
-local SHIELD_SIZE = Vector3.new(3, 3.4, 0.6)
+-- Taller and a touch wider (2026-10-31; 3 x 3.4 before), and carried
+-- SHIELD_LIFT studs above the root so the slab reads at chest height.
+local SHIELD_SIZE = Vector3.new(3.6, 4.6, 0.7)
+local SHIELD_LIFT = Vector3.new(0, 1, 0)
 local SHIELD_FADE_SECONDS = 0.35
 -- How fast the local clock is eased onto the server's: GetServerTimeNow
 -- steps a little frame to frame, and an angle read straight off it
@@ -698,9 +700,10 @@ local function stepShields(deltaTime: number)
 			destroyShield(shield)
 			continue
 		end
-		-- Gone with Stonebound at once, not at the keep-alive's end; they
-		-- keep orbiting while they fade.
-		if not shield.fading and (now >= shield.expiresAt or not root:FindFirstChild(AuraNames.Stonebound)) then
+		-- Gone at the keep-alive's end (the server re-sends once a second
+		-- while the relic is owned; 2026-10-31, no Stonebound gate any
+		-- more); they keep orbiting while they fade.
+		if not shield.fading and now >= shield.expiresAt then
 			shield.fading = true
 			for _, part in shield.parts do
 				TweenService:Create(
@@ -719,7 +722,7 @@ local function stepShields(deltaTime: number)
 		for index, part in shield.parts do
 			local angle = base + (index - 1) * (math.pi * 2 / #shield.parts)
 			local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * radius
-			local position = root.Position + offset
+			local position = root.Position + offset + SHIELD_LIFT
 			part.CFrame = CFrame.lookAt(position, position + offset)
 		end
 	end

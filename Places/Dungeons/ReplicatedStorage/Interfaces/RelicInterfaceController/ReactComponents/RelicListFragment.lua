@@ -11,7 +11,9 @@ local function slotBox(layoutOrder: number, entryProps: { [any]: any })
 	return React.createElement("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(0.165319, 0.159165),
+		-- Six to the column (RelicCapData.MaxSlots): 6 x 0.14 + 5 x 0.03 of
+		-- the list's height; the aspect constraint squares it off that.
+		Size = UDim2.fromScale(0.6, 0.14),
 		BackgroundTransparency = 1,
 		LayoutOrder = layoutOrder,
 	}, {
