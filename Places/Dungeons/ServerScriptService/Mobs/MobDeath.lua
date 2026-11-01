@@ -50,6 +50,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
+local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
@@ -481,8 +482,44 @@ local function handleAssists(context: Context)
 		-- assist registry whose credit is still live (the 5s window),
 		-- INCLUDING the player who landed the killing blow.
 
-		-- Mana orb roll per killer/assister.
-		local manaDropChance = 5
+		-- Fractured (Earth, 2026-11-01): the cracked enemy shatters into an
+		-- Orb at the status's chance, ONCE per death (not per assister).
+		-- Health when the applier (the killer when the applier is gone) is
+		-- under the threshold of Max Health, Mana otherwise, so the orb is
+		-- the one the player is short of.
+		if
+			StatusConditionService
+			and context.model:GetAttribute("FractureShattered") ~= true
+			and (StatusConditionService :: any):IsStatusActive(context.model, StatusConditions.Fractured)
+		then
+			context.model:SetAttribute("FractureShattered", true)
+			local fractureConfig = StatusConditionData[StatusConditions.Fractured]
+			local orbChance = (fractureConfig and fractureConfig.fractureOrbChance) or 0
+			if math.random() < orbChance then
+				local applier = (StatusConditionService :: any):GetStatusSourcePlayer(
+					context.model,
+					StatusConditions.Fractured
+				) or player
+				local threshold = (fractureConfig and fractureConfig.fractureHealthThreshold) or 0.9
+				local applierHumanoid = applier
+					and applier.Character
+					and applier.Character:FindFirstChildOfClass("Humanoid")
+				local wantsHealth = applierHumanoid ~= nil
+					and applierHumanoid.Health < applierHumanoid.MaxHealth * threshold
+				DropService.OnDropRequested:Fire(
+					context.rootPart,
+					if wantsHealth then DropTypes.Health else DropTypes.Mana,
+					1,
+					1,
+					1,
+					1,
+					false
+				)
+			end
+		end
+
+		-- Mana orb roll per killer/assister. 5 -> 3 (2026-11-01).
+		local manaDropChance = 3
 
 		if math.random() * 100 <= manaDropChance then
 			DropService.OnDropRequested:Fire(context.rootPart, DropTypes.Mana, 1, 1, 1, 1, false)
@@ -493,7 +530,9 @@ local function handleAssists(context: Context)
 		-- the bar over a 66-mob floor), which the tier damage ladder
 		-- (DifficultyData) is solved against. (Regeneration Coil's old
 		-- +2.5pp here left when it became an any-source healing amp.)
-		local healthDropChance = 10
+		-- 10 -> 5 (2026-11-01): pots roll orbs at 15 / 10% and Earth's
+		-- Fracture turns kills into orbs; the baseline steps back.
+		local healthDropChance = 5
 
 		if math.random() * 100 <= healthDropChance then
 			DropService.OnDropRequested:Fire(context.rootPart, DropTypes.Health, 1, 1, 1, 1, false)

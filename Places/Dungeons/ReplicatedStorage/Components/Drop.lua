@@ -11,6 +11,8 @@ local JanitorAdder = require(ReplicatedStorage.Submodules.Core.Source.ComponentE
 local DropIndicatorController = require(ReplicatedStorage.Controllers.DropIndicatorController)
 local DropFloatController = require(ReplicatedStorage.Controllers.DropFloatController)
 local DropPickupSweepController = require(ReplicatedStorage.Controllers.DropPickupSweepController)
+local EarthOrbBankController = require(ReplicatedStorage.Controllers.EarthOrbBankController)
+local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
@@ -66,6 +68,17 @@ local Drop = Component.new({
 function Drop:_collect(root: BasePart)
 	-- Takes the drop out of the float (and the sweep, if it is still there).
 	self._janitor:Cleanup()
+
+	-- Earth Protection Orb (2026-11-01): an orb the bank will take is not
+	-- picked up, it floats into its slot above the character. The bank
+	-- renderer takes the model over; the server still hears the collect
+	-- and decides for real (EarthOrbBankController.Adopt).
+	local dropType = self.Instance:GetAttribute(Attributes.DropType)
+	if (dropType == DropTypes.Health or dropType == DropTypes.Mana) and EarthOrbBankController:WillBank(dropType) then
+		EarthOrbBankController:Adopt(self.Instance, dropType)
+		DungeonNetwork.CoinDropCollected.Fire(self.Instance)
+		return
+	end
 
 	DropIndicatorController.OnDropIndicatorRequested:Fire(
 		Players.LocalPlayer.Character,

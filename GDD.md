@@ -77,12 +77,13 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door between the first combat room and the boss, and a
   second rolls at 50% on another door, never back to back (for example C E C M E C B).
 - **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
-  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03); run Gold 250 / 500 / 1000 / 2000 is 60% chests (150 /
-  300 / 600 / 1200, split 40% miniboss chest / 60% boss chest) and 40% grunt drops (100 / 200 /
-  400 / 800, about 3 to 5 a kill on Easy and 13 to 18 on Nightmare, scaled from the old Gem
-  rows); Crystals 25 / 50 / 100 / 200 are per run from the two chests; the boss chest drops 1 /
-  2 / 3 / 4 gear pieces and the miniboss 1; expected gear sales are 160 / 300 / 540 / 970 Gold, so
-  a run's Gold take is 410 / 800 / 1540 / 2970 and Blacksmith prices follow.
+  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03); run Gold 125 / 250 / 500 / 1000 is 60% chests (75 /
+  150 / 300 / 600, split 40% miniboss chest / 60% boss chest) and 40% grunt drops (50 / 100 /
+  200 / 400, about 1 to 3 a kill on Easy and 6 to 9 on Nightmare, scaled from the old Gem rows);
+  Crystals 50 / 100 / 200 / 400 are per run from the two chests; the boss chest drops 1 / 2 / 3 /
+  4 gear pieces and the miniboss 1; expected gear sales are 80 / 150 / 270 / 485 Gold, so a run's
+  Gold take is 205 / 400 / 770 / 1485 and Blacksmith prices follow (Gold halved and Crystals
+  doubled on 2026-11-01; prices are shares of the take, so they halved with it).
 - **Gold sinks:** Blacksmith upgrades (half a run for a Common up to two runs for a Legendary,
   50% of it back on a sale) and **line rerolls** (one gear line becomes another stat from its slot's
   pool with a fresh roll, a quarter of a run of the item's level, flat). A hub gear merchant for
@@ -101,22 +102,31 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
 
 ## Statuses
 
-Five statuses. Relics apply them; gear never does. Same status refreshes duration, different
-statuses coexist. No stacking except Death Venom.
+Five enemy statuses, one per tree, plus the player's Shield. Weapon enchantments open them (a
+20% chance per hit from the weapon that carries the enchantment) and each tree's relics apply
+their own. Same status refreshes duration, different statuses coexist. Burn and Poison stack per
+player (two players each keep their own tick on one enemy); within one player nothing stacks
+except Death Venom.
 
 | Status | Effect | Notes |
 |---|---|---|
-| Burn | 25% of Power per second for 5s | DoT. Black Flame (Katana) doubles it. |
+| Burn | 25% of Power per second for 5s | DoT. Black Flame (Flame Ronin Katana) doubles it. |
 | Chill | 30% slow for 5s | Control. |
-| Poison | 10% of Power per second for 5s, target deals 10% less | DoT plus Weaken. Death Venom (Skeletal Scythe) stacks to 3. |
+| Poison | 15% of Power per second for 5s, target deals 10% less | DoT plus Weaken (10% on 2026-10-31, 15% since 2026-11-01). Death Venom (Skeletal Scythe) stacks to 3. |
 | Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
+| Fractured | The enemy shatters on death: 50% chance to drop an Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health Orb if its applier is under 90% Health, Mana Orb otherwise. No tick, no slow. |
 | Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
   the same Burn and a bigger weapon means a bigger Burn. Bosses take the same Burn as grunts.
+  The Corrosion enchantment multiplies every tick (+20% Status Damage per weapon).
 - Every status lasts 5s; a reapply refreshes the timer. Melted (Burning + Poisoned) makes DoTs
   tick twice as fast. Petrified (Medusa, shelved) is a stun on the same 5s.
   Neither increases damage taken.
+- **Crit** is 10% base (5% before 2026-11-01), 1.75x damage. The Critical Chance gear line rolls 5
+  to 12 points per weapon and Stormcharged adds 10 per weapon. Every tree has a guaranteed crit
+  somewhere (the Bo Staff's rhythm, the Katana's dodge, the Horn's strike on crits), so the
+  Critical Damage line is worth chasing.
 
 ## Relics
 
@@ -141,62 +151,76 @@ for a later rotation. Duos are shelved too until the pool is tested.
 - **Roll:** pick a tree first (one ticket each, plus half a ticket per relic you already hold in
   that tree, capped at two; Neutral stays at one), then a rarity (Rare 77 / Epic 18 / Legendary
   5), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
-  Shop and the vending machines use one eligibility check (`IsRelicRollEligible`).
-- Statuses come from relics. The four tree openers apply theirs on 15% of weapon hits and 45% of
-  spell hits; every other status source is a relic's own proc. Relic bursts (pumpkins, Shatter,
+  Shop and the vending machines use one eligibility check (`IsRelicRollEligible`). A vending
+  machine hand always holds at least one plain Neutral card: if none rolled, one random slot
+  (never a starter-guaranteed one) swaps its card for a Neutral pick, and Cursed does not count.
+- Statuses open from weapon enchantments (20% per hit from the weapon that carries one) and from
+  each tree's own relics. The 2026-10-31 "chance to apply" openers (Ye Olde Fire Breath Potion,
+  Static Shock Sheep, Zombie Axe) are shelved; each tree's Rare enabler now does something on a
+  rhythm or a trigger and applies the status for certain. Relic bursts (pumpkins, Shatter,
   strikes, the Volleyball) ride the universal lane: Power-scaled, no weapon or arcane lines, no
-  enchantment, no crit; Shock, Blight and Abyss still multiply them.
+  enchantment, no crit; Shock and Abyss still multiply them.
+- **Lanes.** Blaze's enabler is melee, Frost's is ranged, Storm's and Venom's are spells, Earth's
+  is any weapon, so every weapon style has a home tree and a mage has two.
+- **Gear stats on relics:** a relic may condition or multiply a stat ("every 5th hit is a crit",
+  "double against Chilled"), never add flat points to it. Flat numbers belong on gear.
 - Card text is the source of truth for the number.
 
 **Blaze** (Burn)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Ye Olde Fire Breath Potion | Rare | NC | Your damage has a chance to apply Burn. |
+| Flaming Bo Staff | Rare | NC | Every 6th / 5th / 4th Melee hit (Daggers / Sword / Greatsword) is a guaranteed Critical Strike and Burns. |
 | Dragon's Flame Sword | Rare | NC | Every 3rd Melee swing fires a Flame Wave that deals 75% of the swing's damage and Burns. |
 | Trick Or Trap | Epic | NC | Takedowns drop 1-3 Explosive Pumpkins that deal damage and Burn. |
-| Berserker's Claymore | Epic | NC | Your Melee hits splash 35% of their damage to nearby enemies, doubled on Burning enemies. |
+| Berserker's Claymore | Epic | NC | Your Critical Strikes on Burning enemies erupt in flames, dealing 100% of the hit to nearby enemies (nearest 3, 7 studs). |
 | Flame Ronin Katana | Legendary | C | Your Burns become Black Flame, doubling their damage. Critical Hits detonate the Black Flame, dealing the remaining Burn damage at once. |
 
 **Frost** (Chill)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Frozen Blue Ice Crossbow | Rare | NC | Your damage has a chance to apply Chill. |
+| Frozen Blue Ice Crossbow | Rare | NC | Every 3rd Ranged hit fires an Ice Arrow that deals 75% of the hit's damage and Chills. |
 | Ice Breaker | Rare | C | Chilling a Chilled enemy Shatters them for damage. |
 | Ice Dragon Slayer | Epic | NC | A Frost Dragon follows you, firing icy blasts that deal damage and Chill. |
 | Icy Arctic Fowl | Epic | NC | Every 3s, fire ice shards at nearby enemies for damage. Chilled enemies take double damage. |
-| Staff of Azure Ever Ice | Legendary | NC | Spells leave a Frost Zone that Chills and deals damage to enemies inside. |
+| Staff of Azure Ever Ice | Legendary | NC | Spells leave a 12-stud Frost Zone that Chills and deals damage to enemies inside. |
 
 **Venom** (Poison)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Zombie Axe | Rare | NC | Your damage has a chance to apply Poison. |
+| Korblox Evil Eye | Rare | NC | Every 2nd Arcane Spell costs 50% less Mana and Poisons every enemy it hits. |
 | Witches Brew | Rare | NC | Every 5th Ranged shot lobs a Brewed Potion that leaves a Poison puddle. |
 | Foul Poison Fowl | Epic | NC | Takedowns leave a Poison Cloud for 3s dealing damage each second. |
 | Skeletal Scythe | Epic | C | Your Poison becomes Death Venom, which is Poison that can stack up to 3 times. |
-| Zombie Bomb | Legendary | NC | Your damage has a chance to spit Poison Goop at nearby enemies, dealing damage and Poisoning them. |
+| Zombie Bomb | Legendary | NC | Your Poison ticks have a 10% chance to spit Poison Goop at nearby enemies, dealing damage and Poisoning them (one spit per 0.5s). |
 
 **Storm** (Shock)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Static Shock Sheep | Rare | NC | Your damage has a chance to apply Shock. |
+| Katana | Rare | NC | After a Perfect Dodge, your next Arcane damage is a guaranteed Critical Strike and Shocks. |
 | Sparkle Time Hoverboard | Rare | NC | Your Dodge becomes a lightning dash that deals damage and Shocks enemies you pass through. |
 | Deluxe Coil Gun | Epic | C | Your Shocks become Coil Shocked, making enemies take +20% more damage. |
 | Lightning Bolt Sword | Epic | NC | Your damage has a chance to chain lightning through nearby enemies, dealing damage and Shocking them. |
-| Lightning Horn of the Heavens | Legendary | NC | Your damage has a chance to call down a lightning strike that Shocks and deals damage to nearby enemies. |
+| Lightning Horn of the Heavens | Legendary | NC | Your damage has a chance, and Critical Strikes always, to call down a lightning strike that Shocks and deals damage to nearby enemies. |
 
-**Earth** (Shield)
+**Earth** (Fracture, the sustain tree since 2026-11-01)
+
+Earth's status Fractures the enemy and the kill drops an Orb; the cards apply Fracture and spend
+the Orbs. Healing never scales with damage dealt: every heal is an Orb or a rate-capped number, so
+a damage build cannot turn Earth into immortality. Baseline orbs stepped back the same day (grunts
+5% Health / 3% Mana, pots 15% / 10%) so Earth is the tree that turns kills into orbs. Teddy Trap
+turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Robloxian Battle Shield | Rare | NC | Casting an Arcane Spell gives you a +10% Shield. |
-| Golden Steampunk Gloves | Rare | NC | Your Weapon damage has a chance to grant you a +5% Shield. |
-| Bundle of TNT | Epic | C | Your Shields explode when they end, dealing damage to nearby enemies. |
-| Spartan Sword and Shield | Epic | NC | You gain 2 shields that circle around you, dealing damage and granting you +5% Shields. |
-| Golem's Hammer | Legendary | NC | Taking damage grants you a +15% Shield. While Shielded, the earth quakes beneath you dealing damage. |
+| War Rocks | Rare | NC | Weapon hits have a 12 / 20 / 30% chance (Daggers / Sword / Greatsword; 20% ranged) to hurl a Boulder that deals damage and Fractures enemies near it. Boulders deal +50% to Fractured enemies. |
+| Earth Protection Orb | Rare | NC | Orbs when your bars are full, float around you (up to 5). They get used when your bars drop below 90%. (One a second, Health first. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
+| Bundle of TNT | Epic | C | Collecting an Orb grants a 10% Shield for 5s. When it ends it explodes, dealing damage and Fracturing nearby enemies. |
+| Earth Summoning Horn | Epic | NC | Collecting an Orb sends out a shockwave that deals damage, and players within 15 studs gain the Orb's restore too. |
+| Golem's Hammer | Legendary | NC | Orbs restore double. In combat the earth quakes around you every 3s, dealing damage and Fracturing enemies. Fractured enemies take double damage from the quake. |
 
 **Neutral** (all NC)
 
@@ -204,14 +228,14 @@ for a later rotation. Duos are shelved too until the pool is tested.
 |---|---|---|
 | Gravity Coil | Rare | Gain +1 Dodge stack. |
 | Newtrat's Tuskinator | Rare | Gain +15 Ammo Capacity, and reload 35% faster. |
-| Pot Of Gold | Rare | Gain +50% Gold and Gems, and auto-collect them. |
+| Pot Of Gold | Rare | Gain +50% Gold, and auto-collect it. |
 | Fuse Bomb | Rare | On Takedown, drop a Fuse Bomb dealing damage. |
 | Speed Coil | Rare | Gain +8 Movement Speed. |
 | Experimental Jetpack | Rare | Perfect Dodges grant an invulnerable Jetpack for 2s. |
 | Summer Fireworks | Rare | Every 3s, launch 3 Fireworks that deal damage. |
 | Super Stomp Boots | Rare | Your Dodge ends with a Ground Stomp that deals damage. |
 | Korblox Mage Staff | Epic | Every 3rd Arcane Spell you cast costs no Mana and resets its cooldown. |
-| Midnight Sword | Epic | Your Weapon damage restores 3% of your Mana. |
+| Midnight Sword | Epic | Your Weapon damage restores 2% of your Mana. |
 | Volleyball | Epic | Every 3rd Ranged hit spikes a Volleyball that deals damage. |
 | Magenta Paintball Gun | Epic | Your Ranged damage has a chance to Paint. Painted enemies take +20% Arcane Damage. |
 | Portable Justice | Epic | Your damage has a chance to Jail enemies for 3s. |
@@ -222,7 +246,7 @@ for a later rotation. Duos are shelved too until the pool is tested.
 | Relic | Effect |
 |---|---|
 | Double-Bladed Scythe | Deal +100% Weapon Damage, but your Arcane deals no damage. |
-| Dragon Lantern | Gain +200% Gold and Gems, but lose 10% of both when you take damage. |
+| Dragon Lantern | Gain +200% Gold, but lose 10% of it when you take damage. |
 | Forbidden Box | Deal +100% Arcane Damage, but your Weapon deals 50% less. |
 | Slateskin Potion | Gain +50% Damage Reduction, but lose 1 Dodge stack. |
 | Sword of Eternal Abyss | Deal +50% damage, but you can't apply Statuses. |
@@ -233,7 +257,11 @@ every flat +% relic, the five Duos, Pinata, and the Neutral Legendaries Astral C
 Mystical Staff of Cyan, Glorious Sword, Neon Rainbow Phoenix, and the two lane converters Orinthian
 Blaster 3777 and Sword of the Epicredness (redundant without auras) and Regeneration Coil (its job
 is the Orb Potency line). Korblox Mage Staff and Newtrat's Tuskinator returned as Neutral cards and
-Midnight Sword is new, all 2026-10-31.
+Midnight Sword is new, all 2026-10-31. On 2026-11-01 the three "chance to apply" openers (Ye Olde
+Fire Breath Potion, Static Shock Sheep, Zombie Axe) and the Shield Earth cards (Robloxian Battle
+Shield, Golden Steampunk Gloves, Spartan Sword and Shield) joined the shelf, and Flaming Bo Staff,
+Katana, Korblox Evil Eye, War Rocks, Earth Protection Orb and Earth Summoning Horn came back with
+new cards.
 
 ## Roguelite mode (future)
 
@@ -248,7 +276,7 @@ what each said when it was shelved, so the design is recoverable without digging
 |---|---|---|---|
 | Blaze | Rare | Faux Firebrand | While Enflamed, gain +25% Weapon Damage. |
 | Blaze | Rare | Fire Breathing Dragon Friend | Deal +20% Weapon Damage to Burning enemies. |
-| Blaze | Rare | Flaming Bo Staff | Weapon Damage has a 15% chance to grant Enflamed. |
+| Blaze | Rare | Ye Olde Fire Breath Potion | Your damage has a chance to apply Burn. (shelved 2026-11-01) |
 | Blaze | Rare | Flaming Mace | While Enflamed, Burns last 50% longer and deal 25% more damage. |
 | Blaze | Rare | Linked Sword | Gain +20% Weapon Damage. Weapon hits on Burning enemies extend the Burn by 1s (up to 8s). |
 | Blaze | Rare | Red Hyperlaser Gun | Ranged Weapon Damage has +25% chance to Burn, and deals +20% damage to Burning enemies. |
@@ -264,7 +292,7 @@ what each said when it was shelved, so the design is recoverable without digging
 | Frost | Epic | Blue Laser Scythe | While Frostburst, your Melee Weapon Damage becomes Arcane Damage and gains +30%. |
 | Frost | Duo | Blizzard Wand | Arcane Spells call a 4s hailstorm where they land. Its shards deal Arcane Damage, can Critically Hit, and Chill. |
 | Frost | Duo | Korblox Ice Claws | Your Barriers become an ice shell. When your last one ends, it shatters outward for Arcane Damage and Chills nearby enemies (once every 3s). |
-| Venom | Rare | Korblox Evil Eye | All damage has +10% chance to grant you Blight. (Increased to +25% on hits that apply a Status) |
+| Venom | Rare | Zombie Axe | Your damage has a chance to apply Poison. (shelved 2026-11-01) |
 | Venom | Rare | Murder Knife | Deal +25% damage to nearby enemies. Your hits on nearby enemies have +15% chance to Poison. |
 | Venom | Rare | Noxious Chocolate | Your Poison lasts 3s longer, and Poisoned enemies are slowed 15%. |
 | Venom | Rare | Overseer's Short Sword | While Blighted, gain +25% chance to apply your Elemental Statuses. |
@@ -279,17 +307,17 @@ what each said when it was shelved, so the design is recoverable without digging
 | Storm | Rare | Shuriken of the Crescent Moon | Gain +10% Critical Hit Chance. Critical Hits on Shocked enemies restore 3% Maximum Mana. |
 | Storm | Rare | Silver Ninja Star | Gain +15% Critical Hit Chance. While Stormcharged, gain +30% Critical Damage. |
 | Storm | Rare | Throwing Bolts | Gain +10% Critical Hit Chance against Shocked enemies. |
-| Storm | Epic | Katana | Your attacks have a 10% chance to chain lightning through 3 enemies for damage. (Increased to 30% for Arcane Spells) |
+| Storm | Rare | Static Shock Sheep | Your damage has a chance to apply Shock. (shelved 2026-11-01) |
 | Storm | Epic | Rubber Chicken Launcher | Ranged Critical Hits stick a static charge on the enemy. After 1.5s it detonates for 100% of the hit and Shocks nearby enemies. |
 | Earth | Rare | Cheezburger | Taking damage grants a 5% Barrier for 3s (once every 5s). |
-| Earth | Rare | Earth Protection Orb | While Stonebound, hits deal bonus damage equal to 25% of your current Barrier. |
+| Earth | Rare | Golden Steampunk Gloves | Your Weapon damage has a chance to grant you a +5% Shield. (shelved 2026-11-01) |
+| Earth | Rare | Robloxian Battle Shield | Casting an Arcane Spell gives you a +10% Shield. (shelved 2026-11-01) |
 | Earth | Rare | Leland the Lolturtle | Your Stonebound gives its users +20% Damage Reduction. |
 | Earth | Rare | Riot Shield | Melee Weapon Damage has a 20% chance to grant Stonebound. |
 | Earth | Rare | Rolling Pin | Melee hits while Stonebound deal +25% damage. |
 | Earth | Rare | Space Sandwich | While Stonebound, taking damage grants a +15% Barrier for 4s, once every 8s. |
 | Earth | Rare | Stonefist Gauntlet | While Stonebound, your Damage Reduction is added to your damage too (+30%, more with Leland). |
-| Earth | Epic | Earth Summoning Horn | Your own Barriers are +25% stronger and last +50% longer. Allies within 15 studs get 75% of each Barrier you give yourself. |
-| Earth | Epic | War Rocks | Every 5th Ranged shot hurls a boulder that deals damage in an area and grants you a 5% Barrier for 3s. |
+| Earth | Epic | Spartan Sword and Shield | You gain 2 shields that circle around you, dealing damage and granting you +5% Shields. (shelved 2026-11-01) |
 | Earth | Duo | Medusa Head | While Stonebound, your Poison Petrifies enemies for 4s: they are slowed 75% and take +25% damage from all sources. |
 | Neutral | Rare | Fluffy Unicorn | Deal +30% damage to Minibosses and Bosses. |
 | Neutral | Rare | Regeneration Coil | Health Orbs heal you 50% more, and heal nearby allies too. |
@@ -350,33 +378,41 @@ beats a Level 2 one of the same quality.
 
 ### Weapon enchantments
 
-One per weapon, bound to that weapon, hidden from its Damage and from Power: the card says 50,
-the hit says 57. Live while the weapon is equipped (either hand slot); two weapons with the same
-enchantment count once. The names are the old aura names; the Wardrobe's cosmetic glows get
-different ones. Weapon particles for each are Studio work.
+One per weapon: a stat plus an opener, hidden from the weapon's Damage and from Power (the card
+says 50, the hit says 55). The **stat is always on** while the weapon is equipped in either hand
+slot, whichever weapon is drawn, and the two slots **add**: two Enflamed weapons are +20% Weapon
+Damage, no exception text anywhere. The **opener** fires only from the weapon that lands the hit:
+a 20% chance per hit (times the gun's proc coefficient, plus the Status Chance line). Spells have
+no enchantment opener; their statuses come from relics. The stored ids keep the 2026-10-31 names
+(Frostburst, Blight); the UI prints the new ones.
 
-| Enchantment | Effect | Where it applies |
-|---|---|---|
-| Enflamed | +15% Weapon Damage | That weapon's own hits |
-| Frostburst | +20% Arcane Damage | Your spells while equipped |
-| Stormcharged | +15% Critical Hit Chance | Every hit while equipped (base crit stays 5%) |
-| Blight | +15% Damage to enemies with a Status | Every lane, any status |
-| Stonebound | +20% Damage Reduction | While equipped |
+| Enchantment | Stat per weapon | Two of the same | Opener |
+|---|---|---|---|
+| Enflamed | +10% Weapon Damage | +20% | 20% Burn |
+| Frostbite (id Frostburst) | +15% Arcane Damage | +30% | 20% Chill |
+| Stormcharged | +10 Critical Chance | +20 | 20% Shock |
+| Corrosion (id Blight) | +20% Status Damage (every Burn, Poison, Black Flame and Death Venom tick) | +40% | 20% Poison |
+| Stonebound | +20% Orb Potency (shares the line's 100% cap) | +40% | 20% Fracture |
+
+Why these sizes: two Frostbite is the strongest pure-mage pair at +30%, but Frostbite plus
+Stormcharged lands close behind through crit synergies in three trees, so it is a preference and
+not a lock. If a single pair becomes the rule, the fix is one number, not a new stacking rule.
 
 - **Roll on drop** by rarity: Common 0%, Uncommon 5%, Rare 10%, Epic 25%, Legendary 60%; which
-  one is uniform over the live pool. The first cut drops only Enflamed, Frostburst and
-  Stormcharged; Blight and Stonebound are built and work on a weapon that has one, they just do
-  not roll yet.
+  one is uniform over the live pool: Enflamed, Frostbite, Stormcharged, Corrosion. Stonebound is
+  built and works on a weapon that has one; it joins the pool with the Earth tree's look.
 - **Imbue** at the Blacksmith adds or rerolls one for Gold: half a run of the weapon's level, flat
-  (about 205 / 400 / 770 / 1485 at each tier's entry level). Never fails, never destroys, a reroll
+  (about 100 / 200 / 385 / 740 at each tier's entry level). Never fails, never destroys, a reroll
   never repeats. Equipped weapons allowed.
-- **Look:** an enchanted weapon wears its status's particles on each blade's handle, locked to the
-  part and still (Enflamed shows Burn, Frostburst Chill, Stormcharged Shock, Blight Poison,
-  Stonebound Shielded), so daggers glow on both blades. Only the drawn weapon glows; holstering or
-  switching weapons turns it off, and the copy on the back never shows it. Hovering the
-  Enchantment row in the bag shows a tooltip with the enchantment's sentence.
-- Looter is gone (its Gold went to the Gold Find line). Saved Looter weapons became unenchanted
-  (profile v4).
+- **Look:** weapon particles per enchantment are Studio work (the code-cloned status rigs were
+  taken off on 2026-11-01 to make room for authored ones). Hovering the Enchantment row in the
+  bag shows a tooltip with the enchantment's sentence, for example "Your weapon hits deal +10%
+  damage and have a 20% chance to Burn."
+- **Test commands:** `/enchant <name | roll | clear>` and `/bonusstat <StatKey percent | roll |
+  clear>` on the primary weapon, in the hub and the dungeon.
+- Looter is gone. Saved Looter weapons became unenchanted (profile v4). The Gold Find and Dodge
+  Recovery lines left on 2026-11-01 (Luck took the slot); saved lines with those keys are
+  ignored and reroll away.
 
 ### Gear lines (bonus stats)
 
@@ -394,13 +430,12 @@ Damage / Health or Power; they change the hit, the heal or the cooldown. Spells 
 |---|---|---|---|
 | Weapon Damage | +4 to 10% | Health | +4 to 10% |
 | Arcane Damage | +5 to 12% | Damage Reduction | +2 to 5% |
-| Critical Chance | +3 to 8 pts | Movement Speed | +2 to 5% |
+| Critical Chance | +5 to 12 pts | Movement Speed | +2 to 5% |
 | Critical Damage | +10 to 25% | Cooldown Reduction | +3 to 8% (cap 40%) |
 | Status Chance | +3 to 8 pts | Mana Cost Reduction | +3 to 8% (cap 40%) |
 | | | Mana Regen | +5 to 15% |
 | | | Orb Potency | +10 to 25% (cap 100%) |
-| | | Dodge Recovery | +5 to 12% |
-| | | Gold Find | +5 to 15%, Gold only |
+| | | Luck | +5 to 15% (cap 60%): every rarity above Common is that much more likely on gear drops |
 
 Every reduction together (Slateskin, Stonebound, lines, set bonus, shrine) caps at 75% of a hit.
 A perfect 15-line Legendary set with Enflamed is about +85% weapon output and +50% effective
@@ -422,8 +457,8 @@ Power still gates it.
   straight into an owned spell as rank XP at a worse rate than the chest's expected value.
   Crystals come from ore veins, chests, bosses and higher difficulties.
 - Selling gear refunds 50% of its Gold upgrade spend. Sales pay Gold only.
-- Run income per tier (Gold 500 / 1,000 / 2,000 / 4,000 split between chests and gear sales;
-  Crystals 25 / 50 / 100 / 200) with treasure chests and pots as a 20% bonus on top.
+- Run income per tier (Gold 205 / 400 / 770 / 1,485 across chests, grunt drops and gear sales;
+  Crystals 50 / 100 / 200 / 400) with treasure chests and pots as a 20% bonus on top.
 
 ## Arcane
 

@@ -28,6 +28,10 @@
 	                      (Lib/azureGlyph). Its +30% Arcane Damage and +35%
 	                      Chill chance on Spells while Frostburst live in
 	                      DamageService/AuraDamage and StatusConditionService.
+	  Frozen Blue Ice     ICE ARROW (2026-11-01, the tree's enabler): every
+	  Crossbow            `everyHits`-th ranged hit fires an arrow at that
+	                      target for `arrowDamage` of what the hit dealt, as
+	                      RANGED WEAPON damage, and Chills it outright.
 
 	The clients draw everything (helpers.fx); the server only aims, waits
 	out each flight and lands the hits where the packet said they land.
@@ -47,6 +51,7 @@ local azureGlyph = require(script.Parent.Lib.azureGlyph)
 
 local WYRM = RelicNames["Ice Dragon Slayer"]
 local FOWL = RelicNames["Icy Arctic Fowl"]
+local CROSSBOW = RelicNames["Frozen Blue Ice Crossbow"]
 local STAFF = RelicNames["Korblox Mage Staff"]
 local AZURE = RelicNames["Staff of Azure Ever Ice"]
 
@@ -72,6 +77,11 @@ local SHARD_STAGGER_SECONDS = 0.08
 -- Frost Zone: how often it looks for enemies inside.
 local FIELD_SCAN_SECONDS = 0.25
 
+-- Ice Arrow: a quick dart from the owner to the target, and the small
+-- frost pop where it lands (the IceShard look).
+local ARROW_FLIGHT_SECONDS = 0.18
+local ARROW_BURST_RADIUS = 3
+
 local Frost = {}
 
 -- Icy Arctic Fowl: the next volley's time per player (every
@@ -80,6 +90,10 @@ local fowlNextVolley: { [Player]: number } = {}
 
 type Wyrm = { expiresAt: number, nextBreath: number }
 local wyrms: { [Player]: Wyrm } = {}
+-- Frozen Blue Ice Crossbow: ranged hits since the last arrow, and true
+-- while an arrow of the owner's is landing (its own hit is a ranged hit).
+local crossbowHits: { [Player]: number } = {}
+local arrowLanding: { [Player]: boolean } = {}
 -- Mage Staff: [player][spell] = a field is still owed by that cast.
 local pendingFields: { [Player]: { [string]: boolean } } = {}
 -- One arcane hit from a Frost gimmick: damage, a guaranteed Chill when
@@ -274,7 +288,57 @@ local function launchVolley(player: Player, root: BasePart)
 	end)
 end
 
+--[ Ice Arrow ]--
+
+-- The Nth ranged hit's arrow at `model`: arrowDamage of what that hit
+-- dealt, on the gun-shot lane (not arcane, not melee, not relic-sourced:
+-- it crits and picks up the weapon relics like the shot it rode in on),
+-- then a Chill outright. The arrow's landing is itself a ranged hit, so
+-- `arrowLanding` keeps it out of this counter and arrows never chain.
+local function fireIceArrow(player: Player, model: Model, dealt: number)
+	local root = getRoot.fromPlayer(player)
+	local targetRoot = getRoot(model)
+	if not root or not targetRoot then
+		return
+	end
+	local from = root.Position + Vector3.new(0, 2, 0)
+	helpers.fx("IceShard", from, targetRoot.Position, ARROW_BURST_RADIUS, ARROW_FLIGHT_SECONDS)
+	local damage = dealt * helpers.data(CROSSBOW, "arrowDamage", 0.75)
+	task.delay(ARROW_FLIGHT_SECONDS, function()
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		if not player.Parent or not model.Parent or not humanoid or humanoid.Health <= 0 then
+			return
+		end
+		arrowLanding[player] = true
+		local ok, err: any = pcall(helpers.takeDamage :: any, player, humanoid, damage, false, false, false)
+		arrowLanding[player] = nil
+		if not ok then
+			error(err, 0)
+		end
+		helpers.statusService():ApplyStatus(player, model, StatusConditions.Chill, true)
+	end)
+end
+
 --[ Handlers ]--
+
+-- Every gun shot that lands (DamageService): the crossbow's count.
+function Frost.onRangedHit(player: Player, model: Model, dealt: number, _wasCrit: boolean)
+	if arrowLanding[player] then
+		return
+	end
+	if not helpers.owns(player, CROSSBOW) then
+		crossbowHits[player] = nil
+		return
+	end
+	local count = (crossbowHits[player] or 0) + 1
+	if count >= helpers.data(CROSSBOW, "everyHits", 3) then
+		count = 0
+		if dealt > 0 then
+			fireIceArrow(player, model, dealt)
+		end
+	end
+	crossbowHits[player] = count
+end
 
 function Frost.onSpellCast(player: Player, vfxName: string)
 	if helpers.owns(player, AZURE) then
@@ -351,6 +415,8 @@ function Frost.onPlayerRemoved(player: Player)
 	fowlNextVolley[player] = nil
 	wyrms[player] = nil
 	pendingFields[player] = nil
+	crossbowHits[player] = nil
+	arrowLanding[player] = nil
 end
 
 return Frost

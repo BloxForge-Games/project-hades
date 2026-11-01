@@ -307,6 +307,8 @@ end
 --
 -- Currently triggers:
 --   * Experimental Jetpack — 2s invulnerable jetpack
+--   * the gimmick trees (RelicGimmickService.OnPerfectDodge): the Katana's
+--     prime (2026-11-01)
 --
 -- Jetpack is gated internally via its own active-module ownership
 -- check, so calling this on every perfect dodge is always safe.
@@ -334,6 +336,12 @@ function RelicService.OnPlayerPerfectDodged(self: typeof(RelicService), player: 
 	-- Jetpack proc — existing behavior, kept identical. GetRelicActiveModule
 	-- internally checks ownership before invoking.
 	self:GetRelicActiveModule(player, "Jetpack")
+
+	-- The gimmick trees (2026-11-01): the Katana primes its owner here.
+	local gimmicks = Blitz.OptionalService("RelicGimmickService")
+	if gimmicks then
+		gimmicks:OnPerfectDodge(player)
+	end
 
 	-- The element rework removed the other perfect-dodge relics (Speedy
 	-- Shoes' Adrenaline died with that aura; Robloxian Battle Shield now

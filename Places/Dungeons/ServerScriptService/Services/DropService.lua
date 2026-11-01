@@ -18,6 +18,7 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local resolveArcLanding = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.resolveArcLanding)
@@ -76,6 +77,17 @@ end
 -- and room-bound like a Gem was. Flip it back on with the Merchant;
 -- the Gem escrow and HUD readout are still wired.
 local GEMS_ENABLED = false
+
+-- Orb Potency (both orbs): the armor line plus the Stonebound enchantment
+-- (2026-11-01, both weapons adding), together under the line's cap.
+local ORB_POTENCY_CAP = 1.0
+local function orbPotency(player: Player): number
+	return math.min(
+		PlayerStatsService:GetGearStat(player, "OrbPotency")
+			+ PlayerStatsService:GetEnchantmentStat(player, "OrbPotency"),
+		ORB_POTENCY_CAP
+	)
+end
 
 -- Relic bonuses on currency pickups (Pot Of Gold +50%), summed into one
 -- BONUS fraction. Each magnitude comes from its own callback, so the
@@ -178,7 +190,63 @@ local DropService = {
 		DataService,
 		PlayerStatsService,
 	} :: { any },
+
+	-- Earth Protection Orb's bank (RelicGimmickService/Earth sets it):
+	-- asked before a Health or Mana Orb restores; true means the orb was
+	-- stored and restores nothing now.
+	OrbBankIntercept = nil :: ((player: Player, dropType: string) -> boolean)?,
 }
+
+-- Orb restores: the base fraction of the bar's max each Orb gives.
+local ORB_RESTORE_FRACTIONS: { [string]: number } = {
+	[DropTypes.Health] = 0.05,
+	[DropTypes.Mana] = 0.10,
+}
+
+-- What `collector`'s Orbs restore relative to the base: the Orb Potency
+-- gear and enchantment lines (orbPotency) and Golem's Hammer's
+-- data.orbMultiplier (2026-11-01).
+function DropService.OrbRestoreMultiplier(_self: typeof(DropService), collector: Player): number
+	local multiplier = 1 + orbPotency(collector)
+	if RelicService:GetSpecificRelicRegistry(collector, RelicNames["Golem's Hammer"]) > 0 then
+		local row = RelicData[RelicNames["Golem's Hammer"]]
+		multiplier *= (row and row.data and row.data.orbMultiplier) or 1
+	end
+	return multiplier
+end
+
+-- Restores ONE Orb of `dropType` to `player` at `multiplier` times the
+-- base: Health through ApplyHealing (healing amps apply inside), Mana
+-- through ArcaneService. The one home for the math: the collect path
+-- below, Earth Protection Orb's bank spending a stored orb and Earth
+-- Summoning Horn's share to allies (RelicGimmickService/Earth) all land
+-- here. Returns what was restored (0 when the bar cannot be read).
+function DropService.RestoreOrb(
+	_self: typeof(DropService),
+	player: Player,
+	dropType: string,
+	multiplier: number
+): number
+	local fraction = ORB_RESTORE_FRACTIONS[dropType]
+	if not fraction then
+		return 0
+	end
+	if dropType == DropTypes.Health then
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if not humanoid then
+			return 0
+		end
+		return PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * fraction * multiplier)
+	end
+	local arcaneData = ArcaneService:GetPlayerArcaneData(player)
+	if not arcaneData then
+		return 0 -- no arcane data yet: nothing to restore into
+	end
+	local maxMana = arcaneData.maxMana
+	local restored = maxMana * fraction * multiplier
+	ArcaneService:SetPlayerArcaneData(player, math.clamp(arcaneData.mana + restored, 0, maxMana), maxMana)
+	return restored
+end
 
 -- `isBoss` is the SCATTER RADIUS (Client/Components/Drop reads it as
 -- IsBoss and throws the drop ±20 studs instead of ±8), not a tier flag.
@@ -220,25 +288,21 @@ function DropService.Start(self: typeof(DropService))
 				return
 			end
 
-			-- Element-rework folder layout: Relics/<Tree>/<Rarity>/<Name>.
-			-- The Skip offer (and anything without a RelicData entry) still
-			-- resolves the OLD way -- its `Folder` rides in the rarity slot
-			-- (Relics.Skip["Skip Relic"]).
-			local relicsFolder = game.ReplicatedStorage.GameAssets.Relics
-			local data = RelicData[relicName]
-			local template
-			if data and data.tree then
-				local treeFolder = relicsFolder:FindFirstChild(data.tree)
-				local rarityFolder = treeFolder and treeFolder:FindFirstChild(itemRarity)
-				template = rarityFolder and rarityFolder:FindFirstChild(relicName)
-			end
-			if not template then
-				local rarityFolder = relicsFolder:FindFirstChild(itemRarity)
-				template = rarityFolder and rarityFolder:FindFirstChild(relicName)
-			end
-			if not template then
+			-- The shared resolver (getRelicModelTemplate, 2026-11-01): the
+			-- Relics/<Tree>/<Rarity>/<Name> layout, then the old flat layout
+			-- (the Skip offer's `Folder` rides in the rarity slot), then a
+			-- search by name anywhere under Relics, so a model filed under
+			-- an old rarity still drops. The drop needs a Model with a
+			-- Handle (ScaleTo, the DropAttachment, the client component).
+			local template = getRelicModelTemplate(relicName, itemRarity)
+			if not template or not template:IsA("Model") or not template:FindFirstChild("Handle") then
 				warn(
-					"[DropService] Missing relic model: " .. tostring(relicName) .. " (" .. tostring(itemRarity) .. ")"
+					"[DropService] No drop model for relic "
+						.. tostring(relicName)
+						.. " ("
+						.. tostring(itemRarity)
+						.. "): needs a Model with a Handle under GameAssets.Relics; found "
+						.. (if template then template:GetFullName() .. " (" .. template.ClassName .. ")" else "nothing")
 				)
 				return
 			end
@@ -249,7 +313,7 @@ function DropService.Start(self: typeof(DropService))
 			-- (Client/Components/Relic), not an attachment on the drop.
 
 			local dropAttachment = ReplicatedStorage.GameAssets.Particles.DropAttachment:Clone()
-			dropAttachment.Parent = drop.Handle
+			dropAttachment.Parent = drop:FindFirstChild("Handle")
 			-- A target past a dungeon wall (a fan slot into a corner, a relic
 			-- tossed at a wall) ricochets back into the room; the client flies
 			-- the two-segment arc through BouncePosition.
@@ -395,13 +459,13 @@ function DropService.Start(self: typeof(DropService))
 			--   * The dungeon's rewardScale (DungeonService.GetRewardScale:
 			--     +50% per dungeon tier; the difficulty's take is already in
 			--     the chest row).
-			--   * Gold Find gear lines (BonusStatData): Coins only, not Gems.
+			--   (The Gold Find gear line left on 2026-11-01; Luck took its
+			--   slot and lives in the gear rarity roll instead.)
 			value = math.round(
 				value
 					* (1 + getRelicCoinBonus(player))
 					* getDragonLanternMultiplier(player)
 					* ArmorSetBonusService:GetCoinMultiplier(player)
-					* (1 + PlayerStatsService:GetGearStat(player, "GoldFind"))
 					* difficultyMultiplier("gold")
 			)
 			-- Death economy: run coins go to the ESCROW, not the profile --
@@ -418,23 +482,24 @@ function DropService.Start(self: typeof(DropService))
 			-- (Arcane Chests) rather than an economy stat.
 			RunEscrowService:AddArcaneCrystals(player, math.round(value * difficultyMultiplier("crystals")))
 		elseif dropType == DropTypes.Mana then
+			-- Earth Protection Orb's bank may take the orb instead: it floats
+			-- into its slot, so no pickup flourish (2026-11-01).
+			if self.OrbBankIntercept and self.OrbBankIntercept(player, dropType) then
+				return
+			end
 			playOrbPickupVFX(player, dropType)
 
-			-- Mana orbs restore 10% of the player's max mana.
-			local BASE_MANA_FRACTION = 0.1
-
-			local arcaneData = ArcaneService:GetPlayerArcaneData(player)
-			if not arcaneData then
-				return -- no arcane data yet: nothing to restore into
-			end
-			local currentMana = arcaneData.mana
-			local maxMana = arcaneData.maxMana
-			-- Orb Potency gear lines (BonusStatData) scale the restore.
-			local manaRestored = currentMana
-				+ maxMana * BASE_MANA_FRACTION * (1 + PlayerStatsService:GetGearStat(player, "OrbPotency"))
-
-			ArcaneService:SetPlayerArcaneData(player, math.clamp(manaRestored, 0, maxMana), maxMana)
+			-- Mana orbs restore 10% of the player's max mana (RestoreOrb), x
+			-- Orb Potency and Golem's Hammer (OrbRestoreMultiplier).
+			self:RestoreOrb(player, dropType, self:OrbRestoreMultiplier(player))
 		elseif dropType == DropTypes.Health then
+			-- Earth Protection Orb's bank may take the orb instead: it floats
+			-- into its slot, so no pickup flourish (2026-11-01). Ahead of
+			-- Teddy Trap on purpose: a banked orb is not consumed.
+			if self.OrbBankIntercept and self.OrbBankIntercept(player, dropType) then
+				return
+			end
+
 			-- Ahead of the humanoid guard below: you picked the orb up, so the
 			-- flourish plays even in the edge case where the heal cannot.
 			playOrbPickupVFX(player, dropType)
@@ -446,24 +511,17 @@ function DropService.Start(self: typeof(DropService))
 				return
 			end
 
-			-- Health orbs restore 5% of the player's max health. Healing
-			-- amps (Holiday Ham) apply inside
-			-- ApplyHealing — any-source, summed additively.
-			local BASE_HEALTH_FRACTION = 0.05
-
-			local humanoid = player.Character and player.Character:FindFirstChild("Humanoid") :: Humanoid?
-
-			if not humanoid then
-				return
-			end
-
+			-- Health orbs restore 5% of the player's max health (RestoreOrb;
+			-- healing amps such as Holiday Ham apply inside ApplyHealing,
+			-- any-source, summed additively), x Orb Potency and Golem's
+			-- Hammer (OrbRestoreMultiplier).
+			--
 			-- Regeneration Coil (2026-10-30): the orb heals its multiplier more,
-			-- and every ally inside data.shareRadius gets the same heal.
-			-- Orb Potency gear lines (BonusStatData) scale the heal, the
-			-- collector's lines for the allies' share too.
-			local coil = (RelicService:GetRelicEffect(player, RelicNames["Regeneration Coil"]) or 1)
-				* (1 + PlayerStatsService:GetGearStat(player, "OrbPotency"))
-			PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
+			-- and every ally inside data.shareRadius gets the same heal, at
+			-- the collector's multiplier.
+			local coil = RelicService:GetRelicEffect(player, RelicNames["Regeneration Coil"]) or 1
+			local multiplier = self:OrbRestoreMultiplier(player) * coil
+			self:RestoreOrb(player, dropType, multiplier)
 			if coil > 1 then
 				local row = RelicData[RelicNames["Regeneration Coil"]]
 				local radius = (row and row.data and row.data.shareRadius) or 20
@@ -480,7 +538,7 @@ function DropService.Start(self: typeof(DropService))
 						and allyHumanoid.Health > 0
 						and (allyRoot.Position - root.Position).Magnitude <= radius
 					then
-						PlayerStatsService:ApplyHealing(ally, allyHumanoid.MaxHealth * BASE_HEALTH_FRACTION * coil)
+						self:RestoreOrb(ally, dropType, multiplier)
 					end
 				end
 			end
