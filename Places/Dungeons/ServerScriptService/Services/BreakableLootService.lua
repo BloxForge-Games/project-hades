@@ -48,6 +48,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CollisionGroups)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local BreakableLootData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BreakableLootData)
@@ -340,6 +341,9 @@ function BreakableLootService._makeModel(self: typeof(BreakableLootService), mod
 			-- and spell hitboxes find it.
 			part.CanCollide = false
 			part.CanQuery = true
+			-- The dodge's ray (cast as the Dodging group) passes this group,
+			-- so a roll goes through pots and veins (2026-11-01).
+			part.CollisionGroup = CollisionGroups.Breakable
 		end
 	end
 	return model

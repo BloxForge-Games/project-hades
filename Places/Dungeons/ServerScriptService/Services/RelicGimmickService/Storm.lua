@@ -156,18 +156,24 @@ end
 -- A Perfect Dodge (RelicService -> RelicGimmickService.OnPerfectDodge)
 -- primes the owner: DamageService's Arcane forced crit for primedSeconds,
 -- whose onHit Shocks the target as the crit is spent and ends the sparks.
--- An unspent prime lapses with the arm and the sparks' Duration together;
--- another dodge meanwhile re-primes (the arm and the sparks both refresh).
+-- The crit spreads over the whole spell (spreadSeconds, 2026-11-01):
+-- every enemy the primed spell hits in that window crits and is Shocked,
+-- not only the first. An unspent prime lapses with the arm and the
+-- sparks' Duration together; another dodge meanwhile re-primes.
 function Storm.onPerfectDodge(player: Player)
 	if not helpers.owns(player, KATANA) then
 		return
 	end
 	local seconds = helpers.data(KATANA, "primedSeconds", 5)
 	showPrime(player, seconds)
+	local shown = true
 	helpers.damageService():ForceNextCrit(player, "Arcane", seconds, function(target: Model)
 		helpers.statusService():ApplyStatus(player, target, StatusConditions.Shock, false)
-		showPrime(player, 0)
-	end)
+		if shown then
+			shown = false
+			showPrime(player, 0)
+		end
+	end, helpers.data(KATANA, "spreadSeconds", 0.6))
 end
 
 function Storm.onPlayerRemoved(player: Player)

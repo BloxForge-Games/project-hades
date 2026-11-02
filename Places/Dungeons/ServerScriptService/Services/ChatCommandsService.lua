@@ -604,10 +604,11 @@ COMMANDS = {
 				scaling:RescaleAll()
 			end
 			local tier = DifficultyData.Resolve(wanted)
-			return ("Difficulty %s -> %s (enemy health x%.2f, damage x%.2f, gear L%d-%d). Living mobs rescaled; the floor's layout stays."):format(
+			return ("Difficulty %s -> %s (enemy health x%.2f, grunts x%.2f more, damage x%.2f, gear L%d-%d). Living mobs rescaled; the floor's layout stays."):format(
 				previous,
 				wanted,
 				tier.enemyHealth,
+				tier.gruntHealth,
 				tier.enemyDamage,
 				tier.levelRange.min,
 				tier.levelRange.max

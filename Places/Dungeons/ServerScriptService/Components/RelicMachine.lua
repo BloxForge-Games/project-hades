@@ -49,6 +49,9 @@ local RelicMachine = Component.new({
 -- intact. A capped owner's choice is marked MADE the moment the machine
 -- lands (and again on every refused tap), so the segment gate does not
 -- hold its full countdown for a pull nobody can take.
+-- Stamped on the machine once its owner has pulled; the client component
+-- keeps its prompt off from then on.
+local PULLED_ATTRIBUTE = "Pulled"
 local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
 local RELIC_CAP_TEXT = "Reached Maximum Relics! (%d)"
 local RELIC_CAP_LABEL = "Vending Machine (Relics Full)"
@@ -303,6 +306,12 @@ function RelicMachine:Start()
 		if self._ownerId == player.UserId and self._canClick then
 			self._proximityPrompt.Enabled = false
 			self._canClick = false
+			-- The prompt's Enabled does not replicate here: the asset ships
+			-- it false and only the owner's client turns it on after the
+			-- landing, so the server's false is a no-op on the wire. The
+			-- client hides its prompt on this attribute instead
+			-- (2026-11-01; the prompt came back after the offer closed).
+			self.Instance:SetAttribute(PULLED_ATTRIBUTE, true)
 
 			self.Instance.PrimaryPart.InteractParticle:Emit(10)
 

@@ -784,6 +784,21 @@ function GearDropService._buildDropModel(
 	end
 
 	local clonedPrefab = (prefab :: Instance):Clone()
+	-- A drop is a VISUAL: strip every tag the prefab ships with, on the
+	-- clone and everything under it, so no MeleeWeapon / ProjectileWeapon
+	-- component ever attaches to it (2026-11-01: the Bluesteel Quickblades
+	-- carry the tag on their inner "Right" model, which the normalizer
+	-- keeps; the component then looked "Right" up as a weapon and
+	-- errored on every chest that dropped them). The loadout service
+	-- does the same for sheathed and off-hand copies.
+	for _, tag in clonedPrefab:GetTags() do
+		clonedPrefab:RemoveTag(tag)
+	end
+	for _, descendant in clonedPrefab:GetDescendants() do
+		for _, tag in descendant:GetTags() do
+			descendant:RemoveTag(tag)
+		end
+	end
 	local visualModel = self:_normalizeGearVisual(clonedPrefab)
 	if not visualModel then
 		return nil
