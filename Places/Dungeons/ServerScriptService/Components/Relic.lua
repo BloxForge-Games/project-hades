@@ -106,6 +106,25 @@ function Relic:Start()
 			return
 		end
 
+		-- Already owned (2026-11-02): every relic is one per player
+		-- (RelicStackData), so a second copy would be consumed for nothing.
+		-- Refused like the cap below, the relic stays claimable, a quiet pop.
+		if not isSkip and RelicService:GetSpecificRelicRegistry(player, self.Instance.Name) > 0 then
+			local character = player.Character
+			local indicatorPart = character
+				and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
+			if TextIndicatorService and indicatorPart then
+				TextIndicatorService:ShowIndicator(
+					player,
+					indicatorPart,
+					"Already Owned",
+					Color3.fromRGB(250, 70, 70),
+					true
+				)
+			end
+			return
+		end
+
 		-- Relic cap: refuse BEFORE consuming anything -- the relic (and, at
 		-- a vending machine, the pull's other offers) stays claimable, so a
 		-- capped player wastes nothing by bumping into it.

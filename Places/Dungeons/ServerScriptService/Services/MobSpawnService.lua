@@ -5,6 +5,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local LootPlan = require(ReplicatedStorage.Submodules.Core.Libraries.LootPlan)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local dungeonContent = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonContent)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -216,13 +217,16 @@ end
 -- floor's folder chain (dungeonContent.FindFloorAsset) -- checked here so
 -- a typo warns at generation, not on the first spawn. Called by
 -- DungeonService on every generation.
-function MobSpawnService.BuildMobPlanForDungeon(self: typeof(MobSpawnService), dungeonId: string)
+function MobSpawnService.BuildMobPlanForDungeon(self: typeof(MobSpawnService), dungeonId: string, difficulty: string?)
 	local plan = LootPlan.new("single")
 	local added = 0
 	local floor = self:_floor()
 	local content = dungeonContent.FloorContent(dungeonId, floor)
 	local pool: { string } = if content then content.mobPool else {}
 	local folder = self:_mobFolder(dungeonId)
+	-- The tier's spawn weight multipliers (DifficultyData mobSpawnWeights),
+	-- for the difficulty this floor is generated at.
+	local tierWeights = if difficulty then DifficultyData.Resolve(difficulty).mobSpawnWeights else nil
 	for _, mobName in pool do
 		local data = MobData[mobName]
 		local weight = data and data.spawnWeight or 0
@@ -246,7 +250,7 @@ function MobSpawnService.BuildMobPlanForDungeon(self: typeof(MobSpawnService), d
 			)
 			continue
 		end
-		plan:AddLoot(mobName, weight)
+		plan:AddLoot(mobName, weight * ((tierWeights and tierWeights[mobName]) or 1))
 		added += 1
 	end
 	if added == 0 then
