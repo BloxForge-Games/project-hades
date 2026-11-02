@@ -6,15 +6,14 @@
 	hit here is a relic burst on the untyped lane; every number is the
 	relic's RelicData `data`:
 
-	  War Rocks             a melee hit rolls chanceDaggers / chanceSword /
-	                        chanceGreatsword by the weapon in hand, a
-	                        ranged hit chanceRanged; on a hit a boulder
-	                        flies at the target and bursts for
-	                        damagePerLevel x level in `radius` (x
-	                        (1 + fracturedBonus) on enemies already
-	                        Fractured), Fracturing everything it lands on.
+	  Golden Steampunk Gloves  every swingsDaggers / swingsSword /
+	                        swingsGreatsword melee SWING (4 / 3 / 2) sends a
+	                        shockwave out of the enemy the swing struck
+	                        (or just ahead when it struck nothing):
+	                        Power-scaled damage in `radius` and Fracture on
+	                        everything in it.
 	  Earth Protection Orb  THE ORB BANK: a Health or Mana Orb collected
-	                        while that bar is at or above spendThreshold of
+	                        while that bar is at storeThreshold (95%) of
 	                        its max is stored (up to maxOrbs; DropService
 	                        asks OrbBankIntercept before restoring). Every
 	                        spendInterval the bank spends one orb if a bar
@@ -53,24 +52,17 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
-local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
-local getEquippedMeleeType = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getEquippedMeleeType)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 
-local WAR_ROCKS = RelicNames["War Rocks"]
+local GLOVES = RelicNames["Golden Steampunk Gloves"]
 local ORB_BANK = RelicNames["Earth Protection Orb"]
 local TNT = RelicNames["Bundle of TNT"]
 local HORN = RelicNames["Earth Summoning Horn"]
 local GOLEM = RelicNames["Golem's Hammer"]
-
--- How long the boulder flies before it bursts.
-local BOULDER_FLIGHT_SECONDS = 0.35
--- The boulder leaves the thrower from about chest height.
-local BOULDER_LAUNCH_LIFT = Vector3.new(0, 2, 0)
 
 -- The character attribute carrying the bank: one letter per stored orb
 -- (ORB_LETTERS), nil when empty. EarthOrbBankController reads it.
@@ -132,50 +124,45 @@ local function isFractured(model: Model): boolean
 	return helpers.statusService():IsStatusActive(model, StatusConditions.Fractured) == true
 end
 
---[ War Rocks ]--
+--[ Golden Steampunk Gloves ]--
 
--- Hurls a boulder from `player` at where `model` stands now; on landing
--- every enemy in `radius` takes the per-level damage (more when already
--- Fractured) and is Fractured.
-local function hurlBoulder(player: Player, model: Model)
-	local from = getRoot.fromPlayer(player)
-	local targetRoot = getRoot(model)
-	if not from or not targetRoot then
-		return
-	end
-	local target = targetRoot.Position
-	local radius = helpers.data(WAR_ROCKS, "radius", 8)
-	helpers.fx("Boulder", from.Position + BOULDER_LAUNCH_LIFT, target, radius, BOULDER_FLIGHT_SECONDS, player)
-	task.delay(BOULDER_FLIGHT_SECONDS, function()
-		if not player.Parent then
-			return
-		end
-		local damage = helpers.levelDamage(player, helpers.data(WAR_ROCKS, "damagePerLevel", 25))
-		local fracturedBonus = helpers.data(WAR_ROCKS, "fracturedBonus", 0.5)
-		helpers.hitBreakables(player, target, radius)
-		forEachEnemyInRadius(target, radius, function(other: Model, humanoid: Humanoid)
-			local dealt = if isFractured(other) then math.round(damage * (1 + fracturedBonus)) else damage
-			fractureHit(player, other, humanoid, dealt)
-		end)
+local glovesSwings: { [Player]: number } = {}
+-- The last enemy this swing struck (onMeleeHit runs per mob before the
+-- swing hook): where the Nth swing's shockwave bursts. Cleared per swing.
+local glovesLastTarget: { [Player]: Model } = {}
+
+-- The shockwave out of `center`: every enemy in `radius` takes the
+-- Power-scaled damage and is Fractured. Drawn with the Horn's ring kind,
+-- in a short pulse.
+local function glovesShockwave(player: Player, center: Vector3)
+	local radius = helpers.data(GLOVES, "radius", 8)
+	helpers.fx("Shockwave", center - Vector3.new(0, 2.5, 0), nil, radius, 0.4, player)
+	helpers.hitBreakables(player, center, radius)
+	local damage = helpers.levelDamage(player, helpers.data(GLOVES, "damagePerLevel", 20))
+	forEachEnemyInRadius(center, radius, function(other: Model, humanoid: Humanoid)
+		fractureHit(player, other, humanoid, damage)
 	end)
 end
 
--- The roll for a weapon hit by `player` on `model` at `chance`.
-local function rollBoulder(player: Player, model: Model, chance: number)
-	if chance <= 0 or math.random() > chance then
+-- Counts one melee SWING (2026-11-01; hits per mob before); the Nth (by
+-- weapon weight: swingsDaggers / swingsSword / swingsGreatsword) bursts
+-- the shockwave at the enemy the swing struck, or just ahead of the
+-- player when it struck nothing, and starts the count over.
+local function countGlovesSwing(player: Player, origin: Vector3, look: Vector3, weaponType: string?)
+	local target = glovesLastTarget[player]
+	glovesLastTarget[player] = nil
+	if not helpers.owns(player, GLOVES) then
+		glovesSwings[player] = nil
 		return
 	end
-	hurlBoulder(player, model)
-end
-
-local function meleeBoulderChance(player: Player): number
-	local weaponType = getEquippedMeleeType(player)
-	if weaponType == MeleeWeaponTypes.Daggers then
-		return helpers.data(WAR_ROCKS, "chanceDaggers", 0.12)
-	elseif weaponType == MeleeWeaponTypes.Greatsword then
-		return helpers.data(WAR_ROCKS, "chanceGreatsword", 0.3)
+	local count = (glovesSwings[player] or 0) + 1
+	if count >= helpers.swingsFor(GLOVES, weaponType) then
+		count = 0
+		local targetRoot = if target and target.Parent then getRoot(target) else nil
+		local center = if targetRoot then targetRoot.Position else origin + look * 3
+		glovesShockwave(player, center)
 	end
-	return helpers.data(WAR_ROCKS, "chanceSword", 0.2)
+	glovesSwings[player] = count
 end
 
 --[ Earth Protection Orb ]--
@@ -228,8 +215,12 @@ local function interceptOrb(player: Player, dropType: string): boolean
 	if not ORB_LETTERS[dropType] or not helpers.owns(player, ORB_BANK) then
 		return false
 	end
+	-- Stored only when the bar is at or above storeThreshold (95% since
+	-- 2026-11-01: an orb heals 5%, so a bar it could not fill counts as
+	-- full; 90% before, which banked orbs the player still needed). A
+	-- sliver under still counts so float rounding never blocks it.
 	local fraction = barFraction(player, dropType)
-	if fraction == nil or fraction < helpers.data(ORB_BANK, "spendThreshold", 0.9) then
+	if fraction == nil or fraction < helpers.data(ORB_BANK, "storeThreshold", 0.95) - 0.001 then
 		return false
 	end
 	local bank = banks[player]
@@ -245,29 +236,31 @@ local function interceptOrb(player: Player, dropType: string): boolean
 	return true
 end
 
--- One bank's spend step: a stored orb becomes the restore of whichever
--- bar is below the threshold, Health first.
+-- One bank's spend step: the oldest stored orb OF THE KIND a bar needs
+-- becomes that bar's restore, Health first (2026-11-01: the oldest orb of
+-- any kind used to go, so a Mana orb healed). A low bar with no orb of
+-- its kind stored waits; the other bar is checked next.
 local function spendFromBank(player: Player, bank: Bank, now: number)
 	if #bank.orbs == 0 or now - bank.lastSpend < helpers.data(ORB_BANK, "spendInterval", 1) then
 		return
 	end
 	local threshold = helpers.data(ORB_BANK, "spendThreshold", 0.9)
-	local restoreType: string? = nil
 	for _, dropType in { DropTypes.Health, DropTypes.Mana } do
 		local fraction = barFraction(player, dropType)
-		if fraction ~= nil and fraction < threshold then
-			restoreType = dropType
-			break
+		if fraction == nil or fraction >= threshold then
+			continue
 		end
-	end
-	if not restoreType then
+		local index = table.find(bank.orbs, dropType)
+		if not index then
+			continue
+		end
+		bank.lastSpend = now
+		table.remove(bank.orbs, index)
+		stampBank(player, bank)
+		local drops = dropService()
+		drops:RestoreOrb(player, dropType, drops:OrbRestoreMultiplier(player))
 		return
 	end
-	bank.lastSpend = now
-	table.remove(bank.orbs, 1)
-	stampBank(player, bank)
-	local drops = dropService()
-	drops:RestoreOrb(player, restoreType, drops:OrbRestoreMultiplier(player))
 end
 
 --[ Bundle of TNT ]--
@@ -426,15 +419,20 @@ end
 
 --[ Handlers ]--
 
-function Earth.onMeleeHit(player: Player, model: Model, _damage: number)
-	if helpers.owns(player, WAR_ROCKS) then
-		rollBoulder(player, model, meleeBoulderChance(player))
-	end
+function Earth.onMeleeSwing(
+	player: Player,
+	origin: Vector3,
+	look: Vector3,
+	_swingDamage: number,
+	_connected: boolean,
+	weaponType: string?
+)
+	countGlovesSwing(player, origin, look, weaponType)
 end
 
-function Earth.onRangedHit(player: Player, model: Model, _dealt: number, _wasCrit: boolean)
-	if helpers.owns(player, WAR_ROCKS) then
-		rollBoulder(player, model, helpers.data(WAR_ROCKS, "chanceRanged", 0.2))
+function Earth.onMeleeHit(player: Player, model: Model, _damage: number)
+	if helpers.owns(player, GLOVES) then
+		glovesLastTarget[player] = model
 	end
 end
 
@@ -466,6 +464,14 @@ end
 function Earth.onTick(player: Player)
 	if not helpers.owns(player, ORB_BANK) then
 		clearBank(player)
+	else
+		-- A new character has no attribute yet: restamp so the ring comes
+		-- back after a respawn and nothing stored is lost unspent.
+		local bank = banks[player]
+		local character = player.Character
+		if bank and #bank.orbs > 0 and character and character:GetAttribute(ORB_BANK_ATTRIBUTE) == nil then
+			stampBank(player, bank)
+		end
 	end
 	if helpers.owns(player, GOLEM) then
 		ensureGolem(player)
@@ -475,6 +481,8 @@ function Earth.onTick(player: Player)
 end
 
 function Earth.onPlayerRemoved(player: Player)
+	glovesSwings[player] = nil
+	glovesLastTarget[player] = nil
 	banks[player] = nil
 	lastTntBlast[player] = nil
 	lastShockwave[player] = nil

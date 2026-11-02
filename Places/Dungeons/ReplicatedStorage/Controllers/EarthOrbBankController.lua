@@ -56,8 +56,8 @@ local ARC_TRAIL_EMITTER_NAME = "DropParticles"
 local COLLECT_BURST_NAME = "Collected"
 -- The ring the orbs ride: its radius, height above the root, turn time and
 -- bob (2026-11-01: slower, higher and wider than the first cut).
-local ORBIT_RADIUS = 3.2
-local ORBIT_LIFT = 2.8
+local ORBIT_RADIUS = 3.8
+local ORBIT_LIFT = 3.1
 local ORBIT_SECONDS_PER_TURN = 9
 local BOB_HEIGHT = 0.3
 local BOB_SECONDS = 2.4
@@ -91,6 +91,9 @@ type Pending = {
 type Entry = {
 	character: Model,
 	orbs: { Orb },
+	-- The letters the ring was last built from, to tell WHICH slot a spend
+	-- removed (the bank spends by kind, not always the oldest).
+	letters: string,
 	pending: Pending?,
 	connection: RBXScriptConnection,
 }
@@ -227,9 +230,24 @@ local function syncEntry(entry: Entry)
 	local letters = if type(value) == "string" then value else ""
 	local wanted = #letters
 	local root = getRoot(entry.character)
+	local sinkTo = root and (root.Position + Vector3.new(0, 1, 0)) or nil
+	-- A spend removes one letter somewhere in the string: retire the slot
+	-- at the first position that no longer matches (the last when the
+	-- prefix still matches), so the orb that sinks is the one that was
+	-- spent and the rest slide over.
+	local previous = entry.letters
 	while #entry.orbs > wanted do
-		retireOrb(table.remove(entry.orbs, 1) :: Orb, root and (root.Position + Vector3.new(0, 1, 0)) or nil)
+		local removeAt = #entry.orbs
+		for index = 1, #previous do
+			if string.sub(previous, index, index) ~= string.sub(letters, index, index) then
+				removeAt = math.min(index, #entry.orbs)
+				break
+			end
+		end
+		retireOrb(table.remove(entry.orbs, removeAt) :: Orb, sinkTo)
+		previous = string.sub(previous, 1, removeAt - 1) .. string.sub(previous, removeAt + 1)
 	end
+	entry.letters = letters
 	for index = 1, wanted do
 		local letter = string.sub(letters, index, index)
 		local dropType = TYPE_BY_LETTER[letter] or DropTypes.Health
@@ -278,6 +296,7 @@ local function ensureEntry(character: Model): Entry
 	local entry: Entry = {
 		character = character,
 		orbs = {},
+		letters = "",
 		pending = nil,
 		connection = character:GetAttributeChangedSignal(ORB_BANK_ATTRIBUTE):Connect(function()
 			local live = entries[character]
@@ -327,8 +346,8 @@ end
 --[ Public ]--
 
 -- The collecting client's prediction of RelicGimmickService/Earth's
--- interceptOrb: owns the relic, the bar is at or above the threshold and
--- the bank has room. A wrong guess only costs a visual (see Adopt).
+-- interceptOrb: owns the relic, the matching bar is FULL and the bank has
+-- room. A wrong guess only costs a visual (see Adopt).
 function EarthOrbBankController.WillBank(_self: typeof(EarthOrbBankController), dropType: string): boolean
 	if not LETTER_BY_TYPE[dropType] then
 		return false
@@ -339,7 +358,7 @@ function EarthOrbBankController.WillBank(_self: typeof(EarthOrbBankController), 
 	end
 	local data = (RelicData[ORB_BANK] and RelicData[ORB_BANK].data) or {}
 	local fraction = localBarFraction(dropType)
-	if fraction == nil or fraction < (data.spendThreshold or 0.9) then
+	if fraction == nil or fraction < (data.storeThreshold or 0.95) - 0.001 then
 		return false
 	end
 	local character = Players.LocalPlayer.Character

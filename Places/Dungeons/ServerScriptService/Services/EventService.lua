@@ -355,6 +355,29 @@ end
 -- never reaches 0 directly — LifeService:LoseLife decides whether the
 -- player has a life to burn or enters the death state. Returns "dead"
 -- when the cost was lethal, "ok" otherwise.
+-- The relic-cap refusal (2026-11-01) for an event that would hand over a
+-- relic: the vending pickup's red pop and Error sound. The client already
+-- refuses to open these conversations (graph CanStart); this is the
+-- server's backstop, so a capped player never pays a cost for nothing.
+local function atRelicCap(player: Player): boolean
+	return RelicService:GetOwnedRelicCount(player) >= RelicService:GetRelicSlots(player)
+end
+
+local function refuseAtRelicCap(player: Player)
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if TextIndicatorService and hrp and hrp:IsA("BasePart") then
+		TextIndicatorService:ShowIndicator(
+			player,
+			hrp,
+			("Reached Maximum Relics! (%d)"):format(RelicService:GetRelicSlots(player)),
+			RELIC_CAP_COLOR,
+			true
+		)
+	end
+	playFeedbackSound(if hrp and hrp:IsA("BasePart") then hrp else nil, "Error")
+end
+
 function EventService._applyHealthCost(_self: typeof(EventService), player: Player, fraction: number): string
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -783,6 +806,13 @@ function EventService._onAttemptSwordPull(_self: typeof(EventService), player: P
 		return "done"
 	end
 
+	-- No pull at the relic cap: nothing paid, nothing rolled, the stone
+	-- stays available for after a drop.
+	if atRelicCap(player) then
+		refuseAtRelicCap(player)
+		return "full"
+	end
+
 	if EventService:_applyHealthCost(player, SWORD_PULL_HEALTH_FRACTION) == "dead" then
 		return "dead"
 	end
@@ -813,7 +843,7 @@ end
 -- unowned Cursed relics fan out, claim-one. Called mid-dialogue from
 -- the "Bargain is struck" node: the COST lands under the billboard;
 -- the FAN is queued and released by MarkEventInteracted at close.
--- Returns "struck" | "done" | "invalid".
+-- Returns "struck" | "done" | "invalid" | "full" (at the relic cap).
 -- DungeonNetwork.AcceptCurse handler (was a client-callable method).
 function EventService._onAcceptCurse(_self: typeof(EventService), player: Player, shrineModel: Instance?): string
 	if not EventService:_validate(player, shrineModel, "CursedShrine") then
@@ -823,6 +853,12 @@ function EventService._onAcceptCurse(_self: typeof(EventService), player: Player
 	local done = EventService._shrineDone[player.UserId]
 	if done and done[shrineModel] then
 		return "done"
+	end
+	-- No bargain at the relic cap: no cost, no curses, the shrine is not
+	-- spent for this player.
+	if atRelicCap(player) then
+		refuseAtRelicCap(player)
+		return "full"
 	end
 	EventService._shrineDone[player.UserId] = EventService._shrineDone[player.UserId] or {}
 	EventService._shrineDone[player.UserId][shrineModel] = true

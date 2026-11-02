@@ -33,6 +33,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local LifeService = require(ServerScriptService.Services.LifeService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
@@ -52,27 +53,45 @@ end
 
 --[ Public API ]--
 
--- The run's difficulty health multiplier; 1 outside a run. DungeonService
--- is reached at call time (this service is a consumer of it).
-local function difficultyHealthMultiplier(): number
+-- The run's difficulty health multiplier for a mob of `enemyType`; 1
+-- outside a run. DungeonService is reached at call time (this service is
+-- a consumer of it). Grunts (every type but Miniboss and Boss) carry the
+-- tier's gruntHealth on top (DifficultyData, 2026-11-01).
+local function difficultyHealthMultiplier(enemyType: string?): number
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	if not dungeonService then
 		return 1
 	end
+	local scale = dungeonService:GetDifficultyScale()
 	-- The tier's multiplier x the floor's (DifficultyData's health growth).
-	return dungeonService:GetDifficultyScale().enemyHealth * dungeonService:GetFloorMultiplier("health")
+	local multiplier = scale.enemyHealth * dungeonService:GetFloorMultiplier("health")
+	if enemyType ~= EnemyTypes.Miniboss and enemyType ~= EnemyTypes.Boss then
+		multiplier *= scale.gruntHealth or 1
+	end
+	return multiplier
 end
 
 -- Health added per active player past the first, as a fraction of base
 -- (1 -> 0.5, 2026-10-30; see the header).
 local HEALTH_PER_EXTRA_PLAYER = 0.5
 
--- (1 + 0.5 x (active players - 1)) x difficulty x floor. `excluding` is a
--- player mid PlayerRemoving, still listed by Players:GetPlayers() while
--- its handlers run.
-function EnemyScalingService.GetHealthMultiplier(_self: typeof(EnemyScalingService), excluding: Player?): number
+-- (1 + 0.5 x (active players - 1)) x difficulty x floor, for a mob of
+-- `enemyType` (the model's EnemyType attribute; nil reads as a grunt).
+-- `excluding` is a player mid PlayerRemoving, still listed by
+-- Players:GetPlayers() while its handlers run.
+function EnemyScalingService.GetHealthMultiplier(
+	_self: typeof(EnemyScalingService),
+	excluding: Player?,
+	enemyType: string?
+): number
 	local extraPlayers = math.max(LifeService:GetActivePlayerCount(excluding) - 1, 0)
-	return (1 + HEALTH_PER_EXTRA_PLAYER * extraPlayers) * difficultyHealthMultiplier()
+	return (1 + HEALTH_PER_EXTRA_PLAYER * extraPlayers) * difficultyHealthMultiplier(enemyType)
+end
+
+-- The model's EnemyType stamp (MobBase, before ApplyToMob), or nil.
+local function enemyTypeOf(model: Model): string?
+	local value = model:GetAttribute(Attributes.EnemyType)
+	return if type(value) == "string" then value else nil
 end
 
 -- Spawn-time scaling. `baseHealth` is the MobData number (already
@@ -84,7 +103,7 @@ function EnemyScalingService.ApplyToMob(
 	humanoid: Humanoid,
 	baseHealth: number
 )
-	local multiplier = self:GetHealthMultiplier()
+	local multiplier = self:GetHealthMultiplier(nil, enemyTypeOf(model))
 	local scaled = baseHealth * multiplier
 
 	model:SetAttribute(Attributes.BaseMaxHealth, baseHealth)
@@ -100,6 +119,7 @@ end
 -- this multiplier are skipped, so a no-op trigger touches nothing.
 function EnemyScalingService.RescaleAll(self: typeof(EnemyScalingService), excluding: Player?)
 	local activePlayers = LifeService:GetActivePlayerCount(excluding)
+	-- Logged for the grunt case; each mob below gets its own.
 	local multiplier = self:GetHealthMultiplier(excluding)
 
 	local rescaled = 0
@@ -117,18 +137,19 @@ function EnemyScalingService.RescaleAll(self: typeof(EnemyScalingService), exclu
 			if not humanoid or humanoid.Health <= 0 then
 				continue
 			end
-			if model:GetAttribute(Attributes.HealthScaleMultiplier) == multiplier then
+			local mobMultiplier = self:GetHealthMultiplier(excluding, enemyTypeOf(model))
+			if model:GetAttribute(Attributes.HealthScaleMultiplier) == mobMultiplier then
 				continue
 			end
 
 			local oldMax = humanoid.MaxHealth
 			local fraction = if oldMax > 0 then humanoid.Health / oldMax else 1
-			local newMax = base * multiplier
+			local newMax = base * mobMultiplier
 			-- Never below 1 HP (a mob must not die of a rescale) and never
 			-- above the new maximum.
 			local newHealth = math.clamp(newMax * fraction, math.min(1, newMax), newMax)
 
-			model:SetAttribute(Attributes.HealthScaleMultiplier, multiplier)
+			model:SetAttribute(Attributes.HealthScaleMultiplier, mobMultiplier)
 			humanoid.MaxHealth = newMax
 			humanoid.Health = newHealth
 			rescaled += 1

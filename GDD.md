@@ -77,13 +77,15 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door between the first combat room and the boss, and a
   second rolls at 50% on another door, never back to back (for example C E C M E C B).
 - **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
-  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03); run Gold 125 / 250 / 500 / 1000 is 60% chests (75 /
-  150 / 300 / 600, split 40% miniboss chest / 60% boss chest) and 40% grunt drops (50 / 100 /
-  200 / 400, about 1 to 3 a kill on Easy and 6 to 9 on Nightmare, scaled from the old Gem rows);
+  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03); a run's whole Gold take, coins plus gear sales, is
+  125 / 250 / 500 / 1000; the coin part (45 / 100 / 230 / 515) is 60% chests (27 / 60 / 138 /
+  309, split 40% miniboss chest / 60% boss chest) and 40% grunt drops (18 / 40 / 92 / 206, under
+  1 a kill on Easy and 3 to 5 on Nightmare, scaled from the old Gem rows);
   Crystals 50 / 100 / 200 / 400 are per run from the two chests; the boss chest drops 1 / 2 / 3 /
   4 gear pieces and the miniboss 1; expected gear sales are 80 / 150 / 270 / 485 Gold, so a run's
-  Gold take is 205 / 400 / 770 / 1485 and Blacksmith prices follow (Gold halved and Crystals
-  doubled on 2026-11-01; prices are shares of the take, so they halved with it).
+  Gold take is 125 / 250 / 500 / 1000 and Blacksmith prices follow (Gold halved and Crystals
+  doubled on 2026-11-01, then the take set to that clean ladder after the first play-test;
+  prices are shares of the take, so they move with it).
 - **Gold sinks:** Blacksmith upgrades (half a run for a Common up to two runs for a Legendary,
   50% of it back on a sale) and **line rerolls** (one gear line becomes another stat from its slot's
   pool with a fresh roll, a quarter of a run of the item's level, flat). A hub gear merchant for
@@ -94,6 +96,10 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
 - The exit portal rises after the boss. Chest rewards all land on that one floor.
 - **Relic picks** come from the vending machines and the Cursed Shrine; the pick count and a
   Legendary pity are open tuning after the first test.
+- **Relic cap gate (2026-11-01):** at the relic cap the Sword in the Stone and the Cursed Shrine
+  refuse to open ("Reached Maximum Relics!", the vending pickup's pop and sound) and stay
+  available; drop a relic and come back. The server refuses the pull or bargain too, so no cost
+  is ever paid for nothing.
 - **Death, wipe or leaving before the clear ends the run.** Nothing picked up is lost: gear banks
   at pickup and the run's Gold and Arcane Crystals bank in full. Dying only costs the chests not
   yet opened. Lives: 1 on every tier. Gems no longer drop (no sink without the Merchant); grunts
@@ -114,7 +120,7 @@ except Death Venom.
 | Chill | 30% slow for 5s | Control. |
 | Poison | 15% of Power per second for 5s, target deals 10% less | DoT plus Weaken (10% on 2026-10-31, 15% since 2026-11-01). Death Venom (Skeletal Scythe) stacks to 3. |
 | Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
-| Fractured | The enemy shatters on death: 50% chance to drop an Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health Orb if its applier is under 90% Health, Mana Orb otherwise. No tick, no slow. |
+| Fractured | The enemy shatters on death: 50% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
 | Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
@@ -148,8 +154,9 @@ for a later rotation. Duos are shelved too until the pool is tested.
   at about +20% of gear DPS.
 - **NC / C.** Four relics per tree are **NC** (no condition). One is **C**, offered only once the
   player holds any relic of that tree, so no one is locked out of a tree on pick one.
-- **Roll:** pick a tree first (one ticket each, plus half a ticket per relic you already hold in
-  that tree, capped at two; Neutral stays at one), then a rarity (Rare 77 / Epic 18 / Legendary
+- **Roll:** pick a tree first (one ticket each, plus a quarter ticket for a tree you already hold
+  a relic in, capped at one and a quarter so your tree is never more than 20% of a slot; Neutral
+  stays at one), then a rarity (Rare 77 / Epic 18 / Legendary
   5), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
   Shop and the vending machines use one eligibility check (`IsRelicRollEligible`). A vending
   machine hand always holds at least one plain Neutral card: if none rolled, one random slot
@@ -170,41 +177,41 @@ for a later rotation. Duos are shelved too until the pool is tested.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Flaming Bo Staff | Rare | NC | Every 6th / 5th / 4th Melee hit (Daggers / Sword / Greatsword) is a guaranteed Critical Strike and Burns. |
-| Dragon's Flame Sword | Rare | NC | Every 3rd Melee swing fires a Flame Wave that deals 75% of the swing's damage and Burns. |
+| Flaming Bo Staff | Rare | NC | Every 5th / 4th / 3rd Melee swing (Daggers / Sword / Greatsword) is a guaranteed Critical Strike and Burns. (Swings counted, not mobs hit, since 2026-11-01.) |
+| Dragon's Flame Sword | Rare | NC | Every 4th / 3rd / 2nd Melee swing (Daggers / Sword / Greatsword) fires a Flame Wave that deals 75% of the swing's damage and Burns. |
 | Trick Or Trap | Epic | NC | Takedowns drop 1-3 Explosive Pumpkins that deal damage and Burn. |
-| Berserker's Claymore | Epic | NC | Your Critical Strikes on Burning enemies erupt in flames, dealing 100% of the hit to nearby enemies (nearest 3, 7 studs). |
-| Flame Ronin Katana | Legendary | C | Your Burns become Black Flame, doubling their damage. Critical Hits detonate the Black Flame, dealing the remaining Burn damage at once. |
+| Berserker's Claymore | Epic | NC | Your Critical Strikes erupt in flames, dealing 100% of the hit to nearby enemies (nearest 3, 7 studs). |
+| Flame Ronin Katana | Legendary | C | Your Burns become Black Flame. Critical Strikes detonate it. (Black Flame is Burn at double damage; the detonation deals the remaining Burn at once.) |
 
 **Frost** (Chill)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Frozen Blue Ice Crossbow | Rare | NC | Every 3rd Ranged hit fires an Ice Arrow that deals 75% of the hit's damage and Chills. |
+| Frozen Blue Ice Crossbow | Rare | NC | Every 4th Ranged hit fires an Ice Arrow that deals 75% of the hit's damage and Chills. |
 | Ice Breaker | Rare | C | Chilling a Chilled enemy Shatters them for damage. |
 | Ice Dragon Slayer | Epic | NC | A Frost Dragon follows you, firing icy blasts that deal damage and Chill. |
 | Icy Arctic Fowl | Epic | NC | Every 3s, fire ice shards at nearby enemies for damage. Chilled enemies take double damage. |
-| Staff of Azure Ever Ice | Legendary | NC | Spells leave a 12-stud Frost Zone that Chills and deals damage to enemies inside. |
+| Staff of Azure Ever Ice | Legendary | NC | Your Spells leave a Frost Zone that Chills and damages everything inside. (12 studs, 5 s, Chills every 2 s.) |
 
 **Venom** (Poison)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
 | Korblox Evil Eye | Rare | NC | Every 2nd Arcane Spell costs 50% less Mana and Poisons every enemy it hits. |
-| Witches Brew | Rare | NC | Every 5th Ranged shot lobs a Brewed Potion that leaves a Poison puddle. |
+| Witches Brew | Rare | NC | Every 5th Ranged hit lobs a Brewed Potion that leaves a Poison puddle. (Shots that land are counted.) |
 | Foul Poison Fowl | Epic | NC | Takedowns leave a Poison Cloud for 3s dealing damage each second. |
-| Skeletal Scythe | Epic | C | Your Poison becomes Death Venom, which is Poison that can stack up to 3 times. |
-| Zombie Bomb | Legendary | NC | Your Poison ticks have a 10% chance to spit Poison Goop at nearby enemies, dealing damage and Poisoning them (one spit per 0.5s). |
+| Skeletal Scythe | Epic | NC | Your Melee hits have a 30% chance to Poison. Your Poison becomes Death Venom, which stacks up to 3 times. (Venom's melee opener since 2026-11-01; Zombie Bomb is the tree's one C relic.) |
+| Zombie Bomb | Legendary | C | Your Poison spits Goop at nearby enemies, Poisoning them too. (10% per Poison tick, one spit per 0.5 s.) |
 
 **Storm** (Shock)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Katana | Rare | NC | After a Perfect Dodge, your next Arcane damage is a guaranteed Critical Strike and Shocks. |
+| Katana | Rare | NC | After a Perfect Dodge, your next Spell is a guaranteed Critical Strike on everything it hits, and Shocks them. (Every target the spell hits within 0.6 s of its first hit.) |
 | Sparkle Time Hoverboard | Rare | NC | Your Dodge becomes a lightning dash that deals damage and Shocks enemies you pass through. |
 | Deluxe Coil Gun | Epic | C | Your Shocks become Coil Shocked, making enemies take +20% more damage. |
 | Lightning Bolt Sword | Epic | NC | Your damage has a chance to chain lightning through nearby enemies, dealing damage and Shocking them. |
-| Lightning Horn of the Heavens | Legendary | NC | Your damage has a chance, and Critical Strikes always, to call down a lightning strike that Shocks and deals damage to nearby enemies. |
+| Lightning Horn of the Heavens | Legendary | NC | Your hits may call down Lightning that Shocks nearby enemies. Critical Strikes always do. (20% of hits, 50% of spell hits, one strike per 0.2 s.) |
 
 **Earth** (Fracture, the sustain tree since 2026-11-01)
 
@@ -216,11 +223,11 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| War Rocks | Rare | NC | Weapon hits have a 12 / 20 / 30% chance (Daggers / Sword / Greatsword; 20% ranged) to hurl a Boulder that deals damage and Fractures enemies near it. Boulders deal +50% to Fractured enemies. |
-| Earth Protection Orb | Rare | NC | Orbs when your bars are full, float around you (up to 5). They get used when your bars drop below 90%. (One a second, Health first. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
+| Golden Steampunk Gloves | Rare | NC | Every 4th / 3rd / 2nd Melee swing (Daggers / Sword / Greatsword) sends out a Shockwave that Fractures enemies for damage. (8 studs around the enemy the swing struck, or just ahead of you on a whiff; Power-scaled; swings counted since 2026-11-01.) |
+| Earth Protection Orb | Rare | NC | Orbs you pick up when your Mana and Health are full are preserved (up to 5). They are used when needed. (Stored when the matching bar is at 95% or above, since an orb heals 5%; spent one a second, Health first; stored orbs never expire and survive a respawn; nobody else can take them. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
 | Bundle of TNT | Epic | C | Collecting an Orb grants a 10% Shield for 5s. When it ends it explodes, dealing damage and Fracturing nearby enemies. |
 | Earth Summoning Horn | Epic | NC | Collecting an Orb sends out a shockwave that deals damage, and players within 15 studs gain the Orb's restore too. |
-| Golem's Hammer | Legendary | NC | Orbs restore double. In combat the earth quakes around you every 3s, dealing damage and Fracturing enemies. Fractured enemies take double damage from the quake. |
+| Golem's Hammer | Legendary | NC | Orbs restore double. In combat the earth quakes around you, Fracturing enemies. (Every 3 s, 12 studs; Fractured enemies take double from the quake.) |
 
 **Neutral** (all NC)
 
@@ -310,7 +317,7 @@ what each said when it was shelved, so the design is recoverable without digging
 | Storm | Rare | Static Shock Sheep | Your damage has a chance to apply Shock. (shelved 2026-11-01) |
 | Storm | Epic | Rubber Chicken Launcher | Ranged Critical Hits stick a static charge on the enemy. After 1.5s it detonates for 100% of the hit and Shocks nearby enemies. |
 | Earth | Rare | Cheezburger | Taking damage grants a 5% Barrier for 3s (once every 5s). |
-| Earth | Rare | Golden Steampunk Gloves | Your Weapon damage has a chance to grant you a +5% Shield. (shelved 2026-11-01) |
+| Earth | Rare | War Rocks | Weapon hits have a 12 / 20 / 30% chance to hurl a Boulder that Fractures enemies near it. (shelved 2026-11-01, Earth wanted a melee opener) |
 | Earth | Rare | Robloxian Battle Shield | Casting an Arcane Spell gives you a +10% Shield. (shelved 2026-11-01) |
 | Earth | Rare | Leland the Lolturtle | Your Stonebound gives its users +20% Damage Reduction. |
 | Earth | Rare | Riot Shield | Melee Weapon Damage has a 20% chance to grant Stonebound. |
@@ -457,7 +464,7 @@ Power still gates it.
   straight into an owned spell as rank XP at a worse rate than the chest's expected value.
   Crystals come from ore veins, chests, bosses and higher difficulties.
 - Selling gear refunds 50% of its Gold upgrade spend. Sales pay Gold only.
-- Run income per tier (Gold 205 / 400 / 770 / 1,485 across chests, grunt drops and gear sales;
+- Run income per tier (Gold 125 / 250 / 500 / 1,000 across chests, grunt drops and gear sales;
   Crystals 50 / 100 / 200 / 400) with treasure chests and pots as a 20% bonus on top.
 
 ## Arcane
@@ -507,9 +514,12 @@ Stonehorn Boar (melee), Rootfang Wolf (fast melee), Thornshot Shaman (ranged), R
 (tank), Briarhorn Caribou (support and healer). Readable silhouettes, stone, wood and foliage,
 restrained glowing runes.
 
-Tier scaling: mob health ×1.2 / 2.4 / 4.8 / 9.6 (×0.8 from 1.5 / 3 / 6 / 12 on 2026-10-31, the
-aura stat half having left every build) and damage ×1 / 1.47 / 1.68 / 2.14 by tier. A first-order
-re-solve; the survival sim reruns after the first play-test.
+Tier scaling: mob health ×1.5 / 3 / 6 / 12 (back to the 2026-10-30 ladder after a ×0.8 on
+2026-10-31), grunts (every mob but the Miniboss and Boss) a further ×2 on every tier, and damage
+×1.5 / 2.5 / 3.5 / 4.5 by tier (set by hand from 1 / 1.47 / 1.68 / 2.14). All from the first
+play-test, 2026-11-01: Hard with a Level 1 sword +4 cleared easily, grunt hits barely registered,
+the Miniboss and Boss felt right. Hard grunt now 1800 HP and a ~25 hit; a ~200 HP player dies in
+~8 grunt hits. The survival sim reruns next.
 
 ## Art and production
 
