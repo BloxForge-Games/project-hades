@@ -459,13 +459,14 @@ function DropService.Start(self: typeof(DropService))
 			--   * The dungeon's rewardScale (DungeonService.GetRewardScale:
 			--     +50% per dungeon tier; the difficulty's take is already in
 			--     the chest row).
-			--   (The Gold Find gear line left on 2026-11-01; Luck took its
-			--   slot and lives in the gear rarity roll instead.)
+			--   * Fortune gear lines (BonusStatData, 2026-11-02; Gold Find
+			--     until 2026-11-01): Coins only, never Crystals.
 			value = math.round(
 				value
 					* (1 + getRelicCoinBonus(player))
 					* getDragonLanternMultiplier(player)
 					* ArmorSetBonusService:GetCoinMultiplier(player)
+					* (1 + PlayerStatsService:GetGearStat(player, "Fortune"))
 					* difficultyMultiplier("gold")
 			)
 			-- Death economy: run coins go to the ESCROW, not the profile --

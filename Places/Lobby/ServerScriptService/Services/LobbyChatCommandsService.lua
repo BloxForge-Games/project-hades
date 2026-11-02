@@ -33,16 +33,20 @@
 	shop and the chests use, so the UI updates at once). Default 1000;
 	a negative amount takes Gold away, never below 0.
 
-	--- /gear [weapon|armor] [rarity] ---
+	--- /gear [kind] [rarity] [level] ---
 
 	Puts ONE random piece of gear in YOUR bag (2026-11-01), built the way a
 	dungeon drop is (GearDrop._buildInventoryEntry): a weapon always
 	carries an enchantment (rollWeaponEnchantment.pick) and every piece
-	rolls its gear lines for its rarity (rollBonusStats); the level is
-	yours, so it equips. Defaults: a weapon, at a rarity drawn from
-	Uncommon to Legendary so the lines always roll (ask for "common" to
-	get none). A weapon whose data pins a rarity keeps it. A fresh uuid
-	is not in profile.Seen, so the piece wears the bag's NEW tag.
+	rolls its gear lines for its rarity (rollBonusStats). The words come
+	in any order: a KIND (weapon, melee, gun / ranged, sword, greatsword,
+	daggers, smg / ar / lmg, armor), a RARITY by its start, and a LEVEL
+	(1 to MAX_SET_LEVEL); "/gear sword rare 1" is a level-1 Rare sword.
+	Defaults: a weapon, at a rarity drawn from Uncommon to Legendary so
+	the lines always roll (ask for "common" to get none), at your level.
+	A weapon whose data pins a rarity keeps it, and is skipped when a
+	different rarity was asked. A fresh uuid is not in profile.Seen, so
+	the piece wears the bag's NEW tag.
 
 	--- /bonusstat <StatKey percent | roll | clear> ---
 	--- /enchant <name | roll | clear> ---
@@ -98,6 +102,8 @@ local rollWeaponEnchantment =
 local ArmorPieceData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArmorPieceData)
 local MeleeWeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MeleeWeaponData)
 local RangedWeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RangedWeaponData)
+local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
+local RangedWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RangedWeaponTypes)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 
@@ -112,6 +118,24 @@ local GEAR_RARITIES: { string } = {
 }
 local GEAR_SCALAR_MIN = 0.5
 local GEAR_SCALAR_MAX = 1
+
+-- /gear's weapon kinds: the word a player types, and the weaponType
+-- values (MeleeWeaponTypes / RangedWeaponTypes) the catalogue entry must
+-- carry; an empty list = any weapon.
+local GEAR_KINDS: { [string]: { string } } = {
+	weapon = {},
+	melee = { MeleeWeaponTypes.Sword, MeleeWeaponTypes.Greatsword, MeleeWeaponTypes.Daggers },
+	gun = { RangedWeaponTypes.SubmachineGun, RangedWeaponTypes.AssaultRifle, RangedWeaponTypes.LightMachineGun },
+	sword = { MeleeWeaponTypes.Sword },
+	greatsword = { MeleeWeaponTypes.Greatsword },
+	daggers = { MeleeWeaponTypes.Daggers },
+	smg = { RangedWeaponTypes.SubmachineGun },
+	ar = { RangedWeaponTypes.AssaultRifle },
+	lmg = { RangedWeaponTypes.LightMachineGun },
+}
+GEAR_KINDS.ranged = GEAR_KINDS.gun
+GEAR_KINDS.dagger = GEAR_KINDS.daggers
+GEAR_KINDS.rifle = GEAR_KINDS.ar
 
 -- A rarity named by its start ("/gear epic", "/gear leg"), among the
 -- five that gear rolls.
@@ -430,8 +454,8 @@ COMMANDS = {
 		end,
 	},
 	gear = {
-		usage = "/gear [weapon|armor] [rarity]",
-		description = "Puts one random piece of gear in YOUR bag, built like a dungeon drop: a weapon always enchanted, gear lines rolled for its rarity (Uncommon to Legendary unless named), at your level.",
+		usage = "/gear [weapon|melee|gun|sword|greatsword|daggers|smg|ar|lmg|armor] [rarity] [level]",
+		description = "Puts one random piece of gear in YOUR bag, built like a dungeon drop: a weapon always enchanted, gear lines rolled for its rarity (Uncommon to Legendary unless named), at the level given or yours. Any word order: /gear sword rare 1.",
 		handler = function(player: Player, args: { string }): string?
 			local profile = DataService:GetProfileData(player)
 			if next(profile) == nil then
@@ -442,26 +466,50 @@ COMMANDS = {
 				return "Your profile has no inventory."
 			end
 
-			-- Any order: each word is a kind or a rarity.
+			-- Any order: each word is a kind, a rarity or a level.
 			local wantArmor = false
+			local weaponTypes: { string } = {}
 			local askedRarity: string? = nil
+			local askedLevel: number? = nil
 			for _, arg in args do
+				local level = tonumber(arg)
 				if arg == "armor" or arg == "armour" then
 					wantArmor = true
-				elseif arg == "weapon" then
+				elseif GEAR_KINDS[arg] then
 					wantArmor = false
+					weaponTypes = GEAR_KINDS[arg]
 				elseif matchRarity(arg) then
 					askedRarity = matchRarity(arg)
+				elseif level then
+					if level ~= math.floor(level) or level < 1 or level > MAX_SET_LEVEL then
+						return ("Level must be a whole number from 1 to %d."):format(MAX_SET_LEVEL)
+					end
+					askedLevel = level
 				else
-					return ("Unknown kind or rarity %q. Usage: /gear [weapon|armor] [rarity]"):format(arg)
+					return ("Unknown word %q. Usage: /gear [kind] [rarity] [level]"):format(arg)
 				end
 			end
 
-			local names = if wantArmor
+			-- The catalogue, narrowed to the asked weapon kind, and without
+			-- the rarity-pinned uniques when a different rarity was asked.
+			local names = {}
+			local candidates = if wantArmor
 				then catalogueNames(ArmorPieceData)
 				else catalogueNames(MeleeWeaponData, RangedWeaponData)
+			for _, candidate in candidates do
+				local entry = if wantArmor
+					then ArmorPieceData[candidate]
+					else (MeleeWeaponData[candidate] or RangedWeaponData[candidate])
+				local pinned = if type(entry) == "table" and type(entry.rarity) == "string" then entry.rarity else nil
+				local kindOk = #weaponTypes == 0
+					or (type(entry) == "table" and table.find(weaponTypes, entry.weaponType) ~= nil)
+				local rarityOk = pinned == nil or askedRarity == nil or pinned == askedRarity
+				if kindOk and rarityOk then
+					table.insert(names, candidate)
+				end
+			end
 			if #names == 0 then
-				return "No gear is authored."
+				return "No gear matches that."
 			end
 			local name = names[math.random(1, #names)]
 			local data = if wantArmor then ArmorPieceData[name] else (MeleeWeaponData[name] or RangedWeaponData[name])
@@ -477,7 +525,7 @@ COMMANDS = {
 				name = name,
 				enchantment = if wantArmor then EnchantmentNames.None else rollWeaponEnchantment.pick(nil),
 				rarity = rarity,
-				level = math.max(ExperienceService:GetLevel(player), 1),
+				level = askedLevel or math.max(ExperienceService:GetLevel(player), 1),
 				upgrades = 0,
 				scalarMultiplier = math.round(
 					(GEAR_SCALAR_MIN + math.random() * (GEAR_SCALAR_MAX - GEAR_SCALAR_MIN)) * 100
@@ -559,16 +607,12 @@ COMMANDS = {
 			end
 			local key = nil
 			for _, row in BonusStatData.Order do
-				if string.lower(row.key) == first and row.slot == "Weapon" then
+				if string.lower(row.key) == first then
 					key = row.key
 				end
 			end
 			if not key then
-				local keys = {}
-				for _, k in BonusStatData.BySlot.Weapon do
-					table.insert(keys, k)
-				end
-				return "Unknown weapon line. Keys: " .. table.concat(keys, ", ")
+				return "Unknown line. Keys: " .. table.concat(BonusStatData.Pool, ", ")
 			end
 			local percent = tonumber(args[2])
 			if not percent then

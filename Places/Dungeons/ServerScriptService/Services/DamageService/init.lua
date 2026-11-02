@@ -408,9 +408,11 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Slateskin Potion"]) or 1)
 	end
 
-	-- Gear lines (BonusStatData "DamageReduction"): the worn armor's summed
-	-- fraction, one multiplier.
+	-- Gear lines (BonusStatData "DamageReduction"): the worn gear's summed
+	-- fraction, one multiplier; the Stonebound enchantment's reduction
+	-- (EnchantmentData, 2026-11-02; both slots add) is another.
 	damage = damage * (1 - PlayerStatsService:GetGearStat(player, "DamageReduction"))
+	damage = damage * (1 - PlayerStatsService:GetEnchantmentStat(player, "DamageReduction"))
 
 	-- Stonebound: its damage reduction (plus the owner's Leland rider), read
 	-- straight off the marker's replicated payload.
@@ -1260,8 +1262,8 @@ end
 
 -- GEAR in the ADDITIVE pool (2026-10-31), beside the relic modules: the
 -- weapon enchantments and the gear lines (BonusStatData).
---   Weapon lane: Enflamed and the Weapon Damage lines of the weapon that
---   landed the hit (the melee or the gun slot).
+--   Weapon lane: Enflamed and the Weapon Damage lines on any worn piece
+--   (one pool since 2026-11-02; they used to belong to the hitting weapon).
 --   Arcane lane: Frostburst and the Arcane Damage lines while equipped.
 -- A spell Sword of the Epicredness made Weapon Damage is neither weapon's
 -- hit; a shot Orinthian made Arcane reads as a spell here (isMagic already
@@ -1271,7 +1273,6 @@ function DamageService._gearDamageBonus(
 	player: Player,
 	damage: number,
 	isMagic: boolean,
-	isMelee: boolean,
 	isConvertedSpell: boolean
 ): number
 	-- Enchantment stats (2026-11-01 rules): always on from both equipped
@@ -1282,9 +1283,30 @@ function DamageService._gearDamageBonus(
 		fraction += PlayerStatsService:GetGearStat(player, "ArcaneDamage")
 	elseif not isConvertedSpell then
 		fraction += PlayerStatsService:GetEnchantmentStat(player, "WeaponDamage")
-		fraction += PlayerStatsService:GetWeaponLineDamage(player, isMelee)
+		fraction += PlayerStatsService:GetGearStat(player, "WeaponDamage")
 	end
 	return damage * fraction
+end
+
+-- Boss Damage lines (BonusStatData, 2026-11-02): against the mob spawned
+-- as the floor's miniboss or boss (the spawn-side IsBoss / IsMiniboss
+-- flags, like the reward chest), in the same additive pool. Returns BONUS
+-- damage, like the modules.
+function DamageService._bossDamageBonus(
+	_self: typeof(DamageService),
+	player: Player,
+	damage: number,
+	targetModel: Instance?
+): number
+	if typeof(targetModel) ~= "Instance" then
+		return 0
+	end
+	local isBoss = targetModel:GetAttribute(Attributes.IsBoss) == true
+		or targetModel:GetAttribute(Attributes.IsMiniBoss) == true
+	if not isBoss then
+		return 0
+	end
+	return damage * PlayerStatsService:GetGearStat(player, "BossDamage")
 end
 
 function DamageService.TakeDamage(
@@ -1446,7 +1468,8 @@ function DamageService.TakeDamage(
 	-- Gear: the weapon enchantments (Enflamed / Frostburst) and the damage
 	-- lines, additive like the set bonus and typed the same way.
 	if not untypedOnly then
-		totalDamage += self:_gearDamageBonus(player, damage, isMagic == true, isMelee == true, isConvertedSpell == true)
+		totalDamage += self:_gearDamageBonus(player, damage, isMagic == true, isConvertedSpell == true)
+		totalDamage += self:_bossDamageBonus(player, damage, targetModel)
 	end
 
 	do

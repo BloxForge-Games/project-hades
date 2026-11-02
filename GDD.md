@@ -85,9 +85,11 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   Gold take is 205 / 400 / 770 / 1485 and Blacksmith prices follow (Gold halved and Crystals
   doubled on 2026-11-01; prices are shares of the take, so they halved with it).
 - **Gold sinks:** Blacksmith upgrades (half a run for a Common up to two runs for a Legendary,
-  50% of it back on a sale) and **line rerolls** (one gear line becomes another stat from its slot's
-  pool with a fresh roll, a quarter of a run of the item's level, flat). A hub gear merchant for
-  Gold is specced separately.
+  50% of it back on a sale) and **line rerolls** (one gear line becomes another stat from the
+  pool with a fresh roll, a quarter of a run of the item's level, flat). Artix's shop (Docs/HubGearMerchant.md,
+  built 2026-11-01) sells four pieces rolled like drops at the player's tier for Gold, restocked
+  every hour (after every run and daily until 2026-11-02); a reroll of the unsold shelves costs
+  10 Arcane Crystals.
 - **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
   add the Coffin and the Cursed Shrine; Nightmare adds the Sword in the Stone. The Merchant Shop
   is out of the pool (its code stays).
@@ -123,10 +125,10 @@ except Death Venom.
 - Every status lasts 5s; a reapply refreshes the timer. Melted (Burning + Poisoned) makes DoTs
   tick twice as fast. Petrified (Medusa, shelved) is a stun on the same 5s.
   Neither increases damage taken.
-- **Crit** is 10% base (5% before 2026-11-01), 1.75x damage. The Critical Chance gear line rolls 5
-  to 12 points per weapon and Stormcharged adds 10 per weapon. Every tree has a guaranteed crit
-  somewhere (the Bo Staff's rhythm, the Katana's dodge, the Horn's strike on crits), so the
-  Critical Damage line is worth chasing.
+- **Crit** is 10% base (5% before 2026-11-01), 1.75x damage. The Critical Hit Chance gear line
+  rolls 3 to 7 points per piece (25 at most from lines) and Stormcharged adds 10 per weapon. Every
+  tree has a guaranteed crit somewhere (the Bo Staff's rhythm, the Katana's dodge, the Horn's
+  strike on crits), so the Critical Damage line is worth chasing.
 
 ## Relics
 
@@ -392,7 +394,7 @@ no enchantment opener; their statuses come from relics. The stored ids keep the 
 | Frostbite (id Frostburst) | +15% Arcane Damage | +30% | 20% Chill |
 | Stormcharged | +10 Critical Chance | +20 | 20% Shock |
 | Corrosion (id Blight) | +20% Status Damage (every Burn, Poison, Black Flame and Death Venom tick) | +40% | 20% Poison |
-| Stonebound | +20% Orb Potency (shares the line's 100% cap) | +40% | 20% Fracture |
+| Stonebound | +15% Damage Reduction | +30% | 20% Fracture |
 
 Why these sizes: two Frostbite is the strongest pure-mage pair at +30%, but Frostbite plus
 Stormcharged lands close behind through crit synergies in three trees, so it is a preference and
@@ -410,37 +412,46 @@ not a lock. If a single pair becomes the rule, the fix is one number, not a new 
   damage and have a 20% chance to Burn."
 - **Test commands:** `/enchant <name | roll | clear>` and `/bonusstat <StatKey percent | roll |
   clear>` on the primary weapon, in the hub and the dungeon.
-- Looter is gone. Saved Looter weapons became unenchanted (profile v4). The Gold Find and Dodge
-  Recovery lines left on 2026-11-01 (Luck took the slot); saved lines with those keys are
-  ignored and reroll away.
+- Looter is gone. Saved Looter weapons became unenchanted (profile v4).
 
 ### Gear lines (bonus stats)
 
 Secondary stats rolled into a weapon or armor piece. Like enchantments they never touch the shown
-Damage / Health or Power; they change the hit, the heal or the cooldown. Spells roll none.
+Damage / Health or Power; they change the hit, the heal or the cooldown. Spells roll none. Relics
+never add a percentage to the player, so lines are the only flat stats in the game.
 
+- **One pool (2026-11-02).** Every stat rolls on every piece, weapon or armor. Every line is
+  yours while the piece is worn, Weapon Damage included (it belonged to the hitting weapon
+  before).
 - **Count by rarity:** Common 0, Uncommon 1, Rare 1, Epic 2, Legendary 3. A full Legendary set is
-  15 lines; mid-game is 5 to 8.
+  15 lines over 5 pieces; mid-game is 5 to 8.
 - **Roll:** uniform inside the range, independent of Quality. Never two of the same stat on one
-  item; the same stat on different items sums. Reroll at the Blacksmith for Gold is still to come.
-- **Weapons roll offence, armor rolls defence and casting.** Weapon Damage lines belong to the
-  weapon that landed the hit, like Enflamed; every other line is yours while the piece is worn.
+  item; the same stat on different items sums, up to its cap.
+- **Caps are about four top rolls.** Five pieces are worn, so a stat can sit on five items; the
+  fifth copy is wasted, so a set that chases one stat on every piece is no better than one that
+  spreads. At the caps a pure-offence set is about +80% damage on grunts and +150% on bosses, a
+  pure-defence set about +60% effective health: a little under one tier, so lines decide how
+  comfortable a tier feels while Power still gates it. Line rerolls at the Blacksmith pull from
+  the same pool.
 
-| Weapon line | Range | Armor line | Range |
+| Line | Range | Cap | Reads |
 |---|---|---|---|
-| Weapon Damage | +4 to 10% | Health | +4 to 10% |
-| Arcane Damage | +5 to 12% | Damage Reduction | +2 to 5% |
-| Critical Chance | +5 to 12 pts | Movement Speed | +2 to 5% |
-| Critical Damage | +10 to 25% | Cooldown Reduction | +3 to 8% (cap 40%) |
-| Status Chance | +3 to 8 pts | Mana Cost Reduction | +3 to 8% (cap 40%) |
-| | | Mana Regen | +5 to 15% |
-| | | Orb Potency | +10 to 25% (cap 100%) |
-| | | Luck | +5 to 15% (cap 60%): every rarity above Common is that much more likely on gear drops |
+| Weapon Damage | +3 to 8% | 30% | every weapon hit |
+| Arcane Damage | +3 to 8% | 30% | spells |
+| Critical Hit Chance | +3 to 7 pts | 25 pts | on the 10 base |
+| Critical Damage | +8 to 20% | 60% | on the 1.75x base |
+| Boss Damage | +5 to 12% | 40% | hits on the floor's miniboss or boss |
+| Health | +4 to 8% | 30% | max health |
+| Damage Reduction | +2 to 5% | 20% | every hit taken |
+| Movement Speed | +2 to 5% | 15% | base walkspeed |
+| Cooldown Reduction | +3 to 8% | 30% | spell cooldowns |
+| Mana Regen | +5 to 15% | 60% | the passive tick |
+| Luck | +5 to 15% | 60% | every rarity above Common is that much more likely on gear drops |
+| Fortune | +5 to 15% | 60% | run Gold (Coins), never Crystals |
 
 Every reduction together (Slateskin, Stonebound, lines, set bonus, shrine) caps at 75% of a hit.
-A perfect 15-line Legendary set with Enflamed is about +85% weapon output and +50% effective
-health over no lines: a little under one tier, so lines decide how comfortable a tier feels while
-Power still gates it.
+Status Chance, Mana Cost Reduction, Orb Potency, Gold Find and Dodge Recovery left the pool
+(2026-11-01 and 11-02); saved lines with those keys are ignored and reroll away.
 
 - **Post-launch, after the first test:**
   - **A Staff weapon type** whose mana-free bolt deals Arcane Damage, so a mage's Power is their
