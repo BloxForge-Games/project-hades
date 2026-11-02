@@ -128,7 +128,7 @@ except Death Venom.
 | Chill | 30% slow for 5s | Control. |
 | Poison | 15% of Power per second for 5s, target deals 10% less | DoT plus Weaken (10% on 2026-10-31, 15% since 2026-11-01). Death Venom (Skeletal Scythe) stacks to 3. |
 | Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
-| Fractured | The enemy shatters on death: 75% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
+| Fractured | The enemy shatters on death: 50% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
 | Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
@@ -164,8 +164,8 @@ for a later rotation. Duos are shelved too until the pool is tested.
   player holds any relic of that tree, so no one is locked out of a tree on pick one.
 - **Roll:** pick a tree first (one ticket each, plus a quarter ticket for a tree you already hold
   a relic in, capped at one and a quarter so your tree is never more than 20% of a slot; Neutral
-  stays at one), then a rarity (Rare 77 / Epic 18 / Legendary
-  5), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
+  stays at one), then a rarity (Rare 80 / Epic 17 / Legendary
+  3), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
   Shop and the vending machines use one eligibility check (`IsRelicRollEligible`). A vending
   machine hand always holds at least one plain Neutral card: if none rolled, one random slot
   (never a starter-guaranteed one) swaps its card for a Neutral pick, and Cursed does not count.
@@ -251,7 +251,7 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 | Super Stomp Boots | Rare | Your Dodge ends with a Ground Stomp that deals damage. |
 | Korblox Mage Staff | Epic | Every 3rd Arcane Spell you cast costs no Mana and resets its cooldown. |
 | Midnight Sword | Epic | Your Weapon damage restores 2% of your Mana. |
-| Volleyball | Epic | Every 3rd Ranged hit spikes a Volleyball that deals damage. |
+| Volleyball | Epic | Every 3rd Ranged hit spikes a Volleyball for 100% of the hit's damage. (A share of the shot since 2026-11-02; 2x Power before, which scaled with fire rate.) |
 | Magenta Paintball Gun | Epic | Your Ranged damage has a chance to Paint. Painted enemies take +20% Arcane Damage. |
 | Portable Justice | Epic | Your damage has a chance to Jail enemies for 3s. |
 | Ban Hammer | Legendary | Enemies below 20% health are executed by a falling Ban Hammer that deals damage. |
@@ -413,16 +413,17 @@ Why these sizes: two Frostbite is the strongest pure-mage pair at +30%, but Fros
 Stormcharged lands close behind through crit synergies in three trees, so it is a preference and
 not a lock. If a single pair becomes the rule, the fix is one number, not a new stacking rule.
 
-- **Roll on drop** by rarity: Common 0%, Uncommon 5%, Rare 10%, Epic 25%, Legendary 60%; which
-  one is uniform over the live pool: Enflamed, Frostbite, Stormcharged, Corrosion. Stonebound is
-  built and works on a weapon that has one; it joins the pool with the Earth tree's look.
+- **Roll on drop:** Rare, Epic and Legendary weapons each have a flat 5% chance (2026-11-02;
+  0 / 5 / 10 / 25 / 60% by rarity before); Common and Uncommon never. Which one is uniform over
+  the pool: Enflamed, Frostbite, Stormcharged, Corrosion, Stonebound.
 - An enchantment is what the weapon dropped with: the Blacksmith's Imbue left on 2026-11-02.
 - **Look:** weapon particles per enchantment are Studio work (the code-cloned status rigs were
   taken off on 2026-11-01 to make room for authored ones). Hovering the Enchantment row in the
   bag shows a tooltip with the enchantment's sentence, for example "Your weapon hits deal +10%
   damage and have a 20% chance to Burn."
 - **Test commands:** `/enchant <name | roll | clear>` and `/bonusstat <StatKey percent | roll |
-  clear>` on the primary weapon, in the hub and the dungeon.
+  clear>` on the primary weapon, in the hub and the dungeon; `/gear` in the hub puts an always
+  enchanted weapon in the bag.
 - Looter is gone. Saved Looter weapons became unenchanted (profile v4).
 
 ### Gear lines (bonus stats)
@@ -549,12 +550,17 @@ Stonehorn Boar (melee), Rootfang Wolf (fast melee), Thornshot Shaman (ranged), R
 (tank), Briarhorn Caribou (support and healer). Readable silhouettes, stone, wood and foliage,
 restrained glowing runes.
 
-Tier scaling (2026-11-02): regular mobs scale per archetype so a tier-matched Common sword at
-median quality kills in a fixed swing count. Easy health is the base row (grunt 175, Elite /
-Support 210, Tank 285) and the ladders are grunt ×1 / 2.25 / 4.2 / 6.8, elite ×1 / 2.1 / 3.9 / 6.2,
-tank ×1 / 2 / 3.5 / 5.4, giving grunt / elite / tank swings of 5 / 6 / 8 on Easy, 7 / 8 / 10 on
-Normal, 9 / 10 / 12 on Hard and 11 / 12 / 14 on Nightmare (Level 1 / 5 / 10 / 15 swords). The
-Miniboss (1250) and Boss (2500) ride ×1 / 3 / 6 / 12. Damage ×0.9 / 2.5 / 3.5 / 4.5 by tier; base
+Runic Executioner, Hard and up (2026-11-02): **Tidal Requiem**, first 2 to 5 s into the fight, then every 25 to 35 s. He leaps to
+the arena's centre, untargetable, and the floor splits into 10-stud lanes; Water Dragon strips
+sweep the odd lanes, then the even, then the odd (1.4 s first flash, then 1 s apart), 8 base
+damage a hit.
+
+Tier scaling (2026-11-02): one health ladder for every mob, ×1 / 3 / 9 / 15 (Easy, Normal, Hard,
+Nightmare), on base rows grunt 175, Elite / Support 210, Tank 285, Miniboss 1250, Boss 2500. The
+per-archetype swing-count ladder of that morning was replaced after Hard and Nightmare played too
+soft; with a tier-matched Common sword at median quality, grunt / elite / tank now take about
+5 / 6 / 8 swings on Easy, 9 / 11 / 15 on Normal, 19 / 22 / 30 on Hard and 24 / 28 / 38 on
+Nightmare. Damage ×0.75 / 2 / 4 / 6 by tier; base
 hits grunts 5, Tank 6, Miniboss Cleave 8 / Ambush 9 / Water Dragon 10 / Shark Barrage 10. All from the first
 play-test, 2026-11-01: Hard with a Level 1 sword +4 cleared easily, grunt hits barely registered,
 the Miniboss and Boss felt right. Hard grunt now 1800 HP and a ~25 hit; a ~200 HP player dies in

@@ -241,6 +241,11 @@ type AttackPoolEntry = {
 	-- never in the pick; fired on their own clock (nextAutoAt) while the
 	-- mob is in a fight, at the farthest player when `targetFarthest`.
 	autoEvery: { number }?,
+	-- MobData `autoFirst` = { min, max } (2026-11-02): the FIRST firing,
+	-- counted from the moment the fight starts (the first auto check with
+	-- a target), instead of autoEvery from spawn.
+	autoFirst: { number }?,
+	firstArmed: boolean,
 	targetFarthest: boolean?,
 	nextAutoAt: number,
 }
@@ -264,9 +269,14 @@ local function poolEntry(kind: string, attack: any, genericIndex: number?): Atta
 		readyAt = GameClock.Now() + (attack.cooldown or 0) * 0.5,
 		weight = attack.weight or 1,
 		autoEvery = attack.autoEvery,
+		autoFirst = attack.autoFirst,
+		firstArmed = false,
 		targetFarthest = attack.targetFarthest,
-		nextAutoAt = if attack.autoEvery
-			then GameClock.Now() + attack.autoEvery[1] + math.random() * (attack.autoEvery[2] - attack.autoEvery[1])
+		nextAutoAt = if attack.autoFirst
+			then math.huge
+			elseif attack.autoEvery then GameClock.Now()
+				+ attack.autoEvery[1]
+				+ math.random() * (attack.autoEvery[2] - attack.autoEvery[1])
 			else math.huge,
 	}
 end
@@ -1392,6 +1402,12 @@ end
 function MobBase._tryAutoAttack(self: MobBase): boolean
 	local now = GameClock.Now()
 	for _, entry in self._attackPool do
+		-- autoFirst: arm the first firing when the fight starts.
+		if entry.autoFirst and not entry.firstArmed and self._currentTarget then
+			entry.firstArmed = true
+			local first = entry.autoFirst :: { number }
+			entry.nextAutoAt = now + first[1] + math.random() * (first[2] - first[1])
+		end
 		if not entry.autoEvery or now < entry.nextAutoAt then
 			continue
 		end

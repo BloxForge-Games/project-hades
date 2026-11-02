@@ -1,7 +1,7 @@
 --!strict
--- Volleyball (2026-10-31 shape): every data.spikeEvery-th gun shot that
+-- Volleyball (2026-11-02 shape): every data.spikeEvery-th gun shot that
 -- lands drops a Volleyball on the target a beat later, for
--- data.powerMultiple x the owner's Power on the UNIVERSAL relic lane
+-- data.shotShare of that shot's damage on the UNIVERSAL relic lane
 -- (DamageService:TakeDamage with isRelicSourced: variance, Shock, Blight,
 -- Abyss, never weapon lines, never a crit). Returns 0 to the additive
 -- pool: the spike is its own hit now, not a share of the shot.
@@ -17,7 +17,6 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local computePower = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.computePower)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type RelicSnapshot = DamageService.RelicSnapshot
@@ -28,12 +27,6 @@ local function volleyballData(key: string, default: number): number
 	local row = RelicData[RelicNames["Volleyball"]]
 	local value = row and row.data and row.data[key]
 	return if typeof(value) == "number" then value else default
-end
-
--- The owner's Power (PlayerStatsService stamps it), the reference before.
-local function powerOf(player: Player): number
-	local power = player:GetAttribute(Attributes.Power)
-	return if typeof(power) == "number" and power > 0 then power else computePower.REFERENCE_POWER
 end
 
 -- PRIVATE ranged-only hit counter. The orchestrator used to hand every
@@ -52,7 +45,7 @@ Players.PlayerRemoving:Connect(function(player: Player)
 	rangedHitCounts[player.UserId] = nil
 end)
 
-return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, _damage: number, isGunShot: boolean)
+return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, damage: number, isGunShot: boolean)
 	-- Ranged WEAPON attacks only: the orchestrator passes isGunShot (true
 	-- for a bullet, Orinthian-converted or not; false for melee, spells and
 	-- Epicredness-converted spells), so nothing else can advance the count.
@@ -64,12 +57,12 @@ return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, _da
 		return 0
 	end
 
-	-- Every spikeEvery-th RANGED hit spikes, for a multiple of Power.
+	-- Every spikeEvery-th RANGED hit spikes, for a share of that shot.
 	local rangedCount = (rangedHitCounts[player.UserId] or 0) + 1
 	rangedHitCounts[player.UserId] = rangedCount
 
 	if rangedCount % volleyballData("spikeEvery", 3) == 0 then
-		local spikeDamage = math.round(powerOf(player) * volleyballData("powerMultiple", 2))
+		local spikeDamage = math.max(math.round(damage * volleyballData("shotShare", 1)), 1)
 
 		RelicNetwork.VolleyballEffect.FireAll({
 			Character = player.Character,
