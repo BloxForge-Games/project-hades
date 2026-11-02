@@ -16,6 +16,7 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local helpers = {}
 
@@ -115,7 +116,7 @@ function helpers.fx(
 		To = to or from,
 		Radius = radius or 0,
 		Duration = duration or 0,
-		StartTime = workspace:GetServerTimeNow(),
+		StartTime = GameClock.Now(),
 	})
 end
 
@@ -147,7 +148,8 @@ end
 function helpers.sweep(start: Vector3, look: Vector3, speed: number, range: number, onStep: (position: Vector3) -> ())
 	local travelled = 0
 	local connection: RBXScriptConnection
-	connection = RunService.Heartbeat:Connect(function(dt: number)
+	connection = RunService.Heartbeat:Connect(function(realDt: number)
+		local dt = GameClock.Dt(realDt)
 		travelled = math.min(travelled + speed * dt, range)
 		onStep(start + look * travelled)
 		if travelled >= range then

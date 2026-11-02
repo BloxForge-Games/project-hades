@@ -19,6 +19,7 @@ local PlayerStateController = require(ReplicatedStorage.Controllers.PlayerStateC
 local CastModeController = require(ReplicatedStorage.Controllers.CastModeController)
 local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DataController)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local player: Player = Players.LocalPlayer
 local mouse: Mouse = player:GetMouse()
@@ -195,7 +196,7 @@ function AimController._isTrackingCursor(self: typeof(AimController)): boolean
 	if next(self._aimHolds) ~= nil then
 		return true
 	end
-	if os.clock() < self._cursorLingerUntil then
+	if GameClock.Now() < self._cursorLingerUntil then
 		return true
 	end
 	return CastModeController ~= nil and CastModeController:IsAiming() == true
@@ -212,7 +213,7 @@ function AimController._keyboardMouseUpdate(self: typeof(AimController))
 	if
 		character:GetAttribute(Attributes.IsDodging) == true
 		or character:GetAttribute(Attributes.ArcaneEnabled) == true
-		or os.clock() < self._castLockUntil
+		or GameClock.Now() < self._castLockUntil
 	then
 		humanoid.AutoRotate = false
 		return
@@ -300,7 +301,7 @@ function AimController.BeginCastLock(self: typeof(AimController), seconds: numbe
 	end
 
 	local duration = math.max(seconds or 0, CAST_LOCK_MIN_SECONDS)
-	self._castLockUntil = math.max(self._castLockUntil, os.clock() + duration)
+	self._castLockUntil = math.max(self._castLockUntil, GameClock.Now() + duration)
 end
 
 -- PC: while `key` is held the facing tracks the cursor. Keyed so a held
@@ -348,7 +349,7 @@ function AimController.RequestCursorFacing(self: typeof(AimController))
 	if not self:_isTrackingCursor() then
 		self:SnapFacingToCursor()
 	end
-	self._cursorLingerUntil = math.max(self._cursorLingerUntil, os.clock() + PC_CURSOR_LINGER_SECONDS)
+	self._cursorLingerUntil = math.max(self._cursorLingerUntil, GameClock.Now() + PC_CURSOR_LINGER_SECONDS)
 end
 
 function AimController._mobileUpdate(self: typeof(AimController))
@@ -366,7 +367,7 @@ function AimController._mobileUpdate(self: typeof(AimController))
 	-- Cast lock (BeginCastLock), the same one the keyboard loop honours:
 	-- the heading is pinned for the cast so the server's hitbox matches
 	-- what the player aimed. Was the SkillshotDelay attribute.
-	if os.clock() < self._castLockUntil then
+	if GameClock.Now() < self._castLockUntil then
 		humanoid.AutoRotate = false
 		return
 	end
@@ -386,7 +387,7 @@ function AimController._mobileUpdate(self: typeof(AimController))
 		-- Nothing steering: hand rotation back to the humanoid — unless a
 		-- weapon-stick release hold is still running, in which case keep
 		-- the current facing (see HoldFacing).
-		humanoid.AutoRotate = os.clock() >= self._facingHoldUntil
+		humanoid.AutoRotate = GameClock.Now() >= self._facingHoldUntil
 
 		return
 	end
@@ -647,7 +648,7 @@ end
 -- by AimThumbstick on TouchEnded after a TAP / HOLD release only (not after
 -- a drag). Rolling: never shortens a hold already running.
 function AimController.HoldFacing(self: typeof(AimController), seconds: number?)
-	local until_ = os.clock() + (seconds or WEAPON_RELEASE_FACING_HOLD_SECONDS)
+	local until_ = GameClock.Now() + (seconds or WEAPON_RELEASE_FACING_HOLD_SECONDS)
 	if until_ > self._facingHoldUntil then
 		self._facingHoldUntil = until_
 	end

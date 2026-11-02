@@ -60,6 +60,7 @@ local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions
 local onHitboxDamage = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Hitbox.onHitboxDamage)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Types ]--
 
@@ -239,7 +240,7 @@ function MobDeath.TrackAssists(model: Model, humanoid: Humanoid, assists: { [str
 	local function creditCurrentAttacker()
 		local slainBy = model:GetAttribute(Attributes.SlainBy)
 		if type(slainBy) == "string" and slainBy ~= "" then
-			assists[slainBy] = os.clock()
+			assists[slainBy] = GameClock.Now()
 		end
 	end
 
@@ -260,7 +261,7 @@ end
 -- ASSIST_WINDOW_SECONDS).
 function MobDeath.AssistedRecently(assists: { [string]: number }, name: string): boolean
 	local lastHitAt = assists[name]
-	return lastHitAt ~= nil and (os.clock() - lastHitAt) <= ASSIST_WINDOW_SECONDS
+	return lastHitAt ~= nil and (GameClock.Now() - lastHitAt) <= ASSIST_WINDOW_SECONDS
 end
 
 --[ Kill credit ]--
@@ -325,19 +326,19 @@ local function lobBombs(context: Context, player: Player, spec: BombSpec)
 			RelicNetwork.ThrownRelicLaunched.FireAll({
 				Position = origin,
 				TargetPosition = targetCFrame.Position,
-				StartTime = workspace:GetServerTimeNow(),
+				StartTime = GameClock.Now(),
 				Duration = BOMB_FLIGHT_SECONDS,
 				ArcaneName = arcaneName,
 				RelicName = spec.relicName,
 			})
 
-			task.delay(BOMB_FLIGHT_SECONDS + BOMB_DETONATION_MARGIN_SECONDS, function()
+			GameClock.Delay(BOMB_FLIGHT_SECONDS + BOMB_DETONATION_MARGIN_SECONDS, function()
 				-- Slot released FIRST, before the blast: this bomb is detonating,
 				-- so its slot is spent either way, and a hitbox that ERRORS must
 				-- never strand it — the counter is server-wide and nothing ever
 				-- resets it, so a leaked slot would starve the relic for the life
 				-- of the server.
-				task.delay(BOMB_SLOT_LINGER_SECONDS, function()
+				GameClock.Delay(BOMB_SLOT_LINGER_SECONDS, function()
 					RelicService:SetRelicLimitRegistry(
 						spec.relicName,
 						(RelicService:GetRelicLimitRegistry(spec.relicName) or 0) - 1
@@ -410,14 +411,14 @@ local function runPoisonCloud(context: Context, player: Player)
 	task.spawn(function()
 		local elapsed = 0
 		while elapsed < MOB_BOMB_CLOUD_DURATION do
-			task.wait(MOB_BOMB_CLOUD_TICK_SECONDS)
+			GameClock.Wait(MOB_BOMB_CLOUD_TICK_SECONDS)
 			elapsed += MOB_BOMB_CLOUD_TICK_SECONDS
 
 			-- Relic damage breaks breakables too.
 			Breakable.HitInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, player)
 			forEachEnemyInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
 				-- One tick per mob per interval across every cloud (above).
-				local now = os.clock()
+				local now = GameClock.Now()
 				local lastTick = cloudTickedAt[model]
 				if lastTick and now - lastTick < MOB_BOMB_CLOUD_TICK_SECONDS * 0.9 then
 					return
@@ -444,7 +445,7 @@ local function runPoisonCloud(context: Context, player: Player)
 					emitter.Enabled = false
 				end
 			end
-			task.delay(MOB_BOMB_CLOUD_FADE_SECONDS, function()
+			GameClock.Delay(MOB_BOMB_CLOUD_FADE_SECONDS, function()
 				cloud:Destroy()
 			end)
 		end
@@ -615,7 +616,7 @@ function MobDeath.RunTakedownRewards(context: Context, killer: Player?)
 	-- The killing blow always counts, even if its HealthChanged credit
 	-- raced the death.
 	if killer then
-		context.assists[killer.Name] = os.clock()
+		context.assists[killer.Name] = GameClock.Now()
 	end
 
 	for name in context.assists do

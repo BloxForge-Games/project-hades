@@ -49,6 +49,7 @@ local Blighted = require(script.AuraServer.Blighted)
 local Stonebound = require(script.AuraServer.Stonebound)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local AuraService = {
 	Name = "AuraService",
@@ -235,7 +236,7 @@ function AuraService.ExtendAura(_self: typeof(AuraService), character: Model, au
 		return
 	end
 	local config = AuraData[auraName]
-	local now = os.clock()
+	local now = GameClock.Now()
 	local current = (marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or now
 	local ceiling = now + ((config and config.duration) or seconds)
 	marker:SetAttribute(EXPIRY_ATTRIBUTE, math.min(current + seconds, math.max(ceiling, current)))
@@ -313,7 +314,7 @@ function AuraService.SetAura(
 	-- identical text over the head every few hits. Each aura module fires
 	-- the pop itself on the fresh-grant path.
 	if marker and resolvedDuration then
-		local newExpiry = os.clock() + resolvedDuration
+		local newExpiry = GameClock.Now() + resolvedDuration
 		if newExpiry > (marker:GetAttribute(EXPIRY_ATTRIBUTE) or 0) then
 			marker:SetAttribute(EXPIRY_ATTRIBUTE, newExpiry)
 		end

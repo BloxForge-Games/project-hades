@@ -484,7 +484,11 @@ function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateCont
 				if movementLegitimatelyLocked(character) then
 					return false
 				end
-				return humanoid.WalkSpeed < expectedBaseWalkSpeed(character) - 0.01
+				local heldSpeed = character:GetAttribute("WalkSpeedUnscaled")
+				if typeof(heldSpeed) ~= "number" then
+					heldSpeed = humanoid.WalkSpeed
+				end
+				return heldSpeed < expectedBaseWalkSpeed(character) - 0.01
 			end,
 			restore = function()
 				self:_releaseHeldInputs()

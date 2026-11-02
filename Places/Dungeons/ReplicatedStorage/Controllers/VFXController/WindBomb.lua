@@ -1,7 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 
 local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
@@ -11,6 +10,7 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -52,7 +52,7 @@ return function(player: Player, preload: boolean?)
 		local windBombSound = ReplicatedStorage.GameAssets.Sounds.WindBombCast:Clone()
 		windBombSound.Parent = getRootPart(character)
 		windBombSound:Play()
-		Debris:AddItem(windBombSound, 5)
+		GameClock.Debris(windBombSound, 5)
 	end
 
 	-- Where the bomb LANDS: the hitbox CFrame, taken on every viewer at the
@@ -61,7 +61,7 @@ return function(player: Player, preload: boolean?)
 	-- where the damage did, not where the explosion mesh is drawn.
 	local impactCFrame: CFrame? = nil
 
-	task.delay(0.75, function()
+	GameClock.Delay(0.75, function()
 		local hitboxCFrame = getRootPart(character).CFrame
 			+ getRootPart(character).CFrame.LookVector * ArcaneData[ArcaneNames["Wind Bomb"]].range
 		impactCFrame = hitboxCFrame
@@ -70,7 +70,7 @@ return function(player: Player, preload: boolean?)
 		end
 	end)
 
-	task.delay(0.85, function()
+	GameClock.Delay(0.85, function()
 		local windbombExplosionVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Wind Bomb"]].ExplosionFX:Clone()
 		windbombExplosionVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 		windbombExplosionVFX.CFrame = getRootPart(character).CFrame + getRootPart(character).CFrame.LookVector * 5
@@ -83,9 +83,9 @@ return function(player: Player, preload: boolean?)
 			particle:Emit(35)
 		end
 
-		Debris:AddItem(windbombExplosionVFX, 5)
+		GameClock.Debris(windbombExplosionVFX, 5)
 
-		task.delay(0.15, function()
+		GameClock.Delay(0.15, function()
 			-- The combat pack's dust at the landing point, on the explosion beat.
 			emitVFXPart(
 				"GroundDust",
@@ -99,9 +99,9 @@ return function(player: Player, preload: boolean?)
 			particle.Enabled = false
 		end
 
-		Debris:AddItem(windbombVFX, 1)
+		GameClock.Debris(windbombVFX, 1)
 
-		task.wait(0.2)
+		GameClock.Wait(0.2)
 
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores

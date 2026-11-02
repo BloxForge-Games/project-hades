@@ -19,7 +19,7 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local LightningStrike = {}
 LightningStrike.__index = LightningStrike
@@ -58,7 +58,7 @@ function LightningStrike:PlayEffect()
 		end
 	end
 
-	task.delay(BODY_EMIT_DELAY, function()
+	GameClock.Delay(BODY_EMIT_DELAY, function()
 		if not strike.Parent then
 			return
 		end
@@ -81,7 +81,7 @@ function LightningStrike:PlayEffect()
 		end
 	end
 
-	Debris:AddItem(strike, CLEANUP_SECONDS)
+	GameClock.Debris(strike, CLEANUP_SECONDS)
 end
 
 return LightningStrike

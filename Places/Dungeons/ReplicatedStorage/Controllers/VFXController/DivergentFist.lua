@@ -1,7 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 
 local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
@@ -12,6 +11,7 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local emitAttributeVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitAttributeVFX)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -34,7 +34,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 	local animationConnection
 
 	divergentFistAnimation:Play(0.25)
-	divergentFistAnimation:AdjustSpeed(1.35)
+	GameClock.SetAnimationSpeed(divergentFistAnimation, 1.35)
 
 	if not preload and character then
 		animationConnection = divergentFistAnimation:GetMarkerReachedSignal("MagicRelease"):Connect(function()
@@ -56,7 +56,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 		local divergentFistSound = ReplicatedStorage.GameAssets.Sounds.DivergentFistCast:Clone()
 		divergentFistSound.Parent = getRootPart(character)
 		divergentFistSound:Play()
-		Debris:AddItem(divergentFistSound, 5)
+		GameClock.Debris(divergentFistSound, 5)
 	end
 
 	-- Where the punch LANDS: the hitbox CFrame, taken on every viewer at the
@@ -65,7 +65,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 	-- where the damage did, not where the explosion mesh is drawn.
 	local impactCFrame: CFrame? = nil
 
-	task.delay(0.9, function()
+	GameClock.Delay(0.9, function()
 		local hitboxCFrame = getRootPart(character).CFrame
 			+ getRootPart(character).CFrame.LookVector * ArcaneData[ArcaneNames["Divergent Fist"]].range
 		impactCFrame = hitboxCFrame
@@ -74,7 +74,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 		end
 	end)
 
-	task.delay(1, function()
+	GameClock.Delay(1, function()
 		local divergentFistExplosion =
 			ReplicatedStorage.GameAssets.VFX[ArcaneNames["Divergent Fist"]].ExplosionFX:Clone()
 		divergentFistExplosion.Parent = workspace.IgnoreInstances.ArcaneSpells
@@ -84,7 +84,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 			divergentFistExplosion.PrimaryPart.Explosion:Play()
 		end
 
-		task.delay(0.05, function()
+		GameClock.Delay(0.05, function()
 			-- Attachment2's emitters are ATTRIBUTE-driven (EmitCount / EmitDelay
 			-- authored on each in Studio) and play on this same beat; the rest of
 			-- the explosion keeps its hand-tuned burst, so those are skipped in
@@ -105,7 +105,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 			end
 		end)
 
-		Debris:AddItem(divergentFistExplosion, 5)
+		GameClock.Debris(divergentFistExplosion, 5)
 
 		-- The combat pack's dust at the landing point, on the explosion beat.
 		emitVFXPart(
@@ -127,7 +127,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 			end
 		end
 
-		Debris:AddItem(divergentFistRight, 1)
+		GameClock.Debris(divergentFistRight, 1)
 
 		for _, particle in pairs(divergentFistLeft:GetDescendants()) do
 			if particle:IsA("ParticleEmitter") then
@@ -135,9 +135,9 @@ return function(player: Player, preload: boolean, _: CFrame)
 			end
 		end
 
-		Debris:AddItem(divergentFistLeft, 1)
+		GameClock.Debris(divergentFistLeft, 1)
 
-		task.wait(0.2)
+		GameClock.Wait(0.2)
 
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores

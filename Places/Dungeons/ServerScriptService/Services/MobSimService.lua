@@ -81,6 +81,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local mobPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobPath)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -857,7 +858,7 @@ function MobSimService._computePath(self: typeof(MobSimService), record: Record)
 	if not record.alive or record.state ~= STATE_CHASE then
 		return
 	end
-	local now = workspace:GetServerTimeNow()
+	local now = GameClock.Now()
 	record.ground = (mobPath.sample(record.move, now))
 
 	if ok and (path :: Path).Status == Enum.PathStatus.Success then
@@ -1132,7 +1133,7 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 	end
 	record.state = STATE_ATTACKING
 	record.attackGeneration += 1
-	record.attackStartedAt = workspace:GetServerTimeNow()
+	record.attackStartedAt = GameClock.Now()
 	local generation = record.attackGeneration
 	local attackIndex = record.chosenAttackIndex
 
@@ -1150,7 +1151,7 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 
 	task.spawn(function()
 		if attack.kind == "ranged" then
-			task.wait(attack.windUpDuration)
+			GameClock.Wait(attack.windUpDuration)
 			local target = record.target
 			local liveRoot = record.targetRoot
 			if
@@ -1182,7 +1183,7 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 						break
 					end
 					record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
-					self:_faceTarget(record, workspace:GetServerTimeNow())
+					self:_faceTarget(record, GameClock.Now())
 					MobNetwork.MobAction.FireAll({
 						Id = record.id,
 						Kind = "Attack",
@@ -1201,14 +1202,14 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 			return
 		end
 		record.model:SetAttribute("MobHighlightAttackActive", false)
-		task.wait(attack.recoveryDuration or 0)
+		GameClock.Wait(attack.recoveryDuration or 0)
 		if not record.alive or record.attackGeneration ~= generation then
 			return
 		end
 		self:_setAttacking(record, false)
 
 		-- A lunge moved the proxy (MobService PivotTo); pick up from there.
-		local resumeAt = workspace:GetServerTimeNow()
+		local resumeAt = GameClock.Now()
 		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
 		record.written = record.root.CFrame
 		self:_enterRoaming(record, resumeAt, true)
@@ -1475,7 +1476,7 @@ function MobSimService._startHeal(
 	local attack = record.chosenAttack
 	record.state = STATE_ATTACKING
 	record.attackGeneration += 1
-	record.attackStartedAt = workspace:GetServerTimeNow()
+	record.attackStartedAt = GameClock.Now()
 	local generation = record.attackGeneration
 
 	record.ground = (mobPath.sample(record.move, now))
@@ -1501,7 +1502,7 @@ function MobSimService._startHeal(
 			return
 		end
 		record.model:SetAttribute("MobHighlightAttackActive", false)
-		task.wait(attack.recoveryDuration or 0)
+		GameClock.Wait(attack.recoveryDuration or 0)
 		if not record.alive or record.attackGeneration ~= generation then
 			return
 		end
@@ -1509,7 +1510,7 @@ function MobSimService._startHeal(
 		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
 		record.written = record.root.CFrame
 		record.supportIntent = nil
-		self:_enterRoaming(record, workspace:GetServerTimeNow(), true)
+		self:_enterRoaming(record, GameClock.Now(), true)
 	end)
 end
 
@@ -1623,7 +1624,7 @@ local movedParts: { BasePart } = {}
 local movedCFrames: { CFrame } = {}
 
 function MobSimService._step(self: typeof(MobSimService))
-	local now = workspace:GetServerTimeNow()
+	local now = GameClock.Now()
 	refreshAlivePlayers(now)
 
 	for _, record in self._records do
@@ -1768,7 +1769,7 @@ function MobSimService._die(self: typeof(MobSimService), record: Record)
 	end
 	model.Parent = workspace.IgnoreInstances.DeadMobs
 
-	task.delay(DESPAWN_SECONDS, function()
+	GameClock.Delay(DESPAWN_SECONDS, function()
 		if not model.Parent then
 			return
 		end
@@ -1777,7 +1778,7 @@ function MobSimService._die(self: typeof(MobSimService), record: Record)
 			Phase = "Out",
 			Duration = MobFadeData.DespawnFadeSeconds,
 		})
-		task.wait(MobFadeData.DespawnFadeSeconds)
+		GameClock.Wait(MobFadeData.DespawnFadeSeconds)
 		model:Destroy()
 	end)
 end
@@ -1818,7 +1819,7 @@ function MobSimService.Spawn(
 
 	-- The floor under the spawn point (a short probe that ignores players,
 	-- spell parts and invisible volumes), never something far below it.
-	refreshAlivePlayers(workspace:GetServerTimeNow())
+	refreshAlivePlayers(GameClock.Now())
 	local ground = floorBelow(position, SPAWN_FLOOR_SEARCH_STUDS) or position
 	-- Not inside a pillar, not on top of another mob (no physics will part
 	-- them later). Falls back to the spawn point when nothing nearby is clear.
@@ -1849,6 +1850,8 @@ function MobSimService.Spawn(
 	proxy:SetAttribute(Attributes.Slowed, false)
 	proxy:SetAttribute(Attributes.CCDebounce, false)
 	proxy:SetAttribute(Attributes.EnemyType, data.enemyType)
+	-- The health ladder archetype (EnemyScalingService, 2026-11-02).
+	proxy:SetAttribute("HealthArchetype", (data :: any).healthArchetype or "grunt")
 
 	-- CORRUPTION (Shared/Data/CorruptionData): the run's difficulty tier
 	-- rolls it once, here. Stamped before parenting so every reader -- the
@@ -1866,7 +1869,7 @@ function MobSimService.Spawn(
 	end
 	EnemyScalingService:ApplyToMob(proxy, humanoid, baseHealth)
 
-	local now = workspace:GetServerTimeNow()
+	local now = GameClock.Now()
 	local attackPool = {}
 	local randomAttackIndices = {}
 	local closeAttackIndices = {}

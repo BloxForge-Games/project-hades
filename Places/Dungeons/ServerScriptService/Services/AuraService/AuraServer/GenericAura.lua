@@ -27,6 +27,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -39,11 +40,11 @@ local FADE_SECONDS = 1
 -- it each pass so a mid-window extension holds.
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - GameClock.Now()
 		if remaining <= 0 then
 			return
 		end
-		task.wait(remaining)
+		GameClock.Wait(remaining)
 	end
 end
 
@@ -103,14 +104,14 @@ return function(auraName: string, options: { transparencyFade: boolean? }?)
 			end
 		end
 
-		task.delay(math.random(1, 15) / 100, function()
+		GameClock.Delay(math.random(1, 15) / 100, function()
 			local head = character:FindFirstChild("Head") :: BasePart?
 			if TextIndicatorService and head then
 				TextIndicatorService:ShowIndicator(player, head, auraName .. "!", Color3.fromRGB(255, 255, 255))
 			end
 		end)
 
-		marker:SetAttribute(EXPIRY_ATTRIBUTE, os.clock() + (duration or FALLBACK_DURATION))
+		marker:SetAttribute(EXPIRY_ATTRIBUTE, GameClock.Now() + (duration or FALLBACK_DURATION))
 
 		task.spawn(function()
 			awaitExpiry(marker)

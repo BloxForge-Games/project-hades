@@ -51,6 +51,7 @@ local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Fu
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local Signal = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- DamageService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -159,7 +160,7 @@ end
 -- Drops buckets whose clock has run out. Returns true if anything was
 -- removed, so callers know to re-stamp.
 local function pruneExpired(state: ShieldState): boolean
-	local now = os.clock()
+	local now = GameClock.Now()
 	local removed = false
 	for index = #state.buckets, 1, -1 do
 		if state.buckets[index].expiresAt <= now then
@@ -252,7 +253,7 @@ function ShieldService._shatterIceShell(self: typeof(ShieldService), state: Shie
 	end
 	local entry = RelicData[RelicNames["Korblox Ice Claws"]]
 	local data = (entry and entry.data) or {}
-	local now = os.clock()
+	local now = GameClock.Now()
 	if now - (self._iceShellLastAt[player.UserId] or -math.huge) < (data.cooldownSeconds or 3) then
 		return
 	end
@@ -268,7 +269,7 @@ function ShieldService._shatterIceShell(self: typeof(ShieldService), state: Shie
 		To = position,
 		Radius = radius,
 		Duration = 0,
-		StartTime = workspace:GetServerTimeNow(),
+		StartTime = GameClock.Now(),
 	})
 	Breakable.HitInRadius(position, radius, player)
 	local damageService = getDamageService()
@@ -307,7 +308,7 @@ function ShieldService._teardown(self: typeof(ShieldService), state: ShieldState
 	state.attachments = {}
 	table.clear(state.emitters)
 
-	task.delay(1, function()
+	GameClock.Delay(1, function()
 		for _, attachment in attachments do
 			attachment:Destroy()
 		end
@@ -375,7 +376,7 @@ function ShieldService.GrantShield(
 
 	table.insert(state.buckets, {
 		value = value,
-		expiresAt = os.clock() + duration,
+		expiresAt = GameClock.Now() + duration,
 		ownerId = applierPlayer.UserId,
 		tag = tag,
 	})

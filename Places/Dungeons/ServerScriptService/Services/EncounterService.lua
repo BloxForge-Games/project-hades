@@ -17,6 +17,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
 
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local IsometricCameraService = require(ServerScriptService.Submodules.Core.Source.Services.IsometricCameraService)
@@ -31,6 +32,7 @@ local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Dungeo
 local dungeonContent = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonContent)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type Room = DungeonService.Room
 
@@ -183,6 +185,11 @@ local ENCOUNTER_GATE_PARTICLE_COLOR = Color3.fromRGB(170, 85, 255)
 
 -- Beat between the outro cinematic ending and the reward chests falling.
 local CHEST_DROP_DELAY_SECONDS = 1.5
+-- The encounter-death slow motion (TimeScaleService, 2026-11-01): a quarter
+-- speed, held 1.5 s for the Boss and 1 s for a Miniboss.
+local ENCOUNTER_SLOW_SCALE = 0.25
+local BOSS_SLOW_HOLD_SECONDS = 1.5
+local MINIBOSS_SLOW_HOLD_SECONDS = 1.0
 -- Hard ceiling on the encounter gate staying shut. The gate normally
 -- opens when the last chest is opened; this only ever fires if that
 -- path never runs at all, and must outlast the outro plus the chest
@@ -1017,21 +1024,21 @@ function EncounterService._playOutroCinematic(
 		local cameraTarget = mob and mob:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 		if cameraTarget and IsometricCameraService then
-			task.wait(CUTSCENE_CAMERA_DELAY)
+			GameClock.Wait(CUTSCENE_CAMERA_DELAY)
 
 			IsometricCameraService.OnCameraTargetChanged:Fire(nil, cameraTarget, true)
 		end
 
-		task.wait(ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION)
+		GameClock.Wait(ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION)
 
 		-- Hold on the mob — the death animation beat.
-		task.wait(ENCOUNTER_OUTRO_HOLD_DURATION)
+		GameClock.Wait(ENCOUNTER_OUTRO_HOLD_DURATION)
 
 		-- Camera back to the local player.
 		if IsometricCameraService then
 			IsometricCameraService.OnCameraTargetReset:Fire(nil, true)
 		end
-		task.wait(ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION)
+		GameClock.Wait(ENCOUNTER_OUTRO_CAMERA_TWEEN_DURATION)
 
 		-- Release controls + lower the cinematic bars + close the window.
 		DungeonNetwork.EncounterOutroEnd.FireAll()
@@ -1112,6 +1119,8 @@ function EncounterService._dropEncounterRewards(
 	self.OnEncounterOutroFinished:Fire(kind, room, mob)
 
 	task.wait(CHEST_DROP_DELAY_SECONDS)
+	-- Never while still slowed: the chest falls at full speed.
+	task.wait(GameClock.RealSecondsUntilNormal())
 
 	local enemyType = if kind == ROOM_TYPES.Boss then EnemyTypes.Boss else EnemyTypes.Miniboss
 	if EncounterChestService then
@@ -1166,6 +1175,16 @@ function EncounterService._onMobDefeated(self: typeof(EncounterService), kind: E
 	end
 
 	local mob = self._activeEncounter and self._activeEncounter.mob
+	-- THE BEAT (2026-11-01): the killing blow slows the whole server, the
+	-- body falls in slow motion, time comes back, then the chest drops
+	-- (_dropEncounterRewards waits out the slow-down on the real clock).
+	local timeScale = Blitz.OptionalService("TimeScaleService")
+	if timeScale then
+		timeScale:Slow(
+			ENCOUNTER_SLOW_SCALE,
+			if kind == ROOM_TYPES.Boss then BOSS_SLOW_HOLD_SECONDS else MINIBOSS_SLOW_HOLD_SECONDS
+		)
+	end
 	-- Kick off the outro cinematic; it releases the held rewards (coins + gear
 	-- + vending machine) when it finishes, via _dropEncounterRewards.
 	self:_playOutroCinematic(kind, room, mob)

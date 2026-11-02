@@ -24,6 +24,7 @@ local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.V
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local localPlayer = Players.LocalPlayer
 
@@ -314,7 +315,7 @@ function Relic:Start()
 		end,
 	})
 
-	self.startTime = workspace:GetServerTimeNow()
+	self.startTime = GameClock.Now()
 	-- Stretched for a ricochet (arcPath's durationScale) so the longer
 	-- two-leg path flies at the same pace as a plain arc.
 	self.duration = 1 * (self._arcDurationScale or 1)
@@ -362,7 +363,7 @@ function Relic:Start()
 	-- and the server destroys it) used to leave this per-frame connection
 	-- behind, since only the landing below ever disconnected it.
 	self._connection = self._janitor:Add(RunService.RenderStepped:Connect(function(_: number)
-		local now = workspace:GetServerTimeNow()
+		local now = GameClock.Now()
 		local alpha = math.clamp((now - self.startTime) / self.duration, 0, 1)
 
 		local pos = self._arc(alpha)
@@ -433,7 +434,7 @@ function Relic:Start()
 
 			-- Re-checked at fire time: a claim that lands inside this grace
 			-- window must not switch the prompt back on behind the fade.
-			task.delay(0.25, function()
+			GameClock.Delay(0.25, function()
 				if not self._consumed then
 					proximityPrompt.Enabled = true
 				end

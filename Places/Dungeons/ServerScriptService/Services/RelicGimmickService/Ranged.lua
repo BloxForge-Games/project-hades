@@ -30,6 +30,7 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CHARGE = RelicNames["Rubber Chicken Launcher"]
 local MORTAR = RelicNames["Witches Brew"]
@@ -88,7 +89,7 @@ local function stickCharge(player: Player, model: Model, dealt: number)
 	local share = helpers.relicService():GetRelicEffect(player, CHARGE) or 1
 	helpers.fx("StaticCharge", root.Position, root.Position, radius, fuse, player, model)
 	local lastPosition = root.Position
-	task.delay(fuse, function()
+	GameClock.Delay(fuse, function()
 		mine[model] = nil
 		if not player.Parent then
 			return
@@ -112,7 +113,7 @@ local function lobBubble(player: Player, target: Vector3)
 	local radius = helpers.data(MORTAR, "radius", 7)
 	local ground = snapToGround(target, { mapOnly = true }) or target
 	helpers.fx("ToxicBubble", root.Position + Vector3.new(0, 2, 0), ground, radius, BUBBLE_FLIGHT_SECONDS)
-	task.delay(BUBBLE_FLIGHT_SECONDS, function()
+	GameClock.Delay(BUBBLE_FLIGHT_SECONDS, function()
 		if not player.Parent then
 			return
 		end
@@ -125,9 +126,9 @@ local function lobBubble(player: Player, target: Vector3)
 		)
 		local seconds = helpers.data(MORTAR, "puddleSeconds", 3)
 		helpers.fx("ToxicPuddle", ground, nil, radius, seconds)
-		local endsAt = os.clock() + seconds
-		while os.clock() < endsAt and player.Parent do
-			task.wait(PUDDLE_SCAN_SECONDS)
+		local endsAt = GameClock.Now() + seconds
+		while GameClock.Now() < endsAt and player.Parent do
+			GameClock.Wait(PUDDLE_SCAN_SECONDS)
 			splash(player, ground, radius, 0, StatusConditions.Poison)
 		end
 	end)

@@ -1,8 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
-local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
@@ -13,6 +11,7 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local groundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.groundFracture)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -38,19 +37,19 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	castFX:PivotTo(cframe + Vector3.new(0, 4, 0))
 	castFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
-	TweenService:Create(
+	GameClock.Tween(
 		castFX.Blue,
 		TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		{ CFrame = castFX.Merged.CFrame }
 	):Play()
 
-	TweenService:Create(
+	GameClock.Tween(
 		castFX.Red,
 		TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		{ CFrame = castFX.Merged.CFrame }
 	):Play()
 
-	task.delay(0.25, function()
+	GameClock.Delay(0.25, function()
 		for _, v in pairs(castFX:GetDescendants()) do
 			if v:IsA("ParticleEmitter") or v:IsA("Trail") then
 				v.Enabled = false
@@ -64,7 +63,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			hollowPurpleMergeSound.Parent = getRootPart(character)
 			hollowPurpleMergeSound.TimePosition = 0.1
 			hollowPurpleMergeSound:Play()
-			Debris:AddItem(hollowPurpleMergeSound, 5)
+			GameClock.Debris(hollowPurpleMergeSound, 5)
 		end
 
 		for _, v in pairs(castFX.Merged:GetDescendants()) do
@@ -73,22 +72,22 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			end
 		end
 
-		task.delay(0.5, function()
+		GameClock.Delay(0.5, function()
 			local chargedFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Hollow Purple"]].ChargeFX.Attachment:Clone()
 			chargedFX.Parent = character:FindFirstChild("Right Arm")
 
-			task.delay(0.5, function()
+			GameClock.Delay(0.5, function()
 				for _, v in pairs(chargedFX:GetDescendants()) do
 					if v:IsA("ParticleEmitter") then
 						v.Enabled = false
 					end
 				end
 
-				Debris:AddItem(chargedFX, 1)
+				GameClock.Debris(chargedFX, 1)
 			end)
 		end)
 
-		Debris:AddItem(castFX, 1)
+		GameClock.Debris(castFX, 1)
 	end)
 
 	local animationConnection
@@ -111,7 +110,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			Arcane.SweepHitboxRequested.Fire({ ArcaneName = ArcaneNames["Hollow Purple"], CFrame = origin })
 		end
 
-		task.delay(0.1, function()
+		GameClock.Delay(0.1, function()
 			-- The combat pack's burst, 2 studs ahead of the caster and facing
 			-- the shot, on the same beat as the white flash. Every viewer runs
 			-- this module, so it needs no replication of its own.
@@ -124,39 +123,40 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			colorCorrection.Parent = Lighting
 			colorCorrection.TintColor = Color3.fromRGB(255, 255, 255)
 			colorCorrection.Brightness = 0.5
-			TweenService:Create(
+			GameClock.Tween(
 				colorCorrection,
 				TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 				{ Brightness = 0 }
-			):Play()
+			)
+				:Play()
 
-			Debris:AddItem(colorCorrection, 0.5)
+			GameClock.Debris(colorCorrection, 0.5)
 
 			-- Silent on the preload pass, same reason as the merge sound above.
 			if not preload then
 				local hollowPurpleBlast1Sound = ReplicatedStorage.GameAssets.Sounds.HollowPurpleBlast1:Clone()
 				hollowPurpleBlast1Sound.Parent = getRootPart(character)
 				hollowPurpleBlast1Sound:Play()
-				Debris:AddItem(hollowPurpleBlast1Sound, 5)
+				GameClock.Debris(hollowPurpleBlast1Sound, 5)
 
 				local hollowPurpleBlast2Sound = ReplicatedStorage.GameAssets.Sounds.HollowPurpleBlast2:Clone()
 				hollowPurpleBlast2Sound.Parent = getRootPart(character)
 				hollowPurpleBlast2Sound:Play()
-				Debris:AddItem(hollowPurpleBlast2Sound, 5)
+				GameClock.Debris(hollowPurpleBlast2Sound, 5)
 			end
 
-			task.delay(1, function()
+			GameClock.Delay(1, function()
 				for _, particleEmitter in projectile:GetDescendants() do
 					if particleEmitter:IsA("ParticleEmitter") then
 						particleEmitter.Enabled = false
 					end
 				end
 
-				Debris:AddItem(projectile, 1)
+				GameClock.Debris(projectile, 1)
 			end)
 
 			for distance = 0, TRAVEL_DISTANCE, STEP_LENGTH do
-				task.wait(0.01)
+				GameClock.Wait(0.01)
 
 				local position = origin.Position + direction * distance
 
@@ -175,7 +175,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end)
 	end)
 
-	task.delay(1.5, function()
+	GameClock.Delay(1.5, function()
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/

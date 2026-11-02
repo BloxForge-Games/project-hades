@@ -39,6 +39,10 @@ local FogOfWarService = require(ServerScriptService.Services.FogOfWarService)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+
+-- The room-clear slow motion (TimeScaleService): a quarter speed for 0.8 s.
+local ROOM_CLEAR_SLOW_SCALE = 0.25
+local ROOM_CLEAR_SLOW_HOLD_SECONDS = 0.8
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
@@ -1198,6 +1202,13 @@ function GateService.Start(self: typeof(GateService))
 		-- past mobs into a later chunk and kill there first would trip the
 		-- gate-open even though earlier chunks still have living mobs.
 		if self:_areSegmentMobsCleared(room.segmentId) then
+			-- THE BEAT (2026-11-01): the kill that clears the room slows the
+			-- whole server for a breath; the vending machines drop as time
+			-- comes back (RelicMachineService waits on the real clock).
+			local timeScale = Blitz.OptionalService("TimeScaleService")
+			if timeScale then
+				timeScale:Slow(ROOM_CLEAR_SLOW_SCALE, ROOM_CLEAR_SLOW_HOLD_SECONDS)
+			end
 			self:OpenSegmentGate(room.segmentId)
 		end
 	end)

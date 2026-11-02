@@ -41,6 +41,7 @@ local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.
 local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local STONEBOUND_DAMAGE_ATTRIBUTE = "StoneboundDamageBonus"
@@ -66,11 +67,11 @@ local REPLACEMENT_POLL_SECONDS = 0.25
 
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - GameClock.Now()
 		if remaining <= 0 then
 			return
 		end
-		task.wait(math.min(remaining, REPLACEMENT_POLL_SECONDS))
+		GameClock.Wait(math.min(remaining, REPLACEMENT_POLL_SECONDS))
 	end
 end
 
@@ -175,7 +176,7 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 
 	-- Fresh-grant pop, same beat as every other aura (small random delay so
 	-- simultaneous procs stagger instead of stacking on one pixel).
-	task.delay(math.random(1, 15) / 100, function()
+	GameClock.Delay(math.random(1, 15) / 100, function()
 		local head = character:FindFirstChild("Head") :: BasePart?
 		if TextIndicatorService and head then
 			TextIndicatorService:ShowIndicator(player, head, AuraNames.Stonebound .. "!", Color3.fromRGB(255, 255, 255))
@@ -185,7 +186,7 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 	-- The marker: deadline + payload, all replicated attributes.
 	local marker = Instance.new("Attachment")
 	marker.Name = AuraNames.Stonebound
-	marker:SetAttribute(EXPIRY_ATTRIBUTE, os.clock() + (duration or FALLBACK_DURATION))
+	marker:SetAttribute(EXPIRY_ATTRIBUTE, GameClock.Now() + (duration or FALLBACK_DURATION))
 	marker:SetAttribute(STONEBOUND_DAMAGE_ATTRIBUTE, payload.damageBonus)
 	marker:SetAttribute(STONEBOUND_REDUCTION_ATTRIBUTE, payload.damageReduction)
 	marker:SetAttribute(STONEBOUND_OWNER_ATTRIBUTE, payload.ownerId)
@@ -206,7 +207,7 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 			-- an instant pop — the replacement's own bloom-in overlaps it,
 			-- reading as one rig handing over to the next.
 			cueFade(cleanupInstances, 1, 0, REPLACEMENT_FADE_SECONDS)
-			task.wait(REPLACEMENT_FADE_SECONDS)
+			GameClock.Wait(REPLACEMENT_FADE_SECONDS)
 			destroyRig()
 			return
 		end
@@ -230,7 +231,7 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 			end
 		end
 		cueFade(cleanupInstances, 1, 0, FADE_OUT_SECONDS)
-		task.wait(FADE_OUT_SECONDS)
+		GameClock.Wait(FADE_OUT_SECONDS)
 		destroyRig()
 	end)
 end

@@ -16,6 +16,7 @@ local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Arcan
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type EnemyEntry = { model: Model, distance: number }
 
@@ -102,11 +103,11 @@ function Fireworks.InvokeFireworks(self: Fireworks)
 			RelicNetwork.FireworksEffect.FireAll({
 				Caster = self._player,
 				Target = targetEnemy,
-				StartTime = workspace:GetServerTimeNow(),
+				StartTime = GameClock.Now(),
 				Duration = 1,
 			})
 
-			task.delay(1, function()
+			GameClock.Delay(1, function()
 				self._vfxService:CreateHitbox(
 					ArcaneNames["Fireworks Explosion"],
 					self._player,
@@ -142,7 +143,7 @@ function Fireworks.InvokeFireworks(self: Fireworks)
 				)
 			end)
 
-			task.wait(0.05)
+			GameClock.Wait(0.05)
 		end
 	end)
 end

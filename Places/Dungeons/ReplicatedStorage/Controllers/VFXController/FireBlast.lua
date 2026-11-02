@@ -1,7 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 
 local IgnoreListController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.IgnoreListController)
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
@@ -11,6 +10,7 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -42,7 +42,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			fireBlastSound.Parent = getRootPart(character)
 			fireBlastSound.TimePosition = 0.1
 			fireBlastSound:Play()
-			Debris:AddItem(fireBlastSound, 5)
+			GameClock.Debris(fireBlastSound, 5)
 		end
 
 		local castFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Fire Blast"]].CastFX:Clone()
@@ -56,7 +56,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
 		for _ = 0, ArcaneData[ArcaneNames["Fire Blast"]].travelDistance, 0.35 do
-			task.wait(0.01)
+			GameClock.Wait(0.01)
 
 			projectile.CFrame = projectile.CFrame + projectile.CFrame.LookVector * 1
 
@@ -89,7 +89,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			particle:Emit(25)
 		end
 
-		Debris:AddItem(fireBlastExplosionVFX, 5)
+		GameClock.Debris(fireBlastExplosionVFX, 5)
 
 		-- The combat pack's dust where the projectile detonated.
 		emitVFXPart("GroundDust", projectile.CFrame, nil, { GroundSnapDistance = 10 })
@@ -100,10 +100,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			end
 		end
 
-		Debris:AddItem(castFX, 1)
+		GameClock.Debris(castFX, 1)
 	end)
 
-	task.delay(0.85, function()
+	GameClock.Delay(0.85, function()
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/

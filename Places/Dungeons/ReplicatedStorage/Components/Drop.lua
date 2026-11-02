@@ -2,7 +2,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
 local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.waitForPrimaryPart)
@@ -18,6 +17,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
 local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.arcPath)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Studs from the local player's root within which a landed drop is
 -- collected (DropPickupSweepController tests it). Pot Of Gold owners skip
@@ -96,7 +96,7 @@ function Drop:_collect(root: BasePart)
 		v:Emit(1)
 	end
 
-	local coinImageTransparencyTween = TweenService:Create(
+	local coinImageTransparencyTween = GameClock.Tween(
 		self._billboardImage,
 		TweenInfo.new(
 			COLLECT_SECONDS / 2,
@@ -116,14 +116,14 @@ function Drop:_collect(root: BasePart)
 	local part = self.Instance.PrimaryPart
 	local rotation = part.CFrame - part.CFrame.Position
 	local startPosition = part.Position
-	local startedAt = os.clock()
+	local startedAt = GameClock.Now()
 	local connection: RBXScriptConnection
 	connection = RunService.Heartbeat:Connect(function()
 		if not part.Parent then
 			connection:Disconnect()
 			return
 		end
-		local alpha = math.clamp((os.clock() - startedAt) / COLLECT_SECONDS, 0, 1)
+		local alpha = math.clamp((GameClock.Now() - startedAt) / COLLECT_SECONDS, 0, 1)
 		local eased = alpha * alpha * (3 - 2 * alpha)
 		local target = (if root.Parent then root.Position else startPosition) + COLLECT_TARGET_OFFSET
 		local lift = Vector3.new(0, COLLECT_LIFT_STUDS * math.sin(alpha * math.pi), 0)
@@ -262,7 +262,7 @@ function Drop:Start()
 		DropPickupSweepController:Unregister(self.Instance)
 	end, true)
 
-	task.delay(PICKUP_DELAY, function()
+	GameClock.Delay(PICKUP_DELAY, function()
 		-- Gone during the delay (destroyed / expired): nothing to sweep.
 		if self._gone or not self.Instance.Parent then
 			return

@@ -21,6 +21,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local RelicController = require(ReplicatedStorage.Controllers.RelicController)
 local InputPlatformController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.InputPlatformController)
+local MusicController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.MusicController)
 local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ScreenSizeController)
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 local RelicInterfaceController = require(ReplicatedStorage.Interfaces.RelicInterfaceController)
@@ -142,10 +143,14 @@ function RelicOfferInterfaceController.Init(self: typeof(RelicOfferInterfaceCont
 end
 
 function RelicOfferInterfaceController.Start(self: typeof(RelicOfferInterfaceController))
+	-- The cards are up: the music steps into the next room (2026-11-02),
+	-- and comes back when the hand resolves.
 	RelicNetwork.RelicOffered.On(function(payload)
+		MusicController:SetMuffled(true)
 		self.Signals.OnOffered:Fire(payload)
 	end)
 	RelicNetwork.RelicOfferResolved.On(function(payload)
+		MusicController:SetMuffled(false)
 		self.Signals.OnResolved:Fire(payload)
 	end)
 	RelicNetwork.RelicOfferTaken.On(function(payload)

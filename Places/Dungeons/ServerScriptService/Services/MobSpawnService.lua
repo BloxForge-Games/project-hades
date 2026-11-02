@@ -87,7 +87,14 @@ local SPAWN_POINTS_FOLDER_NAME = "SpawnPoints"
 local ROOM_SPAWN_HEIGHT_OFFSET = 2
 local ROOM_ATTRIBUTE = "RoomId"
 local MAX_ACTIVE_MOBS = 75
-local MAX_MINIBOSS_WAVE_MOBS = 8
+-- Encounter waves scale with the party (2026-11-02): each wave spawns
+-- MINIBOSS_WAVE_MOBS_PER_PLAYER mobs per active player (2 / 4 / 6 / 8 for
+-- 1-4), each at a RANDOM regular SpawnPoint of the room, and the room holds
+-- at most MINIBOSS_WAVE_ALIVE_PER_PLAYER adds per player before the next
+-- wave waits (one wave fired every 45 s before, one mob per point, 8 alive).
+local MINIBOSS_WAVE_MOBS_PER_PLAYER = 2
+local MINIBOSS_WAVE_ALIVE_PER_PLAYER = 4
+local MINIBOSS_WAVE_MAX_PLAYERS = 4
 
 local MINIBOSS_SPAWN_POINT_NAME = "MinibossSpawnPoint"
 local MINIBOSS_WAVE_INTERVAL = 45
@@ -763,7 +770,7 @@ end
 
 -- Live wave adds in the room: the room's own list minus its boss /
 -- miniboss. DecrementMobCount prunes the list on death, so this is what
--- the MAX_MINIBOSS_WAVE_MOBS cap compares against — never the whole
+-- the per-party alive cap (MINIBOSS_WAVE_ALIVE_PER_PLAYER) compares against — never the whole
 -- Mobs folder, where another room's mobs would starve this room's waves.
 function MobSpawnService._countRoomWaveMobs(self: typeof(MobSpawnService), room): number
 	local roomList = self._mobsByRoom[room.id]
@@ -777,6 +784,14 @@ function MobSpawnService._countRoomWaveMobs(self: typeof(MobSpawnService), room)
 		end
 	end
 	return count
+end
+
+-- Active players clamped to 1..MINIBOSS_WAVE_MAX_PLAYERS (LifeService's
+-- count: the downed and the dead do not swell the waves).
+function MobSpawnService._wavePartySize(_self: typeof(MobSpawnService)): number
+	local lifeService = Blitz.OptionalService("LifeService")
+	local active = if lifeService then lifeService:GetActivePlayerCount() else #Players:GetPlayers()
+	return math.clamp(active, 1, MINIBOSS_WAVE_MAX_PLAYERS)
 end
 
 -- Begins a periodic wave spawner for the miniboss room. Every
@@ -809,12 +824,12 @@ function MobSpawnService.StartMinibossWaves(self: typeof(MobSpawnService), room)
 				continue
 			end
 
-			if self:_countRoomWaveMobs(room) >= MAX_MINIBOSS_WAVE_MOBS then
+			if self:_countRoomWaveMobs(room) >= (self:_wavePartySize() * MINIBOSS_WAVE_ALIVE_PER_PLAYER) then
 				if not warnedCap then
 					warnedCap = true
 					warn(
 						("[MobSpawnService] Hit %d-mob cap for miniboss waves; holding waves for room %s"):format(
-							MAX_MINIBOSS_WAVE_MOBS,
+							(self:_wavePartySize() * MINIBOSS_WAVE_ALIVE_PER_PLAYER),
 							room.model.Name
 						)
 					)
@@ -825,8 +840,13 @@ function MobSpawnService.StartMinibossWaves(self: typeof(MobSpawnService), room)
 			warnedCap = false
 
 			local points = self:_getRoomRegularSpawnPoints(room.model)
+			if #points == 0 then
+				task.wait(MINIBOSS_WAVE_INTERVAL)
+				continue
+			end
 
-			for _, attachment in points do
+			for _ = 1, self:_wavePartySize() * MINIBOSS_WAVE_MOBS_PER_PLAYER do
+				local attachment = points[math.random(#points)]
 				if #workspace.IgnoreInstances.Mobs:GetChildren() >= MAX_ACTIVE_MOBS then
 					break
 				end

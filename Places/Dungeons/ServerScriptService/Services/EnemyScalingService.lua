@@ -57,18 +57,29 @@ end
 -- outside a run. DungeonService is reached at call time (this service is
 -- a consumer of it). Grunts (every type but Miniboss and Boss) carry the
 -- tier's gruntHealth on top (DifficultyData, 2026-11-01).
-local function difficultyHealthMultiplier(enemyType: string?): number
+-- The character attribute the spawners stamp from MobData `healthArchetype`
+-- (grunt / elite / tank; absent reads as grunt). Not in the Attributes enum
+-- on purpose: one writer per spawner, one reader here.
+local HEALTH_ARCHETYPE_ATTRIBUTE = "HealthArchetype"
+
+local function difficultyHealthMultiplier(enemyType: string?, archetype: string?): number
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	if not dungeonService then
 		return 1
 	end
 	local scale = dungeonService:GetDifficultyScale()
-	-- The tier's multiplier x the floor's (DifficultyData's health growth).
-	local multiplier = scale.enemyHealth * dungeonService:GetFloorMultiplier("health")
+	-- The Miniboss and Boss ride enemyHealth; everything else its archetype's
+	-- multiplier (DifficultyData.healthByArchetype, 2026-11-02). Then the
+	-- floor's growth.
+	local tierMultiplier = scale.enemyHealth
 	if enemyType ~= EnemyTypes.Miniboss and enemyType ~= EnemyTypes.Boss then
-		multiplier *= scale.gruntHealth or 1
+		local byArchetype = scale.healthByArchetype
+		local value = if byArchetype then byArchetype[archetype or "grunt"] or byArchetype.grunt else nil
+		if typeof(value) == "number" then
+			tierMultiplier = value
+		end
 	end
-	return multiplier
+	return tierMultiplier * dungeonService:GetFloorMultiplier("health")
 end
 
 -- Health added per active player past the first, as a fraction of base
@@ -82,15 +93,22 @@ local HEALTH_PER_EXTRA_PLAYER = 0.5
 function EnemyScalingService.GetHealthMultiplier(
 	_self: typeof(EnemyScalingService),
 	excluding: Player?,
-	enemyType: string?
+	enemyType: string?,
+	archetype: string?
 ): number
 	local extraPlayers = math.max(LifeService:GetActivePlayerCount(excluding) - 1, 0)
-	return (1 + HEALTH_PER_EXTRA_PLAYER * extraPlayers) * difficultyHealthMultiplier(enemyType)
+	return (1 + HEALTH_PER_EXTRA_PLAYER * extraPlayers) * difficultyHealthMultiplier(enemyType, archetype)
 end
 
--- The model's EnemyType stamp (MobBase, before ApplyToMob), or nil.
+-- The model's EnemyType and HealthArchetype stamps (the spawners, before
+-- ApplyToMob), or nil.
 local function enemyTypeOf(model: Model): string?
 	local value = model:GetAttribute(Attributes.EnemyType)
+	return if type(value) == "string" then value else nil
+end
+
+local function archetypeOf(model: Model): string?
+	local value = model:GetAttribute(HEALTH_ARCHETYPE_ATTRIBUTE)
 	return if type(value) == "string" then value else nil
 end
 
@@ -103,7 +121,7 @@ function EnemyScalingService.ApplyToMob(
 	humanoid: Humanoid,
 	baseHealth: number
 )
-	local multiplier = self:GetHealthMultiplier(nil, enemyTypeOf(model))
+	local multiplier = self:GetHealthMultiplier(nil, enemyTypeOf(model), archetypeOf(model))
 	local scaled = baseHealth * multiplier
 
 	model:SetAttribute(Attributes.BaseMaxHealth, baseHealth)
@@ -137,7 +155,7 @@ function EnemyScalingService.RescaleAll(self: typeof(EnemyScalingService), exclu
 			if not humanoid or humanoid.Health <= 0 then
 				continue
 			end
-			local mobMultiplier = self:GetHealthMultiplier(excluding, enemyTypeOf(model))
+			local mobMultiplier = self:GetHealthMultiplier(excluding, enemyTypeOf(model), archetypeOf(model))
 			if model:GetAttribute(Attributes.HealthScaleMultiplier) == mobMultiplier then
 				continue
 			end

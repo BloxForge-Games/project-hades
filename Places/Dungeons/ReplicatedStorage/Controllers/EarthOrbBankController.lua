@@ -26,7 +26,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
@@ -34,6 +33,7 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local RelicController = require(ReplicatedStorage.Controllers.RelicController)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -191,7 +191,7 @@ local function makeOrb(dropType: string, position: Vector3): Orb?
 	local image = orbImage(orb)
 	if image then
 		image.ImageTransparency = 1
-		TweenService:Create(image, TweenInfo.new(FADE_SECONDS), { ImageTransparency = 0 }):Play()
+		GameClock.Tween(image, TweenInfo.new(FADE_SECONDS), { ImageTransparency = 0 }):Play()
 	end
 	model.Parent = effectsFolder()
 	return orb
@@ -202,13 +202,13 @@ local function retireOrb(orb: Orb, sinkTo: Vector3?)
 	setEmitters(orb, false)
 	local image = orbImage(orb)
 	if image then
-		TweenService:Create(image, TweenInfo.new(SPEND_SECONDS), { ImageTransparency = 1 }):Play()
+		GameClock.Tween(image, TweenInfo.new(SPEND_SECONDS), { ImageTransparency = 1 }):Play()
 	end
 	if sinkTo then
 		local sink = TweenInfo.new(SPEND_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-		TweenService:Create(orb.primary, sink, { CFrame = CFrame.new(sinkTo) }):Play()
+		GameClock.Tween(orb.primary, sink, { CFrame = CFrame.new(sinkTo) }):Play()
 	end
-	task.delay(SPEND_SECONDS + 0.05, function()
+	GameClock.Delay(SPEND_SECONDS + 0.05, function()
 		orb.model:Destroy()
 	end)
 end
@@ -262,7 +262,7 @@ local function syncEntry(entry: Entry)
 				entry.pending = nil
 				orb = pending.orb
 			else
-				local at = if root then slotPosition(root, index, wanted, os.clock()) else Vector3.zero
+				local at = if root then slotPosition(root, index, wanted, GameClock.Now()) else Vector3.zero
 				orb = makeOrb(dropType, at)
 			end
 			if orb then
@@ -406,8 +406,8 @@ function EarthOrbBankController.Adopt(_self: typeof(EarthOrbBankController), dro
 	if entry.pending then
 		retireOrb(entry.pending.orb, nil)
 	end
-	entry.pending = { orb = orb, letter = letter, at = os.clock() }
-	task.delay(ADOPT_GRACE_SECONDS, function()
+	entry.pending = { orb = orb, letter = letter, at = GameClock.Now() }
+	GameClock.Delay(ADOPT_GRACE_SECONDS, function()
 		local live = entries[character]
 		if live and live.pending and live.pending.orb == orb then
 			live.pending = nil
@@ -425,7 +425,7 @@ local function easeToward(orb: Orb, target: Vector3, dt: number)
 end
 
 local function step(dt: number)
-	local now = os.clock()
+	local now = GameClock.Now()
 	for character, entry in entries do
 		local root = getRoot(character)
 		if not root or not character.Parent then

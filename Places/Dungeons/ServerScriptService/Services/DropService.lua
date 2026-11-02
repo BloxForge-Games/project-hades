@@ -23,6 +23,7 @@ local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.F
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local resolveArcLanding = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.resolveArcLanding)
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Coin landing scatter (studs, each axis) around the dead mob. Picked
 -- HERE rather than per client — it used to be, so every player watched
@@ -376,7 +377,7 @@ function DropService.Start(self: typeof(DropService))
 				dropType = DropTypes.Coins
 			end
 			for _ = 1, math.random(minDropRate, maxDropRate) do
-				task.wait(IS_BOSS_COIN_DROP_DELAY)
+				GameClock.Wait(IS_BOSS_COIN_DROP_DELAY)
 
 				local value = math.random(minValue or 1, maxValue or 1)
 				if asMobCoins then

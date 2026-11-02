@@ -37,6 +37,7 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local PLASMA = RelicNames["HEX Spitter"]
 local HAIL = RelicNames["Blizzard Wand"]
@@ -71,7 +72,7 @@ function Duo.onCrit(player: Player, model: Model, _isMelee: boolean, dealt: numb
 	then
 		return
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	if now - (lastNova[player] or -math.huge) < PLASMA_LATCH_SECONDS then
 		return
 	end
@@ -106,13 +107,13 @@ local function callHailstorm(player: Player, position: Vector3)
 	local damage = helpers.levelDamage(player, helpers.data(HAIL, "damagePerLevel", 8))
 	helpers.fx("Hailstorm", ground, nil, radius, seconds)
 	task.spawn(function()
-		local endsAt = os.clock() + seconds
-		while os.clock() < endsAt and player.Parent do
+		local endsAt = GameClock.Now() + seconds
+		while GameClock.Now() < endsAt and player.Parent do
 			local angle = math.random() * math.pi * 2
 			local distance = math.sqrt(math.random()) * radius
 			local spot = ground + Vector3.new(math.cos(angle) * distance, 0, math.sin(angle) * distance)
 			helpers.fx("HailShard", spot + Vector3.new(0, SHARD_FALL_HEIGHT, 0), spot, shardRadius, SHARD_FALL_SECONDS)
-			task.delay(SHARD_FALL_SECONDS, function()
+			GameClock.Delay(SHARD_FALL_SECONDS, function()
 				if not player.Parent then
 					return
 				end
@@ -123,7 +124,7 @@ local function callHailstorm(player: Player, position: Vector3)
 					statusService:ApplyStatus(player, model, StatusConditions.Chill)
 				end)
 			end)
-			task.wait(every)
+			GameClock.Wait(every)
 		end
 	end)
 end

@@ -11,6 +11,7 @@ local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Ser
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 return function(player: Player)
 	local character = player.Character or player.CharacterAdded:Wait()
@@ -67,14 +68,14 @@ return function(player: Player)
 	-- Load & play animation
 	local animator = susanooRig:WaitForChild("AnimationController"):WaitForChild("Animator")
 
-	task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
+	GameClock.Delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
 		susanooRig.SusanooPart.SurfaceGui.Enabled = false
 	end)
 
-	task.delay(0.5, function()
+	GameClock.Delay(0.5, function()
 		targetAttachment.Position = Vector3.new(0, 5, 0)
 
-		task.delay(0.05, function()
+		GameClock.Delay(0.05, function()
 			local castVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].CastPart:Clone()
 			castVFX.CFrame = hrp.CFrame
 			castVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
@@ -161,7 +162,7 @@ return function(player: Player)
 		)
 	end)
 
-	task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime, function()
+	GameClock.Delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime, function()
 		animationConnection:Disconnect()
 		attackAnimation:Stop(0.25)
 
@@ -185,7 +186,7 @@ return function(player: Player)
 
 		targetAttachment.Position = Vector3.new(0, -15, 0)
 
-		task.delay(1, function()
+		GameClock.Delay(1, function()
 			susanooRig:Destroy()
 			-- The follow target lives on the CHARACTER, not the rig: every
 			-- cast left one more Attachment on the root part.
