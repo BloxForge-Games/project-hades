@@ -18,6 +18,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local computePower = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.computePower)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type RelicSnapshot = DamageService.RelicSnapshot
 
@@ -73,11 +74,11 @@ return function(player: Player, snapshot: RelicSnapshot, humanoid: Humanoid, _da
 		RelicNetwork.VolleyballEffect.FireAll({
 			Character = player.Character,
 			Target = humanoid.Parent :: Model?,
-			StartTime = workspace:GetServerTimeNow(),
+			StartTime = GameClock.Now(),
 			Duration = 0.5,
 		})
 
-		task.delay(VOLLEY_BALL_DESYNC_DELAY, function()
+		GameClock.Delay(VOLLEY_BALL_DESYNC_DELAY, function()
 			-- Re-check liveness — the original hit may have already
 			-- brought the mob to 0 HP, in which case the spike is a
 			-- no-op (don't show the indicator either).

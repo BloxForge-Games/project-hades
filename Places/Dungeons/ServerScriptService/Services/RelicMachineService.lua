@@ -20,6 +20,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.findFloorBelow)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local RelicMachineService = {
 	Name = "RelicMachineService",
@@ -156,7 +157,7 @@ function RelicMachineService._animateFall(
 	endCFrame: CFrame,
 	duration: number
 )
-	local startTime = tick()
+	local startTime = GameClock.Now()
 	local connection
 	connection = RunService.Heartbeat:Connect(function()
 		if not model.Parent then
@@ -164,7 +165,7 @@ function RelicMachineService._animateFall(
 			return
 		end
 
-		local elapsed = tick() - startTime
+		local elapsed = GameClock.Now() - startTime
 		local alpha = math.min(elapsed / duration, 1)
 		local easedAlpha = TweenService:GetValue(alpha, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
@@ -269,7 +270,7 @@ function RelicMachineService.DropModelOnPlayer(
 
 	self:_animateFall(model, startCFrame, landingCFrame, FALL_DURATION)
 	if onLanded then
-		task.delay(FALL_DURATION, function()
+		GameClock.Delay(FALL_DURATION, function()
 			if model.Parent then
 				onLanded()
 			end
@@ -293,6 +294,9 @@ function RelicMachineService.Start(_self: typeof(RelicMachineService))
 		-- EVERY cleared Combat segment drops a relic machine: relic pickups
 		-- are the single reward cadence, so the element-affinity snowball
 		-- gets a chance to compound every room.
+		-- After the room-clear slow motion (GateService), on the real clock:
+		-- the kill lands in slow motion, then the machines fall at speed.
+		task.wait(GameClock.RealSecondsUntilNormal())
 		for _, player in Players:GetPlayers() do
 			task.wait(0.25)
 			RelicMachineService:DropMachineOnPlayer(player)

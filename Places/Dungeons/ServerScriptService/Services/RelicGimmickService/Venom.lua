@@ -28,6 +28,7 @@ local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local ZOMBIE_BOMB = RelicNames["Zombie Bomb"]
 local EVIL_EYE = RelicNames["Korblox Evil Eye"]
@@ -68,7 +69,7 @@ local function lobBubble(player: Player, fromModel: Model)
 	local from = fromRoot.Position + Vector3.new(0, 2, 0)
 	local to = targetRoot.Position
 	helpers.fx("ToxicBubble", from, to, SPIT_SPLASH_RADIUS, SPIT_FLIGHT_SECONDS)
-	task.delay(SPIT_FLIGHT_SECONDS, function()
+	GameClock.Delay(SPIT_FLIGHT_SECONDS, function()
 		if not player.Parent then
 			return
 		end
@@ -106,7 +107,7 @@ function Venom.onStatusTick(player: Player, model: Model, status: string)
 	if not helpers.owns(player, ZOMBIE_BOMB) then
 		return
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	local rolls = lastTickRoll[player] or {}
 	lastTickRoll[player] = rolls
 	local lastRoll = rolls[model]

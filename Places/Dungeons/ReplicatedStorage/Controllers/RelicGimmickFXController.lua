@@ -33,10 +33,8 @@
 	See bfg-core/Network/Relic.blink (GimmickEffectPayload) for the kinds.
 ]]
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local RelicNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Relic)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
@@ -44,6 +42,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local SpiritCompanionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SpiritCompanionData)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -87,25 +86,27 @@ local TRAIL_DROP = 2.5
 -- BOLT_STROKES times with fresh jitter, BOLT_RESTRIKE_SECONDS apart, so
 -- it crackles instead of flashing once; each stroke holds for
 -- BOLT_HOLD_SECONDS before it fades over BOLT_FADE_SECONDS.
-local BOLT_SEGMENTS = 7
-local BOLT_JITTER = 1.3
-local BOLT_STROKES = 3
+local BOLT_SEGMENTS = 6
+local BOLT_JITTER = 0.9
+-- Calmed again 2026-11-01 evening: two strokes, thinner, no forks.
+local BOLT_STROKES = 2
 local BOLT_RESTRIKE_SECONDS = 0.08
-local BOLT_HOLD_SECONDS = 0.12
-local BOLT_FADE_SECONDS = 0.3
+local BOLT_HOLD_SECONDS = 0.08
+local BOLT_FADE_SECONDS = 0.22
 local BOLT_CORE_COLOR = Color3.fromRGB(235, 248, 255)
 -- Trimmed the same day: the first pass read as too much. No light.
-local BOLT_CORE_THICKNESS = 0.24
-local BOLT_GLOW_THICKNESS = 0.7
-local BOLT_GLOW_TRANSPARENCY = 0.45
-local BOLT_FORK_CHANCE = 0.6
+local BOLT_CORE_THICKNESS = 0.18
+local BOLT_GLOW_THICKNESS = 0.5
+local BOLT_GLOW_TRANSPARENCY = 0.55
+local BOLT_FORK_CHANCE = 0
 local BOLT_FORKS = 1
-local BOLT_FLASH_RADIUS = 1.8
+local BOLT_FLASH_RADIUS = 1.4
 
 -- Lobbed bubbles arc high; Blizzard's ice shards hop fast and low (a
 -- quadratic bezier with its control point just above the line).
 local ARC_HEIGHT = 6
-local SHARD_ARC_HEIGHT = 1.5
+-- 1.5 -> 3 (2026-11-02): the Fowl's shards read as a lob now, not a dart.
+local SHARD_ARC_HEIGHT = 3
 
 -- Frost Wyrm: the cube and its fade. It follows like a Spirit Companion
 -- WYRM_SCALE times the size (SpiritCompanionData's orbit, drift, spring
@@ -274,21 +275,21 @@ local function retire(part: BasePart, emitters: { ParticleEmitter }?, fadeSecond
 			emitter.Enabled = false
 		end
 	end
-	TweenService:Create(part, TweenInfo.new(fadeSeconds), { Transparency = 1 }):Play()
-	Debris:AddItem(part, fadeSeconds + (linger or 0.1))
+	GameClock.Tween(part, TweenInfo.new(fadeSeconds), { Transparency = 1 }):Play()
+	GameClock.Debris(part, fadeSeconds + (linger or 0.1))
 end
 
 local function elapsedOf(payload: Payload): number
-	return math.max(workspace:GetServerTimeNow() - payload.StartTime, 0)
+	return math.max(GameClock.Now() - payload.StartTime, 0)
 end
 
 -- Calls `step(alpha)` every frame from `startElapsed` into `duration`
 -- until alpha reaches 1, then `done()`.
 local function animate(duration: number, startElapsed: number, step: (number) -> (), done: (() -> ())?)
-	local began = os.clock() - startElapsed
+	local began = GameClock.Now() - startElapsed
 	local connection: RBXScriptConnection
 	connection = RunService.RenderStepped:Connect(function()
-		local alpha = if duration > 0 then math.clamp((os.clock() - began) / duration, 0, 1) else 1
+		local alpha = if duration > 0 then math.clamp((GameClock.Now() - began) / duration, 0, 1) else 1
 		step(alpha)
 		if alpha >= 1 then
 			connection:Disconnect()
@@ -307,11 +308,11 @@ local function burst(position: Vector3, radius: number, color: Color3)
 	ball.Transparency = 0.35
 	ball.Position = position
 	ball.Parent = effectsFolder()
-	TweenService:Create(ball, TweenInfo.new(BURST_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	GameClock.Tween(ball, TweenInfo.new(BURST_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Size = Vector3.one * radius * 2,
 		Transparency = 1,
 	}):Play()
-	Debris:AddItem(ball, BURST_SECONDS + 0.1)
+	GameClock.Debris(ball, BURST_SECONDS + 0.1)
 end
 
 local function boltPoints(from: Vector3, to: Vector3, segments: number, jitter: number): { Vector3 }
@@ -349,11 +350,11 @@ local function drawLine(points: { Vector3 }, thickness: number, color: Color3, t
 			false,
 			BOLT_HOLD_SECONDS
 		)
-		TweenService:Create(segment, fade, {
+		GameClock.Tween(segment, fade, {
 			Transparency = 1,
 			Size = Vector3.new(thickness * 0.3, thickness * 0.3, length),
 		}):Play()
-		Debris:AddItem(segment, BOLT_HOLD_SECONDS + BOLT_FADE_SECONDS + 0.05)
+		GameClock.Debris(segment, BOLT_HOLD_SECONDS + BOLT_FADE_SECONDS + 0.05)
 	end
 end
 
@@ -386,28 +387,28 @@ local function bolt(from: Vector3, to: Vector3)
 	-- apart and a little thinner, so the arc dances for half a second.
 	boltStroke(from, to, 1)
 	for stroke = 2, BOLT_STROKES do
-		task.delay(BOLT_RESTRIKE_SECONDS * (stroke - 1), boltStroke, from, to, 1 - (stroke - 1) * 0.2)
+		GameClock.Delay(BOLT_RESTRIKE_SECONDS * (stroke - 1), boltStroke, from, to, 1 - (stroke - 1) * 0.2)
 	end
 	-- The landing flash: a bright pop and a small ring on the ground.
 	local flash = makePart("GimmickBoltFlash", Vector3.one * 0.5, BOLT_CORE_COLOR)
 	flash.Shape = Enum.PartType.Ball
 	flash.Position = to
 	flash.Parent = effectsFolder()
-	TweenService:Create(flash, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	GameClock.Tween(flash, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Size = Vector3.one * BOLT_FLASH_RADIUS * 2,
 		Transparency = 1,
 	}):Play()
-	Debris:AddItem(flash, 0.4)
+	GameClock.Debris(flash, 0.4)
 	local ring = makePart("GimmickBoltRing", Vector3.new(0.6, 0.1, 0.6), BOLT_COLOR)
 	ring.Shape = Enum.PartType.Cylinder
 	ring.CFrame = CFrame.new(to - Vector3.new(0, 2.4, 0)) * CFrame.Angles(0, 0, math.rad(90))
 	ring.Transparency = 0.3
 	ring.Parent = effectsFolder()
-	TweenService:Create(ring, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	GameClock.Tween(ring, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Size = Vector3.new(0.1, BOLT_FLASH_RADIUS * 2, BOLT_FLASH_RADIUS * 2),
 		Transparency = 1,
 	}):Play()
-	Debris:AddItem(ring, 0.35)
+	GameClock.Debris(ring, 0.35)
 end
 
 -- A slash travelling From -> To over Duration (Flame Wave, Thunder Blade).
@@ -451,7 +452,7 @@ local function phoenixTrail(payload: Payload)
 		ember.Position = from:Lerp(to, index / steps) - Vector3.new(0, TRAIL_DROP, 0)
 		ember.Parent = effectsFolder()
 		local emitters = statusEmitters("Burn", ember)
-		task.delay(remaining, function()
+		GameClock.Delay(remaining, function()
 			retire(ember, emitters, 0.4, 1.5)
 		end)
 	end
@@ -464,21 +465,31 @@ local function frostField(payload: Payload)
 	disc.Transparency = 1
 	disc.CFrame = CFrame.new(payload.From + Vector3.new(0, 0.2, 0)) * CFrame.Angles(0, 0, math.rad(90))
 	disc.Parent = effectsFolder()
-	TweenService:Create(disc, TweenInfo.new(0.25), { Transparency = 0.7 }):Play()
+	GameClock.Tween(disc, TweenInfo.new(0.25), { Transparency = 0.7 }):Play()
 	local emitters = statusEmitters("Chill", disc)
-	task.delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
+	GameClock.Delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
 		retire(disc, emitters, 0.4, 1.5)
 	end)
 end
 
 -- A lobbed shard or bubble arcing From -> To, bursting where it lands.
-local function lob(payload: Payload, part: BasePart, burstColor: Color3, spins: boolean, arcHeight: number)
+-- `smooth` eases the travel (sine in-out) so the shard leaves and lands
+-- softly instead of at a constant clip (2026-11-02, the Fowl's shards).
+local function lob(
+	payload: Payload,
+	part: BasePart,
+	burstColor: Color3,
+	spins: boolean,
+	arcHeight: number,
+	smooth: boolean?
+)
 	local from, to = payload.From, payload.To
 	part.Position = from
 	part.Parent = effectsFolder()
 	local last = from
 	animate(payload.Duration, elapsedOf(payload), function(alpha: number)
-		local point = from:Lerp(to, alpha) + Vector3.new(0, math.sin(alpha * math.pi) * arcHeight, 0)
+		local travel = if smooth then (1 - math.cos(alpha * math.pi)) / 2 else alpha
+		local point = from:Lerp(to, travel) + Vector3.new(0, math.sin(travel * math.pi) * arcHeight, 0)
 		local heading = point - last
 		part.CFrame = if spins and heading.Magnitude > 0.01
 			then CFrame.lookAt(point, point + heading)
@@ -554,12 +565,12 @@ local function dismissWyrm(caster: Player)
 		return
 	end
 	wyrm.fading = true
-	TweenService:Create(wyrm.part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = 1 }):Play()
+	GameClock.Tween(wyrm.part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = 1 }):Play()
 	local light = wyrm.part:FindFirstChildOfClass("PointLight")
 	if light then
-		TweenService:Create(light, TweenInfo.new(WYRM_FADE_SECONDS), { Brightness = 0 }):Play()
+		GameClock.Tween(light, TweenInfo.new(WYRM_FADE_SECONDS), { Brightness = 0 }):Play()
 	end
-	task.delay(WYRM_FADE_SECONDS, function()
+	GameClock.Delay(WYRM_FADE_SECONDS, function()
 		if wyrms[caster] == wyrm then
 			wyrms[caster] = nil
 		end
@@ -574,7 +585,7 @@ local function summonWyrm(payload: Payload)
 	if not caster or not root then
 		return
 	end
-	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
+	local expiresAt = GameClock.Now() + math.max(payload.Duration - elapsedOf(payload), 0)
 	local existing = wyrms[caster]
 	if existing and not existing.fading then
 		existing.expiresAt = expiresAt
@@ -590,8 +601,8 @@ local function summonWyrm(payload: Payload)
 	light.Range = 14
 	light.Parent = part
 	part.Parent = effectsFolder()
-	TweenService:Create(part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = WYRM_TRANSPARENCY }):Play()
-	TweenService:Create(light, TweenInfo.new(WYRM_FADE_SECONDS), { Brightness = 2 }):Play()
+	GameClock.Tween(part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = WYRM_TRANSPARENCY }):Play()
+	GameClock.Tween(light, TweenInfo.new(WYRM_FADE_SECONDS), { Brightness = 2 }):Play()
 	wyrms[caster] = {
 		part = part,
 		expiresAt = expiresAt,
@@ -615,10 +626,10 @@ local function frostOrb(payload: Payload)
 		local flat = (to - from) * Vector3.new(1, 0, 1)
 		if flat.Magnitude > 0.05 then
 			wyrm.facing = flat.Unit
-			wyrm.faceUntil = os.clock() + WYRM_FACE_SECONDS
+			wyrm.faceUntil = GameClock.Now() + WYRM_FACE_SECONDS
 		end
 	end
-	local launched = os.clock()
+	local launched = GameClock.Now()
 	local orb = makePart("FrostOrb", Vector3.one * FROST_ORB_SIZE, ICE_COLOR)
 	orb.Shape = Enum.PartType.Ball
 	orb.Position = from
@@ -648,7 +659,7 @@ local function frostOrb(payload: Payload)
 		local done = gap.Magnitude <= step + ORB_CONTACT_STUDS
 		position = if done then aim else position + gap.Unit * step
 		orb.Position = position
-		if done or os.clock() - launched >= ORB_MAX_SECONDS then
+		if done or GameClock.Now() - launched >= ORB_MAX_SECONDS then
 			connection:Disconnect()
 			burst(position, payload.Radius, ICE_COLOR)
 			retire(orb, emitters, 0.1, 1)
@@ -657,7 +668,7 @@ local function frostOrb(payload: Payload)
 end
 
 local function stepWyrms(deltaTime: number)
-	local now = os.clock()
+	local now = GameClock.Now()
 	local turn = 1 - math.exp(-SpiritCompanionData.TURN_LERP_PER_SECOND * deltaTime)
 	local orbitEase = 1 - math.exp(-SpiritCompanionData.IDLE_ORBIT_EASE_PER_SECOND * deltaTime)
 	for caster, wyrm in wyrms do
@@ -724,7 +735,7 @@ local function keepShield(payload: Payload)
 	if not caster then
 		return
 	end
-	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
+	local expiresAt = GameClock.Now() + math.max(payload.Duration - elapsedOf(payload), 0)
 	local shield = shields[caster]
 	if shield and not shield.fading then
 		shield.expiresAt = expiresAt
@@ -739,7 +750,7 @@ local function keepShield(payload: Payload)
 		local part = makePart("OrbitingShield", SHIELD_SIZE * 0.4, STONE_COLOR, Enum.Material.Slate)
 		part.Transparency = 1
 		part.Parent = effectsFolder()
-		TweenService:Create(
+		GameClock.Tween(
 			part,
 			TweenInfo.new(SHIELD_FADE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 			{ Transparency = 0, Size = SHIELD_SIZE }
@@ -753,9 +764,9 @@ end
 local clockOffset: number? = nil
 
 local function stepShields(deltaTime: number)
-	local now = os.clock()
+	local now = GameClock.Now()
 	local radius, secondsPerTurn = orbitConfig()
-	local target = workspace:GetServerTimeNow() - now
+	local target = GameClock.Now() - now
 	clockOffset = if clockOffset
 		then clockOffset + (target - clockOffset) * (1 - math.exp(-SHIELD_CLOCK_RATE * deltaTime))
 		else target
@@ -775,13 +786,13 @@ local function stepShields(deltaTime: number)
 		if not shield.fading and now >= shield.expiresAt then
 			shield.fading = true
 			for _, part in shield.parts do
-				TweenService:Create(
+				GameClock.Tween(
 					part,
 					TweenInfo.new(SHIELD_FADE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
 					{ Transparency = 1, Size = SHIELD_SIZE * 0.4 }
 				):Play()
 			end
-			task.delay(SHIELD_FADE_SECONDS, function()
+			GameClock.Delay(SHIELD_FADE_SECONDS, function()
 				if shields[caster] == shield then
 					shields[caster] = nil
 				end
@@ -807,9 +818,9 @@ local function toxicPuddle(payload: Payload)
 	disc.Transparency = 1
 	disc.CFrame = CFrame.new(payload.From + Vector3.new(0, 0.15, 0)) * CFrame.Angles(0, 0, math.rad(90))
 	disc.Parent = effectsFolder()
-	TweenService:Create(disc, TweenInfo.new(0.25), { Transparency = 0.6 }):Play()
+	GameClock.Tween(disc, TweenInfo.new(0.25), { Transparency = 0.6 }):Play()
 	local emitters = statusEmitters("Poison", disc)
-	task.delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
+	GameClock.Delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
 		retire(disc, emitters, 0.4, 1.5)
 	end)
 end
@@ -841,8 +852,8 @@ local function staticCharge(payload: Payload)
 		local pulse = 1 + 0.25 * math.sin(alpha * alpha * 60)
 		ball.Size = Vector3.one * STATIC_CHARGE_SIZE * (1 + alpha * 0.8) * pulse
 		ball.Position = anchor + Vector3.new(0, 1.5, 0)
-		if os.clock() - lastSpark > 0.25 - alpha * 0.18 then
-			lastSpark = os.clock()
+		if GameClock.Now() - lastSpark > 0.25 - alpha * 0.18 then
+			lastSpark = GameClock.Now()
 			local spark = ball.Position
 				+ Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit * 3
 			bolt(ball.Position, spark)
@@ -867,10 +878,10 @@ local function hailstorm(payload: Payload)
 	cloud.Transparency = 1
 	cloud.Position = payload.From + Vector3.new(0, HAIL_CLOUD_HEIGHT, 0)
 	cloud.Parent = effectsFolder()
-	TweenService:Create(ring, TweenInfo.new(0.3), { Transparency = 0.8 }):Play()
-	TweenService:Create(cloud, TweenInfo.new(0.3), { Transparency = 0.35 }):Play()
+	GameClock.Tween(ring, TweenInfo.new(0.3), { Transparency = 0.8 }):Play()
+	GameClock.Tween(cloud, TweenInfo.new(0.3), { Transparency = 0.35 }):Play()
 	local emitters = statusEmitters("Chill", cloud)
-	task.delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
+	GameClock.Delay(math.max(payload.Duration - elapsedOf(payload), 0.2), function()
 		retire(ring, nil, 0.4)
 		retire(cloud, emitters, 0.5, 1.5)
 	end)
@@ -898,8 +909,8 @@ local function dismissShell(caster: Player)
 		return
 	end
 	shell.fading = true
-	TweenService:Create(shell.part, TweenInfo.new(ICE_SHELL_FADE_SECONDS), { Transparency = 1 }):Play()
-	task.delay(ICE_SHELL_FADE_SECONDS, function()
+	GameClock.Tween(shell.part, TweenInfo.new(ICE_SHELL_FADE_SECONDS), { Transparency = 1 }):Play()
+	GameClock.Delay(ICE_SHELL_FADE_SECONDS, function()
 		if shells[caster] == shell then
 			shells[caster] = nil
 		end
@@ -912,7 +923,7 @@ local function keepIceShell(payload: Payload)
 	if not caster then
 		return
 	end
-	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
+	local expiresAt = GameClock.Now() + math.max(payload.Duration - elapsedOf(payload), 0)
 	local shell = shells[caster]
 	if shell and not shell.fading then
 		shell.expiresAt = expiresAt
@@ -923,7 +934,7 @@ local function keepIceShell(payload: Payload)
 	part.Transparency = 1
 	part.Position = payload.From
 	part.Parent = effectsFolder()
-	TweenService:Create(
+	GameClock.Tween(
 		part,
 		TweenInfo.new(ICE_SHELL_FADE_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
 		{ Transparency = ICE_SHELL_TRANSPARENCY, Size = Vector3.one * ICE_SHELL_SIZE }
@@ -932,7 +943,7 @@ local function keepIceShell(payload: Payload)
 end
 
 local function stepShells()
-	local now = os.clock()
+	local now = GameClock.Now()
 	for caster, shell in shells do
 		local character = caster.Character
 		local found = character and character:FindFirstChild("HumanoidRootPart")
@@ -988,7 +999,7 @@ local function keepStormPrime(payload: Payload)
 		dismissPrime(caster)
 		return
 	end
-	local expiresAt = os.clock() + math.max(payload.Duration - elapsedOf(payload), 0)
+	local expiresAt = GameClock.Now() + math.max(payload.Duration - elapsedOf(payload), 0)
 	local prime = primes[caster]
 	if prime and not prime.fading then
 		prime.expiresAt = expiresAt
@@ -1014,7 +1025,7 @@ local function keepStormPrime(payload: Payload)
 end
 
 local function stepPrimes()
-	local now = os.clock()
+	local now = GameClock.Now()
 	for caster, prime in primes do
 		local character = caster.Character
 		local found = character and character:FindFirstChild("HumanoidRootPart")
@@ -1046,7 +1057,7 @@ local function setMelted(model: Model, melted: boolean)
 		meltedFire[model] = nil
 		for _, emitter in existing do
 			emitter.Enabled = false
-			Debris:AddItem(emitter, 1.5)
+			GameClock.Debris(emitter, 1.5)
 		end
 	end
 end
@@ -1111,7 +1122,7 @@ local function banHammer(payload: Payload)
 	end, function()
 		burst(payload.From, payload.Radius, BAN_COLOR)
 		burst(payload.From, payload.Radius * 0.5, GOLD_COLOR)
-		Debris:AddItem(hammer, BAN_HAMMER_LINGER_SECONDS)
+		GameClock.Debris(hammer, BAN_HAMMER_LINGER_SECONDS)
 	end)
 end
 
@@ -1181,11 +1192,11 @@ local function quake(payload: Payload)
 			descendant:Play()
 		end
 	end
-	task.delay(QUAKE_HOLD_SECONDS, function()
+	GameClock.Delay(QUAKE_HOLD_SECONDS, function()
 		for _, emitter in emitters do
 			emitter.Enabled = false
 		end
-		Debris:AddItem(tremor, QUAKE_FADE_OUT_SECONDS)
+		GameClock.Debris(tremor, QUAKE_FADE_OUT_SECONDS)
 	end)
 end
 
@@ -1204,7 +1215,7 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	IceShard = function(payload)
 		local shard = makePart("BlizzardShard", Vector3.new(0.8, 2.2, 0.8), ICE_COLOR)
 		shard.Transparency = 0.1
-		lob(payload, shard, ICE_COLOR, true, SHARD_ARC_HEIGHT)
+		lob(payload, shard, ICE_COLOR, true, SHARD_ARC_HEIGHT, true)
 	end,
 	ToxicBubble = function(payload)
 		local bubble = makePart("ToxicBubble", Vector3.one * 1.1, TOXIC_COLOR)

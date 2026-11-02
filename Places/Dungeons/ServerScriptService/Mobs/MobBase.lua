@@ -91,6 +91,7 @@ local MobDeath = require(script.Parent.MobDeath)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -180,7 +181,7 @@ local cachedAlivePlayerEntries: { { character: Model, hrp: BasePart } } = {}
 local cachedAlivePlayerEntriesAt: number = -1
 
 local function _refreshAlivePlayersCache()
-	local now = tick()
+	local now = GameClock.Now()
 	if now - cachedAlivePlayerEntriesAt < UPDATE_DELAY * 0.9 then
 		return
 	end
@@ -260,12 +261,12 @@ local function poolEntry(kind: string, attack: any, genericIndex: number?): Atta
 		closeRange = attack.closeRange,
 		minRange = attack.minRange,
 		cooldown = attack.cooldown,
-		readyAt = os.clock() + (attack.cooldown or 0) * 0.5,
+		readyAt = GameClock.Now() + (attack.cooldown or 0) * 0.5,
 		weight = attack.weight or 1,
 		autoEvery = attack.autoEvery,
 		targetFarthest = attack.targetFarthest,
 		nextAutoAt = if attack.autoEvery
-			then os.clock() + attack.autoEvery[1] + math.random() * (attack.autoEvery[2] - attack.autoEvery[1])
+			then GameClock.Now() + attack.autoEvery[1] + math.random() * (attack.autoEvery[2] - attack.autoEvery[1])
 			else math.huge,
 	}
 end
@@ -445,7 +446,7 @@ function MobBase.new(model: Model): MobBase
 
 	-- Stuck detection
 	self._lastStuckSamplePos = self._rootPart and self._rootPart.Position or Vector3.zero
-	self._lastStuckSampleAt = tick()
+	self._lastStuckSampleAt = GameClock.Now()
 
 	return self
 end
@@ -543,7 +544,7 @@ function MobBase.Start(self: MobBase)
 		self:_cleanupPathConnections()
 	end)
 
-	task.wait(START_GRACE_DELAY)
+	GameClock.Wait(START_GRACE_DELAY)
 
 	if self._model:GetAttribute(MINIBOSS_ATTRIBUTE) or self._model:GetAttribute(BOSS_ATTRIBUTE) then
 		-- The intro holds the AI. When it lets go, open the fight facing
@@ -576,6 +577,8 @@ function MobBase._resetAttributes(self: MobBase)
 	self._model:SetAttribute(Attributes.Slowed, false)
 	self._model:SetAttribute(Attributes.CCDebounce, false)
 	self._model:SetAttribute(Attributes.EnemyType, self._enemyType)
+	-- The health ladder archetype (EnemyScalingService, 2026-11-02).
+	self._model:SetAttribute("HealthArchetype", (self._data :: any).healthArchetype or "grunt")
 end
 
 function MobBase._applyHumanoidProperties(self: MobBase)
@@ -666,18 +669,27 @@ function MobBase._resyncWalkSpeed(self: MobBase)
 	local baseSpeed = self._baseWalkSpeed or self._defaultWalkSpeed
 	local statusSlowAttribute = self._model:GetAttribute("StatusSlowMultiplier")
 	local statusSlow: number = if type(statusSlowAttribute) == "number" then statusSlowAttribute else 1
+	-- Slow motion (GameClock, 2026-11-01): a Humanoid walks in real time,
+	-- so the scale is folded into the speed here and re-applied on change.
+	local timeScale = GameClock.Scale()
 	if self._model:GetAttribute(Attributes.Jailed) then
 		self._humanoid.WalkSpeed = 0
 	elseif self._model:GetAttribute(Attributes.Slowed) then
-		self._humanoid.WalkSpeed = (baseSpeed / 2.5) * statusSlow
+		self._humanoid.WalkSpeed = (baseSpeed / 2.5) * statusSlow * timeScale
 	else
-		self._humanoid.WalkSpeed = baseSpeed * statusSlow
+		self._humanoid.WalkSpeed = baseSpeed * statusSlow * timeScale
 	end
 end
 
 --[ Listeners ]--
 
 function MobBase._setupListeners(self: MobBase)
+	self._janitor:Add(
+		GameClock.OnScaleChanged:Connect(function()
+			self:_resyncWalkSpeed()
+		end),
+		"Disconnect"
+	)
 	self._janitor:Add(self._model:GetAttributeChangedSignal(Attributes.Jailed):Connect(function()
 		self:_resyncWalkSpeed()
 	end))
@@ -896,7 +908,7 @@ function MobBase._ensurePath(self: MobBase): Path
 end
 
 function MobBase._followPath(self: MobBase, destination: Vector3)
-	local now = tick()
+	local now = GameClock.Now()
 	-- Backing off after a failed compute: keep walking straight at the
 	-- target (the failure path's own fallback) rather than re-pathing.
 	if now < self._pathRetryAt then
@@ -977,7 +989,7 @@ function MobBase._followPath(self: MobBase, destination: Vector3)
 end
 
 function MobBase._checkStuck(self: MobBase)
-	local now = tick()
+	local now = GameClock.Now()
 	if now - self._lastStuckSampleAt < STUCK_DETECTION_WINDOW then
 		return
 	end
@@ -1026,7 +1038,7 @@ function MobBase._enterRoaming(self: MobBase)
 	-- Roam pace = default/3, through the status pipe (Jailed→0 handled
 	-- inside the resync; Chill keeps its bite while roaming).
 	self:_setBaseWalkSpeed(self._defaultWalkSpeed / 2)
-	self._stateEndTime = tick() + math.random(ROAM_DURATION_MIN, ROAM_DURATION_MAX)
+	self._stateEndTime = GameClock.Now() + math.random(ROAM_DURATION_MIN, ROAM_DURATION_MAX)
 	self._chosenAttack = nil
 
 	local point = nil
@@ -1099,7 +1111,7 @@ end
 -- fresh roll: no fixed rotation to read. A pool without rules keeps its one
 -- pick for the whole chase.
 function MobBase._selectAttack(self: MobBase, distance: number): AttackPoolEntry?
-	local now = os.clock()
+	local now = GameClock.Now()
 	local intent = self._attackIntent
 	if intent and eligible(intent, distance, now) then
 		return intent
@@ -1192,7 +1204,7 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	-- A cooldown attack starts its clock the moment it fires, and the next
 	-- attack is a fresh roll (_selectAttack).
 	if chosenAttack.cooldown then
-		chosenAttack.readyAt = os.clock() + chosenAttack.cooldown
+		chosenAttack.readyAt = GameClock.Now() + chosenAttack.cooldown
 	end
 	self._attackIntent = nil
 
@@ -1245,7 +1257,7 @@ function MobBase._runAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 		-- Post-attack recovery pause, hoisted onto the pool entry for BOTH kinds
 		-- (_buildAttackPool / _addAttacks). `or 0` keeps an attack that omits it at
 		-- "next frame" instead of erroring on task.wait(nil).
-		task.wait(chosenAttack.recoveryDuration or 0)
+		GameClock.Wait(chosenAttack.recoveryDuration or 0)
 
 		if self._attackGeneration ~= generation then
 			return
@@ -1329,7 +1341,7 @@ function MobBase._runRangedSwing(self: MobBase, entry)
 		end
 	end
 
-	task.wait(entry.windUpDuration)
+	GameClock.Wait(entry.windUpDuration)
 
 	if self._humanoid.Health <= 0 then
 		return -- died during windup
@@ -1370,7 +1382,7 @@ function MobBase._runUniqueAttack(self: MobBase, chosenAttack: AttackPoolEntry)
 	local run = chosenAttack.run
 	assert(run, "[MobBase] Unique attack without a `run` callback on mob: " .. self._model.Name)
 	local duration = run(self._model, target) or 0
-	task.wait(duration)
+	GameClock.Wait(duration)
 end
 
 -- An automatic attack that is due (MobData autoEvery) fires now, from any
@@ -1378,7 +1390,7 @@ end
 -- farthest from it inside the attack's range when `targetFarthest`, else
 -- the current target. True when it fired.
 function MobBase._tryAutoAttack(self: MobBase): boolean
-	local now = os.clock()
+	local now = GameClock.Now()
 	for _, entry in self._attackPool do
 		if not entry.autoEvery or now < entry.nextAutoAt then
 			continue
@@ -1432,13 +1444,13 @@ function MobBase._startAILoop(self: MobBase)
 		-- on the same frame forever, landing the whole wave's AI work as one
 		-- spike every UPDATE_DELAY. A random fraction of the tick spreads
 		-- them across frames.
-		task.wait(math.random() * UPDATE_DELAY)
+		GameClock.Wait(math.random() * UPDATE_DELAY)
 		while
 			self._model
 			and self._model.Parent
 			and self._model:FindFirstChildOfClass("Humanoid")
 			and self._humanoid.Health > 0
-			and task.wait(UPDATE_DELAY)
+			and GameClock.Wait(UPDATE_DELAY)
 		do
 			if self._state == STATE_DEAD then
 				break
@@ -1475,7 +1487,7 @@ function MobBase._startAILoop(self: MobBase)
 			end
 
 			if self._state == STATE_ROAMING then
-				if tick() < self._stateEndTime then
+				if GameClock.Now() < self._stateEndTime then
 					-- Still in the cooldown window. Hold here.
 					continue
 				end
@@ -1636,7 +1648,7 @@ function MobBase._scheduleDespawn(self: MobBase)
 	local longDespawn = self:_isEncounterMob()
 	local timer = if longDespawn then BOSS_DESPAWN_TIMER else DESPAWN_TIMER
 
-	task.delay(timer, function()
+	GameClock.Delay(timer, function()
 		if not self._model or not self._model.Parent then
 			return
 		end
@@ -1655,7 +1667,7 @@ function MobBase._scheduleDespawn(self: MobBase)
 			Duration = MobFadeData.DespawnFadeSeconds,
 		})
 
-		task.wait(MobFadeData.DespawnFadeSeconds)
+		GameClock.Wait(MobFadeData.DespawnFadeSeconds)
 		if self._model then
 			self._model:Destroy()
 		end

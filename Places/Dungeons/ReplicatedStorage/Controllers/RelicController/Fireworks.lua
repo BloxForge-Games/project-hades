@@ -1,10 +1,9 @@
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local Fireworks = {}
 Fireworks.__index = Fireworks
@@ -69,7 +68,7 @@ function Fireworks:PlayEffect()
 			return
 		end
 
-		local now = workspace:GetServerTimeNow()
+		local now = GameClock.Now()
 		local alpha = math.clamp((now - self._startTime) / self._duration, 0, 1)
 
 		local pos = self._quadraticBezierController:GenerateBezierCurve(
@@ -112,12 +111,11 @@ function Fireworks:PlayEffect()
 				end
 			end
 
-			Debris:AddItem(explosionVFX, 2)
+			GameClock.Debris(explosionVFX, 2)
 
-			TweenService:Create(fireworks.Handle, TweenInfo.new(0.25, Enum.EasingStyle.Cubic), { Transparency = 1 })
-				:Play()
+			GameClock.Tween(fireworks.Handle, TweenInfo.new(0.25, Enum.EasingStyle.Cubic), { Transparency = 1 }):Play()
 
-			Debris:AddItem(fireworks, 1)
+			GameClock.Debris(fireworks, 1)
 		end
 	end)
 end

@@ -86,6 +86,7 @@ local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Se
 local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
 local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- One relic's tweak to a status application (StatusConditionData
 -- `relicModifiers` rows and GLOBAL_RELIC_MODIFIERS).
@@ -449,7 +450,7 @@ function StatusConditionService:_decrementVisual(model: Model, visualKey: string
 			emitter.Enabled = false
 		end
 	end
-	task.delay(VFX_FADE_SECONDS, function()
+	GameClock.Delay(VFX_FADE_SECONDS, function()
 		for _, emitter in slot.emitters do
 			emitter:Destroy()
 		end
@@ -513,7 +514,7 @@ local function playStatusSound(status: string, soundName: string?, hrp: BasePart
 		return
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 	if now - (lastSoundPlayAt[status] or -math.huge) < SOUND_DEBOUNCE_SECONDS then
 		return
 	end
@@ -675,7 +676,7 @@ function StatusConditionService:DetonateBlackFlame(sourcePlayer: Player, model: 
 	if not stack or #stack == 0 or not humanoid or humanoid.Health <= 0 then
 		return 0
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	local total = 0
 	local color: Color3? = nil
 	for _, record: StatusRecord in table.clone(stack) :: { StatusRecord } do
@@ -701,7 +702,7 @@ function StatusConditionService:DetonateBlackFlame(sourcePlayer: Player, model: 
 			To = hrp.Position,
 			Radius = 5,
 			Duration = 0,
-			StartTime = workspace:GetServerTimeNow(),
+			StartTime = GameClock.Now(),
 		})
 	end
 	return total
@@ -715,7 +716,7 @@ function StatusConditionService:ExtendBurn(sourcePlayer: Player, model: Model, s
 	if not entry then
 		return
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	for status in BURN_FAMILY do
 		local value = entry[status]
 		local stack = value and value[sourcePlayer.UserId]
@@ -1071,7 +1072,7 @@ function StatusConditionService:_armRecord(record: StatusRecord)
 		record.powerPerTick = config.dotPowerFractionPerSecond * tickInterval
 		record.tickInterval = tickInterval
 		self:_dotTick(record)
-		record.nextTickAt = os.clock() + tickInterval
+		record.nextTickAt = GameClock.Now() + tickInterval
 	end
 	self:_ensureSweepRunning()
 end
@@ -1132,7 +1133,7 @@ function StatusConditionService:_sweepActiveRecords()
 		end
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 	for _, record in due do
 		self:_sweepRecord(record, now)
 	end
@@ -1300,7 +1301,7 @@ function StatusConditionService:_applyStatusOnce(
 	local hadAnyInstance = self:_countInstances(targetModel, status) > 0
 
 	local function refreshRecord(record)
-		record.expiresAt = os.clock() + duration
+		record.expiresAt = GameClock.Now() + duration
 		record.sourcePlayer = sourcePlayer
 		record.dotMultiplier = dotMultiplier
 		record.weakenFraction = weakenFraction
@@ -1349,7 +1350,7 @@ function StatusConditionService:_applyStatusOnce(
 	-- FRESH application (a new stack for stackables below the limit).
 	local visualKey = config.auraName
 	local record: StatusRecord = {
-		expiresAt = os.clock() + duration,
+		expiresAt = GameClock.Now() + duration,
 		-- `sourcePlayer` is a plain Player (see the userId note above).
 		sourcePlayer = sourcePlayer :: Player,
 		dotMultiplier = dotMultiplier,

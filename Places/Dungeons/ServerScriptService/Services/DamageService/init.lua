@@ -76,6 +76,7 @@ end
 local DamageIndicatorColors = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DamageIndicatorColors)
 local rollDamageVariance = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Damage.rollDamageVariance)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Knockback on regular mobs (MobSimService.ApplyKnockback), studs per
 -- hit by what landed it. DoT / aura ticks never push (they return
@@ -589,7 +590,7 @@ function DamageService._recordDamageTaken(self: typeof(DamageService), player: P
 		self._recentDamageTaken[player.UserId] = log
 	end
 
-	local now = tick()
+	local now = GameClock.Now()
 	for i = #log, 1, -1 do
 		if now - log[i].t > RECENT_DAMAGE_KEEP_SECONDS then
 			table.remove(log, i)
@@ -611,7 +612,7 @@ function DamageService.ConsumeRecentDamageTaken(
 		return 0
 	end
 
-	local now = tick()
+	local now = GameClock.Now()
 	local total = 0
 	for _, entry in log do
 		if now - entry.t <= windowSeconds then
@@ -674,10 +675,10 @@ function DamageService.TryExecute(
 		To = slamPosition,
 		Radius = radius,
 		Duration = fallSeconds,
-		StartTime = workspace:GetServerTimeNow(),
+		StartTime = GameClock.Now(),
 	})
 
-	task.delay(fallSeconds, function()
+	GameClock.Delay(fallSeconds, function()
 		if humanoid.Parent and humanoid.Health > 0 then
 			humanoid:TakeDamage(humanoid.Health)
 		end
@@ -738,7 +739,7 @@ function DamageService.ForceNextCrit(
 	local lanes = self._forcedCrits[player.UserId] or {}
 	self._forcedCrits[player.UserId] = lanes
 	lanes[lane] = {
-		expiresAt = if seconds then os.clock() + seconds else nil,
+		expiresAt = if seconds then GameClock.Now() + seconds else nil,
 		onHit = onHit,
 		spreadSeconds = spreadSeconds,
 	}
@@ -760,7 +761,7 @@ function DamageService._liveForcedCrit(self: typeof(DamageService), player: Play
 	if not arm then
 		return nil
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	if arm.spentAt then
 		if now - arm.spentAt > (arm.spreadSeconds or 0) then
 			lanes[lane] = nil
@@ -816,7 +817,7 @@ function DamageService._consumeForcedCrit(
 	end
 	hitTargets[targetModel] = true
 	if not arm.spentAt then
-		arm.spentAt = os.clock()
+		arm.spentAt = GameClock.Now()
 	end
 	return arm
 end
@@ -1006,7 +1007,7 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 	end
 
 	-- The once-per-cooldown latch (also collapses an AoE crit to one).
-	local now = os.clock()
+	local now = GameClock.Now()
 	local lastStrike = self._lightningStrikeLast[player.UserId]
 	if lastStrike and (now - lastStrike) < relicData(RelicNames["Lightning Horn of the Heavens"], "cooldown", 1) then
 		return
@@ -1059,7 +1060,7 @@ function DamageService._tryShurikenManaRefund(self: typeof(DamageService), playe
 		return
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 	local lastRefund = self._shurikenLastRefund[player.UserId]
 	if lastRefund and (now - lastRefund) < SHURIKEN_FANOUT_SECONDS then
 		return

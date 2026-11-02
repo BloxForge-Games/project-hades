@@ -26,6 +26,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- AimController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -171,7 +172,7 @@ function ArcaneController.IsSlotOnCooldown(self: typeof(ArcaneController), equip
 	if not entry then
 		return false
 	end
-	return os.clock() - entry.lastUsed < entry.cooldown
+	return GameClock.Now() - entry.lastUsed < entry.cooldown
 end
 
 -- Every gate a cast must pass, WITH the player-facing feedback a failed
@@ -217,7 +218,10 @@ function ArcaneController.CanCastArcane(
 		}
 	end
 
-	if os.clock() - self._arcaneCooldownRegistry[vfxName].lastUsed < self._arcaneCooldownRegistry[vfxName].cooldown then
+	if
+		GameClock.Now() - self._arcaneCooldownRegistry[vfxName].lastUsed
+		< self._arcaneCooldownRegistry[vfxName].cooldown
+	then
 		return false
 	end
 
@@ -256,7 +260,7 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 
 	self.Signals["OnArcane" .. equipSlot .. "CooldownUpdated"]:Fire(true, self._arcaneData.mana, effectiveManaCost)
 
-	task.delay(newCooldown, function()
+	GameClock.Delay(newCooldown, function()
 		self.Signals["OnArcane" .. equipSlot .. "CooldownUpdated"]:Fire(false, self._arcaneData.mana, effectiveManaCost)
 	end)
 
@@ -269,7 +273,7 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 
 	self._arcaneCooldownRegistry[vfxName] = {
 		cooldown = newCooldown,
-		lastUsed = os.clock(),
+		lastUsed = GameClock.Now(),
 	}
 
 	self.Signals.OnArcaneCasted:Fire(vfxName, equipSlot, newCooldown)
@@ -288,7 +292,7 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 	-- validation + everyone else. See VFXController:PlayVFX.
 	VFXController:PlayVFX(vfxName)
 
-	task.delay(ArcaneData[vfxName].duration, function()
+	GameClock.Delay(ArcaneData[vfxName].duration, function()
 		-- A later cast owns the flags now; its own timer releases them.
 		if self._castSerial ~= castSerial then
 			self.Signals.OnArcaneComplete:Fire(vfxName)

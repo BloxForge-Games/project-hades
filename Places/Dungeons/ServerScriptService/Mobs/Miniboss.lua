@@ -27,6 +27,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local MobBase = require(script.Parent.MobBase)
 local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local MobFadeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobFadeData)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local Miniboss = setmetatable({}, MobBase)
 Miniboss.__index = Miniboss
@@ -45,7 +46,7 @@ end
 -- Aggressive post-attack behavior: short breather, then straight back to
 -- Chase (re-pick an attack + pursue) instead of MobBase's Roaming wander.
 function Miniboss:_afterAttack()
-	task.wait(ATTACK_COOLDOWN)
+	GameClock.Wait(ATTACK_COOLDOWN)
 	-- Don't resume pursuit if we died, or a boss phase cutscene froze us
 	-- (Boss sets self._phasing), during the breather.
 	if self._humanoid.Health <= 0 or self._phasing then
@@ -63,7 +64,7 @@ end
 function Miniboss:_onDeathAnimation()
 	-- TODO: load + play the miniboss/boss death animation track here.
 	-- Placeholder until the animation asset exists.
-	task.wait(7)
+	GameClock.Wait(7)
 
 	self._model.PrimaryPart.Anchored = true
 
@@ -82,7 +83,7 @@ function Miniboss:_onDeathAnimation()
 		Duration = MobFadeData.EncounterDespawnFadeSeconds,
 	})
 
-	task.wait(5)
+	GameClock.Wait(5)
 
 	if self._model then
 		self._model:Destroy()

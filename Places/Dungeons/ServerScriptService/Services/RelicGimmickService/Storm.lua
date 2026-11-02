@@ -40,6 +40,7 @@ local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local BOLT_SWORD = RelicNames["Lightning Bolt Sword"]
 local HOVERBOARD = RelicNames["Sparkle Time Hoverboard"]
@@ -76,7 +77,7 @@ local function chainLightning(player: Player, origin: Model)
 	local from = originRoot.Position
 	for jump = 1, helpers.data(BOLT_SWORD, "jumps", 3) do
 		if jump > 1 then
-			task.wait(CHAIN_JUMP_SECONDS)
+			GameClock.Wait(CHAIN_JUMP_SECONDS)
 		end
 		local nextModel: Model? = nil
 		local nextHumanoid: Humanoid? = nil
@@ -107,7 +108,7 @@ function Storm.onAttackHit(player: Player, model: Model, isMagic: boolean)
 	if not helpers.owns(player, BOLT_SWORD) then
 		return
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	if lastChainRoll[player] and now - lastChainRoll[player] < CHAIN_FANOUT_SECONDS then
 		return
 	end

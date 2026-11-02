@@ -88,6 +88,7 @@ local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Arcan
 local toggleWeaponSheath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.toggleWeaponSheath)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- RelicService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -307,15 +308,15 @@ function VFXService.AuraAttack(self: typeof(VFXService), player: Player)
 	-- gate and WITHOUT stamping lastAttacked, so the wait costs the player
 	-- nothing: the first swing lands the moment the grace is up.
 	local readyAt = self._vfxAuraRegistry[player].readyAt
-	if readyAt and tick() < readyAt then
+	if readyAt and GameClock.Now() < readyAt then
 		return
 	end
 
-	if tick() - self._vfxAuraRegistry[player].lastAttacked < self._vfxAuraRegistry[player].attackInterval then
+	if GameClock.Now() - self._vfxAuraRegistry[player].lastAttacked < self._vfxAuraRegistry[player].attackInterval then
 		return
 	end
 
-	self._vfxAuraRegistry[player].lastAttacked = tick()
+	self._vfxAuraRegistry[player].lastAttacked = GameClock.Now()
 
 	self._vfxAuraRegistry[player].attack()
 end
@@ -579,7 +580,7 @@ function VFXService._onAuraAttackStart(self: typeof(VFXService), player: Player)
 	self._vfxAttackRegistry[player] = task.spawn(function()
 		while player.Parent and player.Character and player.Character:GetAttribute(Attributes.SusanooEnabled) do
 			self:AuraAttack(player)
-			task.wait(AURA_DELAY)
+			GameClock.Wait(AURA_DELAY)
 		end
 	end)
 end
@@ -650,9 +651,9 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 	-- sequence: Beam.Transparency is a NumberSequence, which TweenService
 	-- cannot drive, so step it by hand.
 	local function rampBeams(toVisible: boolean, seconds: number)
-		local startedAt = os.clock()
+		local startedAt = GameClock.Now()
 		while sigil.Parent do
-			local alpha = math.clamp((os.clock() - startedAt) / seconds, 0, 1)
+			local alpha = math.clamp((GameClock.Now() - startedAt) / seconds, 0, 1)
 			local eased = alpha * alpha * (3 - 2 * alpha)
 			local visibility = if toVisible then eased else 1 - eased
 			for _, beam in beams do
@@ -690,12 +691,12 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 		end
 	end
 	task.spawn(rampBeams, true, MYSTICAL_SIGIL_BEAM_FADE_IN)
-	task.delay(MYSTICAL_SIGIL_DURATION - MYSTICAL_SIGIL_BEAM_FADE_OUT, function()
+	GameClock.Delay(MYSTICAL_SIGIL_DURATION - MYSTICAL_SIGIL_BEAM_FADE_OUT, function()
 		if sigil.Parent then
 			rampBeams(false, MYSTICAL_SIGIL_BEAM_FADE_OUT)
 		end
 	end)
-	task.delay(MYSTICAL_SIGIL_DURATION, function()
+	GameClock.Delay(MYSTICAL_SIGIL_DURATION, function()
 		if not sigil.Parent then
 			return
 		end
@@ -710,12 +711,12 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 	self:_pruneExpiredSigils()
 	table.insert(self._activeSigils, {
 		position = floorPosition,
-		expiresAt = tick() + MYSTICAL_SIGIL_DURATION,
+		expiresAt = GameClock.Now() + MYSTICAL_SIGIL_DURATION,
 	})
 end
 
 function VFXService._pruneExpiredSigils(self: typeof(VFXService))
-	local now = tick()
+	local now = GameClock.Now()
 	for i = #self._activeSigils, 1, -1 do
 		if now >= self._activeSigils[i].expiresAt then
 			table.remove(self._activeSigils, i)
@@ -789,7 +790,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	end
 
 	if
-		tick() - ArcaneService:GetPlayerArcaneLastUsed(player, vfxName)
+		GameClock.Now() - ArcaneService:GetPlayerArcaneLastUsed(player, vfxName)
 		< ArcaneService:GetPlayerArcaneCooldown(player, vfxName)
 	then
 		warn("[VFXService] Player attempted to cast arcane before cooldown was up:", player)
@@ -817,7 +818,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- Re-read: the cooldown checks above may have yielded.
 	local latest = ArcaneService:GetPlayerArcaneData(player) or arcaneData
 	ArcaneService:SetPlayerArcaneData(player, latest.mana - effectiveManaCost, latest.maxMana)
-	ArcaneService:SetPlayerArcaneLastUsed(player, vfxName, tick())
+	ArcaneService:SetPlayerArcaneLastUsed(player, vfxName, GameClock.Now())
 
 	ArcaneService:SetPlayerArcaneCooldown(player, vfxName, newCooldown)
 	self:_commitCast(player, freeCast)
@@ -887,14 +888,14 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	if arcaneIndexData.superArmorDuration and arcaneIndexData.superArmorDuration > 0 then
 		character:SetAttribute(Attributes.SuperArmor, true)
 
-		task.delay(arcaneIndexData.superArmorDuration, function()
+		GameClock.Delay(arcaneIndexData.superArmorDuration, function()
 			if activePlayer.Character then
 				activePlayer.Character:SetAttribute(Attributes.SuperArmor, false)
 			end
 		end)
 	end
 
-	task.delay(duration, function()
+	GameClock.Delay(duration, function()
 		if self._castSerials[activePlayer.UserId] ~= castSerial then
 			return
 		end
@@ -920,7 +921,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 			lastAttacked = 0,
 			attackInterval = ArcaneData[vfxName].attackInterval,
 			-- The rig gets AURA_ACTIVATION_DELAY to arrive before it can swing.
-			readyAt = tick() + AURA_ACTIVATION_DELAY,
+			readyAt = GameClock.Now() + AURA_ACTIVATION_DELAY,
 		}
 	end
 
@@ -1181,7 +1182,7 @@ function VFXService._onPersistentHitboxRequested(
 				arcaneIndexData.hitboxSize.X
 			)
 
-			task.wait(arcaneIndexData.hitboxIncrement)
+			GameClock.Wait(arcaneIndexData.hitboxIncrement)
 
 			elapsed += arcaneIndexData.hitboxIncrement
 		end

@@ -30,6 +30,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local EXPIRY_ATTRIBUTE = "AuraExpiresAt"
 local FALLBACK_DURATION = 5
@@ -43,11 +44,11 @@ local FX_NAME = "FrostburstFX"
 
 local function awaitExpiry(marker: Instance)
 	while marker.Parent do
-		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - os.clock()
+		local remaining = ((marker:GetAttribute(EXPIRY_ATTRIBUTE) :: number?) or 0) - GameClock.Now()
 		if remaining <= 0 then
 			return
 		end
-		task.wait(remaining)
+		GameClock.Wait(remaining)
 	end
 end
 
@@ -93,7 +94,7 @@ return function(player: Player, character: Model, duration: number?)
 		end
 	end
 
-	task.delay(math.random(1, 15) / 100, function()
+	GameClock.Delay(math.random(1, 15) / 100, function()
 		local head = character:FindFirstChild("Head") :: BasePart?
 		if TextIndicatorService and head then
 			TextIndicatorService:ShowIndicator(player, head, AuraNames.Frostburst .. "!", Color3.fromRGB(255, 255, 255))
@@ -104,7 +105,7 @@ return function(player: Player, character: Model, duration: number?)
 	local marker = Instance.new("Attachment")
 	marker.Name = AuraNames.Frostburst
 	marker.Parent = hrp
-	marker:SetAttribute(EXPIRY_ATTRIBUTE, os.clock() + (duration or FALLBACK_DURATION))
+	marker:SetAttribute(EXPIRY_ATTRIBUTE, GameClock.Now() + (duration or FALLBACK_DURATION))
 
 	task.spawn(function()
 		awaitExpiry(marker)
@@ -124,7 +125,7 @@ return function(player: Player, character: Model, duration: number?)
 			end
 		end
 
-		task.delay(grace, function()
+		GameClock.Delay(grace, function()
 			for _, clone in clones do
 				clone:Destroy()
 			end

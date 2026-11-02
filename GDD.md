@@ -519,15 +519,38 @@ Merchant (sell), Blacksmith (upgrade), Arcane Trainer (chests), Guildhall (guild
 Salesman (rotating cosmetics), Realm Gate, and the **Keystone Portal** as the central landmark and
 main dungeon queue.
 
+## Slow motion
+
+A server-wide time scale for cinematic beats (2026-11-01). Everyone in the server shares it, the
+triggering player included. Two beats ship with it: the kill that clears a Combat room (a quarter
+speed for 0.8 s, then the vending machines drop as time comes back) and an encounter death (a
+quarter speed for 1.5 s on the Boss, 1 s on a Miniboss, through the body's fall; the chest drops
+once time is back). `TimeScaleService:Slow(scale, holdSeconds)` fires one from anywhere on the
+server; `/slowmo <scale> [seconds]` for testing.
+
+What slows: everything on the game clock (`Shared/GameClock`): the mob sim and legacy mob AI,
+attack wind-ups and recoveries, hitbox telegraphs, statuses and shields, cooldowns, projectiles,
+the dodge, relic gimmicks, drops and relic FX movers; and on every client, animation tracks,
+particle emitters, gravity and the player's walk and jump. Sounds keep their pitch; the mix is
+muffled (highs and mids down) for the beat instead, the way films do it. Not slowed: beams and
+trails (no time scale in the engine), physics velocities already in flight, TweenService tweens
+started before the beat (gameplay tweens use `GameClock.Tween`), the camera, UI, and real-time
+windows (the revive timer, offers, gate countdowns).
+
+
 ## Enemies (Runegrove direction)
 
 Stonehorn Boar (melee), Rootfang Wolf (fast melee), Thornshot Shaman (ranged), Runebark Sentinel
 (tank), Briarhorn Caribou (support and healer). Readable silhouettes, stone, wood and foliage,
 restrained glowing runes.
 
-Tier scaling: mob health ×1.5 / 3 / 6 / 12 (back to the 2026-10-30 ladder after a ×0.8 on
-2026-10-31), grunts (every mob but the Miniboss and Boss) a further ×2 on every tier, and damage
-×1.5 / 2.5 / 3.5 / 4.5 by tier (set by hand from 1 / 1.47 / 1.68 / 2.14). All from the first
+Tier scaling (2026-11-02): regular mobs scale per archetype so a tier-matched Common sword at
+median quality kills in a fixed swing count. Easy health is the base row (grunt 175, Elite /
+Support 210, Tank 285) and the ladders are grunt ×1 / 2.25 / 4.2 / 6.8, elite ×1 / 2.1 / 3.9 / 6.2,
+tank ×1 / 2 / 3.5 / 5.4, giving grunt / elite / tank swings of 5 / 6 / 8 on Easy, 7 / 8 / 10 on
+Normal, 9 / 10 / 12 on Hard and 11 / 12 / 14 on Nightmare (Level 1 / 5 / 10 / 15 swords). The
+Miniboss (1250) and Boss (2500) ride ×1 / 3 / 6 / 12. Damage ×0.9 / 2.5 / 3.5 / 4.5 by tier; base
+hits grunts 5, Tank 6, Miniboss Cleave 8 / Ambush 9 / Water Dragon 10 / Shark Barrage 10. All from the first
 play-test, 2026-11-01: Hard with a Level 1 sword +4 cleared easily, grunt hits barely registered,
 the Miniboss and Boss felt right. Hard grunt now 1800 HP and a ~25 hit; a ~200 HP player dies in
 ~8 grunt hits. The survival sim reruns next.

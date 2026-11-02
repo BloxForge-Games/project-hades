@@ -22,6 +22,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Korblox Evil Eye (2026-11-01): the Mana cost multiplier of the player's
 -- NEXT cast, stamped for the client's precheck (1 when not discounted).
@@ -106,7 +107,7 @@ end
 function ArcaneService._runPassiveManaRegenLoop(self: typeof(ArcaneService))
 	task.spawn(function()
 		while true do
-			task.wait(PASSIVE_MANA_REGEN_INTERVAL)
+			GameClock.Wait(PASSIVE_MANA_REGEN_INTERVAL)
 			for _, player in Players:GetPlayers() do
 				local data = self:GetPlayerArcaneData(player)
 				if data == nil then

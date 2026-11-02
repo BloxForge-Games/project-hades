@@ -24,6 +24,8 @@
 	complete at require time.
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local RunService = game:GetService("RunService")
 
 --[ Types ]--
@@ -84,7 +86,7 @@ local function pose(instance: Instance, entry: FloatEntry, now: number)
 end
 
 function DropFloatController._onHeartbeat(self: typeof(DropFloatController))
-	local now = os.clock()
+	local now = GameClock.Now()
 	for instance, entry in self._entries do
 		-- Gone from the DataModel without an Unregister (destroyed by the
 		-- server before the component's janitor ran): drop it here.
@@ -111,7 +113,7 @@ function DropFloatController.Register(self: typeof(DropFloatController), instanc
 		phase = config.phase or 0,
 		spinAxis = if config.spinAxis then config.spinAxis.Unit else nil,
 		spinRate = config.spinRate or 0,
-		startedAt = os.clock(),
+		startedAt = GameClock.Now(),
 	}
 	if not self._connection then
 		self._connection = RunService.Heartbeat:Connect(function()

@@ -468,6 +468,27 @@ COMMANDS = {
 		end,
 	},
 
+	slowmo = {
+		usage = "/slowmo <scale 0.05-0.95> [hold seconds] | /slowmo off",
+		description = "Slows the whole server (TimeScaleService): animations, mobs, projectiles, statuses, everything on the game clock.",
+		handler = function(_player: Player, args: { string }): string?
+			local timeScale = Blitz.OptionalService("TimeScaleService")
+			if not timeScale then
+				return "TimeScaleService is not loaded."
+			end
+			if args[1] == "off" then
+				timeScale:Reset()
+				return "Time scale released."
+			end
+			local scale = tonumber(args[1])
+			if not scale or scale <= 0 or scale >= 1 then
+				return ("Usage: %s"):format(COMMANDS.slowmo.usage)
+			end
+			local hold = tonumber(args[2]) or 1
+			timeScale:Slow(scale, hold)
+			return ("Time scale %.2f for %.1fs."):format(scale, hold)
+		end,
+	},
 	relic = {
 		usage = "/relic <name> | /relic clear",
 		description = "Grants yourself a relic by (partial) name, opening a slot if you are full; 'clear' removes all of yours.",
@@ -604,11 +625,13 @@ COMMANDS = {
 				scaling:RescaleAll()
 			end
 			local tier = DifficultyData.Resolve(wanted)
-			return ("Difficulty %s -> %s (enemy health x%.2f, grunts x%.2f more, damage x%.2f, gear L%d-%d). Living mobs rescaled; the floor's layout stays."):format(
+			return ("Difficulty %s -> %s (boss health x%.2f, grunt / elite / tank x%.2f / %.2f / %.2f, damage x%.2f, gear L%d-%d). Living mobs rescaled; the floor's layout stays."):format(
 				previous,
 				wanted,
 				tier.enemyHealth,
-				tier.gruntHealth,
+				tier.healthByArchetype.grunt,
+				tier.healthByArchetype.elite,
+				tier.healthByArchetype.tank,
 				tier.enemyDamage,
 				tier.levelRange.min,
 				tier.levelRange.max

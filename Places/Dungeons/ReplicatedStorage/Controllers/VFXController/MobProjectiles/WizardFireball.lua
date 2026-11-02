@@ -37,6 +37,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local TextIndicatorController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.TextIndicatorController)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Tick cadence. Matches FireBlast's 0.015s (~67Hz) — fast enough that
 -- a 60 stud/sec projectile only moves ~0.9 studs per tick, way under
@@ -167,7 +168,7 @@ return function(
 	-- Trajectory loop. Fire-and-forget along the initial direction
 	-- vector. Per-tick: move forward by speed*tickInterval, apply
 	-- gravity if > 0, check overlap.
-	local startTime = os.clock()
+	local startTime = GameClock.Now()
 	local lifetime = attackConfig.lifetime
 	local hitRadius = attackConfig.hitRadius
 	local speed = attackConfig.speed
@@ -209,7 +210,7 @@ return function(
 			-- naturally instead of the model just vanishing.
 			break
 		end
-		if os.clock() - startTime >= lifetime then
+		if GameClock.Now() - startTime >= lifetime then
 			-- Lifetime expired without contact. Despawn cleanly; no
 			-- impact callback fires (server's registry expire handles
 			-- the orphaned cast).
@@ -324,7 +325,7 @@ return function(
 			-- segment raycast above.
 		end
 
-		task.wait(TICK_INTERVAL)
+		GameClock.Wait(TICK_INTERVAL)
 	end
 
 	-- Spawn impact VFX at the final position. Same for hit-player and

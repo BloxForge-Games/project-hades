@@ -1,7 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
@@ -11,6 +10,7 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local radialGroundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.radialGroundFracture)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -42,7 +42,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		ReplicatedStorage.GameAssets.Sounds.LightingShatterCast:Play()
 	end
 
-	task.delay(lightingShatterAnimation.Length - 0.1, function()
+	GameClock.Delay(lightingShatterAnimation.Length - 0.1, function()
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/
@@ -62,7 +62,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					})
 				end
 
-				task.delay(0.1, function()
+				GameClock.Delay(0.1, function()
 					lightingShatterVFX:PivotTo(cachedFrames[i])
 
 					radialGroundFracture:Spawn(cachedFrames[i].Position, 6.5)
@@ -83,7 +83,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 						end
 					end
 
-					task.delay(0.1, function()
+					GameClock.Delay(0.1, function()
 						for _, particle in pairs(lightingShatterVFX:GetDescendants()) do
 							if particle:IsA("ParticleEmitter") and particle.Parent.Name ~= "StarterAttachment" then
 								particle:Emit(if particle.Parent.Name ~= "ImpactAttachment" then 15 else 10)
@@ -96,10 +96,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 						lightingShatterVFX.GroundImpact.ElectricExplosion2:Play()
 					end
 
-					Debris:AddItem(lightingShatterVFX, 5)
+					GameClock.Debris(lightingShatterVFX, 5)
 				end)
 
-				task.wait(0.5)
+				GameClock.Wait(0.5)
 			end
 		end)
 	end)

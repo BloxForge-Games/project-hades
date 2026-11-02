@@ -50,6 +50,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local EventService = require(ServerScriptService.Services.EventService)
@@ -63,6 +64,11 @@ local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyT
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+
+-- The coffin-win slow motion (TimeScaleService): a quarter speed for 1 s.
+local COFFIN_WIN_SLOW_SCALE = 0.25
+local COFFIN_WIN_SLOW_HOLD_SECONDS = 1.0
 
 --[ Constants ]--
 
@@ -617,6 +623,13 @@ end
 function CoffinEventService.DropRewardChests(_self: typeof(CoffinEventService), onAllOpened: (() -> ())?): boolean
 	if not EncounterChestService then
 		return false
+	end
+	-- THE BEAT (2026-11-02): beating the Coffin slows the whole server for
+	-- a breath, then the Event Chests fall at full speed.
+	local timeScale = Blitz.OptionalService("TimeScaleService")
+	if timeScale then
+		timeScale:Slow(COFFIN_WIN_SLOW_SCALE, COFFIN_WIN_SLOW_HOLD_SECONDS)
+		task.wait(GameClock.RealSecondsUntilNormal())
 	end
 	EncounterChestService:DropChestsForEncounter(EnemyTypes.Event, CHEST_MOB_NAME, onAllOpened, activeTuning().gems)
 	return true

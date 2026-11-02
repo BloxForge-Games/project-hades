@@ -36,7 +36,6 @@
 
 --[ Roblox Services ]--
 
-local Debris = game:GetService("Debris")
 local ContentProvider = game:GetService("ContentProvider")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -53,6 +52,7 @@ local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.C
 local BreakableLootData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BreakableLootData)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local BreakableController = {
 	Name = "BreakableController",
@@ -191,7 +191,7 @@ function BreakableController._startShake(self: typeof(BreakableController), mode
 	local state: ShakeState = { cancelled = false, connection = nil }
 	self._activeShakes[model] = state
 
-	local startTime = os.clock()
+	local startTime = GameClock.Now()
 
 	state.connection = RunService.Heartbeat:Connect(function()
 		if state.cancelled then
@@ -208,7 +208,7 @@ function BreakableController._startShake(self: typeof(BreakableController), mode
 			return
 		end
 
-		local elapsed = os.clock() - startTime
+		local elapsed = GameClock.Now() - startTime
 		local current: CFrame
 
 		if elapsed < SHAKE_OUT_DURATION then
@@ -257,7 +257,7 @@ local function addFadingGlow(part: BasePart, color: Color3, seconds: number)
 	light.Range = BIT_LIGHT_RANGE
 	light.Shadows = false
 	light.Parent = part
-	TweenService:Create(light, TweenInfo.new(seconds, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {
+	GameClock.Tween(light, TweenInfo.new(seconds, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {
 		Brightness = 0,
 	}):Play()
 end
@@ -294,12 +294,12 @@ local function burstShards(
 		if glow then
 			addFadingGlow(shard, color, SHARD_LINGER + SHARD_FADE)
 		end
-		task.delay(SHARD_LINGER, function()
+		GameClock.Delay(SHARD_LINGER, function()
 			if shard.Parent then
-				TweenService:Create(shard, SHARD_FADE_INFO, { Transparency = 1 }):Play()
+				GameClock.Tween(shard, SHARD_FADE_INFO, { Transparency = 1 }):Play()
 			end
 		end)
-		Debris:AddItem(shard, SHARD_LINGER + SHARD_FADE + 0.2)
+		GameClock.Debris(shard, SHARD_LINGER + SHARD_FADE + 0.2)
 	end
 end
 
@@ -363,7 +363,7 @@ local function playBreakSound(
 	sound.Parent = anchor
 	anchor.Parent = workspace.IgnoreInstances:FindFirstChild("ArcaneSpells") or workspace.IgnoreInstances
 	sound:Play()
-	Debris:AddItem(anchor, BREAK_SOUND_LIFETIME)
+	GameClock.Debris(anchor, BREAK_SOUND_LIFETIME)
 end
 
 -- The vein's ore chunks (see the CHUNK_ constants): glowing bits thrown
@@ -400,10 +400,10 @@ local function sprayOreChunks(position: Vector3, floorY: number, color: Color3)
 		})
 	end
 
-	local began = os.clock()
+	local began = GameClock.Now()
 	local connection: RBXScriptConnection
 	connection = RunService.Heartbeat:Connect(function(deltaTime: number)
-		local now = os.clock()
+		local now = GameClock.Now()
 		local elapsed = now - began
 		local allGone = true
 		for _, entry in chunks do
@@ -463,14 +463,14 @@ function BreakableController._playStyledBreak(self: typeof(BreakableController),
 	if style ~= "Sink" then
 		-- The pot: swell for a beat under the hit's red flash, then burst.
 		local baseScale = model:GetScale()
-		local began = os.clock()
+		local began = GameClock.Now()
 		local connection: RBXScriptConnection
 		connection = RunService.Heartbeat:Connect(function()
 			if not model.Parent then
 				connection:Disconnect()
 				return
 			end
-			local alpha = math.clamp((os.clock() - began) / POP_SECONDS, 0, 1)
+			local alpha = math.clamp((GameClock.Now() - began) / POP_SECONDS, 0, 1)
 			model:ScaleTo(baseScale * (1 + (POP_SCALE - 1) * math.sin(alpha * math.pi / 2)))
 			if alpha >= 1 then
 				connection:Disconnect()
@@ -507,7 +507,7 @@ function BreakableController._finishStyledBreak(_self: typeof(BreakableControlle
 
 	local start = model:GetPivot()
 	local depth = boxSize.Y
-	local began = os.clock()
+	local began = GameClock.Now()
 	-- The chunks land on the floor the vein stood on.
 	sprayOreChunks(boxCFrame.Position, boxCFrame.Position.Y - boxSize.Y / 2, shardColor)
 	local character = Players.LocalPlayer.Character
@@ -525,7 +525,7 @@ function BreakableController._finishStyledBreak(_self: typeof(BreakableControlle
 	end
 	local connection: RBXScriptConnection
 	connection = RunService.Heartbeat:Connect(function()
-		local alpha = math.clamp((os.clock() - began) / VEIN_SINK_SECONDS, 0, 1)
+		local alpha = math.clamp((GameClock.Now() - began) / VEIN_SINK_SECONDS, 0, 1)
 		if not model.Parent then
 			connection:Disconnect()
 			return

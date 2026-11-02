@@ -57,6 +57,7 @@ local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Fu
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local GLOVES = RelicNames["Golden Steampunk Gloves"]
 local ORB_BANK = RelicNames["Earth Protection Orb"]
@@ -275,7 +276,7 @@ local function detonateTnt(owner: Player, holder: Player)
 	if not root then
 		return
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	if now - (lastTntBlast[owner] or -math.huge) < helpers.data(TNT, "cooldownSeconds", 3) then
 		return
 	end
@@ -314,7 +315,7 @@ local function hornPulse(player: Player, dropType: string)
 		end
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 	if now - (lastShockwave[player] or -math.huge) < helpers.data(HORN, "cooldownSeconds", 0.5) then
 		return
 	end
@@ -365,7 +366,7 @@ end
 local function markCombat(player: Player)
 	local state = golems[player]
 	if state then
-		state.lastCombat = os.clock()
+		state.lastCombat = GameClock.Now()
 	end
 end
 

@@ -46,6 +46,7 @@ local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local FLAME_SWORD = RelicNames["Dragon's Flame Sword"]
 local BO_STAFF = RelicNames["Flaming Bo Staff"]
@@ -168,7 +169,7 @@ local function cleave(player: Player, model: Model, damage: number)
 	if not helpers.owns(player, CLAYMORE) or damage <= 0 then
 		return
 	end
-	local now = os.clock()
+	local now = GameClock.Now()
 	if lastCleave[player] and now - lastCleave[player] < CLEAVE_LATCH_SECONDS then
 		return
 	end
@@ -260,7 +261,7 @@ function Blaze.onDodge(player: Player, from: Vector3, to: Vector3)
 	task.spawn(function()
 		for _ = 1, math.max(1, math.floor(seconds)) do
 			burnTick()
-			task.wait(1)
+			GameClock.Wait(1)
 		end
 	end)
 end

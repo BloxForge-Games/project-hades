@@ -48,6 +48,7 @@ local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Fu
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 local azureGlyph = require(script.Parent.Lib.azureGlyph)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local WYRM = RelicNames["Ice Dragon Slayer"]
 local FOWL = RelicNames["Icy Arctic Fowl"]
@@ -71,8 +72,9 @@ local WYRM_KEEPALIVE_SECONDS = 2
 -- Blizzard: shard reach, flight (fast and low -- a quick bezier hop, not
 -- a lob) and the beat between the three shards of one volley.
 local SHARD_RANGE = 20
-local SHARD_FLIGHT_SECONDS = 0.22
-local SHARD_STAGGER_SECONDS = 0.08
+-- 0.22 -> 0.45 and 0.08 -> 0.12 (2026-11-02): a visible arc, not a snap.
+local SHARD_FLIGHT_SECONDS = 0.45
+local SHARD_STAGGER_SECONDS = 0.12
 
 -- Frost Zone: how often it looks for enemies inside.
 local FIELD_SCAN_SECONDS = 0.25
@@ -140,7 +142,7 @@ local function burstAfter(
 	chills: boolean,
 	chilledMultiplier: number?
 )
-	task.delay(seconds, function()
+	GameClock.Delay(seconds, function()
 		if player.Parent then
 			burstAt(player, position, radius, damage, chills, chilledMultiplier)
 		end
@@ -184,7 +186,7 @@ local function fireOrb(player: Player, root: BasePart)
 	task.spawn(function()
 		local position = from
 		local aim = targetRoot.Position
-		local launched = os.clock()
+		local launched = GameClock.Now()
 		while player.Parent do
 			local deltaTime = RunService.Heartbeat:Wait()
 			local humanoid = nearestModel and nearestModel:FindFirstChildOfClass("Humanoid")
@@ -198,7 +200,7 @@ local function fireOrb(player: Player, root: BasePart)
 				return
 			end
 			position += gap.Unit * step
-			if os.clock() - launched >= ORB_MAX_SECONDS then
+			if GameClock.Now() - launched >= ORB_MAX_SECONDS then
 				burstAt(player, position, radius, damage, true)
 				return
 			end
@@ -218,12 +220,12 @@ local function spawnField(player: Player, position: Vector3)
 
 	local lastChill: { [Model]: number } = {}
 	task.spawn(function()
-		local endsAt = os.clock() + seconds
+		local endsAt = GameClock.Now() + seconds
 		-- First tick as the zone lands, so a 5 s zone deals 5 ticks (it
 		-- dealt 4 when the first waited a second; audit 2026-10-30).
-		local nextDamageAt = os.clock()
-		while os.clock() < endsAt and player.Parent do
-			local now = os.clock()
+		local nextDamageAt = GameClock.Now()
+		while GameClock.Now() < endsAt and player.Parent do
+			local now = GameClock.Now()
 			local statusService = helpers.statusService()
 			local damageTick = now >= nextDamageAt
 			if damageTick then
@@ -240,16 +242,18 @@ local function spawnField(player: Player, position: Vector3)
 				lastChill[model] = now
 				statusService:ApplyStatus(player, model, StatusConditions.Chill)
 			end)
-			task.wait(FIELD_SCAN_SECONDS)
+			GameClock.Wait(FIELD_SCAN_SECONDS)
 		end
 	end)
 end
 
 --[ Blizzard ]--
 
--- Three fast shards a second at enemies in range, like Seraphine's
--- passive: every shard flies whether there are three targets or one (they
--- can all land on the same enemy), each bursting where it lands.
+-- Three shards at enemies in range, like Seraphine's passive. Targets are
+-- spread like the Fireworks (2026-11-02): the candidates are shuffled and
+-- each shard takes the next one, so three or more enemies each get a
+-- shard; with fewer the shards cycle back over the same enemies, and a
+-- lone enemy takes all three. Each bursts where it lands.
 local function launchVolley(player: Player, root: BasePart)
 	local candidates: { BasePart } = {}
 	forEachEnemyInRadius(root.Position, SHARD_RANGE, function(model: Model)
@@ -261,15 +265,19 @@ local function launchVolley(player: Player, root: BasePart)
 	if #candidates == 0 then
 		return
 	end
+	for index = #candidates, 2, -1 do
+		local swap = math.random(index)
+		candidates[index], candidates[swap] = candidates[swap], candidates[index]
+	end
 	local radius = helpers.data(FOWL, "burstRadius", 6)
 	local damage = helpers.levelDamage(player, helpers.data(FOWL, "damagePerLevel", 5))
 	task.spawn(function()
 		for shard = 1, helpers.data(FOWL, "volley", 3) do
 			if shard > 1 then
-				task.wait(SHARD_STAGGER_SECONDS)
+				GameClock.Wait(SHARD_STAGGER_SECONDS)
 			end
 			local liveRoot = getRoot.fromPlayer(player)
-			local target = candidates[math.random(#candidates)]
+			local target = candidates[(shard - 1) % #candidates + 1]
 			if not liveRoot or not target.Parent then
 				continue
 			end
@@ -304,7 +312,7 @@ local function fireIceArrow(player: Player, model: Model, dealt: number)
 	local from = root.Position + Vector3.new(0, 2, 0)
 	helpers.fx("IceShard", from, targetRoot.Position, ARROW_BURST_RADIUS, ARROW_FLIGHT_SECONDS)
 	local damage = dealt * helpers.data(CROSSBOW, "arrowDamage", 0.75)
-	task.delay(ARROW_FLIGHT_SECONDS, function()
+	GameClock.Delay(ARROW_FLIGHT_SECONDS, function()
 		local humanoid = model:FindFirstChildOfClass("Humanoid")
 		if not player.Parent or not model.Parent or not humanoid or humanoid.Health <= 0 then
 			return
@@ -392,10 +400,10 @@ function Frost.onTick(player: Player)
 	if glyphRoot and helpers.owns(player, WYRM) then
 		local wyrm = wyrms[player]
 		if not wyrm then
-			wyrm = { expiresAt = 0, nextBreath = os.clock() + 0.5 }
+			wyrm = { expiresAt = 0, nextBreath = GameClock.Now() + 0.5 }
 			wyrms[player] = wyrm
 		end
-		wyrm.expiresAt = os.clock() + WYRM_KEEPALIVE_SECONDS
+		wyrm.expiresAt = GameClock.Now() + WYRM_KEEPALIVE_SECONDS
 		helpers.fx("WyrmSummon", glyphRoot.Position, nil, nil, WYRM_KEEPALIVE_SECONDS, player)
 	end
 
@@ -404,7 +412,7 @@ function Frost.onTick(player: Player)
 		return
 	end
 	local root = getRoot.fromPlayer(player)
-	local now = os.clock()
+	local now = GameClock.Now()
 	if root and now >= (fowlNextVolley[player] or 0) then
 		fowlNextVolley[player] = now + helpers.data(FOWL, "intervalSeconds", 3)
 		launchVolley(player, root)

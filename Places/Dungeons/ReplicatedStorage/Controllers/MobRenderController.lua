@@ -42,6 +42,7 @@ local mobPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.m
 local attachCorruptVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.attachCorruptVFX)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local MobRenderController = {
 	Name = "MobRenderController",
@@ -482,7 +483,7 @@ function MobRenderController._onMove(self: typeof(MobRenderController), payload)
 	if not entry then
 		local pending = self._pendingMoves[payload.Id]
 		if not pending or pending.move.startTime <= move.startTime then
-			self._pendingMoves[payload.Id] = { move = move, receivedAt = os.clock() }
+			self._pendingMoves[payload.Id] = { move = move, receivedAt = GameClock.Now() }
 		end
 		return
 	end
@@ -496,13 +497,13 @@ function MobRenderController._onMove(self: typeof(MobRenderController), payload)
 	-- new leg says it is, and let it decay (no snap on every new leg).
 	local position = entry.position
 	if position then
-		local now = workspace:GetServerTimeNow()
+		local now = GameClock.Now()
 		local ground = mobPath.sample(move, now)
 		local gap = position - (ground + Vector3.new(0, entry.rootOffset, 0))
 		entry.offset = if gap.Magnitude <= MAX_BLEND_STUDS then gap else Vector3.zero
 		if move.startTime > now + KNOCKBACK_LEAD_SECONDS and entry.offset ~= Vector3.zero then
 			entry.slideGap = entry.offset
-			entry.slideStartedAt = os.clock()
+			entry.slideStartedAt = GameClock.Now()
 		else
 			entry.slideGap = nil
 			entry.slideStartedAt = nil
@@ -555,7 +556,7 @@ function MobRenderController._onLunge(
 	entry.lunge = {
 		startCFrame = payload.StartCFrame,
 		goalCFrame = payload.GoalCFrame,
-		startedAt = os.clock(),
+		startedAt = GameClock.Now(),
 		serverTime = payload.ServerTime,
 	}
 	entry.offset = Vector3.zero
@@ -671,8 +672,8 @@ local movedParts: { BasePart } = {}
 local movedCFrames: { CFrame } = {}
 
 function MobRenderController._step(self: typeof(MobRenderController), dt: number)
-	local now = workspace:GetServerTimeNow()
-	local clock = os.clock()
+	local now = GameClock.Now()
+	local clock = GameClock.Now()
 	local offsetKeep = math.exp(-OFFSET_DECAY_RATE * dt)
 	local turnAlpha = 1 - math.exp(-TURN_RATE * dt)
 	local followAlpha = 1 - math.exp(-FOLLOW_RATE * dt)
@@ -781,7 +782,8 @@ function MobRenderController.Start(self: typeof(MobRenderController))
 		self:_track(proxy)
 	end)
 
-	RunService.RenderStepped:Connect(function(dt: number)
+	RunService.RenderStepped:Connect(function(realDt: number)
+		local dt = GameClock.Dt(realDt)
 		self:_step(dt)
 	end)
 end

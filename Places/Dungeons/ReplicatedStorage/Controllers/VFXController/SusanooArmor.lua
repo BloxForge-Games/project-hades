@@ -17,6 +17,7 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- The spawn burst: GameAssets.VFX["Susanoo Armor"].SpawnPart, whose
 -- attachment emitters carry their own EmitCount / EmitDelay /
@@ -50,7 +51,7 @@ return function(player: Player, preload: boolean?)
 	-- played by PlayerDialogueInterface off the cast replication.
 
 	susanooAnimation:Play()
-	susanooAnimation:AdjustSpeed(0.3)
+	GameClock.SetAnimationSpeed(susanooAnimation, 0.3)
 
 	if not preload then
 		ReplicatedStorage.GameAssets.Sounds.SusanooVoiceline:Play()
@@ -85,7 +86,7 @@ return function(player: Player, preload: boolean?)
 				end
 			end)
 		end
-		task.delay(SPAWN_VFX_FALLBACK_SECONDS, function()
+		GameClock.Delay(SPAWN_VFX_FALLBACK_SECONDS, function()
 			if burstPlayed then
 				return
 			end
@@ -109,19 +110,19 @@ return function(player: Player, preload: boolean?)
 		end)
 
 		-- The viewer's OWN Susanoo, so no proximity: it is on their body.
-		local ambienceId = ("Susanoo_%d_%s"):format(player.UserId, tostring(os.clock()))
+		local ambienceId = ("Susanoo_%d_%s"):format(player.UserId, tostring(GameClock.Now()))
 		if ArcaneAmbienceController then
 			ArcaneAmbienceController:Claim(ambienceId, { tint = SUSANOO_TINT_COLOR })
 		end
 
-		task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime + 0.1, function()
+		GameClock.Delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime + 0.1, function()
 			if ArcaneAmbienceController then
 				ArcaneAmbienceController:Release(ambienceId)
 			end
 		end)
 	end
 
-	task.delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
+	GameClock.Delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
 		-- Only if this cast still OWNS the slow: weaving a swing (or
 		-- another spell) in takes the slow over, and that owner restores
 		-- it on its own timer. See Shared/Functions/Movement/

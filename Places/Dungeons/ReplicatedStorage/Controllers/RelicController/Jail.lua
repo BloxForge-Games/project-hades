@@ -1,7 +1,6 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local Jail = {}
 Jail.__index = Jail
@@ -72,14 +71,14 @@ function Jail:PlayEffect()
 	jail.PrimaryPart.Transparency = 1
 	jail.Parent = workspace.IgnoreInstances.ArcaneSpells
 
-	TweenService:Create(jail.PrimaryPart, TweenInfo.new(2, Enum.EasingStyle.Cubic), {
+	GameClock.Tween(jail.PrimaryPart, TweenInfo.new(2, Enum.EasingStyle.Cubic), {
 		Transparency = 0,
 	}):Play()
 
-	local startTime = workspace:GetServerTimeNow()
+	local startTime = GameClock.Now()
 	local duration = 1.25
 
-	task.delay(0.75, function()
+	GameClock.Delay(0.75, function()
 		for _, p in jail.PrimaryPart.ActiveAttachment:GetChildren() do
 			if p:IsA("ParticleEmitter") then
 				p.Enabled = false
@@ -94,7 +93,8 @@ function Jail:PlayEffect()
 	local swivelSpeed = math.rad(math.random(120, 220)) -- degrees/sec -> radians/sec
 
 	local connection
-	connection = RunService.RenderStepped:Connect(function(dt: number)
+	connection = RunService.RenderStepped:Connect(function(realDt: number)
+		local dt = GameClock.Dt(realDt)
 		if not self.targetCharacter or not self.targetCharacter:FindFirstChild("HumanoidRootPart") then
 			connection:Disconnect()
 			-- Only the completion path released the model; a target that
@@ -104,7 +104,7 @@ function Jail:PlayEffect()
 		end
 
 		local hrp = self.targetCharacter.HumanoidRootPart
-		local now = workspace:GetServerTimeNow()
+		local now = GameClock.Now()
 
 		local rawAlpha = math.clamp((now - startTime) / duration, 0, 1)
 		local eased = easeOutCubic(rawAlpha)
@@ -126,12 +126,12 @@ function Jail:PlayEffect()
 		if rawAlpha >= 1 then
 			connection:Disconnect()
 
-			task.delay(1, function()
-				TweenService:Create(jail.PrimaryPart, TweenInfo.new(0.5, Enum.EasingStyle.Cubic), {
+			GameClock.Delay(1, function()
+				GameClock.Tween(jail.PrimaryPart, TweenInfo.new(0.5, Enum.EasingStyle.Cubic), {
 					Transparency = 1,
 				}):Play()
 
-				Debris:AddItem(jail, 2)
+				GameClock.Debris(jail, 2)
 			end)
 		end
 	end)

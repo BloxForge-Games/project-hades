@@ -43,6 +43,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- One of Portable Justice's `data` numbers, or the fallback.
 local function justiceData(field: string, fallback: number): number
@@ -106,12 +107,12 @@ return function(player: Player, humanoid: Humanoid, procCoefficient: number?, is
 
 	RelicNetwork.JailEffect.FireAll(mobModel)
 
-	task.delay(jailSeconds, function()
+	GameClock.Delay(jailSeconds, function()
 		if mobModel.Parent then
 			mobModel:SetAttribute(Attributes.Jailed, false)
 		end
 
-		task.delay(debounceSeconds, function()
+		GameClock.Delay(debounceSeconds, function()
 			if mobModel.Parent then
 				mobModel:SetAttribute(Attributes.CCDebounce, false)
 			end

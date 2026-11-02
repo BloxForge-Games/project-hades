@@ -35,9 +35,9 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -320,7 +320,7 @@ local function playExplosionSound(entry: BlastEntry): number
 	end
 	seconds = math.min(seconds, MAX_HOLD_SECONDS)
 	audibleExplosions += 1
-	task.delay(seconds, function()
+	GameClock.Delay(seconds, function()
 		audibleExplosions -= 1
 	end)
 	return seconds
@@ -343,7 +343,7 @@ local function playBlast(position: Vector3)
 	end
 
 	local hold = math.min(math.max(entry.particleSeconds, soundSeconds + CLEANUP_MARGIN_SECONDS), MAX_HOLD_SECONDS)
-	task.delay(hold, releaseBlast, entry)
+	GameClock.Delay(hold, releaseBlast, entry)
 end
 
 --[ Flight ]--
@@ -355,14 +355,14 @@ local function land(flight: Flight)
 		particle:Emit(LANDING_EMIT_COUNT)
 	end
 
-	task.delay(LAND_TO_BLAST_SECONDS, function()
+	GameClock.Delay(LAND_TO_BLAST_SECONDS, function()
 		playBlast(flight.target)
 
 		local handle = entry.handle
 		if handle then
-			TweenService:Create(handle, FADE_INFO, { Transparency = 1 }):Play()
+			GameClock.Tween(handle, FADE_INFO, { Transparency = 1 }):Play()
 		end
-		task.delay(entry.holdSeconds, releaseModel, entry)
+		GameClock.Delay(entry.holdSeconds, releaseModel, entry)
 	end)
 end
 
@@ -370,7 +370,7 @@ end
 local function step(deltaTime: number)
 	-- Alpha comes off the SERVER clock, so every client's arc lands at the
 	-- same moment the server's hitbox fires.
-	local now = workspace:GetServerTimeNow()
+	local now = GameClock.Now()
 	for index = #flights, 1, -1 do
 		local flight = flights[index]
 		local alpha = if flight.duration > 0 then math.clamp((now - flight.startTime) / flight.duration, 0, 1) else 1
@@ -426,7 +426,7 @@ function ThrownRelic:PlayEffect()
 	local handle = entry.handle
 	if handle then
 		handle.Transparency = 1
-		TweenService:Create(handle, FADE_INFO, { Transparency = 0 }):Play()
+		GameClock.Tween(handle, FADE_INFO, { Transparency = 0 }):Play()
 	end
 	model.Parent = spellsFolder()
 

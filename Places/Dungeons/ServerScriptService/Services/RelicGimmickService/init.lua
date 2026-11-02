@@ -48,12 +48,14 @@
 	can crit; its fire trail is a relic burst on the untyped lane.
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DodgeService = require(ServerScriptService.Submodules.Core.Source.Services.DodgeService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type TreeModule = {
 	onMeleeSwing: ((
@@ -224,7 +226,7 @@ function RelicGimmickService.Start(self: typeof(RelicGimmickService))
 	end)
 
 	RunService.Heartbeat:Connect(function()
-		local now = os.clock()
+		local now = GameClock.Now()
 		for _, tree in self._trees do
 			if tree.onHeartbeat then
 				tree.onHeartbeat(now)
@@ -233,7 +235,7 @@ function RelicGimmickService.Start(self: typeof(RelicGimmickService))
 	end)
 	task.spawn(function()
 		while true do
-			task.wait(1)
+			GameClock.Wait(1)
 			for _, player in Players:GetPlayers() do
 				for _, tree in self._trees do
 					if tree.onTick then

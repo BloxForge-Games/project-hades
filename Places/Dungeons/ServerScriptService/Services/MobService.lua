@@ -74,6 +74,7 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local MobService = {
 	Name = "MobService",
@@ -223,12 +224,12 @@ function MobService._runHitDetection(
 	local hitRegistry: { [Player]: boolean } = {}
 	local hitCount = 0
 	local frameIndex = 0
-	local startTime = os.clock()
+	local startTime = GameClock.Now()
 	-- Cache the mob's humanoid so the per-tick alive-check below
 	-- doesn't pay a FindFirstChildOfClass lookup every Heartbeat.
 	local mobHumanoid = mobModel:FindFirstChildOfClass("Humanoid")
 
-	while os.clock() - startTime < attack.hitFrameDuration do
+	while GameClock.Now() - startTime < attack.hitFrameDuration do
 		if not mobModel.Parent then
 			return
 		end
@@ -429,7 +430,7 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 			Shape = if spec.shape == "circle" then "Circle" else "Box",
 			Size = spec.size,
 			CFrame = cframe,
-			StartTime = workspace:GetServerTimeNow(),
+			StartTime = GameClock.Now(),
 			WindUpDuration = windUpDuration,
 			HitFrameDuration = hitFrameDuration,
 			Ranged = config.rangedTelegraph == true,
@@ -454,7 +455,7 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 	-- Phase 2: windup wait (no damage yet)
 	-- ============================================================
 	if windUpDuration > 0 then
-		task.wait(windUpDuration)
+		GameClock.Wait(windUpDuration)
 	end
 	if not mobModel.Parent then
 		return
@@ -482,14 +483,14 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 			Mob = mobModel,
 			StartCFrame = root.CFrame,
 			GoalCFrame = goalCFrame,
-			ServerTime = workspace:GetServerTimeNow(),
+			ServerTime = GameClock.Now(),
 		})
 
 		-- Server-side: tween the mob to the goal mid-hitframe. Without this the
 		-- server-authoritative position lags and the next AI tick's distance
 		-- check sees stale data.
 		lungePending = true
-		task.delay(hitFrameDuration * 0.5, function()
+		GameClock.Delay(hitFrameDuration * 0.5, function()
 			if mobModel.Parent and not mobModel:GetAttribute("AttackInterrupted") then
 				mobModel:PivotTo(goalCFrame)
 			end
@@ -756,7 +757,7 @@ function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, tar
 	local startGround = snapToGround(root.Position) or (root.Position - Vector3.new(0, 3, 0))
 	local rootHeight = root.Position.Y - startGround.Y
 
-	task.wait(config.cueDuration)
+	GameClock.Wait(config.cueDuration)
 	if cancelled() then
 		return
 	end
@@ -786,7 +787,7 @@ function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, tar
 		InvulnerabilityService:CloseWindow(window)
 	end
 
-	task.wait(config.vanishDuration)
+	GameClock.Wait(config.vanishDuration)
 	if cancelled() then
 		reveal()
 		return
@@ -876,7 +877,7 @@ function MobService.FireMobRangedAttack(self: typeof(MobService), mobModel: Mode
 	-- left, projectile despawned via lifetime, packet lost), clear the
 	-- registry entry so the table doesn't accumulate.
 	local lifetime = attack.projectileLifetime or 2
-	task.delay(lifetime + PROJECTILE_REGISTRY_EXPIRE_GRACE, function()
+	GameClock.Delay(lifetime + PROJECTILE_REGISTRY_EXPIRE_GRACE, function()
 		local entry = self._pendingRangedCasts[castUuid]
 		if entry and entry.expireToken == expireToken then
 			self._pendingRangedCasts[castUuid] = nil

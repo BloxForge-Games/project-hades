@@ -1,9 +1,6 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-
-local Debris = game:GetService("Debris")
 
 --[[
 	SCREEN EFFECTS ARE CLAIMED, NOT WRITTEN. The tint, Sukuna's theme and
@@ -46,6 +43,7 @@ local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneD
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- The Roblox type definitions no longer allow indexing the root part off
 -- the character; the cast keeps a missing one erroring where the old index did.
@@ -73,7 +71,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 	-- One ambience claim per cast (see the header): unique so two domains,
 	-- from the same caster or different ones, never collide.
-	local ambienceId = ("DomainExpansion_%d_%s"):format(player.UserId, tostring(os.clock()))
+	local ambienceId = ("DomainExpansion_%d_%s"):format(player.UserId, tostring(GameClock.Now()))
 
 	local shrineModel = ReplicatedStorage.GameAssets.VFX:FindFirstChild("Domain Expansion").Shrine:Clone()
 	shrineModel:PivotTo(cframe * CFrame.Angles(0, math.rad(90), 0) + cframe.LookVector * -11 + Vector3.new(0, -15, 0))
@@ -82,7 +80,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	shrineModel.AppearPart.Position = getRootPart(character).Position + Vector3.new(0, -5, 0)
 	shrineModel.AppearPart.Transparency = 1
 
-	task.delay(0.15, function()
+	GameClock.Delay(0.15, function()
 		-- Silent on the preload pass, like every other sound in here.
 		if not preload then
 			shrineModel.AppearPart.CastShockwave:Play()
@@ -96,15 +94,15 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	end)
 
 	domainExpansionAnimation:Play()
-	domainExpansionAnimation:AdjustSpeed(0.35)
+	GameClock.SetAnimationSpeed(domainExpansionAnimation, 0.35)
 
 	if preload then
 		domainExpansionAnimation:Stop()
 		return
 	end
 
-	task.delay(1, function()
-		domainExpansionAnimation:AdjustSpeed(0)
+	GameClock.Delay(1, function()
+		GameClock.SetAnimationSpeed(domainExpansionAnimation, 0)
 	end)
 
 	if not preload then
@@ -117,7 +115,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				-- ArcaneData.dialogue beats (PlayerDialogueInterface), timed
 				-- to this script's waits.
 			end)
-			task.wait(1)
+			GameClock.Wait(1)
 			if not preload then
 				ReplicatedStorage.GameAssets.Sounds.DomainCastSound:Play()
 			end
@@ -142,13 +140,13 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 			end
 
-			task.wait(1)
+			GameClock.Wait(1)
 
 			if player == Players.LocalPlayer and not preload then
 				ReplicatedStorage.GameAssets.Sounds.DomainExpansionRelease:Play()
 			end
 
-			task.wait(0.5)
+			GameClock.Wait(0.5)
 
 			-- The combat pack's eruption where the shrine breaks the surface:
 			-- its root's XZ at floor level, upright, on the rise beat. The
@@ -164,7 +162,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				{ GroundSnapDistance = 10, GroundFallbackDrop = 3, GroundLift = 0.25 }
 			)
 
-			TweenService:Create(
+			GameClock.Tween(
 				shrineModel.PrimaryPart,
 				TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 				{ CFrame = shrineModel.PrimaryPart.CFrame + Vector3.new(0, 18, 0) }
@@ -183,7 +181,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					and shrinePart.Name ~= "Torso"
 					and shrinePart.Name ~= "HighlightDetection"
 				then
-					TweenService:Create(
+					GameClock.Tween(
 						shrinePart,
 						TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 						{ Transparency = 0 }
@@ -197,7 +195,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 			end
 
-			task.wait(0.15)
+			GameClock.Wait(0.15)
 
 			-- The shrine breaking through the ground.
 			if CameraShakeController then
@@ -206,9 +204,9 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 			shrineModel.AppearPart.Shockwave:Play()
 
-			task.wait(0.35)
+			GameClock.Wait(0.35)
 
-			task.delay(1.5, function()
+			GameClock.Delay(1.5, function()
 				for _, particle in shrineModel.DomainAttachmentPart.Attachment:GetChildren() do
 					if particle:IsA("ParticleEmitter") then
 						particle.Enabled = true
@@ -253,7 +251,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				end
 			end)
 
-			task.wait(1)
+			GameClock.Wait(1)
 
 			for _, particle in ipairs(shrineModel.Torso.Main:GetChildren()) do
 				if particle:IsA("ParticleEmitter") then
@@ -266,10 +264,10 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				CFrame = shrineModel.PrimaryPart.CFrame,
 			})
 
-			task.delay(ArcaneData[ArcaneNames["Domain Expansion"]].hitboxDuration, function()
+			GameClock.Delay(ArcaneData[ArcaneNames["Domain Expansion"]].hitboxDuration, function()
 				-- Wait few extra seconds to account for delay from cutscenes and dialogues
 				if player ~= Players.LocalPlayer then
-					task.wait(2.5)
+					GameClock.Wait(2.5)
 				end
 
 				-- Tint / theme / shake let go together. Another domain still
@@ -284,9 +282,9 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 					slashes:Stop()
 				end
 
-				Debris:AddItem(shrineModel, 1)
+				GameClock.Debris(shrineModel, 1)
 
-				TweenService:Create(
+				GameClock.Tween(
 					shrineModel.PrimaryPart,
 					TweenInfo.new(1, Enum.EasingStyle.Quint, Enum.EasingDirection.In),
 					{ CFrame = shrineModel.PrimaryPart.CFrame - Vector3.new(0, 18, 0) }
@@ -299,7 +297,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 						and shrinePart.Name ~= "Torso"
 						and shrinePart.Name ~= "HighlightDetection"
 					then
-						TweenService:Create(
+						GameClock.Tween(
 							shrinePart,
 							TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 							{ Transparency = 1 }
@@ -325,7 +323,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end)
 	end
 
-	task.delay(ArcaneData[ArcaneNames["Domain Expansion"]].duration, function()
+	GameClock.Delay(ArcaneData[ArcaneNames["Domain Expansion"]].duration, function()
 		domainExpansionAnimation:Stop()
 
 		-- Only if this cast still OWNS the slow: weaving a swing (or

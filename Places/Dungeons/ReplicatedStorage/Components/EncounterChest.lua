@@ -35,7 +35,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -46,6 +45,7 @@ local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local chestLidSwing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.chestLidSwing)
 local lootSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.lootSound)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -150,7 +150,7 @@ function EncounterChest:_playOpen()
 	-- whatever they are named.
 	for _, descendant in self.Instance:GetDescendants() do
 		if descendant:IsA("Light") then
-			TweenService:Create(descendant, TweenInfo.new(LIGHT_FADE_SECONDS), { Brightness = 0 }):Play()
+			GameClock.Tween(descendant, TweenInfo.new(LIGHT_FADE_SECONDS), { Brightness = 0 }):Play()
 		elseif
 			descendant:IsA("ParticleEmitter")
 			or descendant:IsA("Beam")
@@ -165,7 +165,7 @@ function EncounterChest:_playOpen()
 
 	-- Faded to nothing: switch the lights off so they stop costing a
 	-- light slot on the render budget.
-	task.delay(LIGHT_FADE_SECONDS, function()
+	GameClock.Delay(LIGHT_FADE_SECONDS, function()
 		if not self.Instance.Parent then
 			return
 		end
@@ -292,11 +292,12 @@ function EncounterChest:Start()
 	local fallAlpha = Instance.new("NumberValue")
 	fallAlpha.Value = 0
 	fallAlpha.Parent = self.Instance
-	TweenService:Create(
+	GameClock.Tween(
 		fallAlpha,
 		TweenInfo.new(FALL_TWEEN_SECONDS, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 		{ Value = 1 }
-	):Play()
+	)
+		:Play()
 
 	-- Opened (any client, replicated attribute): play the open locally.
 	self.Instance:GetAttributeChangedSignal(OPENED_ATTRIBUTE):Connect(function()
@@ -309,7 +310,7 @@ function EncounterChest:Start()
 		return
 	end
 
-	local startTime = os.clock()
+	local startTime = GameClock.Now()
 	local driver
 	driver = RunService.Heartbeat:Connect(function()
 		if not self.Instance.Parent or not self.Instance.PrimaryPart then
@@ -325,7 +326,7 @@ function EncounterChest:Start()
 		local y = seatedY + DROP_HEIGHT_STUDS * (1 - fallAlpha.Value)
 		self.Instance:PivotTo(CFrame.new(restPivot.Position.X, y, restPivot.Position.Z) * restRotation)
 
-		if os.clock() - startTime >= DRIVER_LIFETIME_SECONDS then
+		if GameClock.Now() - startTime >= DRIVER_LIFETIME_SECONDS then
 			-- Snap the exact replicated rest pose and stop — from here the
 			-- local view and the server's truth are identical.
 			self.Instance:ScaleTo(self._baseScale)
@@ -339,17 +340,17 @@ function EncounterChest:Start()
 
 	self._numberValue.Value = SQUASH_SCALE
 
-	task.delay(SQUASH_DELAY, function()
+	GameClock.Delay(SQUASH_DELAY, function()
 		if not self.Instance.Parent then
 			return
 		end
-		TweenService:Create(
+		GameClock.Tween(
 			self._numberValue,
 			TweenInfo.new(SQUASH_SETTLE_SECONDS, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
 			{ Value = 1 }
 		):Play()
 
-		task.delay(LAND_FX_DELAY, function()
+		GameClock.Delay(LAND_FX_DELAY, function()
 			if not self.Instance.Parent or not self.Instance.PrimaryPart then
 				return
 			end
@@ -373,7 +374,7 @@ function EncounterChest:Start()
 			end
 		end)
 
-		task.delay(PROMPT_ENABLE_DELAY, function()
+		GameClock.Delay(PROMPT_ENABLE_DELAY, function()
 			if isOwner and self.Instance.Parent and not self._openPlayed then
 				if self._proximityPrompt then
 					self._proximityPrompt.Enabled = true

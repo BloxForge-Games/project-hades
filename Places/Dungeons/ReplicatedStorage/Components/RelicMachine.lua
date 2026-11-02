@@ -11,7 +11,6 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -24,6 +23,7 @@ local ScreenSizeController = require(ReplicatedStorage.Submodules.Core.Source.Co
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ScreenSizes)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Taps closer than this are one tap (the prompt is never locked locally).
 -- Stamped by the server component once the owner has pulled.
@@ -136,13 +136,13 @@ function RelicMachine:Start()
 			Vector3.new(self.Instance.PrimaryPart.Position.X, floorY + offset, self.Instance.PrimaryPart.Position.Z),
 			1
 		)
-		TweenService:Create(
+		GameClock.Tween(
 			self.Instance.PrimaryPart,
 			TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 			{ Position = targetPosition }
 		):Play()
 
-		TweenService:Create(
+		GameClock.Tween(
 			self.Instance.Model,
 			TweenInfo.new(1, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 			{ Position = targetPosition }
@@ -150,14 +150,15 @@ function RelicMachine:Start()
 
 		self._numberValue.Value = 0.75
 
-		task.delay(0.5, function()
-			TweenService:Create(
+		GameClock.Delay(0.5, function()
+			GameClock.Tween(
 				self._numberValue,
 				TweenInfo.new(2, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
 				{ Value = 1 }
-			):Play()
+			)
+				:Play()
 
-			task.delay(0.35, function()
+			GameClock.Delay(0.35, function()
 				self.Instance.PrimaryPart.LandParticle:Emit(10)
 				self.Instance.PrimaryPart.Landing:Play()
 
@@ -183,7 +184,7 @@ function RelicMachine:Start()
 				end
 			end)
 
-			task.delay(0.5, function()
+			GameClock.Delay(0.5, function()
 				if Players.LocalPlayer.UserId ~= self.Instance:GetAttribute(Attributes.OwnerId) then
 					return
 				end
@@ -221,7 +222,7 @@ function RelicMachine:Start()
 		if self._ownerId ~= player.UserId then
 			return
 		end
-		local now = os.clock()
+		local now = GameClock.Now()
 		if now - lastTap < TAP_DEBOUNCE_SECONDS then
 			return
 		end
@@ -234,11 +235,12 @@ function RelicMachine:Start()
 		local capped = slots ~= nil and owned >= slots
 		if not capped then
 			self._numberValue.Value = 1.25
-			TweenService:Create(
+			GameClock.Tween(
 				self._numberValue,
 				TweenInfo.new(1, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
 				{ Value = 1 }
-			):Play()
+			)
+				:Play()
 		end
 		DungeonNetwork.RelicMachinePromptTriggered.Fire({
 			Machine = self.Instance,

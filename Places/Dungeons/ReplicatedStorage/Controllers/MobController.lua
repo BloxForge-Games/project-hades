@@ -61,10 +61,8 @@
 
 --[ Roblox Services ]--
 
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -81,6 +79,7 @@ local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Cor
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local MobController = {
 	Name = "MobController",
@@ -239,14 +238,14 @@ local function fadeOutHitbox(state: FlashState)
 
 	local fadeInfo = TweenInfo.new(HITBOX_DEATH_FADE_DURATION, Enum.EasingStyle.Cubic)
 	for _, part in state.parts do
-		TweenService:Create(part, fadeInfo, { Transparency = 1 }):Play()
+		GameClock.Tween(part, fadeInfo, { Transparency = 1 }):Play()
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 		if selectionBox then
-			TweenService:Create(selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 }):Play()
+			GameClock.Tween(selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 }):Play()
 		end
 	end
 
-	Debris:AddItem(state.model, HITBOX_DEATH_FADE_DURATION + 0.1)
+	GameClock.Debris(state.model, HITBOX_DEATH_FADE_DURATION + 0.1)
 end
 
 -- Drives the telegraph → fade chain. Two phases:
@@ -280,16 +279,16 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	local rampInfo = TweenInfo.new(windUpDuration, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 
 	for _, part in state.parts do
-		TweenService:Create(part, rampInfo, { Transparency = 0.75 }):Play()
+		GameClock.Tween(part, rampInfo, { Transparency = 0.75 }):Play()
 
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 
 		if selectionBox then
-			TweenService:Create(selectionBox, rampInfo, { Transparency = 0 }):Play()
+			GameClock.Tween(selectionBox, rampInfo, { Transparency = 0 }):Play()
 		end
 	end
 
-	task.wait(windUpDuration)
+	GameClock.Wait(windUpDuration)
 
 	-- Hit-frame snap. Both the underlying hitbox Part AND its
 	-- SelectionBox swap to white over hitFrameDuration so the flash
@@ -305,16 +304,16 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	local flashInfo = TweenInfo.new(hitFrameDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 	for _, part in state.parts do
-		TweenService:Create(part, flashInfo, { Color = FLASH_WHITE }):Play()
+		GameClock.Tween(part, flashInfo, { Color = FLASH_WHITE }):Play()
 
-		task.delay(hitFrameDuration / 2, function()
-			TweenService:Create(part, flashInfo, { Transparency = 0 }):Play()
+		GameClock.Delay(hitFrameDuration / 2, function()
+			GameClock.Tween(part, flashInfo, { Transparency = 0 }):Play()
 		end)
 
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 
 		if selectionBox then
-			TweenService:Create(selectionBox, flashInfo, {
+			GameClock.Tween(selectionBox, flashInfo, {
 				Color3 = FLASH_WHITE,
 				SurfaceColor3 = FLASH_WHITE,
 			}):Play()
@@ -325,7 +324,7 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 		return
 	end
 
-	task.wait(hitFrameDuration)
+	GameClock.Wait(hitFrameDuration)
 
 	if state.aborted or not state.model.Parent then
 		return
@@ -335,12 +334,12 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	local fadeInfo = TweenInfo.new(hitFrameDuration, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 
 	for _, part in state.parts do
-		TweenService:Create(part, fadeInfo, { Transparency = 1 }):Play()
+		GameClock.Tween(part, fadeInfo, { Transparency = 1 }):Play()
 
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 
 		if selectionBox then
-			TweenService:Create(selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 }):Play()
+			GameClock.Tween(selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 }):Play()
 		end
 	end
 
@@ -355,7 +354,7 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	end
 	activeFlashes[state] = nil
 
-	Debris:AddItem(state.model, 1)
+	GameClock.Debris(state.model, 1)
 end
 
 -- Fades out every in-flight hitbox telegraph immediately. Called when a boss
@@ -787,7 +786,7 @@ function MobController.Start(self: typeof(MobController))
 		-- On the server's clock: the wind-up started when the server sent
 		-- this, so the flash gives up however late it arrived and peaks when
 		-- the server tests the hit. Nothing left to show past the hit frame.
-		local late = math.max(workspace:GetServerTimeNow() - payload.StartTime, 0)
+		local late = math.max(GameClock.Now() - payload.StartTime, 0)
 		local windUp = payload.WindUpDuration - late
 		local hitFrame = payload.HitFrameDuration
 		if windUp < 0 then
@@ -833,7 +832,7 @@ function MobController.Start(self: typeof(MobController))
 			return
 		end
 
-		TweenService:Create(root, TweenInfo.new(LUNGE_TWEEN_DURATION, Enum.EasingStyle.Cubic), { CFrame = goalCFrame })
+		GameClock.Tween(root, TweenInfo.new(LUNGE_TWEEN_DURATION, Enum.EasingStyle.Cubic), { CFrame = goalCFrame })
 			:Play()
 	end)
 
