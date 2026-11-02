@@ -888,9 +888,10 @@ local ELEMENTAL_STATUSES: { [string]: boolean } = {
 }
 
 function StatusConditionService:_getStatusChanceBonus(sourcePlayer: Player): number
-	-- Gear lines (BonusStatData "StatusChance", 2026-10-31): a fraction on
-	-- every elemental status the player can already apply, like the relic's.
-	local bonus = PlayerStatsService:GetGearStat(sourcePlayer, "StatusChance")
+	-- Overseer's Short Sword while Blighted: a fraction on every elemental
+	-- status the player can already apply. (The Status Chance gear line
+	-- that used to add here was removed 2026-11-01.)
+	local bonus = 0
 	if not RelicService or not ownerHasAura(sourcePlayer, AuraNames.Blighted) then
 		return bonus
 	end
@@ -986,8 +987,9 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 	local chanceByStatus = self:_sumApplierChances(sourcePlayer, true, isRanged, procCoefficient)
 
 	-- The hitting weapon's enchantment opener (2026-11-01): its row's
-	-- chance per hit, the gun's proc coefficient and the Status Chance line
-	-- on top, like a relic applier. Only the weapon that lands the hit.
+	-- chance per hit, the gun's proc coefficient and the relic's status
+	-- chance bonus on top, like a relic applier. Only the weapon that
+	-- lands the hit.
 	local enchantment = WeaponLoadoutService:GetEnchantmentForHit(sourcePlayer, not isRanged)
 	local row = if enchantment then EnchantmentData[enchantment] else nil
 	if row then

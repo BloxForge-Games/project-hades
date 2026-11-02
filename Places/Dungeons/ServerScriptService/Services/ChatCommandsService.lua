@@ -675,16 +675,12 @@ COMMANDS = {
 			end
 			local key = nil
 			for _, row in BonusStatData.Order do
-				if string.lower(row.key) == first and row.slot == "Weapon" then
+				if string.lower(row.key) == first then
 					key = row.key
 				end
 			end
 			if not key then
-				local keys = {}
-				for _, k in BonusStatData.BySlot.Weapon do
-					table.insert(keys, k)
-				end
-				return "Unknown weapon line. Keys: " .. table.concat(keys, ", ")
+				return "Unknown line. Keys: " .. table.concat(BonusStatData.Pool, ", ")
 			end
 			local percent = tonumber(args[2])
 			if not percent then

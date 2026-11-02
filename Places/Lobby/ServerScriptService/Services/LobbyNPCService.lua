@@ -8,6 +8,7 @@
 	NPC component and the billboard dialogue key off) and a ProximityPrompt
 	under its PrimaryPart if the rig ships none.
 
+	  a name containing "artix"                    -> LobbyGearMerchant (Artix's shop)
 	  a name containing "twig" or "merchant"       -> LobbyMerchant   (the Shop)
 	  a name containing "cysero" or "blacksmith"   -> LobbyBlacksmith (the Forge)
 	  a name containing "warlic" or "arcane"       -> LobbyArcaneTrainer (the chests)
@@ -37,6 +38,7 @@ local DIALOGUE_GRAPH_ATTRIBUTE = "DialogueGraph"
 -- Lower-cased keyword in the model name -> DialogueRegistry module name.
 -- First match in order wins.
 local GRAPH_BY_KEYWORD: { { keyword: string, graph: string } } = {
+	{ keyword = "artix", graph = "LobbyGearMerchant" },
 	{ keyword = "twig", graph = "LobbyMerchant" },
 	{ keyword = "cysero", graph = "LobbyBlacksmith" },
 	{ keyword = "warlic", graph = "LobbyArcaneTrainer" },
