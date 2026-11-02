@@ -8,10 +8,10 @@
 	NPC component and the billboard dialogue key off) and a ProximityPrompt
 	under its PrimaryPart if the rig ships none.
 
-	  a name containing "artix"                    -> LobbyGearMerchant (Artix's shop)
-	  a name containing "twig" or "merchant"       -> LobbyMerchant   (the Shop)
-	  a name containing "cysero" or "blacksmith"   -> LobbyBlacksmith (the Forge)
-	  a name containing "warlic" or "arcane"       -> LobbyArcaneTrainer (the chests)
+	  a name containing "valencia" or "bandit"     -> LobbyGearMerchant (the gear chests)
+	  a name containing "warlic" or "arcane"       -> LobbyArcaneTrainer (the Arcane chests)
+	  a name containing "twig" or "scavenger"      -> LobbyMerchant   (the Shop)
+	  a name containing "yulgar" or "blacksmith"   -> LobbyBlacksmith (the Forge)
 	Matched by keyword, case-insensitive, so "Twig the Moglin", "Twig the
 	Merchant" or "The Merchant" all land on the same graph (an exact-name
 	table missed a rename and dropped Twig onto the default graph).
@@ -38,13 +38,15 @@ local DIALOGUE_GRAPH_ATTRIBUTE = "DialogueGraph"
 -- Lower-cased keyword in the model name -> DialogueRegistry module name.
 -- First match in order wins.
 local GRAPH_BY_KEYWORD: { { keyword: string, graph: string } } = {
-	{ keyword = "artix", graph = "LobbyGearMerchant" },
-	{ keyword = "twig", graph = "LobbyMerchant" },
-	{ keyword = "cysero", graph = "LobbyBlacksmith" },
+	{ keyword = "valencia", graph = "LobbyGearMerchant" },
 	{ keyword = "warlic", graph = "LobbyArcaneTrainer" },
+	{ keyword = "twig", graph = "LobbyMerchant" },
+	{ keyword = "yulgar", graph = "LobbyBlacksmith" },
+	{ keyword = "bandit", graph = "LobbyGearMerchant" },
+	{ keyword = "arcane", graph = "LobbyArcaneTrainer" },
+	{ keyword = "scavenger", graph = "LobbyMerchant" },
 	{ keyword = "merchant", graph = "LobbyMerchant" },
 	{ keyword = "blacksmith", graph = "LobbyBlacksmith" },
-	{ keyword = "arcane", graph = "LobbyArcaneTrainer" },
 }
 
 local function graphForName(name: string): string?

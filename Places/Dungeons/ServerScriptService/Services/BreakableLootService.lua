@@ -93,8 +93,8 @@ local BreakableLootService = {
 	-- This floor's live loot, keyed by model.
 	_veins = {} :: { [Model]: VeinState },
 	_pots = {} :: { [Model]: boolean },
-	-- What one vein UNIT pays in Arcane Crystals (VEIN.crystalShare x the
-	-- tier's chestCrystals), and one Gold handful in Gold, on the current
+	-- What one vein UNIT pays in Arcane Crystals (the floor's vein budget
+	-- over the units placed), and one Gold handful in Gold, on the current
 	-- floor (set when the floor is built).
 	_crystalUnitValue = 0,
 	_goldHandfulValue = 0,
@@ -537,11 +537,12 @@ function BreakableLootService._spawnFloor(self: typeof(BreakableLootService), du
 	local tier = if dungeonService then dungeonService:GetDifficultyScale() else nil
 	local floor = if dungeonService then dungeonService:GetFloor() else 1
 	local floorShare = if tier then DifficultyData.FloorShare(tier, floor) else 0
-	local goldBudget = (if tier then DifficultyData.RunGoldTake(tier) else 0) * POT.goldShare * floorShare
-	-- Crystals are a fixed share of the tier's run chestCrystals per vein
-	-- unit (BreakableLootData.Vein.crystalShare); the dungeon's rewardScale
-	-- is applied on collect (DropService).
-	self._crystalUnitValue = (if tier then tier.chestCrystals or 0 else 0) * VEIN.crystalShare
+	local goldBudget = (if tier then DifficultyData.RunCoins(tier) else 0) * POT.goldShare * floorShare
+	-- The veins share BreakableLootData.Vein.crystalShare of the tier's run
+	-- chestCrystals, the floor's slice of it split across the units placed;
+	-- the dungeon's rewardScale is applied on collect (DropService).
+	local crystalBudget = (if tier then tier.chestCrystals or 0 else 0) * VEIN.crystalShare * floorShare
+	self._crystalUnitValue = if totalUnits > 0 then crystalBudget / totalUnits else 0
 	self._goldHandfulValue = if totalPots > 0 then goldBudget / (totalPots * POT.goldChance) else 0
 
 	local missText, blockerText = {}, {}
