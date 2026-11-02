@@ -344,12 +344,15 @@ function RelicAudit.Run(): (number, number)
 
 			-- 10) Conditional dependency ("While X", "to/against X enemies",
 			-- "your X") must be SATISFIABLE at offer time: self-produced
-			-- (grants), explicitly gated (requiredTags), or covered by a C2
-			-- tree-pair gate. "increased to ..." clauses are opportunistic
-			-- bonuses on an unconditional base and exempt. A bare C does NOT
-			-- satisfy a specific-half dependency — C passes on EITHER half,
-			-- which is exactly how a dead relic gets offered.
-			for _, word in words do
+			-- (grants), explicitly gated (requiredTags), or covered by the
+			-- tree gate. Since 2026-10-31 C means "holds a relic of this
+			-- tree" (RelicService.IsRelicRollEligible), and every tree's
+			-- NC relics produce its status, so C or C2 covers a dependency
+			-- on the tree's own status / aura pair (2026-11-01 audit; C2
+			-- alone before). "increased to ..." clauses are opportunistic
+			-- bonuses on an unconditional base and exempt. A shelved
+			-- (`retired`) relic is never offered, so it is skipped here.
+			for _, word in if data.retired then {} else words do
 				local w = word:lower()
 				for _, pattern in
 					{
@@ -369,13 +372,13 @@ function RelicAudit.Run(): (number, number)
 							or (
 								data.requiredTags == nil
 								and data.requiredRelics == nil
-								and data.combo == RelicCombo.C2
+								and (data.combo == RelicCombo.C or data.combo == RelicCombo.C2)
 								and pairSet[tag]
 							)
 						if not exempt and not satisfied then
 							problem(
 								tostring(relicName),
-								("card depends on %s (%s) with no gate: not in `grants`/`requiredTags`, no covering C2 pair — offerable while unusable"):format(
+								("card depends on %s (%s) with no gate: not in `grants`/`requiredTags`, not a C / C2 relic of that tree — offerable while unusable"):format(
 									tag,
 									word
 								)

@@ -94,14 +94,13 @@ local BOLT_RESTRIKE_SECONDS = 0.08
 local BOLT_HOLD_SECONDS = 0.12
 local BOLT_FADE_SECONDS = 0.3
 local BOLT_CORE_COLOR = Color3.fromRGB(235, 248, 255)
-local BOLT_CORE_THICKNESS = 0.34
-local BOLT_GLOW_THICKNESS = 1.1
-local BOLT_GLOW_TRANSPARENCY = 0.35
-local BOLT_FORK_CHANCE = 0.85
-local BOLT_FORKS = 2
-local BOLT_FLASH_RADIUS = 2.6
-local BOLT_LIGHT_BRIGHTNESS = 9
-local BOLT_LIGHT_RANGE = 16
+-- Trimmed the same day: the first pass read as too much. No light.
+local BOLT_CORE_THICKNESS = 0.24
+local BOLT_GLOW_THICKNESS = 0.7
+local BOLT_GLOW_TRANSPARENCY = 0.45
+local BOLT_FORK_CHANCE = 0.6
+local BOLT_FORKS = 1
+local BOLT_FLASH_RADIUS = 1.8
 
 -- Lobbed bubbles arc high; Blizzard's ice shards hop fast and low (a
 -- quadratic bezier with its control point just above the line).
@@ -389,32 +388,26 @@ local function bolt(from: Vector3, to: Vector3)
 	for stroke = 2, BOLT_STROKES do
 		task.delay(BOLT_RESTRIKE_SECONDS * (stroke - 1), boltStroke, from, to, 1 - (stroke - 1) * 0.2)
 	end
-	-- The landing flash: a bright pop, a ring on the ground and a light.
-	local flash = makePart("GimmickBoltFlash", Vector3.one * 0.6, BOLT_CORE_COLOR)
+	-- The landing flash: a bright pop and a small ring on the ground.
+	local flash = makePart("GimmickBoltFlash", Vector3.one * 0.5, BOLT_CORE_COLOR)
 	flash.Shape = Enum.PartType.Ball
 	flash.Position = to
-	local light = Instance.new("PointLight")
-	light.Color = BOLT_COLOR
-	light.Brightness = BOLT_LIGHT_BRIGHTNESS
-	light.Range = BOLT_LIGHT_RANGE
-	light.Parent = flash
 	flash.Parent = effectsFolder()
-	TweenService:Create(flash, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	TweenService:Create(flash, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Size = Vector3.one * BOLT_FLASH_RADIUS * 2,
 		Transparency = 1,
 	}):Play()
-	TweenService:Create(light, TweenInfo.new(0.45), { Brightness = 0 }):Play()
-	Debris:AddItem(flash, 0.5)
-	local ring = makePart("GimmickBoltRing", Vector3.new(0.8, 0.12, 0.8), BOLT_COLOR)
+	Debris:AddItem(flash, 0.4)
+	local ring = makePart("GimmickBoltRing", Vector3.new(0.6, 0.1, 0.6), BOLT_COLOR)
 	ring.Shape = Enum.PartType.Cylinder
 	ring.CFrame = CFrame.new(to - Vector3.new(0, 2.4, 0)) * CFrame.Angles(0, 0, math.rad(90))
-	ring.Transparency = 0.2
+	ring.Transparency = 0.3
 	ring.Parent = effectsFolder()
-	TweenService:Create(ring, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Size = Vector3.new(0.12, BOLT_FLASH_RADIUS * 3, BOLT_FLASH_RADIUS * 3),
+	TweenService:Create(ring, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = Vector3.new(0.1, BOLT_FLASH_RADIUS * 2, BOLT_FLASH_RADIUS * 2),
 		Transparency = 1,
 	}):Play()
-	Debris:AddItem(ring, 0.4)
+	Debris:AddItem(ring, 0.35)
 end
 
 -- A slash travelling From -> To over Duration (Flame Wave, Thunder Blade).

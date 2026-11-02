@@ -91,7 +91,9 @@ local EventController = {
 	},
 
 	-- Read by dialogue-graph Conditions. "fail" | "success" | "dead" |
-	-- "done" | "invalid" | nil (no pull yet this conversation).
+	-- "done" | "invalid" | "full" (the relic cap; the graph's CanStart
+	-- normally refuses the conversation before any pull) | nil (no pull
+	-- yet this conversation).
 	LastSwordResult = nil :: string?,
 	-- true once this conversation accepted the shrine's bargain — gates
 	-- the leave-path twin of the "Bargain is struck" node.

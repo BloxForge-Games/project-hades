@@ -403,8 +403,13 @@ end
 -- Shared/Functions/Mob/mobHitbox) -- already placed, and runs the
 -- telegraph→fade chain over (windUpDuration + hitFrameDuration). Aborts
 -- cleanly if the local player dies during the flash window.
+-- `mobModel` is nil when this client has no copy of the mob (streamed
+-- out, or not replicated yet): the flash still draws at the CFrame the
+-- server sent (2026-11-01; it used to be skipped, which is one way a
+-- telegraph showed for one player and not another), only the
+-- mob-death fade hook is skipped.
 local function spawnHitboxFlash(
-	mobModel: Model,
+	mobModel: Model?,
 	buildHitbox: () -> Model?,
 	windUpDuration: number,
 	hitFrameDuration: number
@@ -440,7 +445,7 @@ local function spawnHitboxFlash(
 	activeFlashes[state] = true
 
 	-- Hook the mob's death so a kill mid-flash fades the visual.
-	local humanoid = mobModel:FindFirstChildOfClass("Humanoid")
+	local humanoid = if mobModel then mobModel:FindFirstChildOfClass("Humanoid") else nil
 	if humanoid then
 		if humanoid.Health <= 0 then
 			-- Already dead when the attack event arrived — skip the
@@ -761,7 +766,7 @@ function MobController.Start(self: typeof(MobController))
 	end
 
 	Combat.MobAttack.On(function(payload)
-		if not payload.Mob or hiddenBySetting(payload.Ranged) then
+		if hiddenBySetting(payload.Ranged) then
 			return
 		end
 		spawnHitboxFlash(payload.Mob, function()
@@ -772,7 +777,7 @@ function MobController.Start(self: typeof(MobController))
 	-- Data hitboxes (MobData `hitbox`): the same flash on a telegraph this
 	-- client builds from the shape the server is about to query.
 	MobNetwork.MobTelegraph.On(function(payload)
-		if not payload.Mob or hiddenBySetting(payload.Ranged) then
+		if hiddenBySetting(payload.Ranged) then
 			return
 		end
 		local spec: mobHitbox.Spec = {

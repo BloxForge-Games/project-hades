@@ -56,6 +56,7 @@ local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions
 local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local getEquippedMeleeType = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getEquippedMeleeType)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
@@ -83,11 +84,19 @@ local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 -- included; "relic" is the rest of the relic procs.
 -- 2026-10-27: melee 2 -> 2.5, arcane 3 -> 4, relic 1 -> 2.
 -- 2026-10-30: melee 2.5 -> 1.5, arcane 4 -> 3, relic 2 -> 1.
-local KNOCKBACK_MELEE_STUDS = 1.5
+-- Melee pushes by the weapon's weight (2026-11-01; one 1.5 for all before):
+-- light / medium / heavy = Daggers / Sword / Greatsword.
+local KNOCKBACK_MELEE_STUDS_BY_TYPE: { [string]: number } = {
+	Daggers = 1.5,
+	Sword = 2,
+	Greatsword = 2.5,
+}
+local KNOCKBACK_MELEE_STUDS = 2
 -- Bullets do not push (2026-10-25); below MobSimService's minimum.
 local KNOCKBACK_BULLET_STUDS = 0
 local KNOCKBACK_ARCANE_STUDS = 3
-local KNOCKBACK_RELIC_STUDS = 1
+-- 1 -> 0 (2026-11-01): relic bursts and gimmick hits no longer push.
+local KNOCKBACK_RELIC_STUDS = 0
 
 -- The run's difficulty damage multiplier on mob hits; 1 outside a run.
 -- DungeonService is reached at call time (this service is a consumer).
@@ -116,8 +125,16 @@ export type TargetStatuses = {
 }
 
 -- A one-shot guaranteed crit a relic armed (ForceNextCrit): when it lapses
--- unspent, and what to do to the target as it is spent.
-type ForcedCrit = { expiresAt: number?, onHit: ((targetModel: Model) -> ())? }
+-- unspent, what to do to the target as it is spent, and (`spreadSeconds`)
+-- how long after the first hit spends it the SAME spell's other targets
+-- still crit: `spentAt` / `hitTargets` track that spread.
+type ForcedCrit = {
+	expiresAt: number?,
+	onHit: ((targetModel: Model) -> ())?,
+	spreadSeconds: number?,
+	spentAt: number?,
+	hitTargets: { [Model]: boolean }?,
+}
 
 local DamageService = {
 	Name = "DamageService",
@@ -706,18 +723,24 @@ end
 -- `seconds` lapses an unspent arm (nil = until spent); `onHit` runs with
 -- the target as the arm is spent, before the damage lands, for the status
 -- the relic rides on the crit. Re-arming a lane replaces its arm.
+-- `spreadSeconds` (2026-11-01, the Katana): once the first hit spends the
+-- arm, every OTHER target the lane hits within that window crits too and
+-- gets `onHit`, so one spell's whole burst or sweep crits, not one mob;
+-- a target never takes it twice.
 function DamageService.ForceNextCrit(
 	self: typeof(DamageService),
 	player: Player,
 	lane: "Melee" | "Arcane",
 	seconds: number?,
-	onHit: ((targetModel: Model) -> ())?
+	onHit: ((targetModel: Model) -> ())?,
+	spreadSeconds: number?
 )
 	local lanes = self._forcedCrits[player.UserId] or {}
 	self._forcedCrits[player.UserId] = lanes
 	lanes[lane] = {
 		expiresAt = if seconds then os.clock() + seconds else nil,
 		onHit = onHit,
+		spreadSeconds = spreadSeconds,
 	}
 end
 
@@ -729,32 +752,46 @@ function DamageService.ClearForcedCrit(self: typeof(DamageService), player: Play
 	end
 end
 
--- The live arm on `lane`, if any (a lapsed one is dropped here).
+-- The live arm on `lane`, if any (a lapsed one is dropped here). A spent
+-- arm still inside its spread window counts as live.
 function DamageService._liveForcedCrit(self: typeof(DamageService), player: Player, lane: string): ForcedCrit?
 	local lanes = self._forcedCrits[player.UserId]
 	local arm = if lanes then lanes[lane] else nil
 	if not arm then
 		return nil
 	end
-	if arm.expiresAt and os.clock() >= arm.expiresAt then
+	local now = os.clock()
+	if arm.spentAt then
+		if now - arm.spentAt > (arm.spreadSeconds or 0) then
+			lanes[lane] = nil
+			return nil
+		end
+		return arm
+	end
+	if arm.expiresAt and now >= arm.expiresAt then
 		lanes[lane] = nil
 		return nil
 	end
 	return arm
 end
 
--- True while `player` has an unspent arm on `lane`.
+-- True while `player` has an unspent arm on `lane` (a spent arm in its
+-- spread window does not count: the prime is gone).
 function DamageService.HasForcedCrit(self: typeof(DamageService), player: Player, lane: "Melee" | "Arcane"): boolean
-	return self:_liveForcedCrit(player, lane) ~= nil
+	local arm = self:_liveForcedCrit(player, lane)
+	return arm ~= nil and arm.spentAt == nil
 end
 
 -- Spends the arm this hit matches -- Melee for a melee hit, else Arcane for
--- an arcane one -- and returns it, or nil when none is up.
+-- an arcane one -- and returns it, or nil when none is up. With a spread,
+-- the first hit marks the arm spent and later hits on OTHER targets inside
+-- the window return it again; the same target never twice.
 function DamageService._consumeForcedCrit(
 	self: typeof(DamageService),
 	player: Player,
 	isMelee: boolean,
-	isMagic: boolean
+	isMagic: boolean,
+	targetModel: Model
 ): ForcedCrit?
 	local lanes = self._forcedCrits[player.UserId]
 	if not lanes then
@@ -768,7 +805,19 @@ function DamageService._consumeForcedCrit(
 		return nil
 	end
 	local arm = lanes[lane]
-	lanes[lane] = nil
+	if not arm.spreadSeconds then
+		lanes[lane] = nil
+		return arm
+	end
+	local hitTargets = arm.hitTargets or {}
+	arm.hitTargets = hitTargets
+	if hitTargets[targetModel] then
+		return nil
+	end
+	hitTargets[targetModel] = true
+	if not arm.spentAt then
+		arm.spentAt = os.clock()
+	end
 	return arm
 end
 
@@ -804,10 +853,15 @@ function DamageService._knockback(
 	end
 	local distance = if relicPush
 		then KNOCKBACK_RELIC_STUDS
-		elseif isMelee then KNOCKBACK_MELEE_STUDS
+		elseif isMelee then (KNOCKBACK_MELEE_STUDS_BY_TYPE[getEquippedMeleeType(player) or ""] or KNOCKBACK_MELEE_STUDS)
 		elseif isArcane then KNOCKBACK_ARCANE_STUDS
 		elseif isGunShot then KNOCKBACK_BULLET_STUDS
 		else KNOCKBACK_RELIC_STUDS
+	-- A zero distance is no push at all: skip the call so the mob is not
+	-- put into its knockback state for nothing (relic hits since 2026-11-01).
+	if distance <= 0 then
+		return
+	end
 	mobSimService:ApplyKnockback(targetModel, origin, distance, attackerAt)
 end
 
@@ -1504,7 +1558,7 @@ function DamageService.TakeDamage(
 		-- A forced crit (ForceNextCrit): a weapon's or a spell's own hit
 		-- spends the arm its lane matches and crits for certain. The
 		-- gimmicks' typed hits run under WithRelicKnockback and pass it by.
-		local forced = self:_consumeForcedCrit(player, isMelee == true, isMagic == true)
+		local forced = self:_consumeForcedCrit(player, isMelee == true, isMagic == true, targetModel)
 		if forced then
 			critChance = 100
 			if forced.onHit then

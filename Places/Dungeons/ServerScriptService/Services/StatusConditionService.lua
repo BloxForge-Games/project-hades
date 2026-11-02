@@ -813,6 +813,7 @@ end
 -- for the SAME status stack ADDITIVELY; the hub sums them and makes ONE
 -- roll per status per hit.
 -- Row conditions:
+--   meleeOnly               : Skeletal Scythe Poisons on melee weapon hits
 --   weaponOnly / rangedOnly : Magenta Paintball Gun paints on ranged
 --                             weapon hits only.
 --   auraGate                : row counts only while the OWNER has that
@@ -831,11 +832,23 @@ local RELIC_HIT_STATUSES: {
 		chance: number?,
 		weaponOnly: boolean?,
 		rangedOnly: boolean?,
+		meleeOnly: boolean?,
 		auraGate: string?,
 		spellOnly: boolean?,
 	}
 } =
 	{
+		-- Skeletal Scythe (2026-11-01 evening): Venom's melee opener, 30% of
+		-- melee weapon hits Poison (which its own redirect turns into Death
+		-- Venom). Added so the Scythe works alone (NC) and Zombie Bomb is
+		-- the tree's one C relic.
+		{
+			relicName = RelicNames["Skeletal Scythe"],
+			status = StatusConditions.Poison,
+			chance = 0.30,
+			weaponOnly = true,
+			meleeOnly = true,
+		},
 		-- The four tree openers left on 2026-11-01: statuses open from the
 		-- weapon ENCHANTMENTS (EnchantmentData openerStatus / openerChance,
 		-- read in ApplyWeaponOnHitStatuses) and from each tree's own relics
@@ -909,6 +922,9 @@ function StatusConditionService:_sumApplierChances(
 			continue
 		end
 		if row.rangedOnly and not isRanged then
+			continue
+		end
+		if row.meleeOnly and (isRanged or not isWeaponHit) then
 			continue
 		end
 		if row.spellOnly and not isSpell then

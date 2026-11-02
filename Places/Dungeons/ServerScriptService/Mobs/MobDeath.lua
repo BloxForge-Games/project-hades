@@ -484,9 +484,8 @@ local function handleAssists(context: Context)
 
 		-- Fractured (Earth, 2026-11-01): the cracked enemy shatters into an
 		-- Orb at the status's chance, ONCE per death (not per assister).
-		-- Health when the applier (the killer when the applier is gone) is
-		-- under the threshold of Max Health, Mana otherwise, so the orb is
-		-- the one the player is short of.
+		-- A coin flip picks Health or Mana (the applier's bars used to
+		-- choose; kept simple on purpose).
 		if
 			StatusConditionService
 			and context.model:GetAttribute("FractureShattered") ~= true
@@ -496,19 +495,9 @@ local function handleAssists(context: Context)
 			local fractureConfig = StatusConditionData[StatusConditions.Fractured]
 			local orbChance = (fractureConfig and fractureConfig.fractureOrbChance) or 0
 			if math.random() < orbChance then
-				local applier = (StatusConditionService :: any):GetStatusSourcePlayer(
-					context.model,
-					StatusConditions.Fractured
-				) or player
-				local threshold = (fractureConfig and fractureConfig.fractureHealthThreshold) or 0.9
-				local applierHumanoid = applier
-					and applier.Character
-					and applier.Character:FindFirstChildOfClass("Humanoid")
-				local wantsHealth = applierHumanoid ~= nil
-					and applierHumanoid.Health < applierHumanoid.MaxHealth * threshold
 				DropService.OnDropRequested:Fire(
 					context.rootPart,
-					if wantsHealth then DropTypes.Health else DropTypes.Mana,
+					if math.random() < 0.5 then DropTypes.Health else DropTypes.Mana,
 					1,
 					1,
 					1,

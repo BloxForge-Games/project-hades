@@ -26,6 +26,8 @@ local ScreenSizes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Scree
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 -- Taps closer than this are one tap (the prompt is never locked locally).
+-- Stamped by the server component once the owner has pulled.
+local PULLED_ATTRIBUTE = "Pulled"
 local TAP_DEBOUNCE_SECONDS = 0.5
 
 --[ Component Root ]--
@@ -185,6 +187,9 @@ function RelicMachine:Start()
 				if Players.LocalPlayer.UserId ~= self.Instance:GetAttribute(Attributes.OwnerId) then
 					return
 				end
+				if self.Instance:GetAttribute(PULLED_ATTRIBUTE) == true then
+					return
+				end
 
 				self.Instance.PrimaryPart.Attachment.ProximityPrompt.Enabled = true
 			end)
@@ -195,11 +200,22 @@ function RelicMachine:Start()
 		self.Instance:ScaleTo(value)
 	end)
 
-	-- The client never disables the prompt itself (2026-10-31): the SERVER
-	-- does on a real pull, and the instance replicates, so a refused tap
-	-- (relics full, dead, a stale attribute) leaves the machine usable. The
-	-- old local disable stranded the prompt whenever the server refused.
-	-- A short debounce stands in for the lock against double taps.
+	-- The client never disables the prompt on a TAP (2026-10-31): a refused
+	-- tap (relics full, dead, a stale attribute) must leave the machine
+	-- usable. It disables it on the server's Pulled attribute instead
+	-- (2026-11-01): the prompt's own Enabled never replicates, because the
+	-- asset ships it false and this client is the one that turned it on, so
+	-- the server's false after a real pull did not reach us and the prompt
+	-- came back once the offer closed. A short debounce stands in for the
+	-- lock against double taps.
+	self.Instance:GetAttributeChangedSignal(PULLED_ATTRIBUTE):Connect(function()
+		if self.Instance:GetAttribute(PULLED_ATTRIBUTE) == true then
+			self._proximityPrompt.Enabled = false
+		end
+	end)
+	if self.Instance:GetAttribute(PULLED_ATTRIBUTE) == true then
+		self._proximityPrompt.Enabled = false
+	end
 	local lastTap = 0
 	self._proximityPrompt.Triggered:Connect(function(player: Player)
 		if self._ownerId ~= player.UserId then

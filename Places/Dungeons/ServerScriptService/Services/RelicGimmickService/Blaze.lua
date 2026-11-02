@@ -12,19 +12,19 @@
 	                        weapon damage (crits, weapon relics, on-hit
 	                        statuses), more to Burning enemies.
 	  Berserker's Claymore  INFERNO CLEAVE (2026-11-01): a CRITICAL
-	                        STRIKE on a Burning enemy erupts in fire around
-	                        it, dealing the whole hit again to the nearest
-	                        few enemies as weapon damage. Once per fan-out.
+	                        STRIKE erupts in fire around its target,
+	                        dealing the whole hit again to the nearest few
+	                        enemies as weapon damage. Once per fan-out.
 	  Phoenix               PHOENIX DASH: a dodge leaves a fire trail along
 	                        its path; every second it Burns and damages the
 	                        enemies on it (a per-level relic burst).
 
-	  Flaming Bo Staff      THE Nth HIT (2026-11-01, the tree's enabler):
-	                        every Nth melee weapon hit (N by weapon type:
-	                        Daggers 6, Sword 5, Greatsword 4) is a
+	  Flaming Bo Staff      THE Nth SWING (2026-11-01, the tree's enabler):
+	                        every Nth melee swing (N by weapon type:
+	                        Daggers 5, Sword 4, Greatsword 3) is a
 	                        guaranteed Critical Strike and Burns. The crit
 	                        is DamageService's one-shot forced crit, armed
-	                        on the hit before (see countBoStaffHit).
+	                        on the swing before (see countBoStaffSwing).
 	  Flame Ronin Katana    DETONATE: a Critical Hit on an enemy you have
 	                        Black-Flamed sets the burn off at once.
 	  Red Laser Scythe      SWING SPEED (2026-10-30): while Enflamed, the
@@ -42,10 +42,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.MeleeWeaponTypes)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
-local getEquippedMeleeType = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getEquippedMeleeType)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 
@@ -109,6 +107,35 @@ local function launchFlameWave(player: Player, origin: Vector3, look: Vector3, s
 	end)
 end
 
+--[ Flaming Bo Staff: the Nth swing ]--
+
+-- Counts one melee SWING (2026-11-01; hits per mob before, which wound
+-- the rhythm several steps in a crowd). The crit has to be decided
+-- BEFORE a hit's damage is rolled, and the swing hook runs after the
+-- swing's hitbox resolves, so the swing before the Nth arms
+-- DamageService's one-shot Melee forced crit: the next weapon hit (the
+-- Nth swing's first) spends it -- its crit rolls at 100 and the arm's
+-- onHit Burns the target as it lands -- and the Nth swing's hook then
+-- sees the count reach N and starts over. A whiffed Nth swing leaves the
+-- arm up for the next hit. The gimmicks' own melee-typed hits (Flame
+-- Wave, Inferno Cleave) run under WithRelicKnockback and never spend it.
+local function countBoStaffSwing(player: Player, weaponType: string?)
+	if not helpers.owns(player, BO_STAFF) then
+		boStaffHits[player] = nil
+		return
+	end
+	local needed = helpers.swingsFor(BO_STAFF, weaponType)
+	local count = (boStaffHits[player] or 0) + 1
+	if count >= needed then
+		count = 0
+	elseif count == needed - 1 then
+		helpers.damageService():ForceNextCrit(player, "Melee", nil, function(target: Model)
+			helpers.statusService():ApplyStatus(player, target, StatusConditions.Burn, true)
+		end)
+	end
+	boStaffHits[player] = count
+end
+
 function Blaze.onMeleeSwing(
 	player: Player,
 	origin: Vector3,
@@ -117,6 +144,7 @@ function Blaze.onMeleeSwing(
 	_connected: boolean,
 	weaponType: string?
 )
+	countBoStaffSwing(player, weaponType)
 	if not helpers.owns(player, FLAME_SWORD) then
 		return
 	end
@@ -131,16 +159,13 @@ end
 --[ Inferno Cleave ]--
 
 -- One eruption around `model` for a CRITICAL STRIKE that dealt `damage`
--- to a Burning enemy (2026-11-01; every melee hit before): the nearest
--- maxTargets OTHER enemies within splashRadius take splashFraction of it
--- as weapon damage. No status of its own. Latched per fan-out so a crit
--- that lands on three mobs erupts once.
+-- (2026-11-01; "on a Burning enemy" until the same evening, which made
+-- the card dead without a Burn source; every melee hit before that): the
+-- nearest maxTargets OTHER enemies within splashRadius take
+-- splashFraction of it as weapon damage. No status of its own. Latched
+-- per fan-out so a crit that lands on three mobs erupts once.
 local function cleave(player: Player, model: Model, damage: number)
 	if not helpers.owns(player, CLAYMORE) or damage <= 0 then
-		return
-	end
-	local statusService = helpers.statusService()
-	if not statusService:IsBurning(model) then
 		return
 	end
 	local now = os.clock()
@@ -183,50 +208,6 @@ local function cleave(player: Player, model: Model, damage: number)
 		end
 		helpers.takeDamage(player, victim.humanoid, splash, false, false, true)
 	end
-end
-
---[ Flaming Bo Staff: the Nth hit ]--
-
--- The Bo Staff's count for the melee weight in hand: data.hitsDaggers /
--- hitsSword / hitsGreatsword (6 / 5 / 4; the Sword's with none out).
-local function boStaffHitsFor(player: Player): number
-	local weaponType = getEquippedMeleeType(player)
-	if weaponType == MeleeWeaponTypes.Daggers then
-		return helpers.data(BO_STAFF, "hitsDaggers", 6)
-	elseif weaponType == MeleeWeaponTypes.Greatsword then
-		return helpers.data(BO_STAFF, "hitsGreatsword", 4)
-	end
-	return helpers.data(BO_STAFF, "hitsSword", 5)
-end
-
--- Counts one melee weapon hit. The crit has to be decided BEFORE the
--- hit's damage is rolled, and this hook runs after it (MeleeWeapon:
--- TakeDamage, then OnMeleeHit), so the hit before the Nth arms
--- DamageService's one-shot Melee forced crit. The Nth weapon hit spends
--- it -- its crit rolls at 100 and the arm's onHit Burns the target as it
--- lands -- and this hook then sees the count reach N and starts over. The
--- gimmicks' own melee-typed hits (Flame Wave, Inferno Cleave) run under
--- WithRelicKnockback and never spend the arm, so it is exactly the Nth
--- weapon hit that crits.
-local function countBoStaffHit(player: Player)
-	if not helpers.owns(player, BO_STAFF) then
-		boStaffHits[player] = nil
-		return
-	end
-	local needed = boStaffHitsFor(player)
-	local count = (boStaffHits[player] or 0) + 1
-	if count >= needed then
-		count = 0
-	elseif count == needed - 1 then
-		helpers.damageService():ForceNextCrit(player, "Melee", nil, function(target: Model)
-			helpers.statusService():ApplyStatus(player, target, StatusConditions.Burn, true)
-		end)
-	end
-	boStaffHits[player] = count
-end
-
-function Blaze.onMeleeHit(player: Player, _model: Model, _damage: number)
-	countBoStaffHit(player)
 end
 
 --[ Flame Ronin Katana: Detonate ]--
