@@ -260,6 +260,8 @@ local WIPE_KICK_DELAY_SECONDS = 2
 local WIPE_KICK_MESSAGE = "Your data has been wiped. Rejoin to start fresh."
 -- /gold with no amount.
 local DEFAULT_GOLD_AMOUNT = 1000
+-- /crystals with no amount (Arcane Crystals).
+local DEFAULT_CRYSTAL_AMOUNT = 1000
 -- /level: the highest level it sets.
 local MAX_SET_LEVEL = 200
 
@@ -407,6 +409,23 @@ COMMANDS = {
 			local total = math.max(CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) + amount, 0)
 			CurrencyService:SetCurrencyValue(player, CurrencyTypes.Gold, total)
 			return ("%+d Gold (now %d)."):format(amount, total)
+		end,
+	},
+	crystals = {
+		usage = "/crystals [amount]",
+		description = "Adds Arcane Crystals to YOUR profile (default 1000; negative takes them away).",
+		handler = function(player: Player, args: { string }): string?
+			local amount = if args[1] then tonumber(args[1]) else DEFAULT_CRYSTAL_AMOUNT
+			if not amount then
+				return "Usage: /crystals [amount]"
+			end
+			amount = math.floor(amount)
+			if not DataService:GetProfileData(player) then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			local total = math.max(CurrencyService:GetCurrencyValue(player, CurrencyTypes.ArcaneCrystals) + amount, 0)
+			CurrencyService:SetCurrencyValue(player, CurrencyTypes.ArcaneCrystals, total)
+			return ("%+d Arcane Crystals (now %d)."):format(amount, total)
 		end,
 	},
 	level = {
@@ -726,6 +745,7 @@ COMMANDS = {
 }
 -- Aliases: same handler, different spelling.
 COMMANDS.dungeon = COMMANDS.tp
+COMMANDS.crystal = COMMANDS.crystals
 COMMANDS.dungeons = COMMANDS.tp
 
 -- Commands ANYONE may run, rank or not (2026-10-28): /wipedata only ever
