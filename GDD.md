@@ -128,7 +128,7 @@ except Death Venom.
 | Chill | 30% slow for 5s | Control. |
 | Poison | 15% of Power per second for 5s, target deals 10% less | DoT plus Weaken (10% on 2026-10-31, 15% since 2026-11-01). Death Venom (Skeletal Scythe) stacks to 3. |
 | Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
-| Fractured | The enemy shatters on death: 50% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
+| Fractured | The enemy shatters on death: 75% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
 | Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
@@ -137,7 +137,7 @@ except Death Venom.
 - Every status lasts 5s; a reapply refreshes the timer. Melted (Burning + Poisoned) makes DoTs
   tick twice as fast. Petrified (Medusa, shelved) is a stun on the same 5s.
   Neither increases damage taken.
-- **Crit** is 10% base (5% before 2026-11-01), 1.75x damage. The Critical Hit Chance gear line
+- **Crit** is 5% base (10% for a day from 2026-11-01, back to 5% on 2026-11-02), 1.75x damage. The Critical Hit Chance gear line
   rolls 3 to 7 points per piece (25 at most from lines) and Stormcharged adds 10 per weapon. Every
   tree has a guaranteed crit somewhere (the Bo Staff's rhythm, the Katana's dodge, the Horn's
   strike on crits), so the Critical Damage line is worth chasing.

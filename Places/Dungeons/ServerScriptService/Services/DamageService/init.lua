@@ -181,9 +181,8 @@ end
 --[ Constants ]--
 
 -- Baseline crit chance every hit has before any relic or aura.
--- 5 -> 10 (2026-11-01): with guaranteed crits in every tree, ordinary hits
--- crit often enough for the Critical Damage line to be felt.
-local DEFAULT_CRITICAL_CHANCE = 10
+-- 5 -> 10 (2026-11-01), back to 5 after the 2026-11-02 play-test.
+local DEFAULT_CRITICAL_CHANCE = 5
 -- x1.5 -> x1.75 (2026-10-28) so crit chance is worth taking.
 local DEFAULT_CRITICAL_MULTIPLIER = 1.75
 local RESISTED_COLOR3 = DamageIndicatorColors.Resisted
