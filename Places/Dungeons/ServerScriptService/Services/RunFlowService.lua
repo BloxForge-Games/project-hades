@@ -127,7 +127,7 @@ function RunFlowService.GenerateDungeon(
 ): Dungeon
 	-- The mob pool is per dungeon (its GameAssets.Mobs folder).
 	if MobSpawnService then
-		MobSpawnService:BuildMobPlanForDungeon(dungeonId)
+		MobSpawnService:BuildMobPlanForDungeon(dungeonId, difficulty)
 	end
 
 	-- The floor's prefab set is GameAssets.DungeonRooms.<assetFolder>
