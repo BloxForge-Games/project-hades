@@ -85,6 +85,9 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local GearChestService = require(ServerScriptService.Submodules.Core.Source.Services.GearChestService)
+local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
+local GearChestData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GearChestData)
 local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
 local ExperienceService =
@@ -451,6 +454,32 @@ COMMANDS = {
 			local before, after = dungeonProgress.addMasteryXp(progress, dungeonId, xp)
 			DataService:SetProfileValue(player, "DungeonProgress", progress)
 			return ("%s: +%d Mastery XP (level %d -> %d)."):format(dungeonId, xp, before, after)
+		end,
+	},
+	gearchest = {
+		usage = "/gearchest [dungeon] [rarity]",
+		description = "Opens one of Valencia's gear chests for free and plays its roulette, the rolled lines on the result card (Runegrove and the chest's odds unless named; pity untouched). Any word order: /gearchest leg.",
+		handler = function(player: Player, args: { string }): string?
+			local dungeonId = DungeonIds.Runegrove
+			local rarity: string? = nil
+			for _, arg in args do
+				local lowered = string.lower(arg)
+				local asRarity = matchRarity(lowered)
+				local asDungeon = if asRarity then nil else matchDungeon(arg)
+				if asRarity then
+					rarity = asRarity
+				elseif asDungeon then
+					dungeonId = asDungeon
+				else
+					return ("Unknown word %q. Usage: /gearchest [dungeon] [rarity]"):format(arg)
+				end
+			end
+			local result = GearChestService:Open(player, dungeonId, GearChestData.CHEST_DEBUG, rarity)
+			if not result.Accepted then
+				return result.Message
+			end
+			PlayerNetwork.GearChestOpened.Fire(player, { DungeonId = dungeonId, Result = result })
+			return nil
 		end,
 	},
 	gear = {

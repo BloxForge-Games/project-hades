@@ -77,21 +77,27 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door between the first combat room and the boss, and a
   second rolls at 50% on another door, never back to back (for example C E C M E C B).
 - **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
-  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03); a run's whole Gold take, coins plus gear sales, is
-  125 / 250 / 500 / 1000; the coin part (45 / 100 / 230 / 515) is 60% chests (27 / 60 / 138 /
-  309, split 40% miniboss chest / 60% boss chest) and 40% grunt drops (18 / 40 / 92 / 206, under
-  1 a kill on Easy and 3 to 5 on Nightmare, scaled from the old Gem rows);
-  Crystals 50 / 100 / 200 / 400 are per run from the two chests; the boss chest drops 1 / 2 / 3 /
+  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03). **Since 2026-11-02 a run pays 150 / 300 / 600 / 1200
+  coins**: the reward chests 75 / 150 / 300 / 600 (40% miniboss chest / 60% boss chest), grunt
+  drops 50 / 100 / 200 / 400 and the treasure chests 25 / 50 / 100 / 200. Breaking every pot adds
+  up to +20% of that on top. **Crystals are 50 / 100 / 200 / 400** from the two chests, and
+  breaking every crystal vein adds up to +20% on top. Prices did not move with the raise: the
+  Blacksmith, gear chests, quests and treasure chests stay anchored on the old take below
+  (125 / 250 / 500 / 1000, coins 45 / 100 / 230 / 515 plus gear sales); the boss chest drops 1 / 2 / 3 /
   4 gear pieces and the miniboss 1; expected gear sales are 80 / 150 / 270 / 485 Gold, so a run's
   Gold take is 125 / 250 / 500 / 1000 and Blacksmith prices follow (Gold halved and Crystals
   doubled on 2026-11-01, then the take set to that clean ladder after the first play-test;
   prices are shares of the take, so they move with it).
-- **Gold sinks:** Blacksmith upgrades (half a run for a Common up to two runs for a Legendary,
-  50% of it back on a sale) and **line rerolls** (one gear line becomes another stat from the
-  pool with a fresh roll, a quarter of a run of the item's level, flat). Artix's shop (Docs/HubGearMerchant.md,
-  built 2026-11-01) sells four pieces rolled like drops at the player's tier for Gold, restocked
-  every hour (after every run and daily until 2026-11-02); a reroll of the unsold shelves costs
-  10 Arcane Crystals.
+- **Gold sinks:** Blacksmith upgrades (0.625 of a run for a Common up to 2.5 runs for a Legendary, +25% on 2026-11-02;
+  50% of it back on a sale) and **Valencia's gear chests** (2026-11-02; Shared/Data/GearChestData).
+  One chest per dungeon, the Arcane chests' window and roulette with gear in them: one piece of
+  that dungeon's gear, rolled like a drop, at the tier the player has cleared there ("Power 300
+  Chest (Lvl 10-15)"), for half that tier's run Gold (Easy a flat 100, since half a run sold back for more). Never Common; odds a step under running the
+  tier (Easy 70 / 27 / 3 / 0, Normal 55 / 37 / 7 / 1, Hard 35 / 45 / 17 / 3, Nightmare 20 / 45 /
+  28 / 7, Uncommon / Rare / Epic / Legendary; a Legendary is the dungeon's unique, an Epic where
+  it has none). The Luck line raises everything above Uncommon. Gear is never sold for Robux. Pity: an Epic or better every 10 opens per chest. A run still pays about
+  four pieces plus its Gold, so running stays the way to gear up. The Imbue, gear-line rerolls and
+  Artix's hourly shelves all left the same day.
 - **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
   add the Coffin and the Cursed Shrine; Nightmare adds the Sword in the Stone. The Merchant Shop
   is out of the pool (its code stays).
@@ -410,9 +416,7 @@ not a lock. If a single pair becomes the rule, the fix is one number, not a new 
 - **Roll on drop** by rarity: Common 0%, Uncommon 5%, Rare 10%, Epic 25%, Legendary 60%; which
   one is uniform over the live pool: Enflamed, Frostbite, Stormcharged, Corrosion. Stonebound is
   built and works on a weapon that has one; it joins the pool with the Earth tree's look.
-- **Imbue** at the Blacksmith adds or rerolls one for Gold: half a run of the weapon's level, flat
-  (about 100 / 200 / 385 / 740 at each tier's entry level). Never fails, never destroys, a reroll
-  never repeats. Equipped weapons allowed.
+- An enchantment is what the weapon dropped with: the Blacksmith's Imbue left on 2026-11-02.
 - **Look:** weapon particles per enchantment are Studio work (the code-cloned status rigs were
   taken off on 2026-11-01 to make room for authored ones). Hovering the Enchantment row in the
   bag shows a tooltip with the enchantment's sentence, for example "Your weapon hits deal +10%
@@ -438,8 +442,8 @@ never add a percentage to the player, so lines are the only flat stats in the ga
   fifth copy is wasted, so a set that chases one stat on every piece is no better than one that
   spreads. At the caps a pure-offence set is about +80% damage on grunts and +150% on bosses, a
   pure-defence set about +60% effective health: a little under one tier, so lines decide how
-  comfortable a tier feels while Power still gates it. Line rerolls at the Blacksmith pull from
-  the same pool.
+  comfortable a tier feels while Power still gates it. Lines are what a piece dropped with (the
+  Blacksmith's line reroll left on 2026-11-02).
 
 | Line | Range | Cap | Reads |
 |---|---|---|---|
@@ -475,8 +479,9 @@ Status Chance, Mana Cost Reduction, Orb Potency, Gold Find and Dodge Recovery le
   straight into an owned spell as rank XP at a worse rate than the chest's expected value.
   Crystals come from ore veins, chests, bosses and higher difficulties.
 - Selling gear refunds 50% of its Gold upgrade spend. Sales pay Gold only.
-- Run income per tier (Gold 125 / 250 / 500 / 1,000 across chests, grunt drops and gear sales;
-  Crystals 50 / 100 / 200 / 400) with treasure chests and pots as a 20% bonus on top.
+- Run income per tier (coins 150 / 300 / 600 / 1,200 across chests, grunt drops and treasure
+  chests, gear sales on top; Crystals 50 / 100 / 200 / 400) with pots and crystal veins each up to
+  a 20% bonus on top.
 
 ## Arcane
 
