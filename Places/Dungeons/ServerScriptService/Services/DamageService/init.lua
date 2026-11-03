@@ -47,6 +47,7 @@ local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local BonusStatData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BonusStatData)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
@@ -148,6 +149,10 @@ local DamageService = {
 	} :: { any },
 
 	_onDamageModules = {} :: { [string]: any },
+	-- What last hurt each player (2026-11-03): "Slain by Pot Head" /
+	-- "Killed by Spike Trap", read by DungeonProgressService for the run
+	-- history's cause of death (GetLastHitCause).
+	_lastHitCause = {} :: { [Player]: string },
 	-- Lightning Horn / Shuriken fan-out latches: [userId] = os.clock() of the last proc.
 	_lightningStrikeLast = {} :: { [number]: number },
 	-- [userId] = true while that player's Lightning Strike deals its damage,
@@ -182,9 +187,10 @@ end
 
 -- Baseline crit chance every hit has before any relic or aura.
 -- 5 -> 10 (2026-11-01), back to 5 after the 2026-11-02 play-test.
-local DEFAULT_CRITICAL_CHANCE = 5
+-- BonusStatData.Base owns both (2026-11-03); chance in points here.
+local DEFAULT_CRITICAL_CHANCE = BonusStatData.Base.CritChance * 100
 -- x1.5 -> x1.75 (2026-10-28) so crit chance is worth taking.
-local DEFAULT_CRITICAL_MULTIPLIER = 1.75
+local DEFAULT_CRITICAL_MULTIPLIER = BonusStatData.Base.CritDamage
 local RESISTED_COLOR3 = DamageIndicatorColors.Resisted
 local MAGIC_COLOR3 = DamageIndicatorColors.Arcane
 local WEAPON_COLOR3 = DamageIndicatorColors.Weapon
@@ -340,7 +346,26 @@ function DamageService.GetTargetStatuses(_self: typeof(DamageService), targetMod
 	return statuses
 end
 
+-- "Slain by Pot Head" for a mob (its MobData name, spaced), "Killed by
+-- Spike Trap" for a hazard (a Trap-tagged instance).
+local function describeHitSource(source: Instance): string
+	local name = source.Name:gsub("%d+$", ""):gsub("(%l)(%u)", "%1 %2"):gsub("_", " ")
+	if source:HasTag("Trap") then
+		return "Killed by " .. name
+	end
+	return "Slain by " .. name
+end
+
 --[ Public Functions ]--
+
+-- What last hurt `player` ("Slain by Pot Head"), or nil; `clear` forgets it.
+function DamageService.GetLastHitCause(self: typeof(DamageService), player: Player, clear: boolean?): string?
+	local cause = self._lastHitCause[player]
+	if clear then
+		self._lastHitCause[player] = nil
+	end
+	return cause
+end
 
 -- `fixedDamage` means the caller has already decided the exact number
 -- and nothing may scale it: no variance, no relic reduction, no set
@@ -371,6 +396,11 @@ function DamageService.PlayerTakeDamage(
 	-- absorb the hit silently.
 	if character:GetAttribute(Attributes.Death) == true then
 		return
+	end
+
+	-- The run history's cause of death: whatever this hit came from.
+	if model then
+		self._lastHitCause[player] = describeHitSource(model)
 	end
 
 	if character:GetAttribute(Attributes.Invulnerable) == true then

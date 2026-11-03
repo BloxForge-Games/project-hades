@@ -57,6 +57,9 @@
 	held weapon (WeaponLoadoutService), the Blacksmith's commit sequence,
 	so the aura and the numbers change at once.
 
+	--- /loadingscreen ---
+	Plays a preview of the loading screen on YOUR screen (the
+	PreviewLoadingScreen attribute, read by PreloadInterface.Preview).
 	--- /tp [dungeon] [difficulty] ---
 
 	A TEST stand-in for the hub's queue. Reserves ONE private server of the
@@ -88,6 +91,7 @@ local DataService = require(ServerScriptService.Submodules.Core.Source.Services.
 local GearChestService = require(ServerScriptService.Submodules.Core.Source.Services.GearChestService)
 local PlayerNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Player)
 local GearChestData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GearChestData)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CurrencyService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.CurrencyService)
 local ExperienceService =
@@ -392,6 +396,14 @@ COMMANDS = {
 				DungeonData[dungeonId].displayName,
 				difficulty
 			)
+		end,
+	},
+	loadingscreen = {
+		usage = "/loadingscreen",
+		description = "Plays a preview of the loading screen on your screen.",
+		handler = function(player: Player, _args: { string }): string?
+			player:SetAttribute(Attributes.PreviewLoadingScreen, os.clock())
+			return "Showing the loading screen."
 		end,
 	},
 	gold = {
