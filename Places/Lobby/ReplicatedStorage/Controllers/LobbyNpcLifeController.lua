@@ -114,7 +114,7 @@ local function loosenRig(model: Model)
 	end
 end
 
-local function playIdle(model: Model, humanoid: Humanoid)
+local function playIdle(humanoid: Humanoid)
 	local animator = humanoid:FindFirstChildOfClass("Animator")
 	if not animator then
 		local created = Instance.new("Animator")
@@ -145,7 +145,7 @@ function LobbyNpcLifeController._addNpc(self: typeof(LobbyNpcLifeController), mo
 		return
 	end
 	loosenRig(model)
-	playIdle(model, humanoid)
+	playIdle(humanoid)
 	self._npcs[model] = {
 		model = model,
 		torso = torso,
