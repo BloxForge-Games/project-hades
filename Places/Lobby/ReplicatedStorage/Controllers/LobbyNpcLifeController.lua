@@ -7,8 +7,9 @@
 	  IDLE   each NPC under workspace.IgnoreInstances.NPCs plays the
 	         PLAYERS' idle on loop (the player Animate script's "idle"),
 	         not the stock one its own Animate script carries.
-	  LOOK   while the local player is within LOOK_STUDS, the NPC's head
-	         turns toward them, eased. It turns at most LOOK_MAX_YAW either
+	  LOOK   while the local player is within LOOK_STUDS, the NPC turns
+	         toward them, eased: the torso a little (TORSO_SHARE), the head
+	         the rest. It turns at most LOOK_MAX_YAW either
 	         way (a half circle in all), and once the player is behind
 	         that, the head eases back to straight ahead; walk round to its
 	         other side and it picks the player up again. The head also
@@ -47,16 +48,27 @@ local LOOK_MAX_PITCH = math.rad(25)
 -- How fast the head eases toward its target (per second; higher is
 -- snappier).
 local LOOK_EASE = 6
+-- How much of the turn the torso takes (the root joint); the head (the
+-- neck) takes the rest, so the face still points at the player
+-- (2026-11-03).
+local TORSO_SHARE = 0.3
+-- The torso's own, gentler ease (per second; LOOK_EASE is the head's), so
+-- the body swings round slowly while the head keeps up (2026-11-03).
+local TORSO_EASE = 2
 
 --[ Types ]--
 
 type NpcState = {
 	model: Model,
+	root: BasePart,
 	torso: BasePart,
 	neck: Motor6D,
 	restC0: CFrame,
+	rootJoint: Motor6D?,
+	rootRestC0: CFrame,
 	yaw: number,
 	pitch: number,
+	torsoYaw: number,
 }
 
 --[ Module ]--
@@ -144,15 +156,25 @@ function LobbyNpcLifeController._addNpc(self: typeof(LobbyNpcLifeController), mo
 	if not neck or not neck:IsA("Motor6D") then
 		return
 	end
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return
+	end
+	local rootJoint = root:FindFirstChild("RootJoint")
+	local rootMotor = if rootJoint and rootJoint:IsA("Motor6D") then rootJoint else nil
 	loosenRig(model)
 	playIdle(humanoid)
 	self._npcs[model] = {
 		model = model,
+		root = root,
 		torso = torso,
 		neck = neck,
 		restC0 = neck.C0,
+		rootJoint = rootMotor,
+		rootRestC0 = if rootMotor then rootMotor.C0 else CFrame.new(),
 		yaw = 0,
 		pitch = 0,
+		torsoYaw = 0,
 	}
 	model.AncestryChanged:Connect(function()
 		if not model:IsDescendantOf(workspace) then
@@ -161,8 +183,9 @@ function LobbyNpcLifeController._addNpc(self: typeof(LobbyNpcLifeController), mo
 	end)
 end
 
--- The yaw and pitch (torso space) the head should take toward `target`,
--- or 0, 0 when the player is out of range or behind.
+-- The yaw and pitch the NPC turns toward `target` -- measured in the
+-- anchored ROOT's space, so the torso's own turn never feeds back into it
+-- -- or 0, 0 when the player is out of range or behind.
 local function lookAngles(state: NpcState, target: Vector3?): (number, number)
 	if not target then
 		return 0, 0
@@ -171,7 +194,7 @@ local function lookAngles(state: NpcState, target: Vector3?): (number, number)
 	if (target - neckPoint).Magnitude > LOOK_STUDS then
 		return 0, 0
 	end
-	local direction = state.torso.CFrame:VectorToObjectSpace(target - neckPoint)
+	local direction = state.root.CFrame:VectorToObjectSpace(target - neckPoint)
 	-- Straight ahead is -Z; yaw turns it toward -X for a positive angle.
 	local yaw = math.atan2(-direction.X, -direction.Z)
 	if math.abs(yaw) > LOOK_MAX_YAW then
@@ -187,6 +210,7 @@ function LobbyNpcLifeController._step(self: typeof(LobbyNpcLifeController), dt: 
 	local head = character and character:FindFirstChild("Head")
 	local target = if head and head:IsA("BasePart") then head.Position else nil
 	local blend = 1 - math.exp(-LOOK_EASE * dt)
+	local torsoBlend = 1 - math.exp(-TORSO_EASE * dt)
 	for model, state in self._npcs do
 		if not model.Parent or not state.neck.Parent then
 			self._npcs[model] = nil
@@ -195,9 +219,21 @@ function LobbyNpcLifeController._step(self: typeof(LobbyNpcLifeController), dt: 
 		local yaw, pitch = lookAngles(state, target)
 		state.yaw += (yaw - state.yaw) * blend
 		state.pitch += (pitch - state.pitch) * blend
-		-- The turn in torso space, about the neck: pre-multiplied onto the
-		-- rest C0's rotation, its position kept.
-		local turn = CFrame.Angles(0, state.yaw, 0) * CFrame.Angles(state.pitch, 0, 0)
+		-- Split the turn: the torso takes TORSO_SHARE of the yaw (about the
+		-- root), the head the rest plus all the pitch (about the neck), so
+		-- the face ends up pointing at the player. Each is pre-multiplied
+		-- onto its joint's rest rotation, its position kept.
+		-- The torso eases toward its share of the turn more slowly; the head
+		-- takes up whatever it has not reached yet.
+		state.torsoYaw += (state.yaw * TORSO_SHARE - state.torsoYaw) * torsoBlend
+		local torsoYaw = state.torsoYaw
+		if state.rootJoint then
+			state.rootJoint.C0 = CFrame.new(state.rootRestC0.Position)
+				* CFrame.Angles(0, torsoYaw, 0)
+				* state.rootRestC0.Rotation
+		end
+		local headYaw = if state.rootJoint then state.yaw - torsoYaw else state.yaw
+		local turn = CFrame.Angles(0, headYaw, 0) * CFrame.Angles(state.pitch, 0, 0)
 		state.neck.C0 = CFrame.new(state.restC0.Position) * turn * state.restC0.Rotation
 	end
 end
