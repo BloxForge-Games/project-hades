@@ -262,6 +262,13 @@ local function applyBillboard(chest: Model, player: Player, displayName: string)
 		statusLabel.Text = displayName .. " (Active)"
 		statusLabel.TextColor3 = ACTIVE_COLOR
 	end
+
+	-- Filled in (the client component reads it) but never SHOWN
+	-- (2026-11-03): another player's chest is see-through, which is how
+	-- you tell yours apart.
+	if billboard and billboard:IsA("BillboardGui") then
+		billboard.Enabled = false
+	end
 end
 
 -- Places one chest STATICALLY at its final rest pose: the machine's own
