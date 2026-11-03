@@ -784,6 +784,11 @@ function ChatCommandsService._canRun(_self: typeof(ChatCommandsService), player:
 	if PUBLIC_COMMANDS[commandName] then
 		return true
 	end
+	-- Studio runs every command for anyone (2026-11-02): a multi-client
+	-- playtest's players have test UserIds (-1, -2, ...) in no group.
+	if RunService:IsStudio() then
+		return true
+	end
 	local rank = groupRankCache[player]
 	if rank == nil then
 		local ok, groups = pcall(function()

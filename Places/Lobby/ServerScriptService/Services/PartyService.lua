@@ -26,6 +26,8 @@ local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data
 local PartyNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Party)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
 local MatchmakingData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MatchmakingData)
+local SettingsService =
+	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.SettingsService)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 
 export type Party = {
@@ -36,7 +38,7 @@ export type Party = {
 
 local PartyService = {
 	Name = "PartyService",
-	Dependencies = { UserNotificationService } :: { any },
+	Dependencies = { UserNotificationService, SettingsService } :: { any },
 }
 
 PartyService._partyOf = {} :: { [Player]: Party }
@@ -195,6 +197,11 @@ function PartyService._onInvite(self: typeof(PartyService), player: Player, targ
 		notify(player, "Party Full", ("A party holds %d players."):format(MatchmakingData.MAX_PARTY_SIZE))
 		return
 	end
+	-- The target turned party invites off (Party window toggle).
+	if not SettingsService:AcceptsRequests(target, "PartyInvites") then
+		notify(player, "Can't Invite", ("%s isn't taking party invites."):format(target.DisplayName))
+		return
+	end
 	self:_create(player)
 
 	local invites = self._invites[target]
@@ -228,6 +235,12 @@ function PartyService._onRespond(self: typeof(PartyService), player: Player, lea
 	invites[leaderUserId] = nil
 	self:_sendInvites(player)
 	if not accept then
+		-- Tell the leader, and clear their "Invited" at once.
+		local inviter = Players:GetPlayerByUserId(leaderUserId)
+		if inviter then
+			notify(inviter, "Invite Declined", ("%s declined your invite."):format(player.DisplayName))
+			PartyNetwork.InviteAnswered.Fire(inviter, player.UserId)
+		end
 		return
 	end
 	if expiresAt < workspace:GetServerTimeNow() then

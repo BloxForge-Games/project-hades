@@ -80,7 +80,7 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03). **Since 2026-11-02 a run pays 150 / 300 / 600 / 1200
   coins**: the reward chests 75 / 150 / 300 / 600 (40% miniboss chest / 60% boss chest), grunt
   drops 50 / 100 / 200 / 400 and the treasure chests 25 / 50 / 100 / 200. Breaking every pot adds
-  up to +20% of that on top. **Crystals are 50 / 100 / 200 / 400** from the two chests, and
+  up to +20% of that on top. **Crystals are 50 / 100 / 150 / 200** from the two chests, and
   breaking every crystal vein adds up to +20% on top. Prices did not move with the raise: the
   Blacksmith, gear chests, quests and treasure chests stay anchored on the old take below
   (125 / 250 / 500 / 1000, coins 45 / 100 / 230 / 515 plus gear sales); the boss chest drops 1 / 2 / 3 /
@@ -88,14 +88,23 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   Gold take is 125 / 250 / 500 / 1000 and Blacksmith prices follow (Gold halved and Crystals
   doubled on 2026-11-01, then the take set to that clean ladder after the first play-test;
   prices are shares of the take, so they move with it).
-- **Gold sinks:** Blacksmith upgrades (0.625 of a run for a Common up to 2.5 runs for a Legendary, +25% on 2026-11-02;
+- **Trading** (2026-11-02, hub only; Shared/Data/TradeData, Lobby TradeService): the Trading
+  tab lists the server's players; a request (20 s) opens a trade window for both, the bag on the
+  left and both offers on the right. Up to 6 weapons or armour pieces a side (never spells,
+  equipped or favourited gear), plus Gold and Arcane Crystals; 5% of all Gold and Crystals sent is lost to a trading fee, taken from what the receiver gets (send 100, receive 95), so passing currency back and forth drains it.
+  Level 10+ only. Any offer change clears both Ready marks; both Ready unlocks Confirm after 3 s;
+  both Confirmed swaps everything in one server step that re-checks both bags, wallets and bag
+  space first, or cancels and moves nothing. Bags, the forge, Valencia and the queue are locked
+  mid-trade; a player leaving, cancelling or idling 5 minutes ends it. Both profiles log the trade
+  (TradeLog) under one id.
+- **Gold sinks:** Blacksmith upgrades (0.9375 of a run for a Common up to 3.75 runs for a Legendary, +25% then +50% on 2026-11-02;
   50% of it back on a sale) and **Valencia's gear chests** (2026-11-02; Shared/Data/GearChestData).
   One chest per dungeon, the Arcane chests' window and roulette with gear in them: one piece of
   that dungeon's gear, rolled like a drop, at the tier the player has cleared there ("Power 300
   Chest (Lvl 10-15)"), for half that tier's run Gold (Easy a flat 100, since half a run sold back for more). Never Common; odds a step under running the
   tier (Easy 70 / 27 / 3 / 0, Normal 55 / 37 / 7 / 1, Hard 35 / 45 / 17 / 3, Nightmare 20 / 45 /
   28 / 7, Uncommon / Rare / Epic / Legendary; a Legendary is the dungeon's unique, an Epic where
-  it has none). The Luck line raises everything above Uncommon. Gear is never sold for Robux. Pity: an Epic or better every 10 opens per chest. A run still pays about
+  it has none). The Luck line raises everything above Uncommon. Since 2026-11-02 the Gold chest rolls no Common, Rare 32%, Epic 3 / 4 / 5 / 6% by difficulty (Easy to Nightmare), Uncommon the rest, and a 1% Legendary on Nightmare (the dungeon's unique), capped at 3 Gold rolls per player, all back half an hour after the last one is used (offline too); "Refresh!" refills them for 25 Robux. Pity: an Epic every 10 opens per chest. A run still pays about
   four pieces plus its Gold, so running stays the way to gear up. The Imbue, gear-line rerolls and
   Artix's hourly shelves all left the same day.
 - **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
@@ -481,7 +490,7 @@ Status Chance, Mana Cost Reduction, Orb Potency, Gold Find and Dodge Recovery le
   Crystals come from ore veins, chests, bosses and higher difficulties.
 - Selling gear refunds 50% of its Gold upgrade spend. Sales pay Gold only.
 - Run income per tier (coins 150 / 300 / 600 / 1,200 across chests, grunt drops and treasure
-  chests, gear sales on top; Crystals 50 / 100 / 200 / 400) with pots and crystal veins each up to
+  chests, gear sales on top; Crystals 50 / 100 / 150 / 200) with pots and crystal veins each up to
   a 20% bonus on top.
 
 ## Arcane
