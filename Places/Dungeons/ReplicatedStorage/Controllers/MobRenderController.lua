@@ -53,6 +53,10 @@ local MobRenderController = {
 local MOBS_FOLDER = workspace.IgnoreInstances.Mobs
 local RIG_NAME = "Rig"
 local HEALTH_INTERFACE_NAME = "HealthInterface"
+-- No distance cut-off (2026-11-03): the template's 111 studs is measured
+-- from the CAMERA, which sits ~61 studs off the player, so mobs toward
+-- the screen edges lost their bars.
+local HEALTH_INTERFACE_MAX_DISTANCE = math.huge
 -- The bar inside it, and its authored height scale (MobController's names).
 local HEALTH_BAR_INNER_FRAME_NAME = "InnerFrame"
 local HEALTH_BAR_NAME = "RedBar"
@@ -322,6 +326,7 @@ function MobRenderController._dressProxy(_self: typeof(MobRenderController), ent
 	local proxyHead = proxy:FindFirstChild("Head")
 	if proxyHead and not proxyHead:FindFirstChild(HEALTH_INTERFACE_NAME) then
 		local healthInterface = ReplicatedStorage.GameAssets.BillboardGuis.HealthInterface:Clone() :: BillboardGui
+		healthInterface.MaxDistance = HEALTH_INTERFACE_MAX_DISTANCE
 		if rigHead and rigHead:IsA("BasePart") then
 			healthInterface.Adornee = rigHead
 		end
