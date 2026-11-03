@@ -47,6 +47,7 @@ local TeleportService = game:GetService("TeleportService")
 
 local Constants = require(ReplicatedStorage.Submodules.Core.Shared.Data.Constants)
 local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
+local TradeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.TradeData)
 local PartyNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Party)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
@@ -234,6 +235,13 @@ function MatchmakingService.StartQueue(
 		return
 	end
 	local players = PartyService:GetGroup(player)
+	-- Nobody queues mid-trade (the teleport would strand the trade).
+	for _, member in players do
+		if TradeData.IsTrading(member) then
+			notify(player, "Can't Queue", ("%s is in a trade."):format(member.DisplayName))
+			return
+		end
+	end
 	if #players > squad then
 		notify(player, "Squad Too Small", ("Your party has %d players: pick a bigger squad."):format(#players))
 		return

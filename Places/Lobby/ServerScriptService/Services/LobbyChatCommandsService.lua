@@ -769,6 +769,11 @@ function LobbyChatCommandsService._canRun(
 	if PUBLIC_COMMANDS[commandName] then
 		return true
 	end
+	-- Studio runs every command for anyone (2026-11-02): a multi-client
+	-- playtest's players have test UserIds (-1, -2, ...) in no group.
+	if RunService:IsStudio() then
+		return true
+	end
 	local ok, groups = pcall(function()
 		return GroupService:GetGroupsAsync(player.UserId)
 	end)
