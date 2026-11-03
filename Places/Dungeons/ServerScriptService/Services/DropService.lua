@@ -200,7 +200,8 @@ local DropService = {
 
 -- Orb restores: the base fraction of the bar's max each Orb gives.
 local ORB_RESTORE_FRACTIONS: { [string]: number } = {
-	[DropTypes.Health] = 0.05,
+	-- 0.05 -> 0.10 (2026-11-02): one orb now undoes about half a Hard hit.
+	[DropTypes.Health] = 0.10,
 	[DropTypes.Mana] = 0.10,
 }
 

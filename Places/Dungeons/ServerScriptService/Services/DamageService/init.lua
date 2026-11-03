@@ -419,8 +419,8 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * getStatusConditionService():GetPoisonWeakenMultiplier(model)
 	end
 
-	-- Slateskin Potion (Cursed): +50% Damage Reduction, unconditional (the
-	-- callback owns the 0.50 multiplier).
+	-- Slateskin Potion (Cursed): +35% Damage Reduction, unconditional (the
+	-- callback owns the 0.65 multiplier).
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Slateskin Potion"]) > 0 then
 		damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Slateskin Potion"]) or 1)
 	end

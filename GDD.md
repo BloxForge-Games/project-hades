@@ -128,7 +128,7 @@ except Death Venom.
 | Chill | 30% slow for 5s | Control. |
 | Poison | 15% of Power per second for 5s, target deals 10% less | DoT plus Weaken (10% on 2026-10-31, 15% since 2026-11-01). Death Venom (Skeletal Scythe) stacks to 3. |
 | Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
-| Fractured | The enemy shatters on death: 50% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
+| Fractured | The enemy shatters on death: 35% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
 | Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
@@ -195,7 +195,7 @@ for a later rotation. Duos are shelved too until the pool is tested.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Frozen Blue Ice Crossbow | Rare | NC | Every 4th Ranged hit fires an Ice Arrow that deals 75% of the hit's damage and Chills. |
+| Frozen Blue Ice Crossbow | Rare | NC | Every 4th Ranged hit fires an Ice Arrow that deals damage and Chills. (Power-scaled, 10 per factor, since 2026-11-02; 75% of the hit before.) |
 | Ice Breaker | Rare | C | Chilling a Chilled enemy Shatters them for damage. |
 | Ice Dragon Slayer | Epic | NC | A Frost Dragon follows you, firing icy blasts that deal damage and Chill. |
 | Icy Arctic Fowl | Epic | NC | Every 3s, fire ice shards at nearby enemies for damage. Chilled enemies take double damage. |
@@ -226,16 +226,16 @@ for a later rotation. Duos are shelved too until the pool is tested.
 Earth's status Fractures the enemy and the kill drops an Orb; the cards apply Fracture and spend
 the Orbs. Healing never scales with damage dealt: every heal is an Orb or a rate-capped number, so
 a damage build cannot turn Earth into immortality. Baseline orbs stepped back the same day (grunts
-5% Health / 3% Mana, pots 15% / 10%) so Earth is the tree that turns kills into orbs. Teddy Trap
+5% Health / 5% Mana, pots 10% / 10%; each Health Orb heals 10% since 2026-11-02) so Earth is the tree that turns kills into orbs. Teddy Trap
 turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
 | Golden Steampunk Gloves | Rare | NC | Every 4th / 3rd / 2nd Melee swing (Daggers / Sword / Greatsword) sends out a Shockwave that Fractures enemies for damage. (8 studs around the enemy the swing struck, or just ahead of you on a whiff; Power-scaled; swings counted since 2026-11-01.) |
-| Earth Protection Orb | Rare | NC | Orbs you pick up when your Mana and Health are full are preserved (up to 5). They are used when needed. (Stored when the matching bar is at 95% or above, since an orb heals 5%; spent one a second, Health first; stored orbs never expire and survive a respawn; nobody else can take them. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
+| Earth Protection Orb | Rare | NC | Orbs you pick up when your Mana and Health are full are preserved (up to 5). They are used when needed. (Stored when the matching bar is at 90% or above, since an orb heals 10%; spent one a second, Health first; stored orbs never expire and survive a respawn; nobody else can take them. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
 | Bundle of TNT | Epic | C | Collecting an Orb grants a 10% Shield for 5s. When it ends it explodes, dealing damage and Fracturing nearby enemies. |
 | Earth Summoning Horn | Epic | NC | Collecting an Orb sends out a shockwave that deals damage, and players within 15 studs gain the Orb's restore too. |
-| Golem's Hammer | Legendary | NC | Orbs restore double. In combat the earth quakes around you, Fracturing enemies. (Every 3 s, 12 studs; Fractured enemies take double from the quake.) |
+| Golem's Hammer | Legendary | NC | Orbs restore +50%. In combat the earth quakes around you, Fracturing enemies. (Every 3 s, 12 studs; Fractured enemies take double from the quake.) |
 
 **Neutral** (all NC)
 
@@ -263,7 +263,7 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 | Double-Bladed Scythe | Deal +100% Weapon Damage, but your Arcane deals no damage. |
 | Dragon Lantern | Gain +200% Gold, but lose 10% of it when you take damage. |
 | Forbidden Box | Deal +100% Arcane Damage, but your Weapon deals 50% less. |
-| Slateskin Potion | Gain +50% Damage Reduction, but lose 1 Dodge stack. |
+| Slateskin Potion | Gain +35% Damage Reduction, but lose 1 Dodge stack. |
 | Sword of Eternal Abyss | Deal +50% damage, but you can't apply Statuses. |
 | Teddy Trap | Gain 5% Lifesteal, but Health Orbs don't heal you and you take double damage. |
 
