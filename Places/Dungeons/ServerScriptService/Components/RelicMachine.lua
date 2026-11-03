@@ -266,6 +266,10 @@ function RelicMachine:Start()
 
 	self.Instance.PrimaryPart.VendingMachineName.Frame.NameText.Text = Players:GetPlayerByUserId(self._ownerId).Name
 		.. "'s"
+	-- The owner / status billboard stays filled in (the client components
+	-- read it) but is never SHOWN (2026-11-03): another player's machine
+	-- is see-through, which is how you tell yours apart.
+	self.Instance.PrimaryPart.VendingMachineName.Enabled = false
 	-- Run's-first-machine marker. Only meaningful while
 	-- STARTER_GUARANTEED_ELEMENTS > 0; at 0 (today) the starter rolls
 	-- exactly like any other machine.
