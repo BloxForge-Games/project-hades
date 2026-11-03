@@ -101,10 +101,7 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   50% of it back on a sale) and **Valencia's gear chests** (2026-11-02; Shared/Data/GearChestData).
   One chest per dungeon, the Arcane chests' window and roulette with gear in them: one piece of
   that dungeon's gear, rolled like a drop, at the tier the player has cleared there ("Power 300
-  Chest (Lvl 10-15)"), for half that tier's run Gold (Easy a flat 100, since half a run sold back for more). Never Common; odds a step under running the
-  tier (Easy 70 / 27 / 3 / 0, Normal 55 / 37 / 7 / 1, Hard 35 / 45 / 17 / 3, Nightmare 20 / 45 /
-  28 / 7, Uncommon / Rare / Epic / Legendary; a Legendary is the dungeon's unique, an Epic where
-  it has none). The Luck line raises everything above Uncommon. Since 2026-11-02 the Gold chest rolls no Common, Rare 32%, Epic 3 / 4 / 5 / 6% by difficulty (Easy to Nightmare), Uncommon the rest, and a 1% Legendary on Nightmare (the dungeon's unique), capped at 3 Gold rolls per player, all back half an hour after the last one is used (offline too); "Refresh!" refills them for 25 Robux. Pity: an Epic every 10 opens per chest. A run still pays about
+  Chest (Lvl 10-15)"), for half that tier's run Gold (Easy a flat 100, since half a run sold back for more). The odds are exactly the dungeon's own drops at that tier (Easy 60 / 30 / 10 Common / Uncommon / Rare, Normal 45 / 30 / 20 / 5 with Epic, Hard 30 / 20 / 30 / 20 + a Legendary, Nightmare 15 / 50 / 35 Uncommon / Rare / Epic + a Legendary). The Luck line raises everything above Uncommon. Since 2026-11-02 the Gold chest rolls the dungeon's own drop odds at its tier (above), capped at 3 Gold rolls per player, all back half an hour after the last one is used (offline too); "Refresh!" refills them for 25 Robux. Pity: an Epic every 10 opens per chest. A run still pays about
   four pieces plus its Gold, so running stays the way to gear up. The Imbue, gear-line rerolls and
   Artix's hourly shelves all left the same day.
 - **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
