@@ -508,8 +508,9 @@ local function handleAssists(context: Context)
 			end
 		end
 
-		-- Mana orb roll per killer/assister. 5 -> 3 (2026-11-01).
-		local manaDropChance = 3
+		-- Mana orb roll per killer/assister. 5 -> 3 (2026-11-01), back to 5
+		-- (2026-11-02).
+		local manaDropChance = 5
 
 		if math.random() * 100 <= manaDropChance then
 			DropService.OnDropRequested:Fire(context.rootPart, DropTypes.Mana, 1, 1, 1, 1, false)

@@ -69,6 +69,7 @@ local DamageIndicatorService = require(ServerScriptService.Services.DamageIndica
 local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local MobNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Mob)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
@@ -831,6 +832,124 @@ function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, tar
 		hitFrameDuration = config.hitFrameDuration,
 	}
 	self:SpawnHitbox(mobModel, cleave)
+end
+
+--[ Tidal Requiem ]--
+
+local TIDAL_LEAP_FADE_SECONDS = 0.25
+local TIDAL_ROOM_ATTRIBUTE = "RoomId"
+
+-- The arena the mob fights in: its room model's bounding box, flattened
+-- (centre CFrame on the floor, X / Z extent). nil when the room is unknown.
+local function arenaOf(mobModel: Model): (CFrame?, Vector2?)
+	local roomId = mobModel:GetAttribute(TIDAL_ROOM_ATTRIBUTE)
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local dungeon = dungeonService and dungeonService:GetActiveDungeon()
+	local room = dungeon and type(roomId) == "number" and dungeon.roomsById[roomId]
+	local model = room and room.model
+	if not model then
+		return nil, nil
+	end
+	local boxCFrame, boxSize = model:GetBoundingBox()
+	local ground = snapToGround(boxCFrame.Position) or (boxCFrame.Position - Vector3.new(0, boxSize.Y / 2, 0))
+	local flat = CFrame.new(ground) * CFrame.fromEulerAnglesYXZ(0, select(2, boxCFrame:ToEulerAnglesYXZ()), 0)
+	return flat, Vector2.new(boxSize.X, boxSize.Z)
+end
+
+-- The miniboss's arena-wide move (MobData uniqueAttacks, Hard and up).
+-- He fades, reappears at the arena's centre untargetable, and the floor is
+-- cut into parallel lanes `laneWidth` wide along the arena's X. Wave 1
+-- hits the odd lanes, wave 2 the even, wave 3 the odd again: each wave's
+-- strips flash `firstWindUp` (the first) or `waveGap` (the rest) before
+-- they hit, and each wave's flash starts as the one before it lands.
+-- Blocks for the whole move.
+--
+-- config: laneWidth, arenaInset, waves, firstWindUp, waveGap,
+-- hitFrameDuration, damage, animation?
+export type TidalRequiemConfig = {
+	laneWidth: number,
+	arenaInset: number,
+	waves: number,
+	firstWindUp: number,
+	waveGap: number,
+	hitFrameDuration: number,
+	damage: number,
+	animation: Animation?,
+}
+
+function MobService.RunTidalRequiem(self: typeof(MobService), mobModel: Model, config: TidalRequiemConfig)
+	local root = getRoot(mobModel)
+	local humanoid = mobModel:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid then
+		return
+	end
+	local arenaCFrame, arenaSize = arenaOf(mobModel)
+	if not arenaCFrame or not arenaSize then
+		return
+	end
+	local function cancelled(): boolean
+		return not mobModel.Parent
+			or humanoid.Health <= 0
+			or mobModel:GetAttribute("AttackInterrupted") == true
+			or mobModel:GetAttribute(Attributes.Jailed) == true
+	end
+
+	-- Leap to the centre: fade out, move, fade in, untargetable throughout.
+	local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService) :: any
+	local window = InvulnerabilityService:OpenWindow(mobModel, "Cutscene")
+	local startGround = snapToGround(root.Position) or (root.Position - Vector3.new(0, 3, 0))
+	local rootHeight = root.Position.Y - startGround.Y
+	Combat.MobFade.FireAll({ Mob = mobModel, Phase = "Out", Duration = TIDAL_LEAP_FADE_SECONDS })
+	GameClock.Wait(TIDAL_LEAP_FADE_SECONDS)
+	if cancelled() then
+		Combat.MobFade.FireAll({ Mob = mobModel, Phase = "In", Duration = TIDAL_LEAP_FADE_SECONDS })
+		InvulnerabilityService:CloseWindow(window)
+		return
+	end
+	mobModel:PivotTo(arenaCFrame + Vector3.new(0, rootHeight, 0))
+	Combat.MobFade.FireAll({ Mob = mobModel, Phase = "In", Duration = TIDAL_LEAP_FADE_SECONDS })
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if animator and config.animation then
+		animator:LoadAnimation(config.animation):Play()
+	end
+
+	-- The lanes: centred across the arena's X, each running its full Z.
+	local width = math.max(arenaSize.X - config.arenaInset * 2, config.laneWidth)
+	local depth = math.max(arenaSize.Y - config.arenaInset * 2, config.laneWidth)
+	local laneCount = math.max(math.floor(width / config.laneWidth), 2)
+	local firstOffset = -(laneCount - 1) * config.laneWidth / 2
+	local function laneCFrame(index: number): CFrame
+		return arenaCFrame * CFrame.new(firstOffset + (index - 1) * config.laneWidth, 0, 0)
+	end
+	local laneSpec = { shape = "box", size = Vector3.new(config.laneWidth, 0, depth) }
+
+	for wave = 1, config.waves do
+		if cancelled() then
+			break
+		end
+		local windUp = if wave == 1 then config.firstWindUp else config.waveGap
+		-- Odd lanes on odd waves, even lanes on even waves.
+		for lane = 1, laneCount do
+			if lane % 2 == wave % 2 then
+				task.spawn(function()
+					local strike: any = {
+						hitbox = laneSpec,
+						cframe = laneCFrame(lane),
+						damage = config.damage,
+						canRagdoll = false,
+						windUpDuration = windUp,
+						hitFrameDuration = config.hitFrameDuration,
+						rangedTelegraph = true,
+					}
+					self:SpawnHitbox(mobModel, strike)
+				end)
+			end
+		end
+		-- The next wave's flash starts as this one lands.
+		GameClock.Wait(windUp)
+	end
+	GameClock.Wait(config.hitFrameDuration)
+	InvulnerabilityService:CloseWindow(window)
 end
 
 --[ Ranged attack pipeline ]--

@@ -358,7 +358,7 @@ function EarthOrbBankController.WillBank(_self: typeof(EarthOrbBankController), 
 	end
 	local data = (RelicData[ORB_BANK] and RelicData[ORB_BANK].data) or {}
 	local fraction = localBarFraction(dropType)
-	if fraction == nil or fraction < (data.storeThreshold or 0.95) - 0.001 then
+	if fraction == nil or fraction < (data.storeThreshold or 0.9) - 0.001 then
 		return false
 	end
 	local character = Players.LocalPlayer.Character

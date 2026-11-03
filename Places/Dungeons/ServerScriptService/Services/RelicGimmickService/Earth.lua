@@ -221,7 +221,7 @@ local function interceptOrb(player: Player, dropType: string): boolean
 	-- full; 90% before, which banked orbs the player still needed). A
 	-- sliver under still counts so float rounding never blocks it.
 	local fraction = barFraction(player, dropType)
-	if fraction == nil or fraction < helpers.data(ORB_BANK, "storeThreshold", 0.95) - 0.001 then
+	if fraction == nil or fraction < helpers.data(ORB_BANK, "storeThreshold", 0.9) - 0.001 then
 		return false
 	end
 	local bank = banks[player]

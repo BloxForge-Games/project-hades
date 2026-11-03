@@ -298,12 +298,11 @@ end
 
 --[ Ice Arrow ]--
 
--- The Nth ranged hit's arrow at `model`: arrowDamage of what that hit
--- dealt, on the gun-shot lane (not arcane, not melee, not relic-sourced:
--- it crits and picks up the weapon relics like the shot it rode in on),
--- then a Chill outright. The arrow's landing is itself a ranged hit, so
--- `arrowLanding` keeps it out of this counter and arrows never chain.
-local function fireIceArrow(player: Player, model: Model, dealt: number)
+-- The Nth ranged hit's arrow at `model`: damagePerLevel x the Power
+-- factor on the relic lane (2026-11-02; a share of the hit on the gun lane
+-- before), then a Chill outright. `arrowLanding` keeps the landing out of
+-- this counter so arrows never chain.
+local function fireIceArrow(player: Player, model: Model)
 	local root = getRoot.fromPlayer(player)
 	local targetRoot = getRoot(model)
 	if not root or not targetRoot then
@@ -311,14 +310,14 @@ local function fireIceArrow(player: Player, model: Model, dealt: number)
 	end
 	local from = root.Position + Vector3.new(0, 2, 0)
 	helpers.fx("IceShard", from, targetRoot.Position, ARROW_BURST_RADIUS, ARROW_FLIGHT_SECONDS)
-	local damage = dealt * helpers.data(CROSSBOW, "arrowDamage", 0.75)
+	local damage = helpers.levelDamage(player, helpers.data(CROSSBOW, "damagePerLevel", 10))
 	GameClock.Delay(ARROW_FLIGHT_SECONDS, function()
 		local humanoid = model:FindFirstChildOfClass("Humanoid")
 		if not player.Parent or not model.Parent or not humanoid or humanoid.Health <= 0 then
 			return
 		end
 		arrowLanding[player] = true
-		local ok, err: any = pcall(helpers.takeDamage :: any, player, humanoid, damage, false, false, false)
+		local ok, err: any = pcall(helpers.takeDamage :: any, player, humanoid, damage, false, false, nil, true)
 		arrowLanding[player] = nil
 		if not ok then
 			error(err, 0)
@@ -342,7 +341,7 @@ function Frost.onRangedHit(player: Player, model: Model, dealt: number, _wasCrit
 	if count >= helpers.data(CROSSBOW, "everyHits", 3) then
 		count = 0
 		if dealt > 0 then
-			fireIceArrow(player, model, dealt)
+			fireIceArrow(player, model)
 		end
 	end
 	crossbowHits[player] = count
