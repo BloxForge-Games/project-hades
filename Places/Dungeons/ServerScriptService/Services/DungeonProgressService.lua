@@ -40,7 +40,8 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local PROGRESS_KEY = "DungeonProgress"
 local HISTORY_KEY = "RunHistory"
 -- Rows kept per profile (the Profile window shows this many).
-local RUN_HISTORY_LIMIT = 5
+-- 6 since 2026-11-03 (5 before).
+local RUN_HISTORY_LIMIT = 6
 local PROFILE_POLL_SECONDS = 0.25
 
 local DungeonProgressService = {
@@ -129,13 +130,15 @@ end
 
 -- Appends this run's row to `player`'s RunHistory, once per run: the
 -- dungeon, the difficulty, whether it was cleared, how long it took
--- (nil when the run clock never started) and when it ended.
+-- (nil when the run clock never started), when it ended and, for a loss,
+-- how (`cause`: "Slain by Pot Head", "Left the run"; 2026-11-03).
 function DungeonProgressService._recordRun(
 	self: typeof(DungeonProgressService),
 	player: Player,
 	dungeonId: string,
 	difficulty: string,
-	cleared: boolean
+	cleared: boolean,
+	cause: string?
 )
 	if self._historyRecorded[player.UserId] then
 		return
@@ -156,6 +159,7 @@ function DungeonProgressService._recordRun(
 		Cleared = cleared,
 		Seconds = if self._runStartedAt then math.max(now - self._runStartedAt, 0) else nil,
 		EndedAt = now,
+		Cause = if cleared then nil else cause,
 	})
 	while #history > RUN_HISTORY_LIMIT do
 		table.remove(history)
@@ -257,7 +261,9 @@ function DungeonProgressService.Start(self: typeof(DungeonProgressService))
 		lifeService.OnPlayerFullyDied:Connect(function(player: Player)
 			local dungeonId, difficulty = activeRun()
 			if dungeonId and difficulty and not (dungeonService:IsRunCleared() == true) then
-				self:_recordRun(player, dungeonId, difficulty, false)
+				local damageService = Blitz.OptionalService("DamageService")
+				local cause = if damageService then damageService:GetLastHitCause(player, true) else nil
+				self:_recordRun(player, dungeonId, difficulty, false, cause)
 			end
 		end)
 	end
@@ -266,9 +272,13 @@ function DungeonProgressService.Start(self: typeof(DungeonProgressService))
 		playerEventService.OnPlayerLeaving:Connect(function(player: Player)
 			local dungeonId, difficulty = activeRun()
 			if dungeonId and difficulty and not (dungeonService:IsRunCleared() == true) then
-				self:_recordRun(player, dungeonId, difficulty, false)
+				self:_recordRun(player, dungeonId, difficulty, false, "Left the run")
 			end
 			self._historyRecorded[player.UserId] = nil
+			local damageService = Blitz.OptionalService("DamageService")
+			if damageService then
+				damageService:GetLastHitCause(player, true)
+			end
 		end)
 	end
 end
