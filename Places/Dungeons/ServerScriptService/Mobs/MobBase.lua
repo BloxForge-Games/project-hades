@@ -637,6 +637,9 @@ function MobBase._buildHealthUI(self: MobBase)
 		return
 	end
 	local healthInterface = ReplicatedStorage.GameAssets.BillboardGuis.HealthInterface:Clone() :: BillboardGui
+	-- No distance cut-off: the template's 111 studs is from the camera,
+	-- ~61 studs off the player, so edge-of-screen mobs lost their bars.
+	healthInterface.MaxDistance = math.huge
 	healthInterface.Parent = getHead(self._model)
 	self._healthInterface = healthInterface
 end
