@@ -123,6 +123,11 @@ end
 -- Relic damage breaks breakables too (2026-10-29): one hit on every
 -- Breakable within `radius` of `position` (Components/Breakable.
 -- HitInRadius). `seen` dedupes across one sweep's steps.
+-- A SINGLE-TARGET relic hit (an Ice Arrow, a Volleyball, a Chain
+-- Lightning bolt) also hits the breakables within this of where it landed
+-- (2026-11-04: every relic hit can break things, not only the bursts).
+helpers.POINT_BREAK_RADIUS = 3
+
 function helpers.hitBreakables(player: Player, position: Vector3, radius: number, seen: { [Instance]: boolean }?)
 	(require :: any)(ServerScriptService.Components.Breakable).HitInRadius(position, radius, player, seen)
 end
@@ -151,10 +156,12 @@ function helpers.sweep(start: Vector3, look: Vector3, speed: number, range: numb
 	connection = RunService.Heartbeat:Connect(function(realDt: number)
 		local dt = GameClock.Dt(realDt)
 		travelled = math.min(travelled + speed * dt, range)
-		onStep(start + look * travelled)
+		-- Disconnected BEFORE the step (2026-11-05), so a step that errors
+		-- cannot leave the connection running (and erroring) forever.
 		if travelled >= range then
 			connection:Disconnect()
 		end
+		onStep(start + look * travelled)
 	end)
 end
 

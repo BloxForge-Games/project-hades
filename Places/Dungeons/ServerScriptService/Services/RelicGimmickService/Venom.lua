@@ -3,11 +3,13 @@
 	Module: RelicGimmickService/Venom
 	Description:
 	Venom's gimmick relics:
-	  Korblox Evil Eye  THE 2nd CAST (2026-11-01, the tree's enabler): every
-	                    `everyCasts`-th Arcane Spell costs `costMultiplier`
-	                    of its Mana (ArcaneService prices and tags the cast
-	                    as VFXService pays for it) and Poisons every enemy
-	                    it hits (onSpellHit reads the tag).
+	  Korblox Evil Eye  THE 3rd SHOT (2026-11-05; every 2nd Spell cheaper
+	                    and Poisoning before): every `everyShots`-th gun
+	                    shot is primed (its RelicTrigger glows the shot
+	                    before); the next shot hit deals `bonusDamage` of
+	                    the hit again on top, on the relic lane, and
+	                    Poisons. The prime lapses after PRIME_SECONDS (a
+	                    miss).
 	  Zombie Bomb       TOXIC SPIT (2026-11-01; `spitChance` per attack hit
 	                    from 2026-10-31 until then): every Poison or Death
 	                    Venom TICK the owner deals has `tickSpitChance` to
@@ -28,6 +30,7 @@ local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local relicTriggers = require(script.Parent.Lib.relicTriggers)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local ZOMBIE_BOMB = RelicNames["Zombie Bomb"]
@@ -41,6 +44,8 @@ local SPIT_SPLASH_RADIUS = 6
 -- One roll per enemy per tick: the same enemy's stacks ticking within
 -- this window (one status sweep) count as one tick.
 local SPIT_TICK_WINDOW_SECONDS = 0.1
+-- Evil Eye: how long a primed shot waits for its hit.
+local PRIME_SECONDS = 1.5
 
 local Venom = {}
 
@@ -48,6 +53,10 @@ local Venom = {}
 -- enemy's tick last rolled.
 local lastSpitAt: { [Player]: number } = {}
 local lastTickRoll: { [Player]: { [Model]: number } } = {}
+-- Evil Eye: gun shots since the last primed one, and when the primed
+-- shot lapses.
+local eyeShots: { [Player]: number } = {}
+local eyePrimedUntil: { [Player]: number } = {}
 
 local function lobBubble(player: Player, fromModel: Model)
 	local fromRoot = getRoot(fromModel)
@@ -68,7 +77,7 @@ local function lobBubble(player: Player, fromModel: Model)
 	end
 	local from = fromRoot.Position + Vector3.new(0, 2, 0)
 	local to = targetRoot.Position
-	helpers.fx("ToxicBubble", from, to, SPIT_SPLASH_RADIUS, SPIT_FLIGHT_SECONDS)
+	helpers.fx("ToxicBubble", from, to, SPIT_SPLASH_RADIUS, SPIT_FLIGHT_SECONDS, player)
 	GameClock.Delay(SPIT_FLIGHT_SECONDS, function()
 		if not player.Parent then
 			return
@@ -85,15 +94,50 @@ end
 
 --[ Handlers ]--
 
--- A real spell's hit (VFXService): Korblox Evil Eye Poisons every enemy a
--- discounted cast hits. ArcaneService tagged the cast by spell as it was
--- paid for, so a multi-hit spell's late hits still read their own cast.
-function Venom.onSpellHit(player: Player, vfxName: string, model: Model)
+-- Every gun shot, the moment it is fired: Evil Eye's count. The Nth is
+-- primed.
+function Venom.onRangedFire(player: Player, _origin: Vector3, _direction: Vector3, _weaponName: string)
 	if not helpers.owns(player, EVIL_EYE) then
+		eyeShots[player] = nil
+		relicTriggers.set(player, EVIL_EYE, false)
 		return
 	end
-	if helpers.service("ArcaneService"):IsEvilEyeCast(player, vfxName) then
-		helpers.statusService():ApplyStatus(player, model, StatusConditions.Poison, false)
+	local needed = helpers.data(EVIL_EYE, "everyShots", 3)
+	local count = (eyeShots[player] or 0) + 1
+	if count >= needed then
+		count = 0
+		eyePrimedUntil[player] = GameClock.Now() + PRIME_SECONDS
+	end
+	eyeShots[player] = count
+	relicTriggers.set(player, EVIL_EYE, count == needed - 1)
+end
+
+-- A gun shot landed: a primed one deals its bonus and Poisons.
+function Venom.onRangedHit(player: Player, model: Model, dealt: number, _wasCrit: boolean)
+	local primedUntil = eyePrimedUntil[player]
+	if not primedUntil then
+		return
+	end
+	eyePrimedUntil[player] = nil
+	if GameClock.Now() > primedUntil or not helpers.owns(player, EVIL_EYE) then
+		return
+	end
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return
+	end
+	local bonus = dealt * helpers.data(EVIL_EYE, "bonusDamage", 0.5)
+	if bonus > 0 then
+		helpers.takeDamage(player, humanoid, bonus, false, false, nil, true)
+	end
+	helpers.statusService():ApplyStatus(player, model, StatusConditions.Poison, false)
+end
+
+-- The gun was put away (a respawn): the count starts over.
+function Venom.onWeaponStowed(player: Player, lane: string)
+	if lane == "Ranged" then
+		eyeShots[player] = nil
+		eyePrimedUntil[player] = nil
 	end
 end
 
@@ -140,6 +184,8 @@ end
 function Venom.onPlayerRemoved(player: Player)
 	lastSpitAt[player] = nil
 	lastTickRoll[player] = nil
+	eyeShots[player] = nil
+	eyePrimedUntil[player] = nil
 end
 
 return Venom

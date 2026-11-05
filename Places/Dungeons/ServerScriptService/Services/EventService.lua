@@ -36,7 +36,6 @@
 --[ Roblox Services ]--
 
 local CollectionService = game:GetService("CollectionService")
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -61,9 +60,11 @@ local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Relic
 local RelicSlotShopData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicSlotShopData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Rarity.rollItemRarity)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- DungeonService is never required here: consumers reach it through
 -- Blitz.OptionalService at call time or its signals (the service graph runs
@@ -117,13 +118,19 @@ local GREATER_BLESSING_HIGHLIGHT_B = 69
 -- player per fountain (Leave preserves the choice for a return visit).
 -- Drink routes through PlayerStatsService:ApplyHealing, so Holiday Ham's
 -- +50% healing applies — deliberate ("healing from any source"), unlike
--- event COSTS which are raw. Attune joins the same additive Max-HP pool
--- as HP relics/runes (RecomputeHealth), so it replicates into
--- BonusHealthPercent, every HP scaler sees it, and it stacks with a
--- fountain found in a later dungeon. Server-lifetime = run-lifetime, so
--- the bonus naturally lasts the whole run.
+-- event COSTS which are raw. Pray (2026-11-04; "Attune", +20% Max HP,
+-- before it) pays FOUNTAIN_PRAY_COIN_SHARE of the coins a run of this
+-- difficulty pays on average (DifficultyData.RunCoins), as Coin pickups
+-- burst from the fountain that ONLY the player who prayed sees and can
+-- collect (DropService's owner lock, as the pots' coins). The pickup
+-- applies the dungeon's gold rewardScale and the coin bonuses on collect;
+-- the amount shown on the option (FOUNTAIN_PRAY_COINS_ATTRIBUTE, stamped
+-- on the fountain when the floor is wired) includes that scale.
 local FOUNTAIN_HEAL_FRACTION = 0.40
-local FOUNTAIN_ATTUNE_HP_FRACTION = 0.20
+local FOUNTAIN_PRAY_COIN_SHARE = 0.20
+-- How many pickups the prayer's coins split into (fewer for a small sum).
+local FOUNTAIN_PRAY_PICKUPS = 5
+local FOUNTAIN_PRAY_COINS_ATTRIBUTE = "PrayCoins"
 
 -- Forge. How many offers the anvil fans out for one sacrificed relic.
 -- Three, not one: a single random swap was a lateral trade with no
@@ -318,7 +325,7 @@ local function playDropPop(part: BasePart?)
 	local clone = template:Clone()
 	clone.Parent = part
 	clone:Play()
-	Debris:AddItem(clone, 3)
+	GameClock.Debris(clone, 3)
 end
 
 -- One-shot UI-feedback sound at a character's HRP (server-side clone
@@ -348,7 +355,7 @@ local function playFeedbackSound(hrp: BasePart?, soundName: string)
 	local clone = template:Clone()
 	clone.Parent = hrp
 	clone:Play()
-	Debris:AddItem(clone, 3)
+	GameClock.Debris(clone, 3)
 end
 
 -- Raw, unmitigable health cost with DamageService's lethal clamp: health
@@ -607,6 +614,9 @@ function EventService._wireDungeon(self: typeof(EventService), dungeon)
 			local fountain = folder and folder:FindFirstChildWhichIsA("Model")
 			if fountain then
 				fountain:SetAttribute("DialogueGraph", "HealingFountain")
+				local dungeonService = Blitz.OptionalService("DungeonService")
+				local goldScale = if dungeonService then dungeonService:GetRewardScale("gold") else 1
+				fountain:SetAttribute(FOUNTAIN_PRAY_COINS_ATTRIBUTE, math.round(self:_fountainPrayCoins() * goldScale))
 				CollectionService:AddTag(fountain, TagList.NPC)
 				self._eventModels[fountain] = { kind = "HealingFountain", room = room }
 				wired += 1
@@ -928,12 +938,21 @@ function EventService._onDrinkFromFountain(
 	return "ok"
 end
 
--- Attune: FOUNTAIN_ATTUNE_HP_FRACTION more Maximum Health for the rest of
--- the run, joining the relic/rune additive pool (PlayerStatsService).
--- RecomputeHealth's carry-up grants the new headroom as flesh too. Spends
--- the fountain for this player. Returns "ok" | "done" | "invalid".
--- DungeonNetwork.AttuneToFountain handler (was a client-callable method).
-function EventService._onAttuneToFountain(_self: typeof(EventService), player: Player, fountainModel: Instance?): string
+-- The coins a fountain's Pray drops this run, before the pickup's own
+-- multipliers: FOUNTAIN_PRAY_COIN_SHARE of the difficulty's average run
+-- coins. At least 1.
+function EventService._fountainPrayCoins(_self: typeof(EventService)): number
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local tier = if dungeonService then dungeonService:GetDifficultyScale() else nil
+	local runCoins = if tier then DifficultyData.RunCoins(tier) else 0
+	return math.max(math.round(runCoins * FOUNTAIN_PRAY_COIN_SHARE), 1)
+end
+
+-- Pray: the fountain's coins (see FOUNTAIN_PRAY_COIN_SHARE) burst out as
+-- pickups owned by `player` alone. Spends the fountain for this player.
+-- Returns "ok" | "done" | "invalid". DungeonNetwork.PrayAtFountain
+-- handler.
+function EventService._onPrayAtFountain(self: typeof(EventService), player: Player, fountainModel: Instance?): string
 	if not EventService:_validate(player, fountainModel, "HealingFountain") then
 		return "invalid"
 	end
@@ -945,7 +964,43 @@ function EventService._onAttuneToFountain(_self: typeof(EventService), player: P
 	EventService._fountainDone[player.UserId] = EventService._fountainDone[player.UserId] or {}
 	EventService._fountainDone[player.UserId][fountainModel] = true
 
-	PlayerStatsService:AddFountainHealthPercent(player, FOUNTAIN_ATTUNE_HP_FRACTION)
+	local model = fountainModel :: Instance
+	local origin = if model:IsA("Model")
+		then model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+		else model:FindFirstChildWhichIsA("BasePart", true)
+	local total = self:_fountainPrayCoins()
+	if origin then
+		-- Split into whole pickups that add up to `total` exactly.
+		local pickups = math.min(FOUNTAIN_PRAY_PICKUPS, total)
+		local each = total // pickups
+		local extra = total - each * pickups
+		if extra > 0 then
+			DropService.OnDropRequested:Fire(
+				origin,
+				DropTypes.Coins,
+				extra,
+				extra,
+				each + 1,
+				each + 1,
+				false,
+				player.UserId,
+				true
+			)
+		end
+		DropService.OnDropRequested:Fire(
+			origin,
+			DropTypes.Coins,
+			pickups - extra,
+			pickups - extra,
+			each,
+			each,
+			false,
+			player.UserId,
+			true
+		)
+	else
+		RunEscrowService:AddCoins(player, total)
+	end
 	return "ok"
 end
 
@@ -1690,8 +1745,8 @@ function EventService.Start(self: typeof(EventService))
 	DungeonNetwork.DrinkFromFountain.On(function(player: Player, fountainModel: Instance?)
 		return self:_onDrinkFromFountain(player, fountainModel)
 	end)
-	DungeonNetwork.AttuneToFountain.On(function(player: Player, fountainModel: Instance?)
-		return self:_onAttuneToFountain(player, fountainModel)
+	DungeonNetwork.PrayAtFountain.On(function(player: Player, fountainModel: Instance?)
+		return self:_onPrayAtFountain(player, fountainModel)
 	end)
 	DungeonNetwork.IsGreaterShrineSpent.On(function(player: Player, statueModel: Instance?)
 		return self:_onIsGreaterShrineSpent(player, statueModel)

@@ -40,10 +40,8 @@
 --[ Roblox Services ]--
 
 local CollectionService = game:GetService("CollectionService")
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -53,6 +51,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local vfxFade = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxFade)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Controller ]--
 
@@ -150,7 +149,7 @@ local function playGateSound(gate: BasePart, soundId: string)
 	sound.Ended:Once(function()
 		sound:Destroy()
 	end)
-	Debris:AddItem(sound, 10)
+	GameClock.Debris(sound, 10)
 end
 
 -- Small local shake when a gate event happens within range of the local
@@ -198,7 +197,7 @@ local function tweenGateSurfaces(gate: BasePart, hidden: boolean)
 			authored = child.Transparency
 			child:SetAttribute(GATE_SURFACE_TRANSPARENCY_ATTRIBUTE, authored)
 		end
-		TweenService:Create(
+		GameClock.Tween(
 			child,
 			TweenInfo.new(SLAM_TWEEN_SECONDS, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 			{ Transparency = if hidden then 1 else authored }
@@ -217,7 +216,7 @@ local function spawnDoorwayCollider(gate: BasePart, originalCFrame: CFrame)
 	collider.CanQuery = true -- dodge wall-check raycasts skip CanQuery=false parts
 	collider.CanTouch = false
 	collider.Parent = workspace.IgnoreInstances.Map.DungeonRooms
-	Debris:AddItem(collider, SLAM_TWEEN_SECONDS + 0.2)
+	GameClock.Debris(collider, SLAM_TWEEN_SECONDS + 0.2)
 end
 
 -- Dust burst at the foot of the door as it slams shut — same asset +
@@ -239,7 +238,7 @@ local function playSlamVFX(gate: BasePart, originalCFrame: CFrame)
 	-- The slam impact — shake lands together with the dust + sound.
 	shakeIfNear(originalCFrame.Position)
 
-	Debris:AddItem(dodgeVFX, 5)
+	GameClock.Debris(dodgeVFX, 5)
 end
 
 --[ Lifecycle ]--
@@ -349,8 +348,7 @@ function DungeonGateController._revealGateVFX(self: typeof(DungeonGateController
 		record.sound.Looped = true
 		record.sound.Volume = 0
 		record.sound:Play()
-		TweenService:Create(record.sound, TweenInfo.new(GATE_VFX_FADE_SECONDS), { Volume = record.authoredVolume })
-			:Play()
+		GameClock.Tween(record.sound, TweenInfo.new(GATE_VFX_FADE_SECONDS), { Volume = record.authoredVolume }):Play()
 	end
 	task.spawn(function()
 		vfxFade.run(record.targets, 0, 1, GATE_VFX_FADE_SECONDS)
@@ -372,7 +370,7 @@ function DungeonGateController._fadeGateVFX(self: typeof(DungeonGateController),
 	end
 
 	if record.sound then
-		TweenService:Create(record.sound, TweenInfo.new(GATE_VFX_FADE_SECONDS), { Volume = 0 }):Play()
+		GameClock.Tween(record.sound, TweenInfo.new(GATE_VFX_FADE_SECONDS), { Volume = 0 }):Play()
 	end
 	task.spawn(function()
 		vfxFade.run(record.targets, 1, 0, GATE_VFX_FADE_SECONDS)
@@ -402,7 +400,7 @@ function DungeonGateController._openGateVFX(self: typeof(DungeonGateController),
 		return
 	end
 
-	TweenService:Create(
+	GameClock.Tween(
 		record.rig,
 		TweenInfo.new(SLAM_TWEEN_SECONDS, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 		{ CFrame = record.rig.CFrame + Vector3.new(0, riseStuds, 0) }
@@ -418,7 +416,7 @@ function DungeonGateController._dropGateVFX(self: typeof(DungeonGateController),
 	if not record then
 		return
 	end
-	TweenService:Create(
+	GameClock.Tween(
 		record.rig,
 		TweenInfo.new(SLAM_TWEEN_SECONDS, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 		{ CFrame = originalCFrame }
@@ -474,7 +472,7 @@ function DungeonGateController.Start(self: typeof(DungeonGateController))
 		playGateSound(gate, GATE_OPEN_SOUND_ID)
 		shakeIfNear(gate.Position)
 
-		local riseTween = TweenService:Create(
+		local riseTween = GameClock.Tween(
 			gate,
 			TweenInfo.new(SLAM_TWEEN_SECONDS, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 			{
@@ -501,7 +499,7 @@ function DungeonGateController.Start(self: typeof(DungeonGateController))
 
 		spawnDoorwayCollider(gate, originalCFrame)
 
-		local slamTween = TweenService:Create(
+		local slamTween = GameClock.Tween(
 			gate,
 			TweenInfo.new(SLAM_TWEEN_SECONDS, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut),
 			{
@@ -518,11 +516,11 @@ function DungeonGateController.Start(self: typeof(DungeonGateController))
 		tweenGateSurfaces(gate, false)
 		self:_dropGateVFX(gate, originalCFrame)
 
-		task.delay(0.5, function()
+		GameClock.Delay(0.5, function()
 			playGateSound(gate, GATE_CLOSE_SOUND_ID)
 		end)
 
-		task.delay(0.75, function()
+		GameClock.Delay(0.75, function()
 			playSlamVFX(gate, originalCFrame)
 		end)
 	end)

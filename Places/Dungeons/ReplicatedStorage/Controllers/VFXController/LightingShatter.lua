@@ -11,6 +11,8 @@ local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local radialGroundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.radialGroundFracture)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -20,7 +22,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
-	local lightingShatterAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local lightingShatterAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("LightingShatterAnimation")
 	)
 
@@ -28,6 +31,25 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 	local lightingShatterVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Lighting Shatter"]].Model:Clone()
 	lightingShatterVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
+	-- Gone even if the cast is interrupted before MagicRelease (2026-11-05:
+	-- the only cleanup was inside the marker, so a cut-off cast left the
+	-- model in the workspace for good).
+	GameClock.Debris(lightingShatterVFX, math.max(lightingShatterAnimation.Length, 1) + 8)
+
+	-- The model's emitters, found once (each strike walked the model twice).
+	local starterEmitters: { ParticleEmitter } = {}
+	local bodyEmitters: { ParticleEmitter } = {}
+	local starter = lightingShatterVFX:FindFirstChild("Starter")
+	for _, descendant in lightingShatterVFX:GetDescendants() do
+		if descendant:IsA("ParticleEmitter") then
+			if starter and descendant:IsDescendantOf(starter) then
+				table.insert(starterEmitters, descendant)
+			end
+			if descendant.Parent and descendant.Parent.Name ~= "StarterAttachment" then
+				table.insert(bodyEmitters, descendant)
+			end
+		end
+	end
 
 	--TODO: REWRITE THIS, MAKE SERVER AUTHORATIVE ON SETTING THE CFRAME OF HITBOXES
 	local cachedFrames = {
@@ -77,16 +99,14 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 						{ GroundSnapDistance = 10, Scale = 1.5 }
 					)
 
-					for _, particle in pairs(lightingShatterVFX:WaitForChild("Starter"):GetDescendants()) do
-						if particle:IsA("ParticleEmitter") then
-							particle:Emit(15)
-						end
+					for _, particle in starterEmitters do
+						vfxBudget.emit(particle, 15)
 					end
 
 					GameClock.Delay(0.1, function()
-						for _, particle in pairs(lightingShatterVFX:GetDescendants()) do
-							if particle:IsA("ParticleEmitter") and particle.Parent.Name ~= "StarterAttachment" then
-								particle:Emit(if particle.Parent.Name ~= "ImpactAttachment" then 15 else 10)
+						for _, particle in bodyEmitters do
+							if particle.Parent then
+								vfxBudget.emit(particle, if particle.Parent.Name ~= "ImpactAttachment" then 15 else 10)
 							end
 						end
 					end)
@@ -95,8 +115,6 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 						lightingShatterVFX.GroundImpact.ElectricExplosion:Play()
 						lightingShatterVFX.GroundImpact.ElectricExplosion2:Play()
 					end
-
-					GameClock.Debris(lightingShatterVFX, 5)
 				end)
 
 				GameClock.Wait(0.5)

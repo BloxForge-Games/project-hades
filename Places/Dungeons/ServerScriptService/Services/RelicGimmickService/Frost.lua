@@ -7,16 +7,19 @@
 	always Chill; Blizzard's shards only roll the arcane status chances.
 
 	  Ice Dragon Slayer   FROST WYRM: a frost wyrm hovers above your shoulder
-	                      for as long as you hold the relic; every
-	                      `breathInterval` it fires a frost orb that HOMES
-	                      on the nearest enemy in range at `orbSpeed` and
-	                      bursts on it (`orbRadius`), or where it last was
-	                      if it dies first (2026-10-30: it flew at a fixed
-	                      point, so it landed late, behind a moving mob).
-	  Icy Arctic Fowl     BLIZZARD: every second while Frostburst, `volley`
-	                      fast ice shards hop from you onto enemies in range
-	                      (all of them fly; several can strike one enemy),
-	                      each bursting (`burstRadius`).
+	                      for as long as you hold the relic. Every
+	                      `breathInterval` it fires a frost orb that HOMES on
+	                      the nearest enemy in range (2026-11-05: back, with
+	                      the on-cast blast kept), and each Spell you cast
+	                      fires a straight blast the way the spell went.
+	                      Both burst (`orbRadius`), Chill, and deal
+	                      `chilledMultiplier` x to an enemy already Chilled.
+	  Icy Arctic Fowl     BLIZZARD: every enemy a Spell of yours hits
+	                      (2026-11-05; the nearest enemies, on each cast,
+	                      before) gets a homing ice shard -- once per enemy
+	                      per cast, at most `shardsPerCast` a cast -- each
+	                      bursting (`burstRadius`); a Chilled enemy takes
+	                      `chilledMultiplier` x.
 	  Staff of Azure      FROST ZONE (2026-10-30; the Mage Staff's field
 	  Ever Ice            until then): a Spell's first hit leaves a zone of
 	                      ice there for `zoneSeconds`; zones from earlier
@@ -29,9 +32,13 @@
 	                      Chill chance on Spells while Frostburst live in
 	                      DamageService/AuraDamage and StatusConditionService.
 	  Frozen Blue Ice     ICE ARROW (2026-11-01, the tree's enabler): every
-	  Crossbow            `everyHits`-th ranged hit fires an arrow at that
-	                      target for `arrowDamage` of what the hit dealt, as
-	                      RANGED WEAPON damage, and Chills it outright.
+	  Crossbow            `everyHits`-th gun SHOT (2026-11-04; landed hits
+	                      before) fires an arrow WITH the shot, straight
+	                      along its aim (Lib/relicShots, no homing): the
+	                      first mob it flies into takes per-level relic
+	                      damage and a Chill; a wall stops it for nothing.
+	                      An arrow that damages a mob also restores
+	                      `manaFraction` of max Mana, once (2026-11-05).
 
 	The clients draw everything (helpers.fx); the server only aims, waits
 	out each flight and lands the hits where the packet said they land.
@@ -47,6 +54,8 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local relicTriggers = require(script.Parent.Lib.relicTriggers)
+local relicShots = require(script.Parent.Lib.relicShots)
 local azureGlyph = require(script.Parent.Lib.azureGlyph)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
@@ -60,7 +69,9 @@ local AZURE = RelicNames["Staff of Azure Ever Ice"]
 -- the client's wyrm floats) and its reach.
 local WYRM_OFFSET = CFrame.new(-3.5, 6, 3)
 local WYRM_RANGE = 25
--- Its homing orb bursts once it is this close to the target's root, and
+-- How close to the blast's line an enemy must be for it to hit.
+local BLAST_WIDTH = 3.5
+-- The periodic orb bursts once it is this close to its target's root, and
 -- gives up (bursting where it is) after ORB_MAX_SECONDS.
 local ORB_CONTACT_STUDS = 2.5
 local ORB_MAX_SECONDS = 1.5
@@ -69,35 +80,33 @@ local ORB_MAX_SECONDS = 1.5
 -- each once-a-second re-send.
 local WYRM_KEEPALIVE_SECONDS = 2
 
--- Blizzard: shard reach, flight (fast and low -- a quick bezier hop, not
--- a lob) and the beat between the three shards of one volley.
-local SHARD_RANGE = 20
--- 0.22 -> 0.45 and 0.08 -> 0.12 (2026-11-02): a visible arc, not a snap.
-local SHARD_FLIGHT_SECONDS = 0.45
-local SHARD_STAGGER_SECONDS = 0.12
+-- Blizzard: the shards' homing flight is the Fowl's data (shardSpeed ...).
+-- Where a cast's shards appear, in turn, in the caster's frame: right,
+-- left, above the head.
+local SHARD_SPAWN_OFFSETS = {
+	Vector3.new(2.5, 1.5, 0),
+	Vector3.new(-2.5, 1.5, 0),
+	Vector3.new(0, 4, 0),
+}
 
 -- Frost Zone: how often it looks for enemies inside.
 local FIELD_SCAN_SECONDS = 0.25
 
--- Ice Arrow: a quick dart from the owner to the target, and the small
--- frost pop where it lands (the IceShard look).
-local ARROW_FLIGHT_SECONDS = 0.18
-local ARROW_BURST_RADIUS = 3
+-- Ice Arrow (2026-11-04): its studs a game second.
+local ARROW_SPEED = 90
 
 local Frost = {}
 
--- Icy Arctic Fowl: the next volley's time per player (every
--- data.intervalSeconds; 2026-10-31, every second while Frostburst before).
-local fowlNextVolley: { [Player]: number } = {}
-
 type Wyrm = { expiresAt: number, nextBreath: number }
 local wyrms: { [Player]: Wyrm } = {}
--- Frozen Blue Ice Crossbow: ranged hits since the last arrow, and true
--- while an arrow of the owner's is landing (its own hit is a ranged hit).
+-- Frozen Blue Ice Crossbow: gun shots since the last arrow.
 local crossbowHits: { [Player]: number } = {}
-local arrowLanding: { [Player]: boolean } = {}
 -- Mage Staff: [player][spell] = a field is still owed by that cast.
 local pendingFields: { [Player]: { [string]: boolean } } = {}
+-- Icy Arctic Fowl: [player][spell] = the shards that cast still has, and
+-- the enemies it already sent one at.
+type FowlCast = { remaining: number, sent: number, struck: { [Model]: boolean } }
+local fowlCasts: { [Player]: { [string]: FowlCast } } = {}
 -- One arcane hit from a Frost gimmick: damage, a guaranteed Chill when
 -- `chills`, and the arcane on-hit appliers (not a cast, so the spell-only
 -- rows stay out).
@@ -151,6 +160,45 @@ end
 
 --[ Frost Wyrm ]--
 
+-- An ice blast from the wyrm along `direction` (the cast's): it bursts
+-- on the first enemy within BLAST_WIDTH of its line, nearest first, or at
+-- the end of WYRM_RANGE.
+local function fireBlast(player: Player, root: BasePart, direction: Vector3)
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	if flat.Magnitude < 0.01 then
+		flat = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+	end
+	flat = flat.Unit
+	local from = (root.CFrame * WYRM_OFFSET).Position
+	local lineEnd = root.Position + flat * WYRM_RANGE
+	local to = lineEnd
+	local nearestAlong = math.huge
+	forEachEnemyInRadius(root.Position, WYRM_RANGE, function(model: Model)
+		local targetRoot = getRoot(model)
+		if not targetRoot then
+			return
+		end
+		local along = (targetRoot.Position - root.Position):Dot(flat)
+		if
+			along > 0
+			and along < nearestAlong
+			and helpers.flatDistanceToSegment(targetRoot.Position, root.Position, lineEnd) <= BLAST_WIDTH
+		then
+			nearestAlong = along
+			to = targetRoot.Position
+		end
+	end)
+	local speed = helpers.data(WYRM, "orbSpeed", 55)
+	local radius = helpers.data(WYRM, "orbRadius", 5)
+	local damage = helpers.levelDamage(player, helpers.data(WYRM, "damagePerLevel", 15))
+	local seconds = (to - from).Magnitude / speed
+	-- No Target: the client flies it straight to `to`, as the server does.
+	helpers.fx("FrostOrb", from, to, radius, seconds, player)
+	burstAfter(player, seconds, to, radius, damage, true, helpers.data(WYRM, "chilledMultiplier", 1.5))
+end
+
+-- The periodic orb: homes on the nearest enemy in WYRM_RANGE and bursts on
+-- it, or where it last was if it dies first.
 local function fireOrb(player: Player, root: BasePart)
 	local from = (root.CFrame * WYRM_OFFSET).Position
 	local nearest: BasePart? = nil
@@ -170,6 +218,7 @@ local function fireOrb(player: Player, root: BasePart)
 	local speed = helpers.data(WYRM, "orbSpeed", 55)
 	local radius = helpers.data(WYRM, "orbRadius", 5)
 	local damage = helpers.levelDamage(player, helpers.data(WYRM, "damagePerLevel", 15))
+	local chilledMultiplier = helpers.data(WYRM, "chilledMultiplier", 1.5)
 	-- Duration is only the client's estimate; both sides home the same way.
 	helpers.fx(
 		"FrostOrb",
@@ -180,15 +229,12 @@ local function fireOrb(player: Player, root: BasePart)
 		player,
 		nearestModel
 	)
-
-	-- Fly at the target's CURRENT root every frame; its last position once
-	-- it is dead or gone.
 	task.spawn(function()
 		local position = from
 		local aim = targetRoot.Position
 		local launched = GameClock.Now()
 		while player.Parent do
-			local deltaTime = RunService.Heartbeat:Wait()
+			local deltaTime = GameClock.Dt(RunService.Heartbeat:Wait())
 			local humanoid = nearestModel and nearestModel:FindFirstChildOfClass("Humanoid")
 			if targetRoot.Parent and humanoid and humanoid.Health > 0 then
 				aim = targetRoot.Position
@@ -196,12 +242,12 @@ local function fireOrb(player: Player, root: BasePart)
 			local gap = aim - position
 			local step = speed * deltaTime
 			if gap.Magnitude <= step + ORB_CONTACT_STUDS then
-				burstAt(player, aim, radius, damage, true)
+				burstAt(player, aim, radius, damage, true, chilledMultiplier)
 				return
 			end
 			position += gap.Unit * step
 			if GameClock.Now() - launched >= ORB_MAX_SECONDS then
-				burstAt(player, position, radius, damage, true)
+				burstAt(player, position, radius, damage, true, chilledMultiplier)
 				return
 			end
 		end
@@ -249,113 +295,144 @@ end
 
 --[ Blizzard ]--
 
--- Three shards at enemies in range, like Seraphine's passive. Targets are
--- spread like the Fireworks (2026-11-02): the candidates are shuffled and
--- each shard takes the next one, so three or more enemies each get a
--- shard; with fewer the shards cycle back over the same enemies, and a
--- lone enemy takes all three. Each bursts where it lands.
-local function launchVolley(player: Player, root: BasePart)
-	local candidates: { BasePart } = {}
-	forEachEnemyInRadius(root.Position, SHARD_RANGE, function(model: Model)
-		local targetRoot = getRoot(model)
-		if targetRoot then
-			table.insert(candidates, targetRoot)
-		end
-	end)
-	if #candidates == 0 then
-		return
-	end
-	for index = #candidates, 2, -1 do
-		local swap = math.random(index)
-		candidates[index], candidates[swap] = candidates[swap], candidates[index]
-	end
-	local radius = helpers.data(FOWL, "burstRadius", 6)
-	local damage = helpers.levelDamage(player, helpers.data(FOWL, "damagePerLevel", 5))
+-- One shard's homing flight (the Fowl's data; the clients fly the same
+-- curve): it leaves rising and turning toward `target`, eases its
+-- velocity toward it every frame, and bursts on contact, or where it is
+-- once its time is up.
+local function flyShard(player: Player, from: Vector3, target: BasePart, radius: number, damage: number)
+	local speed = helpers.data(FOWL, "shardSpeed", 48)
+	local turnRate = helpers.data(FOWL, "shardTurnRate", 7)
+	local contact = helpers.data(FOWL, "shardContact", 2.5)
+	local maxSeconds = helpers.data(FOWL, "shardMaxSeconds", 2.5)
+	local chilledMultiplier = helpers.data(FOWL, "chilledMultiplier", 2)
+	local aim = target.Position
+	local flat = Vector3.new(aim.X - from.X, 0, aim.Z - from.Z)
+	local velocity = Vector3.new(0, helpers.data(FOWL, "shardLaunchUp", 9), 0)
+		+ (if flat.Magnitude > 0.05 then flat.Unit * speed * 0.5 else Vector3.zero)
 	task.spawn(function()
-		for shard = 1, helpers.data(FOWL, "volley", 3) do
-			if shard > 1 then
-				GameClock.Wait(SHARD_STAGGER_SECONDS)
+		-- It hangs where it appeared while it fades in.
+		GameClock.Wait(helpers.data(FOWL, "shardFadeIn", 0.15))
+		local position = from
+		local flown = 0
+		while player.Parent do
+			local deltaTime = GameClock.Dt(RunService.Heartbeat:Wait())
+			flown += deltaTime
+			local model = target.Parent
+			local humanoid = model and model:FindFirstChildOfClass("Humanoid")
+			if model and humanoid and humanoid.Health > 0 then
+				aim = target.Position
 			end
-			local liveRoot = getRoot.fromPlayer(player)
-			local target = candidates[(shard - 1) % #candidates + 1]
-			if not liveRoot or not target.Parent then
-				continue
+			local gap = aim - position
+			if gap.Magnitude <= contact or flown >= maxSeconds then
+				burstAt(player, position, radius, damage, false, chilledMultiplier)
+				return
 			end
-			local from = liveRoot.Position + Vector3.new(0, 2, 0)
-			helpers.fx("IceShard", from, target.Position, radius, SHARD_FLIGHT_SECONDS)
-			burstAfter(
-				player,
-				SHARD_FLIGHT_SECONDS,
-				target.Position,
-				radius,
-				damage,
-				false,
-				helpers.data(FOWL, "chilledMultiplier", 2)
-			)
+			velocity = velocity:Lerp(gap.Unit * speed, 1 - math.exp(-turnRate * deltaTime))
+			position += velocity * deltaTime
 		end
 	end)
 end
 
 --[ Ice Arrow ]--
 
--- The Nth ranged hit's arrow at `model`: damagePerLevel x the Power
--- factor on the relic lane (2026-11-02; a share of the hit on the gun lane
--- before), then a Chill outright. `arrowLanding` keeps the landing out of
--- this counter so arrows never chain.
-local function fireIceArrow(player: Player, model: Model)
-	local root = getRoot.fromPlayer(player)
-	local targetRoot = getRoot(model)
-	if not root or not targetRoot then
+-- An Ice Arrow that damaged a mob restores manaFraction of max Mana.
+local function restoreCrossbowMana(player: Player)
+	local arcaneService = helpers.service("ArcaneService")
+	local data = arcaneService:GetPlayerArcaneData(player)
+	if not data or not data.maxMana or data.mana >= data.maxMana then
 		return
 	end
-	local from = root.Position + Vector3.new(0, 2, 0)
-	helpers.fx("IceShard", from, targetRoot.Position, ARROW_BURST_RADIUS, ARROW_FLIGHT_SECONDS)
+	local fraction = helpers.data(CROSSBOW, "manaFraction", 0.05)
+	arcaneService:SetPlayerArcaneData(player, math.min(data.mana + data.maxMana * fraction, data.maxMana), data.maxMana)
+end
+
+-- The arrow landed on `target` (nil: a wall, or the end of its range):
+-- damagePerLevel x the Power factor on the relic lane (2026-11-02; a share
+-- of the hit on the gun lane before), then a Chill outright.
+local function iceArrowHit(player: Player, target: Model?)
+	local humanoid = target and target:FindFirstChildOfClass("Humanoid")
+	if not target or not humanoid or humanoid.Health <= 0 then
+		return
+	end
 	local damage = helpers.levelDamage(player, helpers.data(CROSSBOW, "damagePerLevel", 10))
-	GameClock.Delay(ARROW_FLIGHT_SECONDS, function()
-		local humanoid = model:FindFirstChildOfClass("Humanoid")
-		if not player.Parent or not model.Parent or not humanoid or humanoid.Health <= 0 then
-			return
-		end
-		arrowLanding[player] = true
-		local ok, err: any = pcall(helpers.takeDamage :: any, player, humanoid, damage, false, false, nil, true)
-		arrowLanding[player] = nil
-		if not ok then
-			error(err, 0)
-		end
-		helpers.statusService():ApplyStatus(player, model, StatusConditions.Chill, true)
-	end)
+	helpers.takeDamage(player, humanoid, damage, false, false, nil, true)
+	helpers.statusService():ApplyStatus(player, target, StatusConditions.Chill, true)
+	-- One arrow, one target: the Mana is paid once.
+	if damage > 0 then
+		restoreCrossbowMana(player)
+	end
 end
 
 --[ Handlers ]--
 
--- Every gun shot that lands (DamageService): the crossbow's count.
-function Frost.onRangedHit(player: Player, model: Model, dealt: number, _wasCrit: boolean)
-	if arrowLanding[player] then
-		return
-	end
+-- Every gun shot, the moment it is fired: the crossbow's count. The Nth
+-- fires the arrow with it.
+function Frost.onRangedFire(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
 	if not helpers.owns(player, CROSSBOW) then
 		crossbowHits[player] = nil
+		relicTriggers.set(player, CROSSBOW, false)
 		return
 	end
+	local needed = helpers.data(CROSSBOW, "everyHits", 4)
 	local count = (crossbowHits[player] or 0) + 1
-	if count >= helpers.data(CROSSBOW, "everyHits", 3) then
+	if count >= needed then
 		count = 0
-		if dealt > 0 then
-			fireIceArrow(player, model)
-		end
+		relicShots.fire(player, "IceArrowShot", origin, direction, weaponName, ARROW_SPEED, function(_, target)
+			iceArrowHit(player, target)
+		end)
 	end
 	crossbowHits[player] = count
+	relicTriggers.set(player, CROSSBOW, count == needed - 1)
 end
 
-function Frost.onSpellCast(player: Player, vfxName: string)
+-- The gun was put away: the crossbow's count starts over.
+function Frost.onWeaponStowed(player: Player, lane: string)
+	if lane == "Ranged" then
+		crossbowHits[player] = nil
+	end
+end
+
+function Frost.onSpellCast(player: Player, vfxName: string, castCFrame: CFrame?)
 	if helpers.owns(player, AZURE) then
 		local pending = pendingFields[player] or {}
 		pendingFields[player] = pending
 		pending[vfxName] = true
 	end
+	local root = getRoot.fromPlayer(player)
+	if not root then
+		return
+	end
+	-- Ice Dragon Slayer: a blast the way the spell went.
+	if wyrms[player] and helpers.owns(player, WYRM) then
+		fireBlast(player, root, if castCFrame then castCFrame.LookVector else root.CFrame.LookVector)
+	end
+	-- Icy Arctic Fowl: this cast's shards, sent as it hits.
+	if helpers.owns(player, FOWL) then
+		local casts = fowlCasts[player] or {}
+		fowlCasts[player] = casts
+		casts[vfxName] = { remaining = helpers.data(FOWL, "shardsPerCast", 6), sent = 0, struck = {} }
+	end
 end
 
 function Frost.onSpellHit(player: Player, vfxName: string, model: Model)
+	-- Icy Arctic Fowl: a homing shard at each enemy this cast hits, once.
+	local fowlCast = fowlCasts[player] and fowlCasts[player][vfxName]
+	if fowlCast and fowlCast.remaining > 0 and not fowlCast.struck[model] then
+		local targetRoot = getRoot(model)
+		local liveRoot = getRoot.fromPlayer(player)
+		if targetRoot and liveRoot and helpers.owns(player, FOWL) then
+			fowlCast.struck[model] = true
+			fowlCast.remaining -= 1
+			fowlCast.sent += 1
+			local radius = helpers.data(FOWL, "burstRadius", 6)
+			local damage = helpers.levelDamage(player, helpers.data(FOWL, "damagePerLevel", 5))
+			local offset = SHARD_SPAWN_OFFSETS[(fowlCast.sent - 1) % #SHARD_SPAWN_OFFSETS + 1]
+			local from = (liveRoot.CFrame * CFrame.new(offset)).Position
+			helpers.fx("IceShard", from, targetRoot.Position, radius, nil, player, model)
+			flyShard(player, from, targetRoot, radius, damage)
+		end
+	end
+
 	local pending = pendingFields[player]
 	if not pending or not pending[vfxName] then
 		return
@@ -367,7 +444,7 @@ function Frost.onSpellHit(player: Player, vfxName: string, model: Model)
 	end
 end
 
--- Every frame: the wyrms' orbs and lifetimes.
+-- Every frame: the wyrms' periodic orbs and lifetimes.
 function Frost.onHeartbeat(now: number)
 	for player, wyrm in wyrms do
 		local root = getRoot.fromPlayer(player)
@@ -381,7 +458,7 @@ function Frost.onHeartbeat(now: number)
 end
 
 -- Once a second per player: Korblox Mage Staff's Ice Glyph kept in step
--- with Frostburst (worn while it is up), the wyrm, then Blizzard.
+-- with Frostburst (worn while it is up), then the wyrm.
 function Frost.onTick(player: Player)
 	local character = player.Character
 	local glyphRoot = getRoot.fromPlayer(player)
@@ -405,25 +482,13 @@ function Frost.onTick(player: Player)
 		wyrm.expiresAt = GameClock.Now() + WYRM_KEEPALIVE_SECONDS
 		helpers.fx("WyrmSummon", glyphRoot.Position, nil, nil, WYRM_KEEPALIVE_SECONDS, player)
 	end
-
-	if not helpers.owns(player, FOWL) then
-		fowlNextVolley[player] = nil
-		return
-	end
-	local root = getRoot.fromPlayer(player)
-	local now = GameClock.Now()
-	if root and now >= (fowlNextVolley[player] or 0) then
-		fowlNextVolley[player] = now + helpers.data(FOWL, "intervalSeconds", 3)
-		launchVolley(player, root)
-	end
 end
 
 function Frost.onPlayerRemoved(player: Player)
-	fowlNextVolley[player] = nil
 	wyrms[player] = nil
+	fowlCasts[player] = nil
 	pendingFields[player] = nil
 	crossbowHits[player] = nil
-	arrowLanding[player] = nil
 end
 
 return Frost

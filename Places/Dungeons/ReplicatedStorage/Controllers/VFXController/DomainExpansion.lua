@@ -44,6 +44,8 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 -- The Roblox type definitions no longer allow indexing the root part off
 -- the character; the cast keeps a missing one erroring where the old index did.
@@ -61,7 +63,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, 0)
 
-	local domainExpansionAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local domainExpansionAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("DomainExpansionAnimation")
 	)
 
@@ -88,7 +91,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 		for _, particle in ipairs(shrineModel.AppearPart:GetChildren()) do
 			if particle:IsA("ParticleEmitter") then
-				particle:Emit(10)
+				vfxBudget.emit(particle, 10)
 			end
 		end
 	end)
@@ -128,9 +131,11 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 			-- own: stop when the shrine is destroyed (Debris, below) or this
 			-- thread spins every frame for the rest of the session.
 			task.spawn(function()
+				-- 45 degrees a GAME second (it was 0.75 a frame: faster at a high
+				-- frame rate, and blind to slow motion).
 				while torsoAttachment and torsoAttachment.Parent do
-					torsoAttachment.Orientation += Vector3.new(0, 0.75, 0)
-					task.wait()
+					local dt = game:GetService("RunService").Heartbeat:Wait()
+					torsoAttachment.Orientation += Vector3.new(0, 45 * GameClock.Dt(dt), 0)
 				end
 			end)
 
@@ -191,7 +196,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 			for _, particle in ipairs(shrineModel.AppearPart:GetChildren()) do
 				if particle:IsA("ParticleEmitter") then
-					particle:Emit(15)
+					vfxBudget.emit(particle, 15)
 				end
 			end
 

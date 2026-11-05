@@ -24,6 +24,18 @@
 	      dealt.
 	  OnRangedHit(player, model, dealt, wasCrit)
 	      DamageService, every gun shot that lands (2026-10-30).
+	  OnRangedFire(player, origin, direction, weaponName)
+	      ProjectileCastService, every gun shot the moment it is fired:
+	      the muzzle, the aim and the gun (2026-11-04). The every-Nth
+	      ranged relics count SHOTS and fire their own straight shot with
+	      it (Lib/relicShots).
+	  respawn
+	      A fresh character starts every every-Nth count over:
+	      onWeaponStowed(player, lane) for both lanes, and its RelicTrigger
+	      glow cleared (Lib/relicTriggers). Swapping or sheathing a weapon
+	      does NOT reset anything (2026-11-04): the count waits, and the
+	      glow only hides while that weapon is put away
+	      (RelicTriggerController draws it on the weapon in hand).
 	  OnAttackHit(player, model, isMagic)
 	      DamageService, every weapon or spell hit (no relic bursts, no
 	      DoT ticks).
@@ -56,6 +68,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DodgeService = require(ServerScriptService.Submodules.Core.Source.Services.DodgeService)
 local PlayerEventService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerEventService)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local RelicTriggerData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicTriggerData)
+local relicTriggers = require(script.Lib.relicTriggers)
 
 type TreeModule = {
 	onMeleeSwing: ((
@@ -69,11 +83,13 @@ type TreeModule = {
 	onMeleeHit: ((player: Player, model: Model, damage: number) -> ())?,
 	onDodge: ((player: Player, from: Vector3, to: Vector3) -> ())?,
 	onPerfectDodge: ((player: Player) -> ())?,
-	onSpellCast: ((player: Player, vfxName: string) -> ())?,
+	onSpellCast: ((player: Player, vfxName: string, castCFrame: CFrame?) -> ())?,
 	onSpellHit: ((player: Player, vfxName: string, model: Model) -> ())?,
 	onStatusTick: ((player: Player, model: Model, status: string) -> ())?,
 	onCrit: ((player: Player, model: Model, isMelee: boolean, dealt: number, isRanged: boolean) -> ())?,
 	onRangedHit: ((player: Player, model: Model, dealt: number, wasCrit: boolean) -> ())?,
+	onRangedFire: ((player: Player, origin: Vector3, direction: Vector3, weaponName: string) -> ())?,
+	onWeaponStowed: ((player: Player, lane: RelicTriggerData.Lane) -> ())?,
 	onAttackHit: ((player: Player, model: Model, isMagic: boolean) -> ())?,
 	onHeartbeat: ((now: number) -> ())?,
 	onTick: ((player: Player) -> ())?,
@@ -116,10 +132,17 @@ function RelicGimmickService.OnMeleeHit(self: typeof(RelicGimmickService), playe
 	end
 end
 
-function RelicGimmickService.OnSpellCast(self: typeof(RelicGimmickService), player: Player, vfxName: string)
+-- `castCFrame`: where and which way the spell was cast (VFXService's
+-- cast request), for the relics that fire along it.
+function RelicGimmickService.OnSpellCast(
+	self: typeof(RelicGimmickService),
+	player: Player,
+	vfxName: string,
+	castCFrame: CFrame?
+)
 	for _, tree in self._trees do
 		if tree.onSpellCast then
-			tree.onSpellCast(player, vfxName)
+			tree.onSpellCast(player, vfxName, castCFrame)
 		end
 	end
 end
@@ -177,6 +200,37 @@ function RelicGimmickService.OnRangedHit(
 			tree.onRangedHit(player, model, dealt, wasCrit)
 		end
 	end
+end
+
+function RelicGimmickService.OnRangedFire(
+	self: typeof(RelicGimmickService),
+	player: Player,
+	origin: Vector3,
+	direction: Vector3,
+	weaponName: string
+)
+	for _, tree in self._trees do
+		if tree.onRangedFire then
+			tree.onRangedFire(player, origin, direction, weaponName)
+		end
+	end
+end
+
+-- `lane`'s every-Nth counts start over and its glow goes (a respawn).
+function RelicGimmickService._stowLane(self: typeof(RelicGimmickService), player: Player, lane: RelicTriggerData.Lane)
+	for _, tree in self._trees do
+		if tree.onWeaponStowed then
+			tree.onWeaponStowed(player, lane)
+		end
+	end
+	relicTriggers.clearLane(player, lane)
+end
+
+-- A fresh character starts with every count over.
+function RelicGimmickService._watchCharacter(self: typeof(RelicGimmickService), player: Player, _character: Model)
+	self:_stowLane(player, "Melee")
+	self:_stowLane(player, "Ranged")
+	relicTriggers.clear(player)
 end
 
 function RelicGimmickService.OnAttackHit(
@@ -246,8 +300,22 @@ function RelicGimmickService.Start(self: typeof(RelicGimmickService))
 		end
 	end)
 
+	local function watchPlayer(player: Player)
+		player.CharacterAdded:Connect(function(character: Model)
+			self:_watchCharacter(player, character)
+		end)
+		if player.Character then
+			self:_watchCharacter(player, player.Character)
+		end
+	end
+	Players.PlayerAdded:Connect(watchPlayer)
+	for _, player in Players:GetPlayers() do
+		watchPlayer(player)
+	end
+
 	PlayerEventService.OnPlayerRemoved:Connect(function(player: Player)
 		self._dodgeFrom[player] = nil
+		relicTriggers.clear(player)
 		for _, tree in self._trees do
 			if tree.onPlayerRemoved then
 				tree.onPlayerRemoved(player)

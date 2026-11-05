@@ -127,9 +127,12 @@ local BATCH_TIMEOUT_SECONDS = 90
 -- Coins for the run's tier and floor (the Boss's own ENCOUNTER_SHARES
 -- slice, even where the Boss chest also pays the absent Miniboss's), on
 -- top of its Gem row (design call, 2026-10-21): a lucky find, not part of the balanced take, scaling with
--- the tier so it stays worth the fight on Nightmare. No Crystals.
+-- the tier so it stays worth the fight on Nightmare. Arcane Crystals too
+-- since 2026-11-05: the same half of a Boss chest's Crystals.
 local EVENT_CHEST_COIN_SHARE_OF_BOSS = 0.5
 local EVENT_CHEST_COIN_PICKUPS = { 8, 12 }
+local EVENT_CHEST_CRYSTAL_SHARE_OF_BOSS = 0.5
+local EVENT_CHEST_CRYSTAL_PICKUPS = { 3, 5 }
 
 -- One chest batch (see BATCH_TIMEOUT_SECONDS). `gems` is an optional
 -- MobData `gems`-shaped row the Event Chest pays (the run currency);
@@ -464,6 +467,16 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 				DropTypes.Coins,
 				math.round(bossCoins * EVENT_CHEST_COIN_SHARE_OF_BOSS),
 				EVENT_CHEST_COIN_PICKUPS,
+				player
+			)
+		end
+		local bossCrystals = DifficultyData.ChestPayout(tier, floor, EnemyTypes.Boss, "chestCrystals", true)
+		if bossCrystals then
+			dropSplit(
+				origin,
+				DropTypes.ArcaneCrystals,
+				math.round(bossCrystals * EVENT_CHEST_CRYSTAL_SHARE_OF_BOSS),
+				EVENT_CHEST_CRYSTAL_PICKUPS,
 				player
 			)
 		end

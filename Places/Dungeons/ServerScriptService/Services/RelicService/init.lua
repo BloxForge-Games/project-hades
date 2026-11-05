@@ -7,7 +7,6 @@
 
 --[ Roblox Services ]--
 
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -41,6 +40,7 @@ local findFloorBelow = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local Fireworks = require(script.Incremental.Fireworks)
 local GhostDragon = require(script.Incremental.GhostDragon)
 local SuperStompBoots = require(script.Incremental.SuperStompBoots)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- DropService requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -561,7 +561,7 @@ function RelicService.PlayRelicRemovedFX(_self: typeof(RelicService), player: Pl
 			descendant:Emit(2)
 		end
 	end
-	Debris:AddItem(shockwave, 3)
+	GameClock.Debris(shockwave, 3)
 end
 
 -- Tray DROP: the ring around the player the relic lands in (a random
@@ -1209,7 +1209,7 @@ function RelicService.Start(self: typeof(RelicService))
 	end
 
 	task.spawn(function()
-		while task.wait(1) do
+		while GameClock.Wait(1) do
 			self:_incrementalRelicEffects()
 		end
 	end)

@@ -18,7 +18,6 @@
 	after the marker's fading name so the cleanup sweep can find them.
 ]]
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -130,6 +129,6 @@ return function(player: Player, character: Model, duration: number?)
 				clone:Destroy()
 			end
 		end)
-		Debris:AddItem(marker, FADE_SECONDS)
+		GameClock.Debris(marker, FADE_SECONDS)
 	end)
 end

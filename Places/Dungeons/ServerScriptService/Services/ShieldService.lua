@@ -33,7 +33,6 @@
 	(client UI + shieldGate consumers read it).
 ]]
 
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -387,7 +386,7 @@ function ShieldService.GrantShield(
 		gainAuraSound.Parent = getRoot(state.character)
 		gainAuraSound:Play()
 
-		Debris:AddItem(gainAuraSound, 2)
+		GameClock.Debris(gainAuraSound, 2)
 
 		self:_spawnVisuals(state, targetPlayer)
 	else

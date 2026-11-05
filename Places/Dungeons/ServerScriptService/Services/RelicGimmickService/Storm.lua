@@ -9,8 +9,8 @@
 
 	  Lightning Bolt Sword   CHAIN LIGHTNING (2026-10-31; the Thunder Blade
 	                         and its Stormcharged gate left with the auras):
-	                         any weapon or spell hit has `chainChance`
-	                         (`arcaneChainChance` on Arcane) to arc
+	                         a MELEE hit (2026-11-04; any weapon or spell
+	                         hit before) has `chainChance` to arc
 	                         lightning from its target through `jumps` more
 	                         enemies within `jumpRange`, each bolt dealing
 	                         damage and Shocking. One roll per
@@ -60,6 +60,10 @@ local lastChainRoll: { [Player]: number } = {}
 
 -- One Storm bolt on one enemy: its own crit roll, damage, and a Shock.
 local function boltHit(player: Player, model: Model, humanoid: Humanoid, baseDamage: number)
+	local root = getRoot(model)
+	if root then
+		helpers.hitBreakables(player, root.Position, helpers.POINT_BREAK_RADIUS)
+	end
 	local multiplier = helpers.rollCrit(player, model)
 	helpers.takeDamage(player, humanoid, baseDamage * multiplier, false, false, nil, true)
 	helpers.statusService():ApplyStatus(player, model, StatusConditions.Shock)
@@ -97,14 +101,16 @@ local function chainLightning(player: Player, origin: Model)
 			return
 		end
 		hit[nextModel] = true
-		helpers.fx("Bolt", from, nextRoot.Position)
+		-- The enemy rides along so every client can put the shock on the
+		-- body it draws (ChainLightningVFXController).
+		helpers.fx("Bolt", from, nextRoot.Position, nil, nil, player, nextModel)
 		boltHit(player, nextModel, nextHumanoid, damage)
 		from = nextRoot.Position
 	end
 end
 
--- A weapon or spell hit by `player` landed on `model` (DamageService).
-function Storm.onAttackHit(player: Player, model: Model, isMagic: boolean)
+-- A melee hit by `player` landed on `model` (RelicGimmickService.OnMeleeHit).
+function Storm.onMeleeHit(player: Player, model: Model, _damage: number)
 	if not helpers.owns(player, BOLT_SWORD) then
 		return
 	end
@@ -113,10 +119,7 @@ function Storm.onAttackHit(player: Player, model: Model, isMagic: boolean)
 		return
 	end
 	lastChainRoll[player] = now
-	local chance = if isMagic
-		then helpers.data(BOLT_SWORD, "arcaneChainChance", 0.3)
-		else helpers.data(BOLT_SWORD, "chainChance", 0.1)
-	if math.random() < chance then
+	if math.random() < helpers.data(BOLT_SWORD, "chainChance", 0.1) then
 		-- Spawned: the jumps wait between them, and the damage path must
 		-- not yield.
 		task.spawn(chainLightning, player, model)

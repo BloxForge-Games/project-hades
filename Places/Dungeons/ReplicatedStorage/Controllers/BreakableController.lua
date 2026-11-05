@@ -53,6 +53,7 @@ local BreakableLootData = require(ReplicatedStorage.Submodules.Core.Shared.Data.
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
 
 local BreakableController = {
 	Name = "BreakableController",
@@ -80,7 +81,10 @@ local HIGHLIGHT_TIMING: onDamageIndicator.Timing = {
 
 -- Loot breaks (BreakStyle). Shards per break, their size range (studs)
 -- and launch. A vein's glowing shards are bigger, so their Neon blooms.
+-- The shard and chunk counts are scaled by vfxBudget, never below
+-- MIN_BURST_BITS (2026-11-05, the mobile pass).
 local SHARD_COUNT = { Shatter = 9, Sink = 7 }
+local MIN_BURST_BITS = 3
 local SHARD_SIZE = {
 	Shatter = { min = 0.25, max = 0.6 },
 	-- Wide spread, so a crystal's pieces read as chunks of it, not dust.
@@ -118,10 +122,12 @@ local CHUNK_LINGER = 1.4
 local CHUNK_FADE = 1
 -- Past this many seconds a chunk is faded wherever it is (no floor hit).
 local CHUNK_MAX_FLIGHT = 1.2
--- A vein's glowing shards and ore chunks each carry a small PointLight in
--- the crystal colour, dimming out over the bit's life.
-local BIT_LIGHT_BRIGHTNESS = 1.2
-local BIT_LIGHT_RANGE = 5
+-- A vein break lights its burst with ONE PointLight in the crystal colour
+-- at the break point, dimming out over the shards' life. (Every shard and
+-- ore chunk used to carry its own, fourteen lights per break; one wider
+-- light reads the same, 2026-11-05.)
+local BURST_LIGHT_BRIGHTNESS = 2
+local BURST_LIGHT_RANGE = 12
 -- The break sounds are positional, heard fully within the style's
 -- breakRollOffMin studs and gone past its breakRollOffMax
 -- (BreakableLootData).
@@ -248,22 +254,34 @@ function BreakableController._cancelShake(self: typeof(BreakableController), mod
 	self._activeShakes[model] = nil
 end
 
--- A small PointLight in `color` on `part`, dimming to nothing over
--- `seconds` (a vein's shards and ore chunks).
-local function addFadingGlow(part: BasePart, color: Color3, seconds: number)
+-- The one PointLight of a burst (BURST_LIGHT_*): on an invisible anchor
+-- at `position`, in `color`, dimming to nothing over `seconds`.
+local function addBurstGlow(parent: Instance, position: Vector3, color: Color3, seconds: number)
+	local anchor = Instance.new("Part")
+	anchor.Name = "LootBurstGlow"
+	anchor.Size = Vector3.one
+	anchor.Transparency = 1
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanQuery = false
+	anchor.CanTouch = false
+	anchor.Position = position
 	local light = Instance.new("PointLight")
 	light.Color = color
-	light.Brightness = BIT_LIGHT_BRIGHTNESS
-	light.Range = BIT_LIGHT_RANGE
+	light.Brightness = BURST_LIGHT_BRIGHTNESS
+	light.Range = BURST_LIGHT_RANGE
 	light.Shadows = false
-	light.Parent = part
+	light.Parent = anchor
+	anchor.Parent = parent
 	GameClock.Tween(light, TweenInfo.new(seconds, Enum.EasingStyle.Sine, Enum.EasingDirection.In), {
 		Brightness = 0,
 	}):Play()
+	GameClock.Debris(anchor, seconds + 0.2)
 end
 
 -- A burst of small local shards from `position`: they fly out, bounce on
--- the floor, rest a moment and fade. `glow` gives each a fading light.
+-- the floor, rest a moment and fade. `glow` lights the burst (one light at
+-- `position`, not one per shard). `count` is scaled by vfxBudget.
 local function burstShards(
 	position: Vector3,
 	color: Color3,
@@ -273,7 +291,10 @@ local function burstShards(
 	glow: boolean
 )
 	local parent = workspace.IgnoreInstances:FindFirstChild("ArcaneSpells") or workspace.IgnoreInstances
-	for _ = 1, count do
+	if glow then
+		addBurstGlow(parent, position, color, SHARD_LINGER + SHARD_FADE)
+	end
+	for _ = 1, vfxBudget.count(count, MIN_BURST_BITS) do
 		local size = sizeRange.min + math.random() * (sizeRange.max - sizeRange.min)
 		local shard = Instance.new("Part")
 		shard.Name = "LootShard"
@@ -288,12 +309,10 @@ local function burstShards(
 		local angle = math.random() * math.pi * 2
 		local out = SHARD_OUT_SPEED_MIN + math.random() * (SHARD_OUT_SPEED_MAX - SHARD_OUT_SPEED_MIN)
 		local up = SHARD_UP_SPEED_MIN + math.random() * (SHARD_UP_SPEED_MAX - SHARD_UP_SPEED_MIN)
-		shard.AssemblyLinearVelocity = Vector3.new(math.cos(angle) * out, up, math.sin(angle) * out)
+		GameClock.SetVelocity(shard, Vector3.new(math.cos(angle) * out, up, math.sin(angle) * out))
 		shard.AssemblyAngularVelocity = Vector3.new(math.random(-15, 15), math.random(-15, 15), math.random(-15, 15))
+			* GameClock.Scale()
 		shard.Parent = parent
-		if glow then
-			addFadingGlow(shard, color, SHARD_LINGER + SHARD_FADE)
-		end
 		GameClock.Delay(SHARD_LINGER, function()
 			if shard.Parent then
 				GameClock.Tween(shard, SHARD_FADE_INFO, { Transparency = 1 }):Play()
@@ -369,14 +388,15 @@ end
 -- The vein's ore chunks (see the CHUNK_ constants): glowing bits thrown
 -- out and up from `position` in every direction, arcing down to `floorY`,
 -- where they rest a moment and fade. Anchored and moved by hand, so they
--- never touch physics.
+-- never touch physics. Unlit: the shards' burst light covers them, and
+-- their count is scaled by vfxBudget (2026-11-05).
 local function sprayOreChunks(position: Vector3, floorY: number, color: Color3)
 	local parent = workspace.IgnoreInstances:FindFirstChild("ArcaneSpells") or workspace.IgnoreInstances
 	local restY = floorY + CHUNK_SIZE / 2
 
 	type Chunk = { part: Part, position: Vector3, velocity: Vector3, landedAt: number? }
 	local chunks: { Chunk } = {}
-	for _ = 1, CHUNK_COUNT do
+	for _ = 1, vfxBudget.count(CHUNK_COUNT, MIN_BURST_BITS) do
 		local chunk = Instance.new("Part")
 		chunk.Name = "OreChunk"
 		chunk.Size = Vector3.one * CHUNK_SIZE
@@ -388,7 +408,6 @@ local function sprayOreChunks(position: Vector3, floorY: number, color: Color3)
 		chunk.CanTouch = false
 		chunk.CFrame = CFrame.new(position)
 		chunk.Parent = parent
-		addFadingGlow(chunk, color, CHUNK_MAX_FLIGHT + CHUNK_FADE)
 		local angle = math.random() * math.pi * 2
 		local out = CHUNK_OUT_SPEED_MIN + math.random() * (CHUNK_OUT_SPEED_MAX - CHUNK_OUT_SPEED_MIN)
 		local up = CHUNK_UP_SPEED_MIN + math.random() * (CHUNK_UP_SPEED_MAX - CHUNK_UP_SPEED_MIN)

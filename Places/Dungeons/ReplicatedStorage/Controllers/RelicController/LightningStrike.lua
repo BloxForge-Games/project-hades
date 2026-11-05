@@ -20,6 +20,9 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local relicProcColors = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.relicProcColors)
+local recolorSaturated = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.recolorSaturated)
 
 local LightningStrike = {}
 LightningStrike.__index = LightningStrike
@@ -31,9 +34,11 @@ local IMPACT_EMIT = 10
 local BODY_EMIT_DELAY = 0.1
 local CLEANUP_SECONDS = 5
 
-function LightningStrike.new(position: Vector3)
+-- `caster`: whose strike (a Deluxe Coil Gun owner's is yellow).
+function LightningStrike.new(position: Vector3, caster: Player?)
 	local self = setmetatable({}, LightningStrike)
 	self.position = position
+	self.caster = caster
 	return self
 end
 
@@ -48,6 +53,13 @@ function LightningStrike:PlayEffect()
 	-- Scale is baked into the asset (0.451) — don't ScaleTo here, or tuning
 	-- the model in Studio stops taking effect.
 	strike:PivotTo(CFrame.new(self.position))
+	-- The asset is Shock's purple; a Coil Shocked caster's goes yellow
+	-- (relicProcColors, 2026-11-05).
+	local relicController = Blitz.OptionalController("RelicController")
+	local relics = self.caster and relicController and relicController:GetRelicsFromUserId(self.caster.UserId)
+	if relicProcColors.hasCoilShocked(relics) then
+		recolorSaturated(strike, relicProcColors.COIL_SHOCKED)
+	end
 	strike.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	-- Starter first, then everything else a beat later — the two-stage burst

@@ -18,6 +18,7 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 -- The spawn burst: GameAssets.VFX["Susanoo Armor"].SpawnPart, whose
 -- attachment emitters carry their own EmitCount / EmitDelay /
@@ -43,7 +44,8 @@ return function(player: Player, preload: boolean?)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, 0)
 
-	local susanooAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local susanooAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooArmorAnimation")
 	)
 

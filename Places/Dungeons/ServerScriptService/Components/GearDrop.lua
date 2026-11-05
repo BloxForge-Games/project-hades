@@ -44,6 +44,7 @@ local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- Weapon-drop enchantment roll: rollWeaponEnchantment (by rarity, then a
 -- uniform pick of the five). Armor never rolls one.
@@ -242,7 +243,7 @@ function GearDrop:_fadeAndDestroy()
 	end
 	self.Instance:SetAttribute(ATTR_EXPIRED, true)
 	local instance = self.Instance
-	task.delay(POST_FADE_DESTROY_DELAY, function()
+	GameClock.Delay(POST_FADE_DESTROY_DELAY, function()
 		if instance and instance.Parent then
 			instance:Destroy()
 		end

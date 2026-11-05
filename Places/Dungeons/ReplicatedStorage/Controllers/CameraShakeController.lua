@@ -44,6 +44,7 @@ local RunService = game:GetService("RunService")
 
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local CameraShakeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CameraShakeData)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Types ]--
 
@@ -103,7 +104,7 @@ function CameraShakeController.Shake(self: typeof(CameraShakeController), preset
 		return
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 	local active = self._active
 	if active and now < active.endClock then
 		if active.config.rank > config.rank then
@@ -140,7 +141,7 @@ function CameraShakeController._update(self: typeof(CameraShakeController))
 		return
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 	local config = active.config
 	local elapsed = now - active.startClock
 	if now >= active.endClock then

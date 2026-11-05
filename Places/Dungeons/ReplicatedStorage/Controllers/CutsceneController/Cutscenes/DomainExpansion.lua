@@ -3,7 +3,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local DomainExpansionExecutable = {}
 
@@ -91,7 +91,7 @@ function DomainExpansionExecutable:Play()
 		print(finalCameraTilt)
 		local finalCameraCFrame = waypointModel[tostring(i)].CFrame * CFrame.Angles(0, 0, finalCameraTilt)
 
-		self.CutsceneConnection = TweenService:Create(workspace.CurrentCamera, tweenInfo, {
+		self.CutsceneConnection = GameClock.Tween(workspace.CurrentCamera, tweenInfo, {
 			CFrame = finalCameraCFrame,
 			FieldOfView = tonumber(waypointData.fov),
 		})

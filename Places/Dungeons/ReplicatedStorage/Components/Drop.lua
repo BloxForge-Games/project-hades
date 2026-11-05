@@ -56,6 +56,11 @@ local BOB_AMPLITUDE_MIN = 0.15
 local BOB_AMPLITUDE_MAX = 0.35
 local BOB_CYCLE_MIN = 2
 local BOB_CYCLE_MAX = 3.5
+-- The landing arc's flight time for a plain arc (a ricochet stretches it
+-- by arcPath's durationScale). It used to step 0.02 of the path per
+-- frame, so a 30 fps phone flew twice as long; it is timed now, at the
+-- length that step took at 60 fps (2026-11-05).
+local ARC_FLIGHT_SECONDS = (1 / 0.02) / 60
 
 local Drop = Component.new({
 	Tag = TagList.Drop,
@@ -237,13 +242,16 @@ function Drop:Start()
 		lootSound:PlayCoin()
 	end
 
-	-- Finer step for a ricochet (arcPath's durationScale): same pace as a
-	-- plain arc over the longer path.
-	for i = 0, 1, 0.02 / (self._arcDurationScale or 1) do
-		RunService.RenderStepped:Wait()
+	-- Longer for a ricochet (arcPath's durationScale): same pace as a plain
+	-- arc over the longer path. Driven by frame time (ARC_FLIGHT_SECONDS).
+	local flightSeconds = ARC_FLIGHT_SECONDS * (self._arcDurationScale or 1)
+	local flown = 0
+	repeat
+		flown += RunService.RenderStepped:Wait()
+		local alpha = math.min(flown / flightSeconds, 1)
 
-		self._primaryPart.Position = self._arc(i)
-	end
+		self._primaryPart.Position = self._arc(alpha)
+	until alpha >= 1
 
 	self._dropParticles.Enabled = false
 

@@ -20,7 +20,6 @@
 	Debris collects it.
 ]]
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -140,7 +139,7 @@ return function(auraName: string, options: { transparencyFade: boolean? }?)
 				})
 			end
 
-			Debris:AddItem(marker, grace)
+			GameClock.Debris(marker, grace)
 		end)
 	end
 end

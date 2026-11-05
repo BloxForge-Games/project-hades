@@ -681,7 +681,7 @@ local function Container(props: any)
 						),
 						LayoutOrder = 1,
 						Size = UDim2.fromScale(0.332418, 0.739654),
-						Text = if selectedIsLocked then "???" elseif selectedIsCursed then "Locked" else "Drop",
+						Text = if selectedIsLocked then "???" elseif selectedIsCursed then "Cursed" else "Drop",
 						TextColor3 = if dropLive
 							then Color3.fromRGB(79, 34, 30)
 							elseif selectedIsLocked then DROP_MASKED_COLOR

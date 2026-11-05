@@ -11,6 +11,8 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -26,7 +28,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
-	local fireBlastAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local fireBlastAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("FireBlastAnimation")
 	)
 
@@ -55,19 +58,28 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		overlapParams.FilterDescendantsInstances = IgnoreListController:GetArcaneSpellIgnoreList()
 		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
 
-		for _ = 0, ArcaneData[ArcaneNames["Fire Blast"]].travelDistance, 0.35 do
-			GameClock.Wait(0.01)
+		-- One step per 60 fps frame (2026-11-05): a slower frame takes as
+		-- many steps as frames it spans, so the blast flies as fast on a
+		-- phone at 30 fps as on a PC (it was a step per frame: half speed).
+		local totalSteps = math.floor(ArcaneData[ArcaneNames["Fire Blast"]].travelDistance / 0.35) + 1
+		local stepsTaken = 0
+		local blocked = false
+		while stepsTaken < totalSteps and not blocked do
+			local frameSeconds = GameClock.Wait(0.01) * GameClock.Scale()
+			for _ = 1, math.clamp(math.floor(frameSeconds * 60 + 0.5), 1, 4) do
+				stepsTaken += 1
+				projectile.CFrame = projectile.CFrame + projectile.CFrame.LookVector * 1
 
-			projectile.CFrame = projectile.CFrame + projectile.CFrame.LookVector * 1
+				local partsArray = workspace:GetPartBoundsInRadius(
+					projectile.Position,
+					ArcaneData[ArcaneNames["Fire Blast"]].triggerRange,
+					overlapParams
+				)
 
-			local partsArray = workspace:GetPartBoundsInRadius(
-				projectile.Position,
-				ArcaneData[ArcaneNames["Fire Blast"]].triggerRange,
-				overlapParams
-			)
-
-			if #partsArray > 0 then
-				break
+				if #partsArray > 0 or stepsTaken >= totalSteps then
+					blocked = #partsArray > 0
+					break
+				end
 			end
 		end
 
@@ -86,7 +98,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		end
 
 		for _, particle in pairs(fireBlastExplosionVFX.Attachment:GetDescendants()) do
-			particle:Emit(25)
+			vfxBudget.emit(particle, 25)
 		end
 
 		GameClock.Debris(fireBlastExplosionVFX, 5)

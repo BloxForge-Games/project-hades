@@ -77,14 +77,17 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door between the first combat room and the boss, and a
   second rolls at 50% on another door, never back to back (for example C E C M E C B).
 - **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
-  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03). **Since 2026-11-02 a run pays 150 / 300 / 600 / 1200
-  coins**: the reward chests 75 / 150 / 300 / 600 (40% miniboss chest / 60% boss chest), grunt
+  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03). **A run pays 157 / 325 / 640 / 1274 coins** (150 / 300 /
+  600 / 1200 from 2026-11-02 until the 2026-11-04 gear cut): the reward chests 82 / 175 / 340 / 674
+  (40% miniboss chest / 60% boss chest), grunt
   drops 50 / 100 / 200 / 400 and the treasure chests 25 / 50 / 100 / 200. Breaking every pot adds
   up to +20% of that on top. **Crystals are 50 / 100 / 150 / 200** from the two chests, and
   breaking every crystal vein adds up to +20% on top. Prices did not move with the raise: the
   Blacksmith, gear chests, quests and treasure chests stay anchored on the old take below
-  (125 / 250 / 500 / 1000, coins 45 / 100 / 230 / 515 plus gear sales); the boss chest drops 1 / 2 / 3 /
-  4 gear pieces and the miniboss 1; expected gear sales are 80 / 150 / 270 / 485 Gold, so a run's
+  (125 / 250 / 500 / 1000, coins 52 / 125 / 270 / 589 plus gear sales); **gear drops only from the
+  miniboss (1) and the boss chest (1 / 2 / 3 / 4), 2 / 3 / 4 / 5 pieces a run** (2026-11-04: treasure
+  chests, the Coffin and corrupted grunts no longer drop gear, and the reward chests' coins rose
+  7 / 25 / 40 / 74 to cover the lost sales); expected gear sales are 73 / 125 / 230 / 411 Gold, so a run's
   Gold take is 125 / 250 / 500 / 1000 and Blacksmith prices follow (Gold halved and Crystals
   doubled on 2026-11-01, then the take set to that clean ladder after the first play-test;
   prices are shares of the take, so they move with it).
@@ -102,7 +105,7 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   One chest per dungeon, the Arcane chests' window and roulette with gear in them: one piece of
   that dungeon's gear, rolled like a drop, at the tier the player has cleared there ("Power 300
   Chest (Lvl 10-15)"), for half that tier's run Gold (Easy a flat 100, since half a run sold back for more). The odds are exactly the dungeon's own drops at that tier (Easy 60 / 30 / 10 Common / Uncommon / Rare, Normal 45 / 30 / 20 / 5 with Epic, Hard 30 / 20 / 30 / 20 + a Legendary, Nightmare 15 / 50 / 35 Uncommon / Rare / Epic + a Legendary). The Luck line raises everything above Uncommon. Since 2026-11-02 the Gold chest rolls the dungeon's own drop odds at its tier (above), capped at 3 Gold rolls per player, all back half an hour after the last one is used (offline too); "Refresh!" refills them for 25 Robux. Pity: an Epic every 10 opens per chest. A run still pays about
-  four pieces plus its Gold, so running stays the way to gear up. The Imbue, gear-line rerolls and
+  2 to 5 pieces plus its Gold, so running stays the way to gear up. The Imbue, gear-line rerolls and
   Artix's hourly shelves all left the same day.
 - **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
   add the Coffin and the Cursed Shrine; Nightmare adds the Sword in the Stone. The Merchant Shop
@@ -134,7 +137,7 @@ except Death Venom.
 | Chill | 30% slow for 5s | Control. |
 | Poison | 15% of Power per second for 5s, target deals 10% less | DoT plus Weaken (10% on 2026-10-31, 15% since 2026-11-01). Death Venom (Skeletal Scythe) stacks to 3. |
 | Shock | +10% damage taken for 5s | **The only damage-increasing status.** Coil Shocked (Coil Gun) is +20%. Vulnerability total capped at +30%. |
-| Fractured | The enemy shatters on death: 35% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
+| Fractured | The enemy shatters on death: 40% chance to drop a Health or Mana Orb | Earth's status (2026-11-01), shown with the Stonebound aura rig on the enemy. Health or Mana on a coin flip. No tick, no slow. |
 | Shield | Shield worth x% of max health | On the player. Blocks damage before health. |
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
@@ -170,8 +173,8 @@ for a later rotation. Duos are shelved too until the pool is tested.
   player holds any relic of that tree, so no one is locked out of a tree on pick one.
 - **Roll:** pick a tree first (one ticket each, plus a quarter ticket for a tree you already hold
   a relic in, capped at one and a quarter so your tree is never more than 20% of a slot; Neutral
-  stays at one), then a rarity (Rare 80 / Epic 17 / Legendary
-  3), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
+  stays at one), then a rarity (Rare 60 / Epic 30 / Legendary
+  10), then uniformly from that bucket. Cursed come only from the Cursed Shrine. The offers, the
   Shop and the vending machines use one eligibility check (`IsRelicRollEligible`). A vending
   machine hand always holds at least one plain Neutral card: if none rolled, one random slot
   (never a starter-guaranteed one) swaps its card for a Neutral pick, and Cursed does not count.
@@ -191,30 +194,30 @@ for a later rotation. Duos are shelved too until the pool is tested.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Flaming Bo Staff | Rare | NC | Every 5th / 4th / 3rd Melee swing (Daggers / Sword / Greatsword) is a guaranteed Critical Strike and Burns. (Swings counted, not mobs hit, since 2026-11-01.) |
+| Flaming Bo Staff | Rare | NC | Every 5th / 4th / 3rd Melee hit (Daggers / Sword / Greatsword) is a guaranteed Critical Strike and Burns. (Swings that land are counted, once per swing, since 2026-11-04; a whiff never counts.) |
 | Dragon's Flame Sword | Rare | NC | Every 4th / 3rd / 2nd Melee swing (Daggers / Sword / Greatsword) fires a Flame Wave that deals 75% of the swing's damage and Burns. |
-| Trick Or Trap | Epic | NC | Takedowns drop 1-3 Explosive Pumpkins that deal damage and Burn. |
-| Berserker's Claymore | Epic | NC | Your Critical Strikes erupt in flames, dealing 100% of the hit to nearby enemies (nearest 3, 7 studs). |
+| Trick Or Trap | Epic | NC | Melee Takedowns drop 1-3 Explosive Pumpkins that deal damage and Burn. |
+| Phoenix (Berserker's Claymore until 2026-11-05) | Epic | NC | Your Critical Strikes erupt in flames, dealing 100% of the hit to nearby enemies (nearest 3, 7 studs). |
 | Flame Ronin Katana | Legendary | C | Your Burns become Black Flame. Critical Strikes detonate it. (Black Flame is Burn at double damage; the detonation deals the remaining Burn at once.) |
 
 **Frost** (Chill)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Frozen Blue Ice Crossbow | Rare | NC | Every 4th Ranged hit fires an Ice Arrow that deals damage and Chills. (Power-scaled, 10 per factor, since 2026-11-02; 75% of the hit before.) |
+| Frozen Blue Ice Crossbow | Rare | NC | Every 4th Ranged shot fires an Ice Arrow that deals damage and Chills, restoring 5% of your Mana when it hits. (Shots counted, hit or miss, since 2026-11-04: the arrow fires with the shot, straight along its aim like a bullet, and hits the first mob in its path. Power-scaled, 10 per factor, since 2026-11-02.) |
 | Ice Breaker | Rare | C | Chilling a Chilled enemy Shatters them for damage. |
-| Ice Dragon Slayer | Epic | NC | A Frost Dragon follows you, firing icy blasts that deal damage and Chill. |
-| Icy Arctic Fowl | Epic | NC | Every 3s, fire ice shards at nearby enemies for damage. Chilled enemies take double damage. |
+| Ice Dragon Slayer | Epic | NC | A Frost Dragon follows you, firing icy blasts every 1.5s and with each Spell. They deal damage, +50% to Chilled enemies, and Chill. |
+| Icy Arctic Fowl | Epic | NC | Enemies hit by your Spells are struck by a homing ice shard for damage. Chilled enemies take double damage. |
 | Staff of Azure Ever Ice | Legendary | NC | Your Spells leave a Frost Zone that Chills and damages everything inside. (12 studs, 5 s, Chills every 2 s.) |
 
 **Venom** (Poison)
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Korblox Evil Eye | Rare | NC | Every 2nd Arcane Spell costs 50% less Mana and Poisons every enemy it hits. |
-| Witches Brew | Rare | NC | Every 5th Ranged hit lobs a Brewed Potion that leaves a Poison puddle. (Shots that land are counted.) |
-| Foul Poison Fowl | Epic | NC | Takedowns leave a Poison Cloud for 3s dealing damage each second. |
-| Skeletal Scythe | Epic | NC | Your Melee hits have a 30% chance to Poison. Your Poison becomes Death Venom, which stacks up to 3 times. (Venom's melee opener since 2026-11-01; Zombie Bomb is the tree's one C relic.) |
+| Korblox Evil Eye | Rare | NC | Every 3rd Ranged shot deals +50% more damage and Poisons. |
+| Witches Brew | Rare | NC | Every 5th Ranged shot lobs a Brewed Potion that leaves a Poison puddle. (Every shot counted, hit or miss, since 2026-11-04: the potion flies with the shot, straight along its aim, and bursts on the first mob or wall it reaches.) |
+| Foul Poison Fowl | Epic | NC | Takedowns leave a 3s Poison Cloud that deals damage, twice as big from Poisoned enemies. |
+| Skeletal Scythe | Epic | NC | Your Ranged hits have a 30% chance to Poison. Your Poison becomes Death Venom, which stacks up to 3 times. (Venom's ranged opener since 2026-11-05, melee from 2026-11-01; Zombie Bomb is the tree's one C relic.) |
 | Zombie Bomb | Legendary | C | Your Poison spits Goop at nearby enemies, Poisoning them too. (10% per Poison tick, one spit per 0.5 s.) |
 
 **Storm** (Shock)
@@ -224,7 +227,7 @@ for a later rotation. Duos are shelved too until the pool is tested.
 | Katana | Rare | NC | After a Perfect Dodge, your next Spell is a guaranteed Critical Strike on everything it hits, and Shocks them. (Every target the spell hits within 0.6 s of its first hit.) |
 | Sparkle Time Hoverboard | Rare | NC | Your Dodge becomes a lightning dash that deals damage and Shocks enemies you pass through. |
 | Deluxe Coil Gun | Epic | C | Your Shocks become Coil Shocked, making enemies take +20% more damage. |
-| Lightning Bolt Sword | Epic | NC | Your damage has a chance to chain lightning through nearby enemies, dealing damage and Shocking them. |
+| Lightning Bolt Sword | Epic | NC | Your Melee hits have a chance to chain lightning through nearby enemies, dealing damage and Shocking them. |
 | Lightning Horn of the Heavens | Legendary | NC | Your hits may call down Lightning that Shocks nearby enemies. Critical Strikes always do. (20% of hits, 50% of spell hits, one strike per 0.2 s.) |
 
 **Earth** (Fracture, the sustain tree since 2026-11-01)
@@ -237,7 +240,7 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 
 | Relic | Rarity | C? | Effect |
 |---|---|---|---|
-| Golden Steampunk Gloves | Rare | NC | Every 4th / 3rd / 2nd Melee swing (Daggers / Sword / Greatsword) sends out a Shockwave that Fractures enemies for damage. (8 studs around the enemy the swing struck, or just ahead of you on a whiff; Power-scaled; swings counted since 2026-11-01.) |
+| Golden Steampunk Gloves | Rare | NC | Every 2nd Melee swing (every weapon, since 2026-11-04; 4th / 3rd / 2nd before) sends out a Shockwave that Fractures enemies for damage. (8 studs around the enemy the swing struck, or just ahead of you on a whiff; Power-scaled; swings counted since 2026-11-01.) |
 | Earth Protection Orb | Rare | NC | Orbs you pick up when your Mana and Health are full are preserved (up to 5). They are used when needed. (Stored when the matching bar is at 90% or above, since an orb heals 10%; spent one a second, Health first; stored orbs never expire and survive a respawn; nobody else can take them. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
 | Bundle of TNT | Epic | C | Collecting an Orb grants a 10% Shield for 5s. When it ends it explodes, dealing damage and Fracturing nearby enemies. |
 | Earth Summoning Horn | Epic | NC | Collecting an Orb sends out a shockwave that deals damage, and players within 15 studs gain the Orb's restore too. |
@@ -257,7 +260,7 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 | Super Stomp Boots | Rare | Your Dodge ends with a Ground Stomp that deals damage. |
 | Korblox Mage Staff | Epic | Every 3rd Arcane Spell you cast costs no Mana and resets its cooldown. |
 | Midnight Sword | Epic | Your Weapon damage restores 2% of your Mana. |
-| Volleyball | Epic | Every 3rd Ranged hit spikes a Volleyball for 100% of the hit's damage. (A share of the shot since 2026-11-02; 2x Power before, which scaled with fire rate.) |
+| Volleyball | Epic | Every 3rd Ranged shot spikes a Volleyball for 100% of the shot's damage. (Shots counted, hit or miss, since 2026-11-04: the ball flies with the shot, straight along its aim, and hits the first mob in its path. A share of the gun's damage since 2026-11-02; 2x Power before.) |
 | Magenta Paintball Gun | Epic | Your Ranged damage has a chance to Paint. Painted enemies take +20% Arcane Damage. |
 | Portable Justice | Epic | Your damage has a chance to Jail enemies for 3s. |
 | Ban Hammer | Legendary | Enemies below 20% health are executed by a falling Ban Hammer that deals damage. |
@@ -267,7 +270,7 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 | Relic | Effect |
 |---|---|
 | Double-Bladed Scythe | Deal +100% Weapon Damage, but your Arcane deals no damage. |
-| Dragon Lantern | Gain +200% Gold, but lose 10% of it when you take damage. |
+| Dragon Lantern | Gain +200% Coins, but lose Coins every time you take damage (5% of the run's average coins per hit, run coins first, then banked Gold). |
 | Forbidden Box | Deal +100% Arcane Damage, but your Weapon deals 50% less. |
 | Slateskin Potion | Gain +35% Damage Reduction, but lose 1 Dodge stack. |
 | Sword of Eternal Abyss | Deal +50% damage, but you can't apply Statuses. |
@@ -301,7 +304,7 @@ what each said when it was shelved, so the design is recoverable without digging
 | Blaze | Rare | Flaming Mace | While Enflamed, Burns last 50% longer and deal 25% more damage. |
 | Blaze | Rare | Linked Sword | Gain +20% Weapon Damage. Weapon hits on Burning enemies extend the Burn by 1s (up to 8s). |
 | Blaze | Rare | Red Hyperlaser Gun | Ranged Weapon Damage has +25% chance to Burn, and deals +20% damage to Burning enemies. |
-| Blaze | Epic | Phoenix | Your Dodge leaves a 4s fire trail that Burns and deals damage per second. |
+| Blaze | Epic | Phoenix Dash (was Phoenix) | Your Dodge leaves a 4s fire trail that Burns and deals damage per second. |
 | Blaze | Epic | Red Laser Scythe | Gain +30% Melee Weapon Damage. While Enflamed, swing 25% faster. |
 | Blaze | Duo | HEX Spitter | While Enflamed and Stormcharged, Critical Hits burst in a plasma nova dealing 60% of the hit to nearby enemies, Burning and Shocking them. |
 | Frost | Rare | Frostbrand | While Frostburst, gain +25% Arcane Damage. |
@@ -351,7 +354,7 @@ what each said when it was shelved, so the design is recoverable without digging
 | Neutral | Legendary | Mystical Staff of Cyan | Deal 40% more Arcane Damage. Spells create a large 10s Sigil giving anyone inside +25% Arcane Damage. |
 | Neutral | Legendary | Neon Rainbow Phoenix | Gain +25% chance to apply any Status on all damage. |
 | Neutral | Cursed | Flaming Orb of Divine Pain | Double the base effects of your Auras, but take +50% more damage while an Aura is active. |
-| Neutral | Cursed | Pinata | Vending Machines offer only 2 Relic choices, but all are Epic or higher. |
+| Neutral | Cursed | Pinata | Critical Hits have a 35% chance to burst Coins out of an enemy, but lose 50% of your Critical Strike damage. |
 
 ## Auras
 

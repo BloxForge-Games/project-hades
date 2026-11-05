@@ -31,7 +31,6 @@
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 --[ Imports ]--
 
@@ -288,9 +287,6 @@ function SpiritCompanionBarkController.Start(_self: typeof(SpiritCompanionBarkCo
 			end
 		end
 	end)
-
-	-- Keep the loop honest if a frame hitch stalls task.wait.
-	RunService.Heartbeat:Connect(function() end)
 end
 
 return SpiritCompanionBarkController

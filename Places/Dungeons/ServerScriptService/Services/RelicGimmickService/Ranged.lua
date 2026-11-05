@@ -12,8 +12,12 @@
 	                          on the enemy; after `fuseSeconds` it detonates
 	                          for the callback's share of that hit in
 	                          `radius`, Shocking everything there.
-	  Witches Brew            (Venom) every `everyShots` shot lobs a poison
-	                          bubble at the target: per-level damage in
+	  Witches Brew            (Venom) every `everyShots` gun SHOT (2026-11-04;
+	                          landed hits before) throws a potion WITH the
+	                          shot, straight along its aim (Lib/relicShots,
+	                          no homing); it bursts where it lands (a mob,
+	                          a wall, or the end of the gun's range):
+	                          per-level damage in
 	                          `radius`, Poison, and a puddle that Poisons
 	                          whatever stands in it for `puddleSeconds`.
 
@@ -30,13 +34,16 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local relicTriggers = require(script.Parent.Lib.relicTriggers)
+local relicShots = require(script.Parent.Lib.relicShots)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CHARGE = RelicNames["Rubber Chicken Launcher"]
 local MORTAR = RelicNames["Witches Brew"]
 
 -- How long the bubble flies.
-local BUBBLE_FLIGHT_SECONDS = 0.5
+-- The potion's studs a game second (2026-11-04).
+local POTION_SPEED = 60
 -- How often a puddle looks for enemies standing in it.
 local PUDDLE_SCAN_SECONDS = 0.5
 
@@ -98,34 +105,29 @@ local function stickCharge(player: Player, model: Model, dealt: number)
 		if liveRoot then
 			lastPosition = liveRoot.Position
 		end
-		helpers.fx("ShockBurst", lastPosition, nil, radius)
+		helpers.fx("ShockBurst", lastPosition, nil, radius, nil, player)
 		splash(player, lastPosition, radius, math.round(dealt * share), StatusConditions.Shock)
 	end)
 end
 
 --[ Witches Brew ]--
 
-local function lobBubble(player: Player, target: Vector3)
-	local root = getRoot.fromPlayer(player)
-	if not root then
-		return
-	end
+-- The potion burst at `position`: damage and Poison in `radius`, then a
+-- puddle that Poisons whatever stands in it for `puddleSeconds`.
+local function burstPotion(player: Player, position: Vector3)
 	local radius = helpers.data(MORTAR, "radius", 7)
-	local ground = snapToGround(target, { mapOnly = true }) or target
-	helpers.fx("ToxicBubble", root.Position + Vector3.new(0, 2, 0), ground, radius, BUBBLE_FLIGHT_SECONDS)
-	GameClock.Delay(BUBBLE_FLIGHT_SECONDS, function()
-		if not player.Parent then
-			return
-		end
-		splash(
-			player,
-			ground,
-			radius,
-			helpers.levelDamage(player, helpers.data(MORTAR, "damagePerLevel", 15)),
-			StatusConditions.Poison
-		)
-		local seconds = helpers.data(MORTAR, "puddleSeconds", 3)
-		helpers.fx("ToxicPuddle", ground, nil, radius, seconds)
+	local ground = snapToGround(position, { mapOnly = true }) or position
+	helpers.fx("ToxicBurst", position, nil, radius, nil, player)
+	splash(
+		player,
+		ground,
+		radius,
+		helpers.levelDamage(player, helpers.data(MORTAR, "damagePerLevel", 15)),
+		StatusConditions.Poison
+	)
+	local seconds = helpers.data(MORTAR, "puddleSeconds", 3)
+	helpers.fx("ToxicPuddle", ground, nil, radius, seconds, player)
+	task.spawn(function()
 		local endsAt = GameClock.Now() + seconds
 		while GameClock.Now() < endsAt and player.Parent do
 			GameClock.Wait(PUDDLE_SCAN_SECONDS)
@@ -144,8 +146,29 @@ function Ranged.onRangedHit(player: Player, model: Model, dealt: number, wasCrit
 	if wasCrit and dealt > 0 and helpers.owns(player, CHARGE) then
 		stickCharge(player, model, dealt)
 	end
-	if helpers.owns(player, MORTAR) and countShot(mortarShots, player, helpers.data(MORTAR, "everyShots", 6)) then
-		lobBubble(player, root.Position)
+end
+
+-- Every gun shot, the moment it is fired: the Brew's count. The Nth
+-- throws the potion with it.
+function Ranged.onRangedFire(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
+	if not helpers.owns(player, MORTAR) then
+		mortarShots[player] = nil
+		relicTriggers.set(player, MORTAR, false)
+		return
+	end
+	local needed = helpers.data(MORTAR, "everyShots", 5)
+	if countShot(mortarShots, player, needed) then
+		relicShots.fire(player, "BrewShot", origin, direction, weaponName, POTION_SPEED, function(position)
+			burstPotion(player, position)
+		end)
+	end
+	relicTriggers.set(player, MORTAR, (mortarShots[player] or 0) == needed - 1)
+end
+
+-- The gun was put away: the Brew's count starts over.
+function Ranged.onWeaponStowed(player: Player, lane: string)
+	if lane == "Ranged" then
+		mortarShots[player] = nil
 	end
 end
 

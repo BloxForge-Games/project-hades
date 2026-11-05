@@ -25,7 +25,6 @@
 
 --[ Roblox Services ]--
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -63,6 +62,8 @@ local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.
 local MobData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MobData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
+local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 
 -- Second-value reader. Relics whose card reads "base X, increased to Y"
 -- keep X in the callback and Y in RelicData's `data` table, because a
@@ -223,9 +224,17 @@ local FLAMING_ORB_AURA_MARKERS = {
 	AuraNames.Stonebound,
 }
 
--- Dragon Lantern (Cursed): every hit that reaches HEALTH strips 10% of
--- the owner's unbanked run coins.
-local DRAGON_LANTERN_TAX = 0.10
+-- Each player's LAST weapon or spell hit on each enemy (relic bursts and
+-- DoT ticks never count): whether it was a melee weapon hit, and when.
+-- Recorded before the damage lands, so the death handlers already see the
+-- killing blow (Trick Or Trap's melee takedowns, MobDeath; 2026-11-05).
+-- Weak-keyed: a despawned enemy drops out.
+local lastWeaponHit: { [Model]: { [string]: { melee: boolean, at: number } } } = setmetatable({}, { __mode = "k" }) :: any
+
+-- Dragon Lantern (Cursed): every hit that reaches HEALTH costs the owner
+-- its data.coinLossShare of the run's average coins (DifficultyData
+-- RunCoins), from the run's coins first, then banked Gold
+-- (RunEscrowService.LoseCoins; 10% of the run's coins until 2026-11-04).
 
 -- Storm tree crit riders (percentage points on the 0-100 roll / fractions
 -- on the multiplier). Chances/fractions that live in relic callbacks are
@@ -266,7 +275,6 @@ local REQUIRED_DAMAGE_MODULES = {
 	"MysticalSigil",
 	"LaserScythes",
 	"AuraDamage",
-	"Volleyball",
 	"RangedRelics",
 }
 
@@ -554,9 +562,14 @@ function DamageService.PlayerTakeDamage(
 		return
 	end
 
-	-- Dragon Lantern's Gems + Coins tax — health damage only.
+	-- Dragon Lantern's coin loss — health damage only.
 	if RelicService:GetSpecificRelicRegistry(player, RelicNames["Dragon Lantern"]) > 0 then
-		RunEscrowService:TaxCurrencies(player, DRAGON_LANTERN_TAX)
+		local dungeonService = Blitz.OptionalService("DungeonService")
+		if dungeonService then
+			local share = relicData(RelicNames["Dragon Lantern"], "coinLossShare", 0.05)
+			local loss = math.max(math.round(DifficultyData.RunCoins(dungeonService:GetDifficultyScale()) * share), 1)
+			RunEscrowService:LoseCoins(player, loss)
+		end
 	end
 
 	local ragdollTrigger = character:FindFirstChild("RagdollTrigger")
@@ -577,12 +590,13 @@ function DamageService.PlayerTakeDamage(
 
 			local bodyVelocity = Instance.new("BodyVelocity")
 			bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-			bodyVelocity.Velocity = -(direction * RAGDOLL_VELOCITY) + Vector3.new(0, RAGDOLL_VELOCITY, 0)
+			bodyVelocity.Velocity = (-(direction * RAGDOLL_VELOCITY) + Vector3.new(0, RAGDOLL_VELOCITY, 0))
+				* GameClock.Scale()
 			bodyVelocity.Parent = characterRoot
 
-			Debris:AddItem(bodyVelocity, 0.15)
+			GameClock.Debris(bodyVelocity, 0.15)
 
-			task.delay(1.5, function()
+			GameClock.Delay(1.5, function()
 				RagdollService:Unragdoll(character)
 			end)
 		end
@@ -926,11 +940,14 @@ function DamageService._postDamage(
 	-- has data.strikeChance (arcaneStrikeChance on a spell) to call a strike
 	-- (data.cooldown paces it). 2026-11-01: a Critical Strike ALWAYS calls
 	-- one when data.critAlways is set, the same cooldown pacing it.
-	local hornChance = relicData(
-		RelicNames["Lightning Horn of the Heavens"],
-		if isMagic == true then "arcaneStrikeChance" else "strikeChance",
-		0.2
-	)
+	-- Per source (2026-11-05): a melee weapon hit, a spell, else (a bullet,
+	-- relic damage) the base strikeChance.
+	local hornField = if isRelicSourced
+		then "strikeChance"
+		elseif isMagic == true then "arcaneStrikeChance"
+		elseif isMelee == true and not isGunShot then "meleeStrikeChance"
+		else "strikeChance"
+	local hornChance = relicData(RelicNames["Lightning Horn of the Heavens"], hornField, 0.2)
 	local hornRow: any = RelicData[RelicNames["Lightning Horn of the Heavens"]]
 	local hornCritAlways = hornRow ~= nil and hornRow.data ~= nil and hornRow.data.critAlways == true
 	if (wasCrit and hornCritAlways) or math.random() < hornChance then
@@ -938,6 +955,7 @@ function DamageService._postDamage(
 	end
 
 	if wasCrit then
+		self:_tryPinataBurst(player, humanoid)
 		self:_tryShurikenManaRefund(player, humanoid)
 		self:_tryNinjaWhipShock(player, humanoid)
 		local targetModel = humanoid.Parent
@@ -1057,7 +1075,7 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 	-- Ground the strike under the target so the bolt lands on the floor.
 	local strikePosition = snapToGround(hrp.Position) or hrp.Position
 
-	RelicNetwork.LightningStrikeEffect.FireAll(strikePosition)
+	RelicNetwork.LightningStrikeEffect.FireAll({ Position = strikePosition, Caster = player })
 
 	self._lightningStrikeResolving[player.UserId] = true
 	-- Relic damage breaks breakables too.
@@ -1075,6 +1093,57 @@ function DamageService._tryLightningHornStrike(self: typeof(DamageService), play
 		end
 	end)
 	self._lightningStrikeResolving[player.UserId] = nil
+end
+
+-- Pinata (Cursed, 2026-11-04): a Critical Hit has data.burstChance to
+-- burst data.burstCoinShare of the run's average coins out of the enemy,
+-- as data.burstPickups Coin pickups only `player` sees and can collect
+-- (DropService's owner lock). The pickups take the usual coin multipliers
+-- on collect.
+function DamageService._tryPinataBurst(_self: typeof(DamageService), player: Player, humanoid: Humanoid)
+	if RelicService:GetSpecificRelicRegistry(player, RelicNames.Pinata) <= 0 then
+		return
+	end
+	if math.random() >= relicData(RelicNames.Pinata, "burstChance", 0.35) then
+		return
+	end
+	local model = humanoid.Parent
+	local root = if model and model:IsA("Model") then getRoot(model) else nil
+	local dropService = Blitz.OptionalService("DropService")
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not root or not dropService or not dungeonService then
+		return
+	end
+	local tier = dungeonService:GetDifficultyScale()
+	local total =
+		math.max(math.round(DifficultyData.RunCoins(tier) * relicData(RelicNames.Pinata, "burstCoinShare", 0.03)), 1)
+	local pickups = math.min(relicData(RelicNames.Pinata, "burstPickups", 3), total)
+	local each = total // pickups
+	local extra = total - each * pickups
+	if extra > 0 then
+		dropService.OnDropRequested:Fire(
+			root,
+			DropTypes.Coins,
+			extra,
+			extra,
+			each + 1,
+			each + 1,
+			false,
+			player.UserId,
+			true
+		)
+	end
+	dropService.OnDropRequested:Fire(
+		root,
+		DropTypes.Coins,
+		pickups - extra,
+		pickups - extra,
+		each,
+		each,
+		false,
+		player.UserId,
+		true
+	)
 end
 
 -- Shuriken of the Crescent Moon: refund 1% of Maximum Mana on a critical
@@ -1194,6 +1263,12 @@ function DamageService.GetCritParameters(
 	if critChance > 100 then
 		critMultiplier += (critChance - 100) / 100
 		critChance = 100
+	end
+
+	-- Pinata (Cursed): keeps only critBonusKept of the multiplier's bonus
+	-- over x1 (x1.75 -> x1.375), last so it halves every source.
+	if DamageService.RelicCount(relics, RelicNames.Pinata) > 0 then
+		critMultiplier = 1 + (critMultiplier - 1) * relicData(RelicNames.Pinata, "critBonusKept", 0.5)
 	end
 
 	return critChance, critMultiplier
@@ -1435,6 +1510,13 @@ function DamageService.TakeDamage(
 		targetModel:SetAttribute(Attributes.SlainBy, player.Name)
 	end
 
+	-- The player's last weapon / spell hit on this enemy (see lastWeaponHit).
+	if not isStatusConditionDamage and not isRelicSourced then
+		local hits = lastWeaponHit[targetModel] or {}
+		lastWeaponHit[targetModel] = hits
+		hits[player.Name] = { melee = isMelee == true and isMagic ~= true, at = GameClock.Now() }
+	end
+
 	-- Status condition damage (DoT) bypasses the whole pipeline: no
 	-- amplifiers, no crit, no appliers, no hit sparks.
 	if isStatusConditionDamage then
@@ -1524,22 +1606,10 @@ function DamageService.TakeDamage(
 		+ (if untypedOnly then 0 else self._onDamageModules["MysticalSigil"](player, snapshot, damage, isMagic))
 		+ (if untypedOnly then 0 else self._onDamageModules["LaserScythes"](player, snapshot, damage, isMagic, isMelee))
 		+ (if untypedOnly then 0 else self._onDamageModules["AuraDamage"](player, snapshot, damage, isMagic, isMelee))
-		+ (if untypedOnly
-			then 0
-			else self._onDamageModules["RangedRelics"](player, snapshot, damage, isGunShot, statuses))
 		+ (
 			if untypedOnly
 				then 0
-				else self._onDamageModules["Volleyball"](
-					player,
-					snapshot,
-					humanoid,
-					damage,
-					-- A GUN SHOT, converted (Orinthian) or not; a spell made
-					-- Weapon Damage by Sword of the Epicredness is not one
-					-- (audit 2026-10-30: it used to count and spike).
-					isGunShot
-				)
+				else self._onDamageModules["RangedRelics"](player, snapshot, damage, isGunShot, statuses)
 		)
 
 	-- Weapon Mastery set bonus (all 3 Ruinseeker pieces): +10% weapon
@@ -1732,6 +1802,19 @@ function DamageService.TakeDamage(
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage))
 		self:_postDamage(player, humanoid, false, relicSourced, isGunShot, isMelee, isMagic, math.round(totalDamage))
 	end
+end
+
+-- True when `playerName`'s last weapon or spell hit on `model` was a melee
+-- weapon hit, no more than `window` seconds ago.
+function DamageService.LastHitWasMelee(
+	_self: typeof(DamageService),
+	model: Model,
+	playerName: string,
+	window: number
+): boolean
+	local hits = lastWeaponHit[model]
+	local hit = hits and hits[playerName]
+	return hit ~= nil and hit.melee and GameClock.Now() - hit.at <= window
 end
 
 --[ Initializers ]--

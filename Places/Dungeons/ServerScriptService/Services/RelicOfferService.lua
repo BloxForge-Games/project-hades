@@ -329,6 +329,24 @@ function RelicOfferService.Offer(
 	return true
 end
 
+-- Closes `player`'s open hand with nothing granted or marked (the client
+-- closes its cards, as on a floor teardown), then deals the next queued
+-- hand if there is one. For /allcards (2026-11-05).
+function RelicOfferService.Dismiss(self: typeof(RelicOfferService), player: Player)
+	local offer = self._pending[player.UserId]
+	if not offer then
+		return
+	end
+	self._pending[player.UserId] = nil
+	if player.Parent then
+		RelicNetwork.RelicOfferResolved.Fire(player, { OfferId = offer.id, RelicName = nil, Outcome = "Cancelled" })
+	end
+	local queue = self._queued[player.UserId]
+	if queue and #queue > 0 and player.Parent then
+		self:_deal(table.remove(queue, 1) :: Offer)
+	end
+end
+
 -- True while this player has a hand on screen.
 function RelicOfferService.HasOpenOffer(self: typeof(RelicOfferService), player: Player): boolean
 	return self._pending[player.UserId] ~= nil

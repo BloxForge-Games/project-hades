@@ -64,7 +64,6 @@ local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyT
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
-local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- The coffin-win slow motion (TimeScaleService): a quarter speed for 1 s.
 local COFFIN_WIN_SLOW_SCALE = 0.25
@@ -82,7 +81,8 @@ local CONCURRENT_MAX = 12
 -- How far from the coffin a client request is honoured (EventService's
 -- own leash; the dialogue keeps players closer than this anyway).
 local INTERACT_RANGE = 30
-local POLL_SECONDS = 0.25
+-- 0.25 -> 0.1 (2026-11-05): the clock's end lands within a tenth.
+local POLL_SECONDS = 0.1
 -- Torch ignition on accept. A light may carry this attribute to set its
 -- own lit brightness; otherwise the default. Emitters simply enable.
 local IGNITE_BRIGHTNESS_ATTRIBUTE = "IgniteBrightness"
@@ -524,7 +524,20 @@ function CoffinEventService._startChallenge(self: typeof(CoffinEventService), st
 	)
 
 	-- The referee: win the moment the queue is dry and the room is empty,
-	-- fail the moment the clock runs out.
+	-- fail the moment the clock runs out. The win is ALSO checked on every
+	-- mob death (2026-11-05), so the last kill ends it that frame rather
+	-- than on the next poll.
+	local despawnConnection: any
+	despawnConnection = MobSpawnService.OnMobDespawn:Connect(function()
+		if state.status ~= STATUS.Running or state.generation ~= generation then
+			despawnConnection:Disconnect()
+			return
+		end
+		if MobSpawnService:IsRoomQueueExhausted(state.room) and #MobSpawnService:GetMobsInRoom(state.room) == 0 then
+			despawnConnection:Disconnect()
+			self:_finish(state, true)
+		end
+	end)
 	task.spawn(function()
 		while state.status == STATUS.Running and state.generation == generation do
 			if not state.room.model or not state.room.model.Parent then
@@ -549,6 +562,13 @@ function CoffinEventService._finish(self: typeof(CoffinEventService), state: Cof
 		return
 	end
 	state.status = if won then STATUS.Won else STATUS.Failed
+	-- THE BEAT (2026-11-02; the moment the challenge ends since 2026-11-05,
+	-- win or loss -- it waited for the chest drop before, a second late):
+	-- the whole server slows for a breath.
+	local timeScale = Blitz.OptionalService("TimeScaleService")
+	if timeScale then
+		timeScale:Slow(COFFIN_WIN_SLOW_SCALE, COFFIN_WIN_SLOW_HOLD_SECONDS)
+	end
 	-- The coffin returns either way; its particles only if it was NOT laid
 	-- to rest (a win puts the coffin to sleep). It can be spoken to again:
 	-- the graph has a last word for a win, a fail, and an expiry.
@@ -624,13 +644,8 @@ function CoffinEventService.DropRewardChests(_self: typeof(CoffinEventService), 
 	if not EncounterChestService then
 		return false
 	end
-	-- THE BEAT (2026-11-02): beating the Coffin slows the whole server for
-	-- a breath, then the Event Chests fall at full speed.
-	local timeScale = Blitz.OptionalService("TimeScaleService")
-	if timeScale then
-		timeScale:Slow(COFFIN_WIN_SLOW_SCALE, COFFIN_WIN_SLOW_HOLD_SECONDS)
-		task.wait(GameClock.RealSecondsUntilNormal())
-	end
+	-- (The slow-motion beat is _finish's now, at the moment the challenge
+	-- ends; the chests fall into it.)
 	EncounterChestService:DropChestsForEncounter(EnemyTypes.Event, CHEST_MOB_NAME, onAllOpened, activeTuning().gems)
 	return true
 end

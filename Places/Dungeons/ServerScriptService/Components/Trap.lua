@@ -35,6 +35,7 @@ local DamageService = require(ServerScriptService.Services.DamageService)
 local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Component Root ]--
 
@@ -78,7 +79,7 @@ function Trap:_onEntityEntered()
 
 	self._onCooldown = true
 
-	task.delay(TRAP_DELAY, function()
+	GameClock.Delay(TRAP_DELAY, function()
 		self._spikeSound:Play()
 
 		local entitiesInZone = 0
@@ -158,7 +159,7 @@ function Trap:_onEntityEntered()
 
 		DungeonNetwork.TrapSpikesTriggered.FireAll(self.Instance)
 
-		task.delay(TRAP_COOLDOWN, function()
+		GameClock.Delay(TRAP_COOLDOWN, function()
 			self._onCooldown = false
 
 			if #self._zone:getItems() > 0 then

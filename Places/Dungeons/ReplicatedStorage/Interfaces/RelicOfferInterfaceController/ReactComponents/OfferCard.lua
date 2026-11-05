@@ -238,6 +238,49 @@ local RING_START_THICKNESS = 3
 local RING_TWEEN = TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local RING_FADE_TWEEN = TweenInfo.new(0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
+-- 2026-11-05: three quiet touches for LEGENDARY cards only, all in the
+-- card's own tier tint (cardTint). Every other tier builds none of it.
+--
+-- The HALO: a soft blurred glow behind the card (a UIShadow on a frame
+-- under the card group) that breathes between the two values while the
+-- card is fully drawn, and a step brighter while it is hovered. One
+-- looping tween; the card's fades (deal in, taken rise) drive it
+-- directly instead (see applyAlpha).
+local HALO_BLUR = UDim.new(0, 26)
+local HALO_SPREAD = UDim2.fromOffset(8, 8)
+local HALO_DIM_TRANSPARENCY = 0.55
+local HALO_BRIGHT_TRANSPARENCY = 0.35
+local HALO_HOVER_DIM_TRANSPARENCY = 0.4
+local HALO_HOVER_BRIGHT_TRANSPARENCY = 0.2
+-- Seconds per leg (dim to bright), reversing forever.
+local HALO_BREATHE_SECONDS = 1.8
+-- The ease into a new range (hover on / off) before it breathes again.
+local HALO_SETTLE_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+-- Under the back embers (0) and the card group (1).
+local HALO_ZINDEX = -1
+-- The REVEAL: as the card lands (the Container deals it a beat after the
+-- rest), one thin, faint ring off the card edge -- the pick's ring path,
+-- scaled down so it never reads as a pick. (Silent since 2026-11-05: its
+-- chime went.)
+local REVEAL_RING_TRANSPARENCY = 0.7
+local REVEAL_RING_THICKNESS = 1.5
+local REVEAL_RING_END_SCALE = 1.12
+local REVEAL_RING_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local REVEAL_RING_FADE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+-- The PILL GLEAM: a narrow white band sliding across the rarity pill,
+-- GLEAM_SECONDS per pass with GLEAM_PAUSE_SECONDS between passes. One
+-- looping tween (TweenInfo's DelayTime is the pause before each repeat).
+local GLEAM_SECONDS = 0.6
+local GLEAM_PAUSE_SECONDS = 2.4
+local GLEAM_ROTATION = 20
+local GLEAM_TRANSPARENCY = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(0.4, 1),
+	NumberSequenceKeypoint.new(0.5, 0.5),
+	NumberSequenceKeypoint.new(0.6, 1),
+	NumberSequenceKeypoint.new(1, 1),
+})
+
 -- The description is dealt TRANSPARENT and fades in on its own, this long
 -- after the card's deal starts, so the art lands first and the text reads
 -- second (design call, 2026-10).
@@ -451,10 +494,13 @@ local function OfferCard(props: any)
 	local rarity: string = relicInfo and relicInfo.rarity or ItemRarity.Common
 	local colors = RarityColors:GetCard(rarity)
 	local iconImage = relicInfo and relicInfo.icon or DEFAULT_ICON
+	-- RelicData.iconScale: thin art drawn larger (default 1).
+	local iconScale: number = relicInfo and relicInfo.icon and relicInfo.iconScale or 1
 	local cardImage = relicInfo and CARD_IMAGES[relicInfo.tree] or DEFAULT_CARD_IMAGE
 	-- One colour for the whole card -- frame tint, strokes, ring, embers --
 	-- and it is the TIER's (Cursed is authored pure red in the palette).
 	local cardTint = colors.tint
+	local isLegendary = rarity == ItemRarity.Legendary
 
 	-- The stage part and its guis, rented for this card's life. A lazy
 	-- initialiser, so the part exists for the first render's portal.
@@ -477,6 +523,8 @@ local function OfferCard(props: any)
 	local hoveredRef = React.useRef(false)
 	local embersBackRef = React.useRef(nil)
 	local embersFrontRef = React.useRef(nil)
+	local haloShadowRef = React.useRef(nil)
+	local gleamRef = React.useRef(nil)
 
 	local description = getRelicDescription(localPlayer, relicName) or ""
 	-- The card's hoverable keywords, read off the DESCRIPTION so the
@@ -528,11 +576,67 @@ local function OfferCard(props: any)
 			end
 		end
 
+		-- The Legendary halo (only Legendary cards render the frame, so
+		-- every call here no-ops on the rest). It breathes only while the
+		-- card is fully drawn; applyAlpha stops it for any fade, so the
+		-- loop and the fade never write the shadow at once.
+		local haloTween: Tween? = nil
+		local haloBreathing = false
+		local haloGeneration = 0
+		local function stopHalo()
+			haloGeneration += 1
+			haloBreathing = false
+			if haloTween then
+				haloTween:Cancel()
+				haloTween = nil
+			end
+		end
+		-- (Re)starts the breath in the current range (hovered or not):
+		-- eases to the range's dim end, then loops dim <-> bright.
+		local function breatheHalo()
+			local haloShadow = haloShadowRef.current
+			if not haloShadow or not alive then
+				return
+			end
+			stopHalo()
+			haloBreathing = true
+			local generation = haloGeneration
+			local hovered = hoveredRef.current
+			local settle = TweenService:Create(haloShadow, HALO_SETTLE_TWEEN, {
+				Transparency = if hovered then HALO_HOVER_DIM_TRANSPARENCY else HALO_DIM_TRANSPARENCY,
+			})
+			haloTween = settle
+			settle.Completed:Once(function(state: Enum.PlaybackState)
+				if state ~= Enum.PlaybackState.Completed or generation ~= haloGeneration or not alive then
+					return
+				end
+				local loop = TweenService:Create(
+					haloShadow,
+					TweenInfo.new(HALO_BREATHE_SECONDS, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+					{ Transparency = if hovered then HALO_HOVER_BRIGHT_TRANSPARENCY else HALO_BRIGHT_TRANSPARENCY }
+				)
+				haloTween = loop
+				loop:Play()
+			end)
+			settle:Play()
+		end
+
 		local function applyAlpha(a: number)
 			group.GroupTransparency = a
 			local shadow = shadowRef.current
 			if shadow then
 				shadow.Transparency = CARD_SHADOW_TRANSPARENCY + (1 - CARD_SHADOW_TRANSPARENCY) * a
+			end
+			local haloShadow = haloShadowRef.current
+			if haloShadow then
+				if a > 0 then
+					if haloBreathing then
+						stopHalo()
+					end
+					haloShadow.Transparency = HALO_DIM_TRANSPARENCY + (1 - HALO_DIM_TRANSPARENCY) * a
+				elseif not haloBreathing then
+					breatheHalo()
+				end
 			end
 			applyEmberAlpha()
 		end
@@ -657,6 +761,10 @@ local function OfferCard(props: any)
 			end
 			hoveredRef.current = on
 			setTooltip(on)
+			-- The Legendary halo steps brighter (or back) in its breath.
+			if haloBreathing then
+				breatheHalo()
+			end
 			local stroke = strokeRef.current
 			-- The part comes toward the camera (which also sorts its gui,
 			-- tooltip column included, in front of the neighbour's) and
@@ -786,23 +894,45 @@ local function OfferCard(props: any)
 
 		-- The pick's ring: grows from the card's edge while thinning and fading.
 		-- It lives outside the card's CanvasGroup so it can grow past it.
-		local function shockwave()
+		-- `faint`: the Legendary reveal's thinner, fainter, shorter ring.
+		local function shockwave(faint: boolean?)
 			local ring = ringRef.current
 			local stroke = ring and ring:FindFirstChildOfClass("UIStroke")
 			if not ring or not stroke then
 				return
 			end
+			local endScale = if faint then REVEAL_RING_END_SCALE else RING_END_SCALE
 			ring.Size = UDim2.fromScale(1, 1)
 			ring.Visible = true
-			stroke.Transparency = LIT_STROKE_TRANSPARENCY
-			stroke.Thickness = RING_START_THICKNESS
-			TweenService:Create(ring, RING_TWEEN, { Size = UDim2.fromScale(RING_END_SCALE, RING_END_SCALE) }):Play()
-			-- Hidden once the fade has taken it fully transparent.
-			local fade = TweenService:Create(stroke, RING_FADE_TWEEN, { Transparency = 1, Thickness = 1 })
-			fade.Completed:Once(function()
-				ring.Visible = false
+			stroke.Transparency = if faint then REVEAL_RING_TRANSPARENCY else LIT_STROKE_TRANSPARENCY
+			stroke.Thickness = if faint then REVEAL_RING_THICKNESS else RING_START_THICKNESS
+			TweenService:Create(
+				ring,
+				if faint then REVEAL_RING_TWEEN else RING_TWEEN,
+				{ Size = UDim2.fromScale(endScale, endScale) }
+			):Play()
+			-- Hidden once the fade has taken it fully transparent. Not when
+			-- a newer ring overrode this fade: that ring hides itself.
+			local fade = TweenService:Create(
+				stroke,
+				if faint then REVEAL_RING_FADE_TWEEN else RING_FADE_TWEEN,
+				{ Transparency = 1, Thickness = 1 }
+			)
+			fade.Completed:Once(function(state: Enum.PlaybackState)
+				if state == Enum.PlaybackState.Completed then
+					ring.Visible = false
+				end
 			end)
 			fade:Play()
+		end
+
+		-- The Legendary reveal as the card lands: one soft chime, one faint
+		-- ring. Exposed on Legendary handles only.
+		local function legendaryReveal()
+			if not alive then
+				return
+			end
+			shockwave(true)
 		end
 
 		-- The refused shake: a quick rotation wobble on the card itself.
@@ -918,6 +1048,28 @@ local function OfferCard(props: any)
 			tileTween = created
 		end
 
+		-- The Legendary pill gleam: one looping tween, the pause between
+		-- passes being its DelayTime (the band waits off the pill's left).
+		local gleamTween: Tween? = nil
+		local gleam = gleamRef.current
+		if gleam then
+			gleam.Offset = Vector2.new(-1, 0)
+			local created = TweenService:Create(
+				gleam,
+				TweenInfo.new(
+					GLEAM_SECONDS,
+					Enum.EasingStyle.Sine,
+					Enum.EasingDirection.InOut,
+					-1,
+					false,
+					GLEAM_PAUSE_SECONDS
+				),
+				{ Offset = Vector2.new(1, 0) }
+			)
+			created:Play()
+			gleamTween = created
+		end
+
 		-- The periodic shine: the card sweeps itself every few seconds,
 		-- on its own random beat, only while it is actually on screen.
 		task.spawn(function()
@@ -949,6 +1101,8 @@ local function OfferCard(props: any)
 			sweep = sweep,
 			flash = flash,
 			shockwave = shockwave,
+			-- nil on every tier but Legendary (the Container checks it).
+			legendaryReveal = if isLegendary then legendaryReveal else nil,
 			wobble = wobble,
 			slotCenter = slotCenter,
 			containsPoint = containsPoint,
@@ -974,6 +1128,10 @@ local function OfferCard(props: any)
 			end
 			if tileTween then
 				tileTween:Cancel()
+			end
+			stopHalo()
+			if gleamTween then
+				gleamTween:Cancel()
 			end
 			alphaConnection:Disconnect()
 			alpha:Destroy()
@@ -1155,6 +1313,31 @@ local function OfferCard(props: any)
 						ZIndex = 0,
 					}),
 
+					-- The Legendary halo (see the HALO constants): a frame
+					-- the card's art size whose gold UIShadow glows past the
+					-- card's edge, under the back embers and the card.
+					-- Legendary only; transparent until the deal fades in.
+					Halo = if isLegendary
+						then React.createElement("Frame", {
+							AnchorPoint = Vector2.new(0.5, 0.5),
+							Position = UDim2.fromScale(0.5, 0.5),
+							Size = UDim2.fromScale(ART_INSET, ART_INSET),
+							BackgroundTransparency = 1,
+							ZIndex = HALO_ZINDEX,
+						}, {
+							UICorner = React.createElement("UICorner", {
+								CornerRadius = UDim.new(0.07, 0),
+							}),
+							UIShadow = React.createElement("UIShadow", {
+								ref = haloShadowRef,
+								Color = cardTint,
+								BlurRadius = HALO_BLUR,
+								Spread = HALO_SPREAD,
+								Transparency = 1,
+							}),
+						})
+						else nil,
+
 					-- The few that pass IN FRONT of the card. Above the card
 					-- and its ring, so they read as nearest to the camera.
 					EmbersFront = React.createElement("CanvasGroup", {
@@ -1329,7 +1512,7 @@ local function OfferCard(props: any)
 							Icon = React.createElement("ImageLabel", {
 								AnchorPoint = Vector2.new(0.5, 0.5),
 								Position = UDim2.fromScale(0.499079, 0.405262),
-								Size = UDim2.fromScale(0.486, 0.311),
+								Size = UDim2.fromScale(0.486 * iconScale, 0.311 * iconScale),
 								BackgroundTransparency = 1,
 								Image = iconImage,
 								ScaleType = Enum.ScaleType.Fit,
@@ -1362,6 +1545,29 @@ local function OfferCard(props: any)
 									PaddingTop = UDim.new(0.1, 0),
 									PaddingBottom = UDim.new(0.1, 0),
 								}),
+								-- The Legendary gleam: a white overlay whose
+								-- gradient is clear but for one narrow band,
+								-- slid across by the gleam loop. Ignores the
+								-- pill's padding so it covers the whole pill.
+								Gleam = if isLegendary
+									then React.createElement("Frame", {
+										Position = UDim2.fromScale(0, -0.1 / 0.8),
+										Size = UDim2.fromScale(1, 1 / 0.8),
+										BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+										BorderSizePixel = 0,
+										ZIndex = 4,
+									}, {
+										UICorner = React.createElement("UICorner", {
+											CornerRadius = UDim.new(0.1, 0),
+										}),
+										UIGradient = React.createElement("UIGradient", {
+											ref = gleamRef,
+											Rotation = GLEAM_ROTATION,
+											Transparency = GLEAM_TRANSPARENCY,
+											Offset = Vector2.new(-1, 0),
+										}),
+									})
+									else nil,
 							}),
 
 							Description = React.createElement("TextLabel", {

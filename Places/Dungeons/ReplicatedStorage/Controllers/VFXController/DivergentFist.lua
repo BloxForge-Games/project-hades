@@ -12,6 +12,8 @@ local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local emitAttributeVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitAttributeVFX)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -27,7 +29,8 @@ return function(player: Player, preload: boolean, _: CFrame)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
-	local divergentFistAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local divergentFistAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("DivergentFistAnimation")
 	)
 
@@ -96,7 +99,7 @@ return function(player: Player, preload: boolean, _: CFrame)
 					particle:IsA("ParticleEmitter")
 					and not (attributeAttachment and particle:IsDescendantOf(attributeAttachment))
 				then
-					particle:Emit(15)
+					vfxBudget.emit(particle, 15)
 				end
 			end
 

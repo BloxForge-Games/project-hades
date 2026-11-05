@@ -1,6 +1,5 @@
 --!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -18,6 +17,7 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
@@ -166,7 +166,7 @@ local function playOrbPickupVFX(player: Player, dropType: string)
 			-- Parent FIRST, burst SECOND -- :Emit on an unparented emitter is
 			-- silently discarded.
 			clone:Emit(ORB_PICKUP_EMIT_COUNT)
-			Debris:AddItem(clone, clone.Lifetime.Max + ORB_PICKUP_CLEANUP_MARGIN)
+			GameClock.Debris(clone, clone.Lifetime.Max + ORB_PICKUP_CLEANUP_MARGIN)
 		end
 	end
 end
@@ -274,6 +274,32 @@ DropService.OnManaCollected = Signal.new() :: Signal.Signal<string, number>
 -- (player, value?)
 DropService.OnChestCoinsRequested = Signal.new() :: Signal.Signal<Player, number?>
 
+-- The relic's sparkle (its RelicParticleAttachment) in its RARITY colour,
+-- set on the server drop so every client sees it (2026-11-05): relics
+-- moved between rarities kept their old colour in the place file. A
+-- rarity not listed (Duo) keeps the model's own.
+local RELIC_PARTICLE_COLORS: { [string]: Color3 } = {
+	[ItemRarity.Rare] = Color3.fromRGB(55, 98, 255),
+	[ItemRarity.Epic] = Color3.fromRGB(81, 0, 255),
+	[ItemRarity.Legendary] = Color3.fromRGB(255, 170, 0),
+	[ItemRarity.Cursed] = Color3.fromRGB(255, 0, 0),
+}
+
+local function tintRelicParticles(drop: Instance, relicName: string)
+	local row = RelicData[relicName]
+	local color = row and RELIC_PARTICLE_COLORS[row.rarity]
+	local attachment = color and drop:FindFirstChild("RelicParticleAttachment", true)
+	if not color or not attachment then
+		return
+	end
+	local sequence = ColorSequence.new(color)
+	for _, emitter in attachment:GetDescendants() do
+		if emitter:IsA("ParticleEmitter") then
+			emitter.Color = sequence
+		end
+	end
+end
+
 function DropService.Start(self: typeof(DropService))
 	self.OnRelicDropRequested:Connect(
 		function(
@@ -310,6 +336,7 @@ function DropService.Start(self: typeof(DropService))
 			end
 			local drop = template:Clone()
 			drop:ScaleTo(1.5)
+			tintRelicParticles(drop, relicName)
 
 			-- The pickup bursts are the clients' own CollectRelicVFX clones
 			-- (Client/Components/Relic), not an attachment on the drop.

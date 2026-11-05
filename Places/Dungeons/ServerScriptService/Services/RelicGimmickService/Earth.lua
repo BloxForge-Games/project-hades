@@ -57,6 +57,7 @@ local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Fu
 local combatProximity = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.combatProximity)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local relicTriggers = require(script.Parent.Lib.relicTriggers)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local GLOVES = RelicNames["Golden Steampunk Gloves"]
@@ -154,16 +155,19 @@ local function countGlovesSwing(player: Player, origin: Vector3, look: Vector3, 
 	glovesLastTarget[player] = nil
 	if not helpers.owns(player, GLOVES) then
 		glovesSwings[player] = nil
+		relicTriggers.set(player, GLOVES, false)
 		return
 	end
+	local needed = helpers.swingsFor(GLOVES, weaponType)
 	local count = (glovesSwings[player] or 0) + 1
-	if count >= helpers.swingsFor(GLOVES, weaponType) then
+	if count >= needed then
 		count = 0
 		local targetRoot = if target and target.Parent then getRoot(target) else nil
 		local center = if targetRoot then targetRoot.Position else origin + look * 3
 		glovesShockwave(player, center)
 	end
 	glovesSwings[player] = count
+	relicTriggers.set(player, GLOVES, count == needed - 1)
 end
 
 --[ Earth Protection Orb ]--
@@ -429,6 +433,13 @@ function Earth.onMeleeSwing(
 	weaponType: string?
 )
 	countGlovesSwing(player, origin, look, weaponType)
+end
+
+-- The melee weapon was put away: the Gloves count starts over.
+function Earth.onWeaponStowed(player: Player, lane: string)
+	if lane == "Melee" then
+		glovesSwings[player] = nil
+	end
 end
 
 function Earth.onMeleeHit(player: Player, model: Model, _damage: number)

@@ -94,8 +94,10 @@ local THINK_INTERVAL_FAR = 0.5
 local THINK_NEAR_STUDS = 60
 local THINK_MID_STUDS = 150
 -- Inside this range of a player the proxy follows its leg every frame, not
--- only on thinks (see _step).
-local TRACK_EVERY_FRAME_STUDS = THINK_MID_STUDS
+-- only on thinks (see _step). 90 studs (2026-11-05; THINK_MID_STUDS, 150,
+-- before): every proxy write replicates to every client, and past 90 a
+-- mob's 4 Hz think keeps it close enough for anything aimed that far.
+local TRACK_EVERY_FRAME_STUDS = 90
 
 -- Spawn: the mob holds still this long before its first decision (MobBase's
 -- START_GRACE_DELAY), while every client fades its body in.

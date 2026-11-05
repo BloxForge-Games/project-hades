@@ -57,7 +57,6 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
@@ -66,6 +65,7 @@ local DungeonService = require(ServerScriptService.Services.DungeonService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local fogHideables = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.fogHideables)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -136,7 +136,7 @@ local function revealInstance(instance: Instance)
 	if cachedNumber ~= nil then
 		local property = numericProperty(instance)
 		if property then
-			TweenService:Create(instance, REVEAL_TWEEN_INFO, { [property] = cachedNumber }):Play()
+			GameClock.Tween(instance, REVEAL_TWEEN_INFO, { [property] = cachedNumber }):Play()
 		end
 		instance:SetAttribute(FOG_NUMBER_ATTRIBUTE, nil)
 		return

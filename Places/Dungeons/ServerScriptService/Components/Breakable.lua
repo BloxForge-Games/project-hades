@@ -29,8 +29,6 @@
 
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-local Debris = game:GetService("Debris")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
@@ -42,6 +40,7 @@ local CollisionGroups = require(ReplicatedStorage.Submodules.Core.Shared.Enums.C
 local Combat = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -78,21 +77,41 @@ Breakable.Signals = {
 -- forEachEnemyInRadius, which only ever sees the Mobs folder; their sites
 -- call this beside it. `seen` (optional) dedupes across one sweep's steps:
 -- a breakable it already holds is skipped, and a hit one is added.
+--
+-- Each breakable's box (centre and flat reach) is measured ONCE and kept
+-- (2026-11-05): breakables do not move until they break, and this runs on
+-- every relic hit and every frame of a Flame Wave, where a GetBoundingBox
+-- per breakable per call was the server's biggest cost. Weak-keyed, so a
+-- destroyed breakable drops out.
+local boxes: { [Instance]: { center: Vector3, reach: number } } = setmetatable({}, { __mode = "k" }) :: any
+
+local function boxOf(instance: Instance): { center: Vector3, reach: number }?
+	local box = boxes[instance]
+	if box then
+		return box
+	end
+	if instance:IsA("Model") then
+		local boxCFrame, boxSize = instance:GetBoundingBox()
+		box = { center = boxCFrame.Position, reach = math.max(boxSize.X, boxSize.Z) / 2 }
+	elseif instance:IsA("BasePart") then
+		box = { center = instance.Position, reach = math.max(instance.Size.X, instance.Size.Z) / 2 }
+	else
+		return nil
+	end
+	boxes[instance] = box
+	return box
+end
+
 function Breakable.HitInRadius(position: Vector3, radius: number, player: Player?, seen: { [Instance]: boolean }?)
 	for _, instance in CollectionService:GetTagged(TagList.Breakable) do
-		if not instance:IsDescendantOf(workspace) or (seen and seen[instance]) then
+		if seen and seen[instance] then
 			continue
 		end
-		local center: Vector3, reach: number
-		if instance:IsA("Model") then
-			local boxCFrame, boxSize = instance:GetBoundingBox()
-			center, reach = boxCFrame.Position, math.max(boxSize.X, boxSize.Z) / 2
-		elseif instance:IsA("BasePart") then
-			center, reach = instance.Position, math.max(instance.Size.X, instance.Size.Z) / 2
-		else
+		local box = boxOf(instance)
+		if not box or (box.center - position).Magnitude > radius + box.reach then
 			continue
 		end
-		if (center - position).Magnitude > radius + reach then
+		if not instance:IsDescendantOf(workspace) then
 			continue
 		end
 		local breakable = Breakable:FromInstance(instance)
@@ -126,20 +145,22 @@ function Breakable:_applyBreakImpulse(part: BasePart)
 	local direction = Vector3.new(math.cos(angle), UPWARD_KICK, math.sin(angle))
 	local mass = part.AssemblyMass
 
-	part:ApplyImpulse(direction * mass * KNOCKBACK_STRENGTH * IMPULSE_SCALAR)
+	GameClock.ApplyImpulse(part, direction * mass * KNOCKBACK_STRENGTH * IMPULSE_SCALAR)
 	part:ApplyAngularImpulse(
 		Vector3.new(
 			math.random(-ANGULAR_IMPULSE_RANGE, ANGULAR_IMPULSE_RANGE),
 			math.random(-ANGULAR_IMPULSE_RANGE, ANGULAR_IMPULSE_RANGE),
 			math.random(-ANGULAR_IMPULSE_RANGE, ANGULAR_IMPULSE_RANGE)
-		) * mass
+		)
+			* mass
+			* GameClock.Scale()
 	)
 
 	if self.Instance.PrimaryPart:FindFirstChild("BreakSound") then
 		self.Instance.PrimaryPart.BreakSound:Play()
 	end
 
-	task.delay(math.random(DEBRIS_MIN_LIFETIME, DEBRIS_MAX_LIFETIME), function()
+	GameClock.Delay(math.random(DEBRIS_MIN_LIFETIME, DEBRIS_MAX_LIFETIME), function()
 		if not part.Parent then
 			return
 		end
@@ -147,11 +168,11 @@ function Breakable:_applyBreakImpulse(part: BasePart)
 			if child:IsA("ParticleEmitter") then
 				child.Enabled = false
 			elseif child:IsA("Texture") or child:IsA("Decal") then
-				TweenService:Create(child, TweenInfo.new(FADE_TIME), { Transparency = 1 }):Play()
+				GameClock.Tween(child, TweenInfo.new(FADE_TIME), { Transparency = 1 }):Play()
 			end
 		end
-		TweenService:Create(part, TweenInfo.new(FADE_TIME), { Transparency = 1 }):Play()
-		Debris:AddItem(part, FADE_TIME + 0.5)
+		GameClock.Tween(part, TweenInfo.new(FADE_TIME), { Transparency = 1 }):Play()
+		GameClock.Debris(part, FADE_TIME + 0.5)
 	end)
 end
 
@@ -172,7 +193,7 @@ function Breakable:_break(_origin: Vector3?, player: Player?)
 				part.CanQuery = false
 			end
 		end
-		Debris:AddItem(self.Instance, STYLED_BREAK_LIFETIME)
+		GameClock.Debris(self.Instance, STYLED_BREAK_LIFETIME)
 		self._janitor:Cleanup()
 		return
 	end
@@ -199,7 +220,7 @@ function Breakable:_break(_origin: Vector3?, player: Player?)
 	end
 
 	-- Detach the empty model shell after the longest debris lifetime.
-	Debris:AddItem(self.Instance, DEBRIS_MAX_LIFETIME + FADE_TIME + 1)
+	GameClock.Debris(self.Instance, DEBRIS_MAX_LIFETIME + FADE_TIME + 1)
 
 	self._janitor:Cleanup()
 end

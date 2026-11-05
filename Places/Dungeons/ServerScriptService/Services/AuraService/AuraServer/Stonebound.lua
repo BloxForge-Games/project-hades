@@ -33,7 +33,6 @@
 	damage pipeline and any client UI read them straight off the marker.
 ]]
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -214,7 +213,7 @@ return function(player: Player, character: Model, duration: number?, payload: Pa
 
 		-- Rename BEFORE the fade grace so a re-grant takes the fresh path.
 		marker.Name = AuraNames.Stonebound .. "Fading"
-		Debris:AddItem(marker, FADE_OUT_SECONDS)
+		GameClock.Debris(marker, FADE_OUT_SECONDS)
 
 		-- Stop NEW particles immediately (one replicated bool each), then
 		-- breathe the whole rig out on every client — trails, beams and

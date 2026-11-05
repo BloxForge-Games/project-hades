@@ -59,7 +59,6 @@
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local RelicService = require(ServerScriptService.Services.RelicService)
@@ -297,7 +296,7 @@ function MobService._runHitDetection(
 					perfectDodgedPart.Anchored = true
 					perfectDodgedPart.CanCollide = false
 					perfectDodgedPart.Parent = workspace.IgnoreInstances.ArcaneSpells
-					Debris:AddItem(perfectDodgedPart, 2)
+					GameClock.Debris(perfectDodgedPart, 2)
 
 					-- One credit per roll, relics + floater (_creditPerfectDodge).
 					self:_creditPerfectDodge(player, perfectDodgedPart)

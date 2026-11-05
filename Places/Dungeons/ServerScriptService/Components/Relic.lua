@@ -1,5 +1,4 @@
 --!strict
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -14,6 +13,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local SkipRelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SkipRelicData)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- The pickup fade, mirrored by the client's PICKUP_FADE_SECONDS, plus a
 -- margin before the instance goes so the tween is never cut short.
@@ -158,7 +158,7 @@ function Relic:Start()
 				local errorSound = errorTemplate:Clone()
 				errorSound.Parent = rootPart
 				errorSound:Play()
-				Debris:AddItem(errorSound, 3)
+				GameClock.Debris(errorSound, 3)
 			elseif not errorTemplate then
 				warn("[Relic] Missing ReplicatedStorage.GameAssets.Sounds.Error")
 			end
@@ -183,7 +183,7 @@ function Relic:Start()
 			local pickupSound = ReplicatedStorage.GameAssets.Sounds.RelicPickup:Clone()
 			pickupSound.Parent = rootPart
 			pickupSound:Play()
-			Debris:AddItem(pickupSound, 3)
+			GameClock.Debris(pickupSound, 3)
 		end
 		if indicatorPart then
 			TextIndicatorService:ShowIndicator(
@@ -226,7 +226,7 @@ function Relic:Start()
 		-- still walk up and trigger it.
 		local function collect(relic: Instance)
 			relic:SetAttribute(Attributes.Collected, true)
-			task.delay(POST_FADE_DESTROY_DELAY, function()
+			GameClock.Delay(POST_FADE_DESTROY_DELAY, function()
 				if relic.Parent then
 					relic:Destroy()
 				end

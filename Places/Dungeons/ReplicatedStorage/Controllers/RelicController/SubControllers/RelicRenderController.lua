@@ -10,7 +10,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local ProximityPromptService = game:GetService("ProximityPromptService")
 local CollectionService = game:GetService("CollectionService")
 
@@ -24,6 +23,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local PickupHoverStyle = require(ReplicatedStorage.Submodules.Core.Shared.Data.PickupHoverStyle)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- GearDropsRenderController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
@@ -61,6 +61,15 @@ local HOVER_DEBOUNCE_SECONDS = PickupHoverStyle.HoverDebounceSeconds
 -- The per-relic applied-dim record is keyed by models that die with the
 -- floor: weak keys.
 local WEAK_KEYS = { __mode = "k" }
+-- Other players' orbits (2026-11-05, the mobile pass): posed at most
+-- OTHER_ORBIT_HZ times a second, on the frame time saved up between
+-- steps, and not at all while the player is past OTHER_ORBIT_FAR_STUDS
+-- from the camera. The local player's orbit runs every frame, unchanged.
+local OTHER_ORBIT_HZ = 30
+local OTHER_ORBIT_FAR_STUDS = 150
+-- How far each step closes on the orbit pose: this fraction per 60 fps
+-- frame (the local orbit's per-frame lerp), compounded over a longer step.
+local ORBIT_LERP_PER_FRAME = 0.15
 
 --[ Types ]--
 
@@ -91,6 +100,9 @@ type RenderedRelicEntry = {
 	count: number,
 	visible: boolean,
 	hiddenAll: boolean?,
+	-- Frame time saved up since this set was last posed (other players'
+	-- sets only, see OTHER_ORBIT_HZ).
+	pendingDt: number?,
 }
 
 --[ Properties ]--
@@ -239,6 +251,11 @@ function RelicRenderController._renderRelics(self: typeof(RelicRenderController)
 	local hideAll = self._landingHidden
 		or self._cutsceneHidden
 		or (viewerCharacter ~= nil and viewerCharacter:GetAttribute(Attributes.Death) == true)
+	local localUserId = Players.LocalPlayer.UserId
+	local camera = workspace.CurrentCamera
+	local cameraPosition = if camera then camera.CFrame.Position else nil
+	-- The orbit clock as of this frame; each set reads it the same.
+	local orbitClock = self._orbitClock
 
 	for userId, entry in pairs(self._clientRenderedRelics) do
 		local player = Players:GetPlayerByUserId(userId)
@@ -271,6 +288,25 @@ function RelicRenderController._renderRelics(self: typeof(RelicRenderController)
 		local total = entry.count
 		local i = 0
 
+		-- Another player's set: throttled and culled (see OTHER_ORBIT_HZ).
+		-- `stepDt` is the time this pose covers; `lerpAlpha` is the local
+		-- per-frame lerp, compounded over it.
+		local stepDt = dt
+		local lerpAlpha = ORBIT_LERP_PER_FRAME
+		if userId ~= localUserId then
+			if cameraPosition and (center - cameraPosition).Magnitude > OTHER_ORBIT_FAR_STUDS then
+				entry.pendingDt = 0
+				continue
+			end
+			stepDt = (entry.pendingDt or 0) + dt
+			if stepDt < 1 / OTHER_ORBIT_HZ then
+				entry.pendingDt = stepDt
+				continue
+			end
+			entry.pendingDt = 0
+			lerpAlpha = 1 - (1 - ORBIT_LERP_PER_FRAME) ^ math.min(stepDt * 60, 30)
+		end
+
 		for _, data in pairs(entry.parts) do
 			local model = data.part
 			i += 1
@@ -292,15 +328,15 @@ function RelicRenderController._renderRelics(self: typeof(RelicRenderController)
 			end
 
 			local s = self._radiusSpiralState[model]
-			s.currentRadius = s.currentRadius + (s.targetRadius - s.currentRadius) * (dt * 2)
+			s.currentRadius = s.currentRadius + (s.targetRadius - s.currentRadius) * math.min(stepDt * 2, 1)
 			local radius = s.currentRadius
 
-			local angle = self._orbitClock + (2 * math.pi) * (i / total)
+			local angle = orbitClock + (2 * math.pi) * (i / total)
 
 			local x = math.cos(angle) * radius
 			local z = math.sin(angle) * radius
 
-			local bob = math.sin(self._orbitClock * s.bobFrequency + s.bobPhase) * s.bobAmplitude
+			local bob = math.sin(orbitClock * s.bobFrequency + s.bobPhase) * s.bobAmplitude
 			local worldPos = center + Vector3.new(x, bob, z)
 
 			if not self._localSpinState[model] then
@@ -311,10 +347,11 @@ function RelicRenderController._renderRelics(self: typeof(RelicRenderController)
 			end
 
 			local spin = self._localSpinState[model]
-			spin.rotation = spin.rotation * CFrame.Angles(spin.spin.X * dt, spin.spin.Y * dt, spin.spin.Z * dt)
+			spin.rotation = spin.rotation
+				* CFrame.Angles(spin.spin.X * stepDt, spin.spin.Y * stepDt, spin.spin.Z * stepDt)
 
 			local targetCFrame = CFrame.new(worldPos) * spin.rotation
-			model:PivotTo(model:GetPivot():Lerp(targetCFrame, 0.15))
+			model:PivotTo(model:GetPivot():Lerp(targetCFrame, lerpAlpha))
 		end
 	end
 end
@@ -372,7 +409,7 @@ function RelicRenderController._applyModelVisibility(
 			for emitterName, brightness in targets do
 				local emitter = attachment:FindFirstChild(emitterName)
 				if emitter and emitter:IsA("ParticleEmitter") then
-					TweenService:Create(emitter, brightnessInfo, { Brightness = brightness }):Play()
+					GameClock.Tween(emitter, brightnessInfo, { Brightness = brightness }):Play()
 				end
 			end
 		end
@@ -438,7 +475,7 @@ function RelicRenderController._setOwnedMachinesDimmed(self: typeof(RelicRenderC
 			continue
 		end
 
-		TweenService:Create(machine.Model, tweenInfo, { Transparency = modelTransparency }):Play()
+		GameClock.Tween(machine.Model, tweenInfo, { Transparency = modelTransparency }):Play()
 		self:_tweenMachineBillboardText(machine, tweenInfo, textTransparency)
 	end
 
@@ -470,10 +507,10 @@ function RelicRenderController._tweenMachineBillboardText(
 		if not (label and label:IsA("TextLabel")) then
 			continue
 		end
-		TweenService:Create(label, tweenInfo, { TextTransparency = transparency }):Play()
+		GameClock.Tween(label, tweenInfo, { TextTransparency = transparency }):Play()
 		local stroke = label:FindFirstChild("UIStroke")
 		if stroke then
-			TweenService:Create(stroke, tweenInfo, { Transparency = transparency }):Play()
+			GameClock.Tween(stroke, tweenInfo, { Transparency = transparency }):Play()
 		end
 	end
 end
@@ -738,11 +775,12 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 
 			local relicScale = model:FindFirstChild("RelicScale") :: NumberValue?
 			if relicScale then
-				TweenService:Create(
+				GameClock.Tween(
 					relicScale,
 					TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 					{ Value = 1.5 }
-				):Play()
+				)
+					:Play()
 			end
 		end
 
@@ -803,14 +841,14 @@ function RelicRenderController.Start(self: typeof(RelicRenderController))
 			if relicName then
 				relicName.Enabled = false
 
-				TweenService:Create(
+				GameClock.Tween(
 					model:FindFirstChild("RelicScale") :: NumberValue,
 					TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 					{ Value = 2 }
 				):Play()
 			end
 
-			TweenService:Create(
+			GameClock.Tween(
 				relicHighlight,
 				TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out),
 				{ FillTransparency = 0.75 }
