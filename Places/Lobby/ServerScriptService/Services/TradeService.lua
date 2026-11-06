@@ -392,17 +392,29 @@ function TradeService._commit(self: typeof(TradeService), session: Session)
 	local goldB = CurrencyService:GetCurrencyValue(b, CurrencyTypes.Gold)
 	local crystalsA = CurrencyService:GetCurrencyValue(a, CurrencyTypes.ArcaneCrystals)
 	local crystalsB = CurrencyService:GetCurrencyValue(b, CurrencyTypes.ArcaneCrystals)
-	CurrencyService:SetCurrencyValue(a, CurrencyTypes.Gold, goldA - offerA.gold + TradeData.Received(offerB.gold))
-	CurrencyService:SetCurrencyValue(b, CurrencyTypes.Gold, goldB - offerB.gold + TradeData.Received(offerA.gold))
+	CurrencyService:SetCurrencyValue(
+		a,
+		CurrencyTypes.Gold,
+		goldA - offerA.gold + TradeData.Received(offerB.gold),
+		{ transaction = "Trade", sku = "PlayerTrade" }
+	)
+	CurrencyService:SetCurrencyValue(
+		b,
+		CurrencyTypes.Gold,
+		goldB - offerB.gold + TradeData.Received(offerA.gold),
+		{ transaction = "Trade", sku = "PlayerTrade" }
+	)
 	CurrencyService:SetCurrencyValue(
 		a,
 		CurrencyTypes.ArcaneCrystals,
-		crystalsA - offerA.crystals + TradeData.Received(offerB.crystals)
+		crystalsA - offerA.crystals + TradeData.Received(offerB.crystals),
+		{ transaction = "Trade", sku = "PlayerTrade" }
 	)
 	CurrencyService:SetCurrencyValue(
 		b,
 		CurrencyTypes.ArcaneCrystals,
-		crystalsB - offerB.crystals + TradeData.Received(offerA.crystals)
+		crystalsB - offerB.crystals + TradeData.Received(offerA.crystals),
+		{ transaction = "Trade", sku = "PlayerTrade" }
 	)
 
 	-- Both profiles log the same trade id.

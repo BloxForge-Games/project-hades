@@ -60,6 +60,14 @@
 	--- /loadingscreen ---
 	Plays a preview of the loading screen on YOUR screen (the
 	PreviewLoadingScreen attribute, read by PreloadInterface.Preview).
+
+	--- /guide [npc | off] ---
+
+	Draws the guide path (GuideBeamController) from YOU to a hub NPC
+	(2026-11-06), through YOUR GuideTarget attribute. The NPC is matched by
+	any part of its name ("/guide yulgar") or by what it does (GUIDE_ALIASES:
+	"/guide forge"). "/guide off" clears it; "/guide" alone lists the NPCs.
+	The path clears itself when you arrive.
 	--- /tp [dungeon] [difficulty] ---
 
 	A TEST stand-in for the hub's queue. Reserves ONE private server of the
@@ -143,6 +151,48 @@ local GEAR_KINDS: { [string]: { string } } = {
 GEAR_KINDS.ranged = GEAR_KINDS.gun
 GEAR_KINDS.dagger = GEAR_KINDS.daggers
 GEAR_KINDS.rifle = GEAR_KINDS.ar
+
+-- /guide: what an NPC does -> a word in its model name (the same words
+-- LobbyNPCService wires its dialogue by).
+local GUIDE_ALIASES: { [string]: { string } } = {
+	shop = { "twig", "scavenger", "merchant" },
+	merchant = { "twig", "scavenger", "merchant" },
+	sell = { "twig", "scavenger", "merchant" },
+	forge = { "yulgar", "blacksmith" },
+	blacksmith = { "yulgar", "blacksmith" },
+	upgrade = { "yulgar", "blacksmith" },
+	chest = { "valencia", "bandit" },
+	chests = { "valencia", "bandit" },
+	gear = { "valencia", "bandit" },
+	arcane = { "warlic", "arcane", "wizard" },
+	spells = { "warlic", "arcane", "wizard" },
+	wizard = { "warlic", "arcane", "wizard" },
+}
+
+local function hubNpcs(): { Instance }
+	local ignore = workspace:FindFirstChild("IgnoreInstances")
+	local folder = ignore and ignore:FindFirstChild("NPCs")
+	return if folder then folder:GetChildren() else {}
+end
+
+-- The hub NPC `query` names (part of its name, or a GUIDE_ALIASES word).
+local function matchNpc(query: string): Instance?
+	local npcs = hubNpcs()
+	for _, npc in npcs do
+		if string.find(string.lower(npc.Name), query, 1, true) then
+			return npc
+		end
+	end
+	local keywords: { string } = GUIDE_ALIASES[query] or {}
+	for _, keyword in keywords do
+		for _, npc in npcs do
+			if string.find(string.lower(npc.Name), keyword, 1, true) then
+				return npc
+			end
+		end
+	end
+	return nil
+end
 
 -- A rarity named by its start ("/gear epic", "/gear leg"), among the
 -- five that gear rolls.
@@ -404,6 +454,35 @@ COMMANDS = {
 		handler = function(player: Player, _args: { string }): string?
 			player:SetAttribute(Attributes.PreviewLoadingScreen, os.clock())
 			return "Showing the loading screen."
+		end,
+	},
+	guide = {
+		usage = "/guide [npc | off]",
+		description = "Draws a path from you to a hub NPC (no name lists them).",
+		handler = function(player: Player, args: { string }): string?
+			local query = table.concat(args, " ")
+			if query == "" then
+				local names = {}
+				for _, npc in hubNpcs() do
+					table.insert(names, npc.Name)
+				end
+				table.sort(names)
+				if #names == 0 then
+					return "No hub NPCs here."
+				end
+				return "Guide to: " .. table.concat(names, ", ") .. " (or /guide off)"
+			end
+			if query == "off" or query == "clear" or query == "stop" then
+				player:SetAttribute(Attributes.GuideTarget, "")
+				return "Guide off."
+			end
+			local npc = matchNpc(query)
+			if not npc then
+				return ("No NPC matches %q. /guide lists them."):format(query)
+			end
+			-- The stamp makes the same NPC twice a change, so it redraws.
+			player:SetAttribute(Attributes.GuideTarget, npc.Name .. "|" .. tostring(os.clock()))
+			return "Guiding you to " .. npc.Name .. "."
 		end,
 	},
 	gold = {

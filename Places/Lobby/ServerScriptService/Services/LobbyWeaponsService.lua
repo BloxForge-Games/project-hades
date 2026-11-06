@@ -2,9 +2,10 @@
 --[[
 	Module: LobbyWeaponsService.lua
 	Description:
-	Switches RANGED weapons off in the hub. Every character that spawns here
-	gets Attributes.RangedWeaponsDisabled = true: the core ProjectileWeapon
-	refuses to start a shot loop while it is set. Melee is LEFT ALONE
+	Switches GUNS off in the hub. Every character that spawns here gets
+	Attributes.RangedWeaponsDisabled = true: the core ProjectileWeapon
+	refuses to start a shot loop while it is set -- except for a bow, which
+	is exempt and fires here (2026-11-05). Melee is LEFT ALONE
 	(2026-10-24) -- swinging a sword in the hub is harmless and reads as
 	alive, where a bullet has nothing to hit and carries into the NPCs and
 	the queue.

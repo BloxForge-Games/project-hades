@@ -50,6 +50,7 @@ local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data
 local TradeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.TradeData)
 local PartyNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Party)
 local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
+local AnalyticsService = require(ServerScriptService.Submodules.Core.Source.Services.AnalyticsService)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
 local MatchmakingData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MatchmakingData)
@@ -273,6 +274,7 @@ function MatchmakingService.StartQueue(
 	self._tickets[ticket.id] = ticket
 	for _, member in players do
 		self._ticketOf[member] = ticket
+		AnalyticsService:Queued(member)
 	end
 
 	-- Already a full squad: no one else to wait for.

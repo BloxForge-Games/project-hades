@@ -265,7 +265,12 @@ function RunEscrowService.LoseCoins(self: typeof(RunEscrowService), player: Play
 		local banked = CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) or 0
 		fromBank = math.min(banked, remaining)
 		if fromBank > 0 then
-			CurrencyService:SetCurrencyValue(player, CurrencyTypes.Gold, banked - fromBank)
+			CurrencyService:SetCurrencyValue(
+				player,
+				CurrencyTypes.Gold,
+				banked - fromBank,
+				{ transaction = "Gameplay", sku = "LostToEnemy" }
+			)
 		end
 	end
 	return fromRun + fromBank
@@ -330,14 +335,16 @@ function RunEscrowService.BankCurrencies(self: typeof(RunEscrowService), player:
 		CurrencyService:SetCurrencyValue(
 			player,
 			CurrencyTypes.Gold,
-			CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) + coins
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) + coins,
+			{ transaction = "Gameplay", sku = "RunLoot" }
 		)
 	end
 	if crystals > 0 then
 		CurrencyService:SetCurrencyValue(
 			player,
 			CurrencyTypes.ArcaneCrystals,
-			CurrencyService:GetCurrencyValue(player, CurrencyTypes.ArcaneCrystals) + crystals
+			CurrencyService:GetCurrencyValue(player, CurrencyTypes.ArcaneCrystals) + crystals,
+			{ transaction = "Gameplay", sku = "RunLoot" }
 		)
 	end
 	entry.arcaneCrystals = 0
