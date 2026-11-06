@@ -46,7 +46,6 @@ local Planner = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dunge
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
-local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 -- A placed room (see _makeRoom). Everything stamped on it later --
 -- branch, combatSegmentIndex, exitPortal, buildings -- is optional here.
@@ -554,11 +553,11 @@ end
 --[ Initializers ]--
 
 function DungeonService.Start(self: typeof(DungeonService))
-	-- The party's shared camera angle (2026-10-23): one isometric corner
-	-- per server, replicated as a workspace attribute, which every client's
-	-- IsometricCameraController reads when it builds its camera. Rolled
-	-- here, before any player can load, so nobody ever sees it change.
-	workspace:SetAttribute(Attributes.CameraCorner, Random.new():NextInteger(0, 3))
+	-- No random camera corner (2026-11-04; one of four per server before):
+	-- every dungeon starts at the same corner as the Lobby, so rooms are
+	-- built for one known first view (players may still rotate with Q / E).
+	-- Attributes.CameraCorner is left unset; IsometricCameraController
+	-- keeps its default corner without it.
 
 	Players.PlayerRemoving:Connect(function(player: Player)
 		self._playerRoomCursor[player] = nil

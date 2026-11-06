@@ -7,6 +7,8 @@
 	  IDLE   each NPC under workspace.IgnoreInstances.NPCs plays the
 	         PLAYERS' idle on loop (the player Animate script's "idle"),
 	         not the stock one its own Animate script carries.
+	  GLOW   within HIGHLIGHT_STUDS the NPC gets a soft warm outline and
+	         a faint glow (a client-side Highlight), faded in and out.
 	  LOOK   while the local player is within LOOK_STUDS, the NPC turns
 	         toward them, eased: the torso a little (TORSO_SHARE), the head
 	         the rest. It turns at most LOOK_MAX_YAW either
@@ -28,6 +30,7 @@
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 --[ Constants ]--
 
@@ -56,6 +59,16 @@ local TORSO_SHARE = 0.3
 -- the body swings round slowly while the head keeps up (2026-11-03).
 local TORSO_EASE = 2
 
+-- A soft highlight while the player is near (2026-11-03): within
+-- HIGHLIGHT_STUDS (a little past the talk prompt's 8) a warm outline and
+-- a faint glow fade in, and fade out on the way off.
+local HIGHLIGHT_STUDS = 12
+local HIGHLIGHT_OUTLINE_COLOR = Color3.fromRGB(255, 226, 150)
+local HIGHLIGHT_FILL_COLOR = Color3.fromRGB(255, 240, 200)
+local HIGHLIGHT_OUTLINE_TRANSPARENCY = 0.35
+local HIGHLIGHT_FILL_TRANSPARENCY = 0.88
+local HIGHLIGHT_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
 --[ Types ]--
 
 type NpcState = {
@@ -69,6 +82,8 @@ type NpcState = {
 	yaw: number,
 	pitch: number,
 	torsoYaw: number,
+	highlight: Highlight,
+	highlighted: boolean,
 }
 
 --[ Module ]--
@@ -143,6 +158,20 @@ local function playIdle(humanoid: Humanoid)
 	end
 end
 
+-- The NPC's highlight, hidden until the player comes near (client only).
+local function makeHighlight(model: Model): Highlight
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "NearHighlight"
+	highlight.Adornee = model
+	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	highlight.OutlineColor = HIGHLIGHT_OUTLINE_COLOR
+	highlight.FillColor = HIGHLIGHT_FILL_COLOR
+	highlight.OutlineTransparency = 1
+	highlight.FillTransparency = 1
+	highlight.Parent = model
+	return highlight
+end
+
 function LobbyNpcLifeController._addNpc(self: typeof(LobbyNpcLifeController), model: Model)
 	if self._npcs[model] then
 		return
@@ -175,12 +204,26 @@ function LobbyNpcLifeController._addNpc(self: typeof(LobbyNpcLifeController), mo
 		yaw = 0,
 		pitch = 0,
 		torsoYaw = 0,
+		highlight = makeHighlight(model),
+		highlighted = false,
 	}
 	model.AncestryChanged:Connect(function()
 		if not model:IsDescendantOf(workspace) then
 			self._npcs[model] = nil
 		end
 	end)
+end
+
+-- Fades the NPC's highlight in or out.
+local function setHighlighted(state: NpcState, on: boolean)
+	if state.highlighted == on then
+		return
+	end
+	state.highlighted = on
+	TweenService:Create(state.highlight, HIGHLIGHT_TWEEN, {
+		OutlineTransparency = if on then HIGHLIGHT_OUTLINE_TRANSPARENCY else 1,
+		FillTransparency = if on then HIGHLIGHT_FILL_TRANSPARENCY else 1,
+	}):Play()
 end
 
 -- The yaw and pitch the NPC turns toward `target` -- measured in the
@@ -216,6 +259,7 @@ function LobbyNpcLifeController._step(self: typeof(LobbyNpcLifeController), dt: 
 			self._npcs[model] = nil
 			continue
 		end
+		setHighlighted(state, target ~= nil and (target - state.root.Position).Magnitude <= HIGHLIGHT_STUDS)
 		local yaw, pitch = lookAngles(state, target)
 		state.yaw += (yaw - state.yaw) * blend
 		state.pitch += (pitch - state.pitch) * blend
