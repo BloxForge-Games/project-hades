@@ -31,6 +31,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local AnalyticsService = require(ServerScriptService.Submodules.Core.Source.Services.AnalyticsService)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local MasteryData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MasteryData)
 local dungeonProgress = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonProgress)
@@ -153,11 +154,13 @@ function DungeonProgressService._recordRun(
 		history = {}
 	end
 	local now = os.time()
+	local seconds = if self._runStartedAt then math.max(now - self._runStartedAt, 0) else nil
+	AnalyticsService:RunEnded(player, dungeonId, difficulty, cleared, seconds, if cleared then nil else cause)
 	table.insert(history, 1, {
 		DungeonId = dungeonId,
 		Difficulty = difficulty,
 		Cleared = cleared,
-		Seconds = if self._runStartedAt then math.max(now - self._runStartedAt, 0) else nil,
+		Seconds = seconds,
 		EndedAt = now,
 		Cause = if cleared then nil else cause,
 	})

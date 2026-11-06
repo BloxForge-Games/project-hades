@@ -4,6 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local InputPlatformController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.InputPlatformController)
+local ClientSettingsController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ClientSettingsController)
 local CharacterHighlightController = require(ReplicatedStorage.Controllers.CharacterHighlightController)
 -- Blink client module for the Combat domain (bfg-core/Network/Combat.blink):
 -- the typed replacement for DamageIndicatorService's old remote signals.
@@ -391,6 +392,16 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			if not isMelee and not isHeal then
 				ReplicatedStorage.GameAssets.Sounds.BulletHit:Play()
 			end
+		end
+
+		-- Damage numbers off (the Settings window, 2026-11-06): no number.
+		-- The hit flash and the hit sounds above still play, and a crit
+		-- keeps its sound.
+		if ClientSettingsController:Get("DamageNumbers") == false then
+			if critical then
+				ReplicatedStorage.GameAssets.Sounds.CriticalHit:Play()
+			end
+			return
 		end
 
 		-- The live-number cap (see MAX_LIVE_INDICATORS). Status ticks never

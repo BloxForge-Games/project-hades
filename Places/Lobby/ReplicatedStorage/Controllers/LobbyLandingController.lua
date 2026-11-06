@@ -45,6 +45,7 @@ local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 
 --[ Constants ]--
 
@@ -87,6 +88,14 @@ local LobbyLandingController = {
 LobbyLandingController._playerControls = nil :: any
 -- True once the loading screen has been dismissed (server cue or fallback).
 LobbyLandingController._revealed = false
+-- Fires once, as the loading screen starts to fade out (the town theme
+-- fades in on it, LobbyMusicController, 2026-11-06).
+LobbyLandingController.OnRevealed = Signal.new()
+
+-- Whether the loading screen has been dismissed yet.
+function LobbyLandingController.IsRevealed(self: typeof(LobbyLandingController)): boolean
+	return self._revealed
+end
 
 --[ Private Functions ]--
 
@@ -189,6 +198,7 @@ function LobbyLandingController._reveal(self: typeof(LobbyLandingController))
 		return
 	end
 	self._revealed = true
+	self.OnRevealed:Fire()
 
 	PreloadInterface:ToggleInterface(false)
 	task.delay(PreloadInterface.FADE_OUT_SECONDS, function()

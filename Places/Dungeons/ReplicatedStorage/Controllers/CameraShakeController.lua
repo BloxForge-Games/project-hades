@@ -32,6 +32,10 @@
 	  dependence, so PC and mobile read the same. Phases are randomized per
 	  shake so repeats don't look stamped.
 
+	Off entirely while the Settings window's Camera Shake is off
+	(ClientSettingsController, 2026-11-06): Shake drops every request, and
+	turning it off mid-shake stops the shake at once.
+
 	A Blitz module with no dependencies.
 ]]
 
@@ -42,6 +46,7 @@ local RunService = game:GetService("RunService")
 
 --[ Imports ]--
 
+local ClientSettingsController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ClientSettingsController)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local CameraShakeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CameraShakeData)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
@@ -98,6 +103,9 @@ end
 -- Rank-gated: ignored while a HIGHER-rank shake is still playing;
 -- equal-or-higher rank replaces the active shake and restarts.
 function CameraShakeController.Shake(self: typeof(CameraShakeController), preset: string)
+	if ClientSettingsController:Get("CameraShake") == false then
+		return
+	end
 	local config: ShakeConfig? = CameraShakeData[preset]
 	if not config then
 		warn(("[CameraShakeController] Unknown shake preset %q"):format(tostring(preset)))
@@ -144,7 +152,7 @@ function CameraShakeController._update(self: typeof(CameraShakeController))
 	local now = GameClock.Now()
 	local config = active.config
 	local elapsed = now - active.startClock
-	if now >= active.endClock then
+	if now >= active.endClock or ClientSettingsController:Get("CameraShake") == false then
 		self._active = nil
 		return
 	end
