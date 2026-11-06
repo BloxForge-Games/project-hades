@@ -89,6 +89,7 @@ type TreeModule = {
 	onCrit: ((player: Player, model: Model, isMelee: boolean, dealt: number, isRanged: boolean) -> ())?,
 	onRangedHit: ((player: Player, model: Model, dealt: number, wasCrit: boolean) -> ())?,
 	onRangedFire: ((player: Player, origin: Vector3, direction: Vector3, weaponName: string) -> ())?,
+	shotTint: ((player: Player) -> string?)?,
 	onWeaponStowed: ((player: Player, lane: RelicTriggerData.Lane) -> ())?,
 	onAttackHit: ((player: Player, model: Model, isMagic: boolean) -> ())?,
 	onHeartbeat: ((now: number) -> ())?,
@@ -214,6 +215,21 @@ function RelicGimmickService.OnRangedFire(
 			tree.onRangedFire(player, origin, direction, weaponName)
 		end
 	end
+end
+
+-- The colour (a name, e.g. "Poison") of the shot OnRangedFire just
+-- counted, from the first tree that has one; nil for a plain shot.
+-- ProjectileCastService sends it with the shot (2026-11-05).
+function RelicGimmickService.ShotTint(self: typeof(RelicGimmickService), player: Player): string?
+	for _, tree in self._trees do
+		if tree.shotTint then
+			local tint = tree.shotTint(player)
+			if tint then
+				return tint
+			end
+		end
+	end
+	return nil
 end
 
 -- `lane`'s every-Nth counts start over and its glow goes (a respawn).

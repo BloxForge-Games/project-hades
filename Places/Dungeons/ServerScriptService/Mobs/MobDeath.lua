@@ -138,10 +138,10 @@ type BombSpec = {
 	onHit: (player: Player, model: Model, targetCFrame: CFrame) -> (),
 }
 
--- Trick Or Trap: 1-3 pumpkins. Only a MELEE takedown drops them
--- (2026-11-05; any takedown before): the killer or an assister whose LAST
--- weapon hit on the mob was a melee hit, inside the assist window
--- (DamageService.LastHitWasMelee). The
+-- Trick Or Trap: 1-3 pumpkins. A WEAPON takedown drops them (2026-11-05;
+-- melee only that morning, any takedown before): the killer or an assister
+-- whose LAST hit on the mob was a weapon hit, melee or ranged, not a
+-- spell, inside the assist window (DamageService.LastHitWasWeapon). The
 -- Burning-target requirement came off in the 2026-08 pass when the relic
 -- became NC: gating an opener behind a Burn the player might have no way
 -- to apply made it dead on pickup. The pumpkins apply Burn themselves
@@ -657,7 +657,7 @@ function MobDeath.RunTakedownRewards(context: Context, killer: Player?)
 		if not player or not player:IsA("Player") then
 			continue
 		end
-		if DamageService and DamageService:LastHitWasMelee(context.model, player.Name, ASSIST_WINDOW_SECONDS) then
+		if DamageService and DamageService:LastHitWasWeapon(context.model, player.Name, ASSIST_WINDOW_SECONDS) then
 			lobBombs(context, player, TRICK_OR_TRAP_BOMBS)
 		end
 		lobBombs(context, player, FUSE_BOMBS)

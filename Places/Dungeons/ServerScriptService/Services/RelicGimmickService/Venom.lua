@@ -57,6 +57,9 @@ local lastTickRoll: { [Player]: { [Model]: number } } = {}
 -- shot lapses.
 local eyeShots: { [Player]: number } = {}
 local eyePrimedUntil: { [Player]: number } = {}
+-- True when the shot onRangedFire just counted is the Eye's poison shot
+-- (2026-11-05): ShotTint reads it right after, for the shot's colour.
+local eyeShotIsPoison: { [Player]: boolean } = {}
 
 local function lobBubble(player: Player, fromModel: Model)
 	local fromRoot = getRoot(fromModel)
@@ -97,6 +100,7 @@ end
 -- Every gun shot, the moment it is fired: Evil Eye's count. The Nth is
 -- primed.
 function Venom.onRangedFire(player: Player, _origin: Vector3, _direction: Vector3, _weaponName: string)
+	eyeShotIsPoison[player] = nil
 	if not helpers.owns(player, EVIL_EYE) then
 		eyeShots[player] = nil
 		relicTriggers.set(player, EVIL_EYE, false)
@@ -107,9 +111,17 @@ function Venom.onRangedFire(player: Player, _origin: Vector3, _direction: Vector
 	if count >= needed then
 		count = 0
 		eyePrimedUntil[player] = GameClock.Now() + PRIME_SECONDS
+		eyeShotIsPoison[player] = true
 	end
 	eyeShots[player] = count
 	relicTriggers.set(player, EVIL_EYE, count == needed - 1)
+end
+
+-- The colour of the shot onRangedFire just counted: "Poison" for the Eye's
+-- (ProjectileCastService sends it with the shot, so every client paints
+-- exactly that arrow green), nil otherwise.
+function Venom.shotTint(player: Player): string?
+	return if eyeShotIsPoison[player] then "Poison" else nil
 end
 
 -- A gun shot landed: a primed one deals its bonus and Poisons.
@@ -138,6 +150,7 @@ function Venom.onWeaponStowed(player: Player, lane: string)
 	if lane == "Ranged" then
 		eyeShots[player] = nil
 		eyePrimedUntil[player] = nil
+		eyeShotIsPoison[player] = nil
 	end
 end
 
@@ -186,6 +199,7 @@ function Venom.onPlayerRemoved(player: Player)
 	lastTickRoll[player] = nil
 	eyeShots[player] = nil
 	eyePrimedUntil[player] = nil
+	eyeShotIsPoison[player] = nil
 end
 
 return Venom

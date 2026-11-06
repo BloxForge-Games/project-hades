@@ -16,6 +16,12 @@
 	                  into takes shotShare of the gun's damage on the
 	                  universal relic lane (variance, Shock, Blight, Abyss;
 	                  no weapon lines, no crit). A wall stops it for nothing.
+	  Magenta Paintball Gun
+	                  PAINTBALL (2026-11-05; a splash, a Paint status
+	                  before): at `chance` per gun shot, a PaintballShot
+	                  follows the shot on its own arc (relicShots follow);
+	                  the first mob it flies into takes shotShare of the
+	                  gun's damage as Arcane Damage.
 	The numbers are the relic's RelicData `data`.
 ]]
 
@@ -32,10 +38,13 @@ local relicTriggers = require(script.Parent.Lib.relicTriggers)
 local relicShots = require(script.Parent.Lib.relicShots)
 
 local MIDNIGHT = RelicNames["Midnight Sword"]
+local PAINTBALL = RelicNames["Magenta Paintball Gun"]
 local VOLLEYBALL = RelicNames["Volleyball"]
 
 -- The ball's studs a game second.
 local VOLLEYBALL_SPEED = 70
+-- A Paintball's speed when its weapon has no arc of its own to follow.
+local PAINTBALL_SPEED = 90
 
 local Neutral = {}
 
@@ -94,9 +103,31 @@ local function volleyballHit(player: Player, target: Model?, weaponName: string)
 	helpers.damageService():TakeDamage(player, humanoid, spikeDamage, false, false, false, true)
 end
 
--- Every gun shot, the moment it is fired: the Volleyball's count. The
--- Nth fires the ball with it.
+-- A Paintball landed on `target` (nil: a wall, or the end of its range):
+-- shotShare of the gun's damage as Arcane Damage.
+local function paintballHit(player: Player, target: Model?, weaponName: string)
+	local humanoid = target and target:FindFirstChildOfClass("Humanoid")
+	if not target or not humanoid or humanoid.Health <= 0 or target:GetAttribute(Attributes.Invulnerable) == true then
+		return
+	end
+	local damage = math.max(math.round(gunDamage(player, weaponName) * helpers.data(PAINTBALL, "shotShare", 1)), 1)
+	helpers.takeDamage(player, humanoid, damage, true, false, false)
+end
+
+-- Magenta Paintball Gun: a chance per shot for a Paintball to follow it.
+local function rollPaintball(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
+	if not helpers.owns(player, PAINTBALL) or math.random() > helpers.data(PAINTBALL, "chance", 0.35) then
+		return
+	end
+	relicShots.fire(player, "PaintballShot", origin, direction, weaponName, PAINTBALL_SPEED, function(_, target)
+		paintballHit(player, target, weaponName)
+	end, true)
+end
+
+-- Every gun shot, the moment it is fired: the Paintball's roll, and the
+-- Volleyball's count (the Nth fires the ball with it).
 function Neutral.onRangedFire(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
+	rollPaintball(player, origin, direction, weaponName)
 	if not helpers.owns(player, VOLLEYBALL) then
 		volleyballShots[player] = nil
 		relicTriggers.set(player, VOLLEYBALL, false)

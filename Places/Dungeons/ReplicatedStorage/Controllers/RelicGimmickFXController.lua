@@ -1323,6 +1323,9 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	IceArrowShot = function(payload)
 		RelicShotVFXController:Launch(payload)
 	end,
+	PaintballShot = function(payload)
+		RelicShotVFXController:Launch(payload)
+	end,
 	VolleyballShot = function(payload)
 		RelicShotVFXController:Launch(payload)
 	end,
