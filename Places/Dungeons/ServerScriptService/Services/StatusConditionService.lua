@@ -77,6 +77,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
@@ -853,32 +854,23 @@ local RELIC_HIT_STATUSES: {
 	}
 } =
 	{
-		-- Skeletal Scythe: Venom's opener, 30% of RANGED weapon hits
-		-- (2026-11-05; melee hits since 2026-11-01 before) Poison, which
-		-- its own redirect turns into Death Venom. So the Scythe works
-		-- alone (NC) and Zombie Bomb is the tree's one C relic. rangedOnly:
-		-- the chance is not scaled by the gun coefficient again.
+		-- Skeletal Scythe: Venom's opener, 30% of WEAPON hits, melee or
+		-- ranged (2026-11-05; ranged only that morning, melee before) Poison,
+		-- which its own redirect turns into Death Venom. So the Scythe works
+		-- alone (NC) and Zombie Bomb is the tree's one C relic. An arrow rolls
+		-- at its proc coefficient (the bow's is 1).
 		{
 			relicName = RelicNames["Skeletal Scythe"],
 			status = StatusConditions.Poison,
 			chance = 0.30,
 			weaponOnly = true,
-			rangedOnly = true,
 		},
 		-- The four tree openers left on 2026-11-01: statuses open from the
 		-- weapon ENCHANTMENTS (EnchantmentData openerStatus / openerChance,
 		-- read in ApplyWeaponOnHitStatuses) and from each tree's own relics
 		-- (a wave, an arrow, a cloud, a strike, a shard).
-		-- Magenta Paintball Gun: 30% of ranged weapon hits Paint (15% until
-		-- 2026-11-05; the callback is its damage multiplier, so the chance
-		-- lives here).
-		{
-			relicName = RelicNames["Magenta Paintball Gun"],
-			status = StatusConditions.Paint,
-			chance = 0.30,
-			weaponOnly = true,
-			rangedOnly = true,
-		},
+		-- (Magenta Paintball Gun's Paint row left 2026-11-05: the relic is a
+		-- splash now, RelicGimmickService/Neutral.)
 	}
 
 -- Status Chance: percentage points added to EVERY status the player
@@ -984,6 +976,36 @@ function StatusConditionService:_sumApplierChances(
 	return chanceByStatus
 end
 
+-- An enchantment's opener chance grows with its tree (2026-11-05): +10%
+-- per relic owned from it, up to 50% (the enchantments' tooltips).
+local ENCHANT_TREE_RELIC_BONUS = 0.10
+local ENCHANT_MAX_OPENER_CHANCE = 0.50
+
+-- How many relics `player` owns from the element tree whose status is
+-- `status` (an enchantment's opener: Burn -> Blaze, Chill -> Frost, ...).
+local TREE_OF_STATUS: { [string]: string } = {
+	[StatusConditions.Burn] = ElementTrees.Blaze,
+	[StatusConditions.Chill] = ElementTrees.Frost,
+	[StatusConditions.Shock] = ElementTrees.Storm,
+	[StatusConditions.Poison] = ElementTrees.Venom,
+	[StatusConditions.Fractured] = ElementTrees.Earth,
+}
+function StatusConditionService:_ownedTreeRelics(player: Player, status: string): number
+	local tree = TREE_OF_STATUS[status]
+	if not tree or not RelicService then
+		return 0
+	end
+	local count = 0
+	for relicName, row in RelicData do
+		if type(row) == "table" and row.tree == tree and not row.retired then
+			if (RelicService:GetSpecificRelicRegistry(player, relicName) or 0) > 0 then
+				count += 1
+			end
+		end
+	end
+	return count
+end
+
 -- Weapon-hit status entry point — the ONE call both weapon damage paths
 -- make after landing a hit on a mob.
 function StatusConditionService:ApplyWeaponOnHitStatuses(
@@ -1010,7 +1032,13 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 	local enchantment = WeaponLoadoutService:GetEnchantmentForHit(sourcePlayer, not isRanged)
 	local row = if enchantment then EnchantmentData[enchantment] else nil
 	if row then
-		local chance = (row.openerChance + self:_getStatusChanceBonus(sourcePlayer)) * procCoefficient
+		-- Committing to the status's tree raises it (2026-11-05): +10% per
+		-- relic owned from that tree, up to 50%.
+		local opener = math.min(
+			row.openerChance + ENCHANT_TREE_RELIC_BONUS * self:_ownedTreeRelics(sourcePlayer, row.openerStatus),
+			ENCHANT_MAX_OPENER_CHANCE
+		)
+		local chance = (opener + self:_getStatusChanceBonus(sourcePlayer)) * procCoefficient
 		chanceByStatus[row.openerStatus] = (chanceByStatus[row.openerStatus] or 0) + chance
 	end
 

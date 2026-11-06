@@ -45,8 +45,9 @@ local DEFAULT_RANGE = 75
 local SHOT_RADIUS = 0.75
 -- The ids wrap well inside the payload's f32.
 local MAX_ID = 1000000
--- A following shot leaves this long after the weapon's own.
-local FOLLOW_DELAY_SECONDS = 0.1
+-- A following shot leaves this long after the weapon's own (0.1 -> 0.15,
+-- 2026-11-05: room for the shooter's second draw, the double shot).
+local FOLLOW_DELAY_SECONDS = 0.15
 
 local relicShots = {}
 
