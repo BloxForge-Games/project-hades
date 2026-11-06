@@ -377,9 +377,11 @@ function Frost.onRangedFire(player: Player, origin: Vector3, direction: Vector3,
 	local count = (crossbowHits[player] or 0) + 1
 	if count >= needed then
 		count = 0
+		-- Off a bow it trails the arrow on the bow's own arc (relicShots
+		-- follow, 2026-11-05).
 		relicShots.fire(player, "IceArrowShot", origin, direction, weaponName, ARROW_SPEED, function(_, target)
 			iceArrowHit(player, target)
-		end)
+		end, true)
 	end
 	crossbowHits[player] = count
 	relicTriggers.set(player, CROSSBOW, count == needed - 1)

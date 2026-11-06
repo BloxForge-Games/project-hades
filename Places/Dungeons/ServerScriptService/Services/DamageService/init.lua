@@ -940,12 +940,13 @@ function DamageService._postDamage(
 	-- has data.strikeChance (arcaneStrikeChance on a spell) to call a strike
 	-- (data.cooldown paces it). 2026-11-01: a Critical Strike ALWAYS calls
 	-- one when data.critAlways is set, the same cooldown pacing it.
-	-- Per source (2026-11-05): a melee weapon hit, a spell, else (a bullet,
-	-- relic damage) the base strikeChance.
+	-- Per source (2026-11-05): a melee weapon hit, a spell, a ranged weapon
+	-- hit (rangedStrikeChance), else (relic damage) the base strikeChance.
 	local hornField = if isRelicSourced
 		then "strikeChance"
 		elseif isMagic == true then "arcaneStrikeChance"
 		elseif isMelee == true and not isGunShot then "meleeStrikeChance"
+		elseif isGunShot then "rangedStrikeChance"
 		else "strikeChance"
 	local hornChance = relicData(RelicNames["Lightning Horn of the Heavens"], hornField, 0.2)
 	local hornRow: any = RelicData[RelicNames["Lightning Horn of the Heavens"]]

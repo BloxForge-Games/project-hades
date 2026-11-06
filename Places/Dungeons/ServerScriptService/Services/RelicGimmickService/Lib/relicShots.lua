@@ -21,6 +21,13 @@
 	                  it can fly. Every client flies the same arc
 	                  (RelicTriggerData.Shot.Gravity).
 	  RelicShotEnd    where it landed (From), so the client stops it there.
+
+	FOLLOW (2026-11-05, the Ice Arrow off a bow): a shot fired with
+	`follow` from a weapon with ballisticAim flies the weapon's OWN path
+	instead -- the shot's exact direction, the weapon's velocity and drop,
+	no lift -- FOLLOW_DELAY_SECONDS after it, so it trails the arrow on
+	the same arc. Every client draws it with the weapon's drop too
+	(RelicShotVFXController, from the caster's drawn weapon).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -28,6 +35,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ProjectileCastService = require(ReplicatedStorage.Submodules.Core.Libraries.ProjectileCast.ProjectileCastService)
 local WeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WeaponData)
 local RelicTriggerData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicTriggerData)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local helpers = require(script.Parent.gimmickHelpers)
 
 -- A gun with no maxRange flies this far (the bullet library's default).
@@ -37,6 +45,8 @@ local DEFAULT_RANGE = 75
 local SHOT_RADIUS = 0.75
 -- The ids wrap well inside the payload's f32.
 local MAX_ID = 1000000
+-- A following shot leaves this long after the weapon's own.
+local FOLLOW_DELAY_SECONDS = 0.1
 
 local relicShots = {}
 
@@ -49,34 +59,57 @@ function relicShots.fire(
 	direction: Vector3,
 	weaponName: string,
 	speed: number,
-	onHit: (position: Vector3, target: Model?) -> ()
+	onHit: (position: Vector3, target: Model?) -> (),
+	follow: boolean?
 )
 	nextId = nextId % MAX_ID + 1
 	local id = nextId
 	local weapon = WeaponData[weaponName]
-	local range = (weapon and weapon.maxRange) or DEFAULT_RANGE
-	-- The aim lifted LiftDegrees toward straight up (a level aim leaves at
-	-- exactly that angle).
-	local lift = math.tan(math.rad(RelicTriggerData.Shot.LiftDegrees))
-	local velocity = (direction.Unit + Vector3.new(0, lift, 0)).Unit * speed
-	local gravity = RelicTriggerData.Shot.Gravity
+	local range = ((weapon and weapon.maxRange) or DEFAULT_RANGE) + ((weapon and weapon.rangeSlack) or 0)
+	local velocity: Vector3
+	local gravity: number
+	local delaySeconds = 0
+	local followed = follow == true and weapon ~= nil and weapon.ballisticAim == true
+	if followed then
+		-- The weapon's own flight, a beat behind it.
+		speed = tonumber(weapon.velocity) or speed
+		velocity = direction.Unit * speed
+		gravity = tonumber(weapon.drop) or RelicTriggerData.Shot.Gravity
+		delaySeconds = FOLLOW_DELAY_SECONDS
+	else
+		-- The aim lifted LiftDegrees toward straight up (a level aim leaves
+		-- at exactly that angle).
+		local lift = math.tan(math.rad(RelicTriggerData.Shot.LiftDegrees))
+		velocity = (direction.Unit + Vector3.new(0, lift, 0)).Unit * speed
+		gravity = RelicTriggerData.Shot.Gravity
+	end
 	local maxSeconds = range / speed + 0.5
-	helpers.fx(kind, origin, origin + velocity, id, maxSeconds, player)
-	ProjectileCastService:LaunchRelicShot(
-		player,
-		origin,
-		velocity,
-		gravity,
-		range,
-		SHOT_RADIUS,
-		function(position: Vector3, target: Model?)
-			helpers.fx("RelicShotEnd", position, position, id, 0, player)
-			if player.Parent then
-				helpers.hitBreakables(player, position, helpers.POINT_BREAK_RADIUS)
-				onHit(position, target)
-			end
+	local function launch()
+		if not player.Parent then
+			return
 		end
-	)
+		helpers.fx(kind, origin, origin + velocity, id, maxSeconds, player)
+		ProjectileCastService:LaunchRelicShot(
+			player,
+			origin,
+			velocity,
+			gravity,
+			range,
+			SHOT_RADIUS,
+			function(position: Vector3, target: Model?)
+				helpers.fx("RelicShotEnd", position, position, id, 0, player)
+				if player.Parent then
+					helpers.hitBreakables(player, position, helpers.POINT_BREAK_RADIUS)
+					onHit(position, target)
+				end
+			end
+		)
+	end
+	if delaySeconds > 0 then
+		GameClock.Delay(delaySeconds, launch)
+	else
+		launch()
+	end
 end
 
 return relicShots

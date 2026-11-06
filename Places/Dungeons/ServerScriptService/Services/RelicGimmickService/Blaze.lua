@@ -20,8 +20,8 @@
 	                        enemies on it (a per-level relic burst).
 
 	  Flaming Bo Staff      THE Nth SWING (2026-11-01, the tree's enabler):
-	                        every Nth melee swing (N by weapon type:
-	                        Daggers 5, Sword 4, Greatsword 3) is a
+	                        every 4th melee swing, a miss included (on
+	                        every weapon since 2026-11-05) is a
 	                        guaranteed Critical Strike and Burns. The crit
 	                        is DamageService's one-shot forced crit, armed
 	                        on the swing before (see countBoStaffSwing).
@@ -110,32 +110,32 @@ local function launchFlameWave(player: Player, origin: Vector3, look: Vector3, s
 	end)
 end
 
---[ Flaming Bo Staff: the Nth hit ]--
+--[ Flaming Bo Staff: the Nth swing ]--
 
--- Counts one melee swing THAT LANDED (2026-11-04: a whiff no longer
--- counts; every swing from 2026-11-01, hits per mob before, which wound
--- the rhythm several steps in a crowd). The crit has to be decided
--- BEFORE a hit's damage is rolled, and the swing hook runs after the
--- swing's hitbox resolves, so the swing before the Nth arms
--- DamageService's one-shot Melee forced crit: the next weapon hit (the
--- Nth swing's first) spends it -- its crit rolls at 100 and the arm's
--- onHit Burns the target as it lands -- and the Nth swing's hook then
--- sees the count reach N and starts over. A whiffed Nth swing leaves the
--- arm up for the next hit. The gimmicks' own melee-typed hits (Flame
--- Wave, Inferno Cleave) run under WithRelicKnockback and never spend it.
+-- Counts EVERY melee swing, a whiff included (2026-11-05, like Dragon's
+-- Flame Sword and the Gloves; only swings that landed 2026-11-04, hits per
+-- mob before 2026-11-01). The crit has to be decided BEFORE a hit's damage
+-- is rolled, and the swing hook runs after the swing's hitbox resolves, so
+-- the swing before the Nth arms DamageService's one-shot Melee forced
+-- crit: the Nth swing's first hit spends it -- its crit rolls at 100 and
+-- the arm's onHit Burns the target as it lands -- and the Nth swing's hook
+-- then sees the count reach N and starts over. A whiffed Nth swing takes
+-- the arm back, so the crit is that swing's or nobody's. The gimmicks' own
+-- melee-typed hits (Flame Wave, Inferno Cleave) run under
+-- WithRelicKnockback and never spend it.
 local function countBoStaffSwing(player: Player, connected: boolean, weaponType: string?)
 	if not helpers.owns(player, BO_STAFF) then
 		boStaffHits[player] = nil
 		relicTriggers.set(player, BO_STAFF, false)
 		return
 	end
-	if not connected then
-		return
-	end
 	local needed = helpers.swingsFor(BO_STAFF, weaponType)
 	local count = (boStaffHits[player] or 0) + 1
 	if count >= needed then
 		count = 0
+		if not connected then
+			helpers.damageService():ClearForcedCrit(player, "Melee")
+		end
 	elseif count == needed - 1 then
 		helpers.damageService():ForceNextCrit(player, "Melee", nil, function(target: Model)
 			helpers.statusService():ApplyStatus(player, target, StatusConditions.Burn, true)

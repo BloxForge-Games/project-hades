@@ -71,6 +71,7 @@
 --[ Roblox Services ]--
 
 local GroupService = game:GetService("GroupService")
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -103,12 +104,11 @@ local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
-local getWeaponCategory = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.getWeaponCategory)
+local WeaponNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.WeaponNames)
 local rollWeaponEnchantment =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
-local InventoryService = require(ServerScriptService.Submodules.Core.Source.Services.InventoryService)
 
 -- RunFlowService's Studio-only difficulty pick; /difficulty writes it so a
 -- Studio restart replays the chosen tier.
@@ -648,51 +648,28 @@ COMMANDS = {
 	},
 
 	bow = {
-		usage = "/bow | /bow off",
-		description = "Gives you the prototype Travelers Bow and equips it in your ranged slot (in place of your gun). '/bow off' equips your gun back.",
-		handler = function(player: Player, args: { string }): string?
+		usage = "/bow",
+		description = "Adds a Travelers Bow to your inventory. Equip it from the inventory like any weapon.",
+		handler = function(player: Player, _args: { string }): string?
 			local profile = DataService:GetProfileData(player)
 			local weapons = profile and profile.Inventory and profile.Inventory[InventoryType.Weapon]
 			if not weapons then
 				return "No profile inventory."
 			end
-			if args[1] and string.lower(args[1]) == "off" then
-				for _, entry in weapons do
-					if entry.name ~= "Travelers Bow" and getWeaponCategory(entry.name) == "Gun" then
-						if InventoryService:EquipItem(player, entry.uuid) then
-							return ("Equipped %s back."):format(entry.name)
-						end
-					end
-				end
-				return "No gun in your inventory to equip back."
-			end
-			local bow
-			for _, entry in weapons do
-				if entry.name == "Travelers Bow" then
-					bow = entry
-					break
-				end
-			end
-			if not bow then
-				bow = {
-					uuid = "dev-travelers-bow",
-					name = "Travelers Bow",
-					enchantment = EnchantmentNames.None,
-					rarity = ItemRarity.Common,
-					level = 1,
-					upgrades = 0,
-					equipSlot = 0,
-					scalarMultiplier = 1,
-					bonusStats = {},
-					shiny = false,
-				}
-				table.insert(weapons, bow)
-				DataService:SetProfileValue(player, "Inventory", profile.Inventory)
-			end
-			if not InventoryService:EquipItem(player, bow.uuid) then
-				return "Could not equip the bow."
-			end
-			return "Travelers Bow equipped in your ranged slot. '/bow off' to swap back."
+			table.insert(weapons, {
+				uuid = HttpService:GenerateGUID(false),
+				name = WeaponNames["Travelers Bow"],
+				enchantment = EnchantmentNames.None,
+				rarity = ItemRarity.Common,
+				level = 1,
+				upgrades = 0,
+				equipSlot = 0,
+				scalarMultiplier = 1,
+				bonusStats = {},
+				shiny = false,
+			})
+			DataService:SetProfileValue(player, "Inventory", profile.Inventory)
+			return "Added a Travelers Bow to your inventory."
 		end,
 	},
 

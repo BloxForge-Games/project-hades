@@ -869,12 +869,13 @@ local RELIC_HIT_STATUSES: {
 		-- weapon ENCHANTMENTS (EnchantmentData openerStatus / openerChance,
 		-- read in ApplyWeaponOnHitStatuses) and from each tree's own relics
 		-- (a wave, an arrow, a cloud, a strike, a shard).
-		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (the
-		-- callback is its damage multiplier, so the chance lives here).
+		-- Magenta Paintball Gun: 30% of ranged weapon hits Paint (15% until
+		-- 2026-11-05; the callback is its damage multiplier, so the chance
+		-- lives here).
 		{
 			relicName = RelicNames["Magenta Paintball Gun"],
 			status = StatusConditions.Paint,
-			chance = 0.15,
+			chance = 0.30,
 			weaponOnly = true,
 			rangedOnly = true,
 		},

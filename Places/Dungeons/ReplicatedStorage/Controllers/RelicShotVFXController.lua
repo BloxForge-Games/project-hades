@@ -39,6 +39,8 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicModelTemplate)
 local RelicTriggerData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicTriggerData)
+local WeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WeaponData)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local relicProcColors = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.relicProcColors)
 
@@ -224,6 +226,21 @@ local function arcAt(origin: Vector3, velocity: Vector3, gravity: Vector3, t: nu
 	return origin + velocity * t + gravity * (0.5 * t * t), velocity + gravity * t
 end
 
+-- The gravity a shot flies under: an Ice Arrow from a caster holding a
+-- ballisticAim weapon follows that weapon's arc (its drop; relicShots
+-- follow, 2026-11-05); everything else the relic shots' own.
+local function gravityFor(payload: Payload): number
+	if payload.Kind == "IceArrowShot" and payload.Caster then
+		local character = payload.Caster.Character
+		local weaponName = character and character:GetAttribute(Attributes.EquippedWeapon)
+		local weapon = if type(weaponName) == "string" then WeaponData[weaponName] else nil
+		if weapon and weapon.ballisticAim == true and tonumber(weapon.drop) then
+			return tonumber(weapon.drop) :: number
+		end
+	end
+	return RelicTriggerData.Shot.Gravity
+end
+
 local function flat(vector: Vector3): Vector3
 	return Vector3.new(vector.X, 0, vector.Z)
 end
@@ -294,7 +311,7 @@ function RelicShotVFXController.Launch(_self: typeof(RelicShotVFXController), pa
 		place = place,
 		origin = origin,
 		velocity = velocity,
-		gravity = Vector3.new(0, -RelicTriggerData.Shot.Gravity, 0),
+		gravity = Vector3.new(0, -gravityFor(payload), 0),
 		heading = if flat(velocity).Magnitude > 1e-3 then flat(velocity).Unit else Vector3.zero,
 		direction = velocity.Unit,
 		startedAt = GameClock.Now(),
