@@ -9,6 +9,8 @@
 	RelicTriggerData.Shot.Gravity) -- no homing -- until the server says
 	where it landed:
 
+	  PaintballShot   Magenta Paintball Gun: the Ice Arrow's pieces in pink
+	                  (2026-11-05).
 	  IceArrowShot    Frozen Blue Ice Crossbow: the Ice Arrow prefab
 	                  (GameAssets.VFX.IceArrow: Release at the muzzle, the
 	                  Arrow in flight, Impact where it lands).
@@ -31,6 +33,7 @@
 	dependencies.
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -43,16 +46,60 @@ local WeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WeaponD
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local relicProcColors = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.relicProcColors)
+local resolveAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.resolveAnimation)
 
 local ICE_ARROW_FOLDER = "IceArrow"
 local ICE_RELEASE_VFX = ICE_ARROW_FOLDER .. "/Release"
 local ICE_IMPACT_VFX = ICE_ARROW_FOLDER .. "/Impact"
 local VOLLEYBALL_RELEASE_VFX = "Volleyball/Release"
 local VOLLEYBALL_IMPACT_VFX = "Volleyball/Impact"
+-- Magenta Paintball Gun's colour: the Ice Arrow's pieces, painted.
+local PAINTBALL_COLOR = Color3.fromRGB(255, 60, 200)
 local POTION_SIZE = 1.1
 local BALL_FADE_SECONDS = 0.25
 -- How long a landed shot stays for its trails and loose particles.
 local CLEANUP_SECONDS = 1
+-- The shooter's second draw for a relic shot that leaves after the
+-- weapon's own (the double shot, 2026-11-05): which of the weapon's attack
+-- animations, how fast, and its blend in.
+local DOUBLE_SHOT_ANIMATION_INDEX = 1
+local DOUBLE_SHOT_SPEED = 1.4
+local DOUBLE_SHOT_FADE_SECONDS = 0.08
+
+-- One loaded track per animation, per Animator.
+local doubleShotTracks: { [Animator]: { [string]: AnimationTrack } } = setmetatable({}, { __mode = "k" }) :: any
+
+-- The LOCAL player's double shot: one of their held ranged weapon's attack
+-- animations (shootAnimations, or its single shootAnimation) played again
+-- as the relic shot leaves. Played on the owner's client, it replicates to
+-- everyone like any character animation.
+local function playDoubleShot()
+	local character = Players.LocalPlayer.Character
+	local weaponName = character and character:GetAttribute(Attributes.EquippedWeapon)
+	local data: any = if type(weaponName) == "string" then WeaponData[weaponName] else nil
+	if not data then
+		return
+	end
+	local list = data.shootAnimations
+	local nameOrId = if type(list) == "table" and #list > 0
+		then list[math.min(DOUBLE_SHOT_ANIMATION_INDEX, #list)]
+		else data.shootAnimation
+	local animation = resolveAnimation(nameOrId)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	if not animation or not animator then
+		return
+	end
+	local tracks: { [string]: AnimationTrack } = doubleShotTracks[animator] or {}
+	doubleShotTracks[animator] = tracks
+	local track: AnimationTrack = tracks[animation.AnimationId] or animator:LoadAnimation(animation)
+	if not tracks[animation.AnimationId] then
+		track.Priority = Enum.AnimationPriority.Action2
+		tracks[animation.AnimationId] = track
+	end
+	track:Play(DOUBLE_SHOT_FADE_SECONDS)
+	GameClock.SetAnimationSpeed(track, DOUBLE_SHOT_SPEED)
+end
 
 type Payload = {
 	Kind: string,
@@ -183,8 +230,13 @@ local function finish(shot: Shot, position: Vector3)
 	local visual = shot.visual
 	local facing = CFrame.lookAt(position, position + shot.direction)
 	shot.place(facing)
-	if shot.kind == "IceArrowShot" and visual:IsA("BasePart") then
-		emitVFXPart(ICE_IMPACT_VFX, facing)
+	if (shot.kind == "IceArrowShot" or shot.kind == "PaintballShot") and visual:IsA("BasePart") then
+		emitVFXPart(
+			ICE_IMPACT_VFX,
+			facing,
+			nil,
+			if shot.kind == "PaintballShot" then { Color = PAINTBALL_COLOR } else nil
+		)
 		for _, descendant in visual:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") then
 				descendant.Enabled = false
@@ -230,7 +282,7 @@ end
 -- ballisticAim weapon follows that weapon's arc (its drop; relicShots
 -- follow, 2026-11-05); everything else the relic shots' own.
 local function gravityFor(payload: Payload): number
-	if payload.Kind == "IceArrowShot" and payload.Caster then
+	if (payload.Kind == "IceArrowShot" or payload.Kind == "PaintballShot") and payload.Caster then
 		local character = payload.Caster.Character
 		local weaponName = character and character:GetAttribute(Attributes.EquippedWeapon)
 		local weapon = if type(weaponName) == "string" then WeaponData[weaponName] else nil
@@ -256,10 +308,26 @@ function RelicShotVFXController.Launch(_self: typeof(RelicShotVFXController), pa
 
 	local visual: Instance? = nil
 	local place: ((CFrame) -> ())? = nil
-	if payload.Kind == "IceArrowShot" then
+	if payload.Kind == "IceArrowShot" or payload.Kind == "PaintballShot" then
+		local painted = payload.Kind == "PaintballShot"
+		-- The shooter's second draw for the Paintball only (the Ice Arrow
+		-- leaves without one, 2026-11-05).
+		if painted and payload.Caster == Players.LocalPlayer then
+			playDoubleShot()
+		end
 		local arrow = makeArrow()
 		if arrow then
-			emitVFXPart(ICE_RELEASE_VFX, facing)
+			emitVFXPart(ICE_RELEASE_VFX, facing, nil, if painted then { Color = PAINTBALL_COLOR } else nil)
+			if painted then
+				local paint = ColorSequence.new(PAINTBALL_COLOR)
+				for _, descendant in arrow:GetDescendants() do
+					if descendant:IsA("ParticleEmitter") or descendant:IsA("Trail") or descendant:IsA("Beam") then
+						(descendant :: any).Color = paint
+					elseif descendant:IsA("BasePart") then
+						descendant.Color = PAINTBALL_COLOR
+					end
+				end
+			end
 			arrow.CFrame = facing
 			arrow.Parent = effectParent()
 			for _, descendant in arrow:GetDescendants() do

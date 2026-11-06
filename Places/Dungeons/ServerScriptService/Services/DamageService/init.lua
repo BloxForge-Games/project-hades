@@ -227,9 +227,10 @@ local FLAMING_ORB_AURA_MARKERS = {
 -- Each player's LAST weapon or spell hit on each enemy (relic bursts and
 -- DoT ticks never count): whether it was a melee weapon hit, and when.
 -- Recorded before the damage lands, so the death handlers already see the
--- killing blow (Trick Or Trap's melee takedowns, MobDeath; 2026-11-05).
+-- killing blow (Trick Or Trap's weapon takedowns, MobDeath; 2026-11-05).
 -- Weak-keyed: a despawned enemy drops out.
-local lastWeaponHit: { [Model]: { [string]: { melee: boolean, at: number } } } = setmetatable({}, { __mode = "k" }) :: any
+type WeaponHit = { melee: boolean, weapon: boolean, at: number }
+local lastWeaponHit: { [Model]: { [string]: WeaponHit } } = setmetatable({}, { __mode = "k" }) :: any
 
 -- Dragon Lantern (Cursed): every hit that reaches HEALTH costs the owner
 -- its data.coinLossShare of the run's average coins (DifficultyData
@@ -1515,7 +1516,11 @@ function DamageService.TakeDamage(
 	if not isStatusConditionDamage and not isRelicSourced then
 		local hits = lastWeaponHit[targetModel] or {}
 		lastWeaponHit[targetModel] = hits
-		hits[player.Name] = { melee = isMelee == true and isMagic ~= true, at = GameClock.Now() }
+		hits[player.Name] = {
+			melee = isMelee == true and isMagic ~= true,
+			weapon = isMagic ~= true,
+			at = GameClock.Now(),
+		}
 	end
 
 	-- Status condition damage (DoT) bypasses the whole pipeline: no
@@ -1816,6 +1821,20 @@ function DamageService.LastHitWasMelee(
 	local hits = lastWeaponHit[model]
 	local hit = hits and hits[playerName]
 	return hit ~= nil and hit.melee and GameClock.Now() - hit.at <= window
+end
+
+-- True when `playerName`'s last weapon or spell hit on `model` was a
+-- WEAPON hit, melee or ranged (not a spell), no more than `window` seconds
+-- ago (Trick Or Trap's Weapon Takedowns, 2026-11-05).
+function DamageService.LastHitWasWeapon(
+	_self: typeof(DamageService),
+	model: Model,
+	playerName: string,
+	window: number
+): boolean
+	local hits = lastWeaponHit[model]
+	local hit = hits and hits[playerName]
+	return hit ~= nil and hit.weapon == true and GameClock.Now() - hit.at <= window
 end
 
 --[ Initializers ]--
