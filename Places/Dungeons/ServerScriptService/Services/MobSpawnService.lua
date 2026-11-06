@@ -11,6 +11,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- DungeonService is never required here: consumers reach it through
 -- Blitz.OptionalService at call time or its signals (the service graph runs
@@ -570,7 +571,7 @@ function MobSpawnService.SpawnMobsInRoom(self: typeof(MobSpawnService), room)
 					firstWaveDone = true
 				end
 
-				task.wait(SPAWN_DELAY)
+				GameClock.Wait(SPAWN_DELAY)
 			else
 				task.wait(QUEUE_POLL_SECONDS)
 			end
@@ -628,7 +629,7 @@ function MobSpawnService.StartChallengeQueue(
 			if alive < queue.concurrentCap and #workspace.IgnoreInstances.Mobs:GetChildren() < MAX_ACTIVE_MOBS then
 				queue.remaining -= 1
 				self:_spawnQueuedMob(room, spawnPoints)
-				task.wait(SPAWN_DELAY)
+				GameClock.Wait(SPAWN_DELAY)
 			else
 				task.wait(QUEUE_POLL_SECONDS)
 			end
@@ -845,7 +846,7 @@ function MobSpawnService.StartMinibossWaves(self: typeof(MobSpawnService), room)
 
 			local points = self:_getRoomRegularSpawnPoints(room.model)
 			if #points == 0 then
-				task.wait(MINIBOSS_WAVE_INTERVAL)
+				GameClock.Wait(MINIBOSS_WAVE_INTERVAL)
 				continue
 			end
 
@@ -866,10 +867,10 @@ function MobSpawnService.StartMinibossWaves(self: typeof(MobSpawnService), room)
 					continue
 				end
 				self:_spawnMobAt(room, mobName, waveTemplate, attachment)
-				task.wait(SPAWN_DELAY)
+				GameClock.Wait(SPAWN_DELAY)
 			end
 
-			task.wait(MINIBOSS_WAVE_INTERVAL)
+			GameClock.Wait(MINIBOSS_WAVE_INTERVAL)
 		end
 	end)
 end

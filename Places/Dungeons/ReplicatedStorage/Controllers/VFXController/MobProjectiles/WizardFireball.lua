@@ -30,7 +30,6 @@
 	(replicated visual), but only the target triggers damage.
 ]]
 
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -38,6 +37,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local TextIndicatorController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.TextIndicatorController)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
 
 -- Tick cadence. Matches FireBlast's 0.015s (~67Hz) — fast enough that
 -- a 60 stud/sec projectile only moves ~0.9 studs per tick, way under
@@ -124,10 +124,10 @@ return function(
 		castFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 		for _, descendant in castFX:GetDescendants() do
 			if descendant:IsA("ParticleEmitter") then
-				descendant:Emit(25)
+				vfxBudget.emit(descendant, 25)
 			end
 		end
-		Debris:AddItem(castFX, 1)
+		GameClock.Debris(castFX, 1)
 	end
 
 	-- Per-tick overlap params. Include-filtered to EXACTLY two roots:
@@ -203,6 +203,8 @@ return function(
 	-- but no need to fire ~30 redundant packets per dodged cast.
 	local perfectDodgeFired = false
 
+	-- This frame's length in 60 fps frames (see moveStep).
+	local frameFactor = 1
 	while not hit do
 		if despawned then
 			-- Another client's impact resolved this cast. Stop flying and
@@ -227,8 +229,11 @@ return function(
 		-- Move forward by speed * tickInterval along the initial
 		-- direction. Straight-line, no drop — this is a arcane
 		-- fireball, not a thrown rock.
+		-- x frameFactor (2026-11-05): the step was per FRAME, so the ball
+		-- flew half as fast at 30 fps (a phone) as at 60. Normalised to the
+		-- 60 fps step, on game time.
 		local previousPosition = projectile:GetPivot().Position
-		local moveStep = direction * speed * TICK_INTERVAL
+		local moveStep = direction * speed * TICK_INTERVAL * frameFactor
 		projectile:PivotTo(projectile:GetPivot() + moveStep)
 
 		-- Player overlap at the projectile's new position.
@@ -325,7 +330,7 @@ return function(
 			-- segment raycast above.
 		end
 
-		GameClock.Wait(TICK_INTERVAL)
+		frameFactor = math.clamp(GameClock.Wait(TICK_INTERVAL) * GameClock.Scale() * 60, 0, 4)
 	end
 
 	-- Spawn impact VFX at the final position. Same for hit-player and
@@ -354,7 +359,7 @@ return function(
 			descendant.Enabled = false
 		end
 	end
-	Debris:AddItem(projectile, 1)
+	GameClock.Debris(projectile, 1)
 
 	-- Impact callback — ONLY the targeted local player fires this.
 	-- Everyone else just sees the projectile fly + impact visual.

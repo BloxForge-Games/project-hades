@@ -38,6 +38,7 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type Room = DungeonService.Room
 type Dungeon = DungeonService.Dungeon
@@ -456,9 +457,9 @@ function RunFlowService._raiseExitPortal(self: typeof(RunFlowService), room: Roo
 	-- then enable the prompt.
 	task.spawn(function()
 		local startCFrame = portal:GetPivot()
-		local startedAt = os.clock()
+		local startedAt = GameClock.Now()
 		while portal.Parent and self._exitPortal == portal do
-			local t = math.clamp((os.clock() - startedAt) / EXIT_PORTAL_RISE_SECONDS, 0, 1)
+			local t = math.clamp((GameClock.Now() - startedAt) / EXIT_PORTAL_RISE_SECONDS, 0, 1)
 			-- Sine InOut: eases both out of the ground and into rest -- no
 			-- snap at either end.
 			local alpha = TweenService:GetValue(t, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)

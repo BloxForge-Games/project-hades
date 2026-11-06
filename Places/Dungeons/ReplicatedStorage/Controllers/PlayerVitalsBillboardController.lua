@@ -39,11 +39,11 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -113,10 +113,10 @@ type BarEntry = {
 	shieldBar: GuiObject?,
 	fraction: () -> number,
 	shieldFraction: (() -> number)?,
-	tween: Tween?,
-	shieldTween: Tween?,
+	tween: GameClock.Tween?,
+	shieldTween: GameClock.Tween?,
 	fadeTargets: { FadeTarget },
-	fadeTweens: { Tween },
+	fadeTweens: { GameClock.Tween },
 	shown: boolean,
 	hideToken: {}?,
 	fillWidth: number,
@@ -203,7 +203,7 @@ function PlayerVitalsBillboardController._refreshVisibility(
 			-- Going away (cutscene started / died): fade the visuals out, THEN
 			-- disable once the fade lands (unless visibility flipped back).
 			self:_fadeBarVisuals(barEntry, false)
-			task.delay(FADE_OUT_INFO.Time, function()
+			GameClock.Delay(FADE_OUT_INFO.Time, function()
 				if entry.visibilityToken == token and not entry.visible then
 					barEntry.billboard.Enabled = false
 				end
@@ -277,7 +277,7 @@ function PlayerVitalsBillboardController._fadeBarVisuals(
 		if instant then
 			(target.instance :: any)[target.property] = goal
 		else
-			local fadeTween = TweenService:Create(target.instance, info, { [target.property] = goal })
+			local fadeTween = GameClock.Tween(target.instance, info, { [target.property] = goal })
 			table.insert(barEntry.fadeTweens, fadeTween)
 			fadeTween:Play()
 		end
@@ -317,7 +317,7 @@ function PlayerVitalsBillboardController._onBarValueChanged(
 	if isFull then
 		local token = {}
 		barEntry.hideToken = token
-		task.delay(FULL_LINGER_SECONDS, function()
+		GameClock.Delay(FULL_LINGER_SECONDS, function()
 			if barEntry.hideToken == token and barEntry.shown then
 				barEntry.hideToken = nil
 				self:_setBarShown(barEntry, false)
@@ -381,11 +381,11 @@ function PlayerVitalsBillboardController._refreshBar(
 			shieldBar.Position = shieldTarget.Position
 		end
 	else
-		local tween = TweenService:Create(bar, BAR_TWEEN_INFO, { Size = target })
+		local tween = GameClock.Tween(bar, BAR_TWEEN_INFO, { Size = target })
 		barEntry.tween = tween
 		tween:Play()
 		if shieldBar and shieldTarget then
-			local shieldTween = TweenService:Create(shieldBar, BAR_TWEEN_INFO, shieldTarget)
+			local shieldTween = GameClock.Tween(shieldBar, BAR_TWEEN_INFO, shieldTarget)
 			barEntry.shieldTween = shieldTween
 			shieldTween:Play()
 		end

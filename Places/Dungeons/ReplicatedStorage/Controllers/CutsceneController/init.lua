@@ -22,6 +22,7 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local AmbientGradientInterfaceController = require(ReplicatedStorage.Interfaces.AmbientGradientInterfaceController)
 local MobController = require(ReplicatedStorage.Controllers.MobController)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CutsceneController = {
 	Name = "CutsceneController",
@@ -200,8 +201,8 @@ end
 local function newCinematicBeat(duration: number)
 	local beat = { _cancelled = false }
 	function beat:Play()
-		local startedAt = os.clock()
-		while not self._cancelled and os.clock() - startedAt < duration do
+		local startedAt = GameClock.Now()
+		while not self._cancelled and GameClock.Now() - startedAt < duration do
 			task.wait()
 		end
 	end

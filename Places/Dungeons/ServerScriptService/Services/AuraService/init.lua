@@ -31,7 +31,6 @@
 
 --[ Roblox Services ]--
 
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -325,7 +324,7 @@ function AuraService.SetAura(
 	gainAuraSound.Parent = hrp
 	gainAuraSound:Play()
 
-	Debris:AddItem(gainAuraSound, 2)
+	GameClock.Debris(gainAuraSound, 2)
 
 	-- The element shockwave, for EVERY aura — fresh grants only (the
 	-- extend branch returned above; no strobe on refresh). The owner

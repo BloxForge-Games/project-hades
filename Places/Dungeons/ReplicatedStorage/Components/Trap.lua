@@ -15,7 +15,6 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -24,6 +23,7 @@ local waitForPrimaryPart = require(ReplicatedStorage.Submodules.Core.Shared.Func
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Component Root ]--
 
@@ -91,28 +91,25 @@ function Trap:_playTrigger()
 	for spikePart, originalCFrame in pairs(self._spikeOriginalCFrames) do
 		spikePart.Transparency = 0
 
-		local extendTween = TweenService:Create(
-			spikePart,
-			EXTEND_TWEEN,
-			{ CFrame = originalCFrame * CFrame.new(0, SPIKE_TRAVEL_STUDS, 0) }
-		)
+		local extendTween =
+			GameClock.Tween(spikePart, EXTEND_TWEEN, { CFrame = originalCFrame * CFrame.new(0, SPIKE_TRAVEL_STUDS, 0) })
 		extendTween:Play()
 
 		extendTween.Completed:Connect(function()
-			task.delay(EXTENDED_HOLD_SECONDS, function()
+			GameClock.Delay(EXTENDED_HOLD_SECONDS, function()
 				if not spikePart.Parent then
 					return
 				end
 				-- Down happens whether or not the room cleared meanwhile:
 				-- a retired trap wants the spikes down too.
-				TweenService:Create(spikePart, RETRACT_TWEEN, { CFrame = self:_downCFrame(originalCFrame) }):Play()
+				GameClock.Tween(spikePart, RETRACT_TWEEN, { CFrame = self:_downCFrame(originalCFrame) }):Play()
 
-				task.delay(RETRACTED_HOLD_SECONDS, function()
+				GameClock.Delay(RETRACTED_HOLD_SECONDS, function()
 					-- Cleared while hidden: stay hidden.
 					if self._retired or not spikePart.Parent then
 						return
 					end
-					TweenService:Create(spikePart, RESET_TWEEN, { CFrame = originalCFrame }):Play()
+					GameClock.Tween(spikePart, RESET_TWEEN, { CFrame = originalCFrame }):Play()
 				end)
 			end)
 		end)
@@ -137,7 +134,7 @@ function Trap:_retire(instant: boolean)
 		if instant then
 			spikePart.CFrame = downCFrame
 		else
-			TweenService:Create(spikePart, RETRACT_TWEEN, { CFrame = downCFrame }):Play()
+			GameClock.Tween(spikePart, RETRACT_TWEEN, { CFrame = downCFrame }):Play()
 		end
 	end
 end

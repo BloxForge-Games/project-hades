@@ -161,6 +161,11 @@ local DEAL_SPIN_TWEEN = TweenInfo.new(1.05, Enum.EasingStyle.Quad, Enum.EasingDi
 local DEAL_SPIN = 360
 local DEAL_REVEAL_YAW = 270
 local DEAL_FADE_TWEEN = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+-- 2026-11-05: Legendary cards (handle.legendaryReveal, OfferCard) are
+-- dealt AFTER the rest: this beat behind the last other card's start,
+-- one stagger apart from each other, and ring as they land.
+-- A hand with no Legendary deals exactly as before.
+local LEGENDARY_LAND_DELAY = 0.25
 local OFFSCREEN_MARGIN = 0.1
 -- Leaving (the dismissed cards, and the others when one is taken): each
 -- flips back over (DISMISS_FLIP degrees) while dropping below the view.
@@ -546,9 +551,25 @@ local function Container(props: any)
 			return orderOf(a.name) < orderOf(b.name)
 		end)
 
+		-- Each card's start: its stagger slot, or for a Legendary card a
+		-- beat after the last other card's slot (see LEGENDARY_LAND_DELAY).
+		local lastOtherStart: number? = nil
+		for index, entry in entries do
+			if not entry.handle.legendaryReveal then
+				lastOtherStart = DEAL_LEAD_SECONDS + (index - 1) * DEAL_STAGGER
+			end
+		end
+		local legendaryCount = 0
+		local lastStart = 0
 		for index, entry in entries do
 			local handle = entry.handle
-			task.delay(DEAL_LEAD_SECONDS + (index - 1) * DEAL_STAGGER, function()
+			local start = DEAL_LEAD_SECONDS + (index - 1) * DEAL_STAGGER
+			if handle.legendaryReveal then
+				start = (lastOtherStart or DEAL_LEAD_SECONDS) + LEGENDARY_LAND_DELAY + legendaryCount * DEAL_STAGGER
+				legendaryCount += 1
+			end
+			lastStart = math.max(lastStart, start)
+			task.delay(start, function()
 				if offerRef.current ~= thisOffer or phaseRef.current == "closed" then
 					return
 				end
@@ -572,6 +593,9 @@ local function Container(props: any)
 					move.Completed:Once(function()
 						if offerRef.current == thisOffer then
 							handle.sweep()
+							if handle.legendaryReveal then
+								handle.legendaryReveal()
+							end
 						end
 					end)
 				end
@@ -580,7 +604,7 @@ local function Container(props: any)
 
 		-- Open only once the LAST card's flight and spin have completed:
 		-- a hover before that would add its depth and tilt to the spin.
-		task.delay(DEAL_LEAD_SECONDS + (#entries - 1) * DEAL_STAGGER + DEAL_MOVE_TWEEN.Time + 0.05, function()
+		task.delay(lastStart + DEAL_MOVE_TWEEN.Time + 0.05, function()
 			if offerRef.current == thisOffer and phaseRef.current == "dealing" then
 				phaseRef.current = "open"
 				applyPendingHover()

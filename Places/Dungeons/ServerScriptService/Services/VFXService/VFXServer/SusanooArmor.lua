@@ -1,5 +1,4 @@
 --!strict
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -86,7 +85,7 @@ return function(player: Player)
 				end
 			end
 
-			Debris:AddItem(castVFX, 3)
+			GameClock.Debris(castVFX, 3)
 		end)
 
 		susanooRig.PrimaryPart.SusanooActivate:Play()
@@ -134,7 +133,7 @@ return function(player: Player)
 		susanooRig.PrimaryPart.SusanooAttack:Play()
 		susanooRig.PrimaryPart.GroundSmash:Play()
 
-		Debris:AddItem(attackVFXPart, 3)
+		GameClock.Debris(attackVFXPart, 3)
 
 		-- The combat pack's dust where the smash lands. Server-side like the
 		-- AttackPart burst above; the helper needs only ReplicatedStorage and
@@ -182,7 +181,7 @@ return function(player: Player)
 			end
 		end
 
-		Debris:AddItem(castVFX, 3)
+		GameClock.Debris(castVFX, 3)
 
 		targetAttachment.Position = Vector3.new(0, -15, 0)
 

@@ -39,7 +39,6 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -47,6 +46,7 @@ local DungeonGateController = require(ReplicatedStorage.Controllers.DungeonGateC
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local fogHideables = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.fogHideables)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -81,7 +81,7 @@ local function hideLocally(instance: Instance)
 
 	local property = fogHideables.numericProperty(instance)
 	if property then
-		TweenService:Create(instance, FADE_TWEEN_INFO, { [property] = fogHideables.hiddenValue(property) }):Play()
+		GameClock.Tween(instance, FADE_TWEEN_INFO, { [property] = fogHideables.hiddenValue(property) }):Play()
 		return
 	end
 
@@ -121,7 +121,7 @@ function FogOfWarController._onRoomsLeftBehind(
 		delay += DungeonGateController:GetGateSlamSeconds()
 	end
 
-	task.delay(delay, function()
+	GameClock.Delay(delay, function()
 		for _, roomModel in rooms do
 			local room = roomModel :: Model
 			if room:IsA("Model") and room.Parent then

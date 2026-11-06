@@ -1,6 +1,5 @@
 --!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Component = require(ReplicatedStorage.Submodules.Core.Packages.Component)
@@ -14,6 +13,7 @@ local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 -- The client collects inside its PICKUP_RADIUS (15 since 2026-10-30; was
 -- 10); this is that with margin for the trigger's latency (QA 2026-10-21,
@@ -112,28 +112,31 @@ function Drop:Start()
 			return
 		end
 		fadeArmed = true
-		task.delay(delay, function()
+		GameClock.Delay(delay, function()
 			local primary = self.Instance and self.Instance.PrimaryPart
 			if not primary or not primary.Parent then
 				return -- collected or torn down already
 			end
-			local coinImageTransparencyTween = TweenService:Create(
-				primary.BillboardGui.Image,
-				TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ ImageTransparency = 1 }
-			)
-
 			for _, descendant in primary:GetDescendants() do
 				if descendant:IsA("ParticleEmitter") then
 					descendant.Enabled = false
 				end
 			end
 
-			coinImageTransparencyTween:Play()
-
-			coinImageTransparencyTween.Completed:Connect(function()
-				self.Instance:Destroy()
-			end)
+			-- FADE_STEPS writes over 1 s (2026-11-05): a server tween wrote
+			-- (and replicated) the transparency every frame, per drop.
+			local FADE_STEPS = 4
+			local image = primary.BillboardGui.Image
+			for step = 1, FADE_STEPS do
+				GameClock.Delay(step / FADE_STEPS, function()
+					if image.Parent then
+						image.ImageTransparency = step / FADE_STEPS
+					end
+					if step == FADE_STEPS and self.Instance then
+						self.Instance:Destroy()
+					end
+				end)
+			end
 		end)
 	end
 

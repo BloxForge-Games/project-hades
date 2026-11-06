@@ -21,7 +21,6 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local ProximityPromptService = game:GetService("ProximityPromptService")
 local CollectionService = game:GetService("CollectionService")
 
@@ -34,6 +33,7 @@ local PickupHoverStyle = require(ReplicatedStorage.Submodules.Core.Shared.Data.P
 local getGearIdleScale = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Gear.getGearIdleScale)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -307,7 +307,7 @@ function GearDropsRenderController._tweenHoveredScale(
 	end
 	local scaleValue = carrier:FindFirstChild(SCALE_VALUE_NAME)
 	if scaleValue and scaleValue:IsA("NumberValue") then
-		TweenService:Create(scaleValue, TWEEN_INFO, { Value = targetScale }):Play()
+		GameClock.Tween(scaleValue, TWEEN_INFO, { Value = targetScale }):Play()
 	end
 end
 
@@ -365,8 +365,7 @@ function GearDropsRenderController.Start(self: typeof(GearDropsRenderController)
 		if visualModel then
 			highlight.Adornee = visualModel
 			highlight.Parent = visualModel
-			TweenService:Create(highlight, TWEEN_INFO, { FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HOVERED })
-				:Play()
+			GameClock.Tween(highlight, TWEEN_INFO, { FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY_HOVERED }):Play()
 		end
 
 		-- Scale up the hovered drop.

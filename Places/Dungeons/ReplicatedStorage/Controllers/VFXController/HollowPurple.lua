@@ -12,6 +12,8 @@ local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local groundFracture = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.groundFracture)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -27,7 +29,8 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
-	local fireBlastAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local fireBlastAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("HollowPurpleAnimation")
 	)
 
@@ -68,7 +71,7 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 		for _, v in pairs(castFX.Merged:GetDescendants()) do
 			if v:IsA("ParticleEmitter") then
-				v:Emit(20)
+				vfxBudget.emit(v, 20)
 			end
 		end
 
@@ -155,8 +158,14 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				GameClock.Debris(projectile, 1)
 			end)
 
-			for distance = 0, TRAVEL_DISTANCE, STEP_LENGTH do
-				GameClock.Wait(0.01)
+			-- 2026-11-05: a step per 60 fps frame (a slow frame takes several,
+			-- so the orb flies as fast on a phone), and a fracture every
+			-- FRACTURE_EVERY_STEPS steps rather than a 1-in-3 roll per frame.
+			local FRACTURE_EVERY_STEPS = 3
+			local distance = 0
+			local nextFracture = 0
+			while distance <= TRAVEL_DISTANCE do
+				local frameSeconds = GameClock.Wait(0.01) * GameClock.Scale()
 
 				local position = origin.Position + direction * distance
 
@@ -164,13 +173,16 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 
 				projectile.CFrame = hitboxCFrame
 
-				if math.random(1, 3) == 1 then
+				if distance >= nextFracture then
+					nextFracture += STEP_LENGTH * FRACTURE_EVERY_STEPS
 					groundFracture:Spawn(
 						projectile.Position,
 						direction,
 						ArcaneData[ArcaneNames["Hollow Purple"]].hitboxSize.Z
 					)
 				end
+
+				distance += STEP_LENGTH * math.clamp(math.floor(frameSeconds * 60 + 0.5), 1, 4)
 			end
 		end)
 	end)

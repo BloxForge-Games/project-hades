@@ -922,17 +922,35 @@ function EncounterService._startFight(
 		-- HP-change stream. We attach now so any damage between attach and the
 		-- end of the cinematic still flows; the property is only Set later
 		-- (Phase 8) to delay the HP bar reveal until the camera returns.
+		-- Sent at most every HP_SEND_SECONDS (2026-11-05; on every change
+		-- before, so every DoT tick and every hit replicated the whole table
+		-- to every client): the latest value is flushed at the window's end.
+		local HP_SEND_SECONDS = 0.1
 		local encounter = self._activeEncounter
 		local hpConn: RBXScriptConnection?
-		hpConn = humanoid.HealthChanged:Connect(function(newHealth)
+		local flushPending = false
+		local function sendHealth()
+			flushPending = false
 			local healthData: EncounterData = {
 				kind = kind,
 				name = mobName,
 				level = encounterLevel(),
-				currentHP = newHealth,
+				currentHP = humanoid.Health,
 				maxHP = humanoid.MaxHealth,
 			}
 			self._dataProperty:Set(healthData)
+		end
+		hpConn = humanoid.HealthChanged:Connect(function(newHealth)
+			if flushPending then
+				return
+			end
+			flushPending = true
+			-- A death goes out at once; anything else rides the window.
+			if newHealth <= 0 then
+				sendHealth()
+			else
+				GameClock.Delay(HP_SEND_SECONDS, sendHealth)
+			end
 		end)
 		if encounter then
 			encounter.hpConn = hpConn

@@ -43,6 +43,11 @@ local getRelicModelTemplate = require(ReplicatedStorage.Submodules.Core.Shared.F
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local SpiritCompanionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.SpiritCompanionData)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local relicProcColors = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.relicProcColors)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local ChainLightningVFXController = require(script.Parent.ChainLightningVFXController)
+local RelicShotVFXController = require(script.Parent.RelicShotVFXController)
 
 --[ Constants ]--
 
@@ -56,6 +61,31 @@ local BLACK_FLAME_COLOR = Color3.fromRGB(70, 35, 80)
 local BAN_COLOR = Color3.fromRGB(255, 85, 85)
 local PLASMA_COLOR = Color3.fromRGB(255, 120, 200)
 local SHOCK_COLOR = Color3.fromRGB(185, 87, 255)
+
+-- The caster's relics, for the procs whose colour follows them
+-- (relicProcColors: Death Venom's purple Poison, Coil Shocked's yellow
+-- Shock; 2026-11-05).
+local function relicsOf(caster: Player?): { [string]: number }?
+	if not caster then
+		return nil
+	end
+	local relicController = Blitz.OptionalController("RelicController")
+	return relicController and relicController:GetRelicsFromUserId(caster.UserId)
+end
+
+local function toxicColorFor(caster: Player?): Color3
+	return relicProcColors.poison(relicsOf(caster))
+end
+
+local function shockColorFor(caster: Player?): Color3
+	return relicProcColors.shock(relicsOf(caster))
+end
+
+-- The bursts whose colour follows the caster's relics.
+local CASTER_BURST_COLORS: { [string]: (Player?) -> Color3 } = {
+	ToxicBurst = toxicColorFor,
+	ShockBurst = shockColorFor,
+}
 
 local BURST_COLORS: { [string]: Color3 } = {
 	FireBurst = FIRE_COLOR,
@@ -101,12 +131,12 @@ local BOLT_GLOW_TRANSPARENCY = 0.55
 local BOLT_FORK_CHANCE = 0
 local BOLT_FORKS = 1
 local BOLT_FLASH_RADIUS = 1.4
+-- Chain Lightning (Lightning Bolt Sword) is its own controller since
+-- 2026-11-04 (ChainLightningVFXController: the pack's beam, shock and smoke).
 
--- Lobbed bubbles arc high; Blizzard's ice shards hop fast and low (a
--- quadratic bezier with its control point just above the line).
+-- Lobbed bubbles arc high. (Blizzard's ice shards home since 2026-11-05:
+-- iceShard, flown from the Fowl's data like the server's.)
 local ARC_HEIGHT = 6
--- 1.5 -> 3 (2026-11-02): the Fowl's shards read as a lob now, not a dart.
-local SHARD_ARC_HEIGHT = 3
 
 -- Frost Wyrm: the cube and its fade. It follows like a Spirit Companion
 -- WYRM_SCALE times the size (SpiritCompanionData's orbit, drift, spring
@@ -382,11 +412,18 @@ local function boltStroke(from: Vector3, to: Vector3, scale: number)
 	end
 end
 
-local function bolt(from: Vector3, to: Vector3)
+-- `spark` (2026-11-05): a small ambient crackle (the Katana's prime, a
+-- Static Charge, the Thunder Blade's trail) -- one stroke and no landing
+-- flash or ring, which were 26 parts a spark. The full bolt's restrikes
+-- follow the device budget (vfxBudget).
+local function bolt(from: Vector3, to: Vector3, spark: boolean?)
 	-- The crackle: the first stroke at once, the rest re-jittered a beat
 	-- apart and a little thinner, so the arc dances for half a second.
 	boltStroke(from, to, 1)
-	for stroke = 2, BOLT_STROKES do
+	if spark then
+		return
+	end
+	for stroke = 2, vfxBudget.count(BOLT_STROKES, 1) do
 		GameClock.Delay(BOLT_RESTRIKE_SECONDS * (stroke - 1), boltStroke, from, to, 1 - (stroke - 1) * 0.2)
 	end
 	-- The landing flash: a bright pop and a small ring on the ground.
@@ -434,7 +471,7 @@ local function travellingSlash(payload: Payload, size: Vector3, color: Color3, v
 		slash.CFrame = CFrame.lookAt(position, position + look)
 		if sparks and math.random() < THUNDER_SPARK_CHANCE then
 			local side = slash.CFrame.RightVector * (math.random() * 2 - 1) * size.X * 0.5
-			bolt(position + side, position + side + look * 2.5 + Vector3.new(0, math.random() * 1.5, 0))
+			bolt(position + side, position + side + look * 2.5 + Vector3.new(0, math.random() * 1.5, 0), true)
 		end
 	end, function()
 		retire(slash, emitters, SLASH_FADE_SECONDS, 1.2)
@@ -615,6 +652,63 @@ local function summonWyrm(payload: Payload)
 		orbitNextMoveAt = 0,
 		bobPhase = orbitRandom:NextNumber() * 2 * math.pi,
 	}
+end
+
+-- Icy Arctic Fowl's shard: the server's homing flight (RelicGimmickService
+-- /Frost flyShard, the Fowl's data), drawn nose-first along its velocity,
+-- bursting on contact with its Target or when its time is up.
+local function iceShard(payload: Payload)
+	local fowl = RelicData[RelicNames["Icy Arctic Fowl"]].data or {}
+	local speed: number = fowl.shardSpeed or 48
+	local turnRate: number = fowl.shardTurnRate or 7
+	local fadeIn: number = fowl.shardFadeIn or 0.15
+	local contact: number = fowl.shardContact or 2.5
+	local maxSeconds: number = fowl.shardMaxSeconds or 2.5
+	local target = payload.Target
+	local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+	local position = payload.From
+	local aim = payload.To
+	local flat = Vector3.new(aim.X - position.X, 0, aim.Z - position.Z)
+	local velocity = Vector3.new(0, fowl.shardLaunchUp or 9, 0)
+		+ (if flat.Magnitude > 0.05 then flat.Unit * speed * 0.5 else Vector3.zero)
+
+	-- It appears where the server placed it (your right, your left or
+	-- above your head), nose toward its first heading, and fades in over
+	-- fadeIn while it hangs there (2026-11-05).
+	local shard = makePart("BlizzardShard", Vector3.new(0.8, 2.2, 0.8), ICE_COLOR)
+	shard.Transparency = 1
+	shard.CFrame = CFrame.lookAt(position, position + velocity) * CFrame.Angles(-math.pi / 2, 0, 0)
+	shard.Parent = effectsFolder()
+	GameClock.Tween(shard, TweenInfo.new(fadeIn, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Transparency = 0.1,
+	}):Play()
+	local emitters = statusEmitters("Chill", shard)
+	-- Negative while it hangs: the flight starts once fadeIn has passed.
+	local waited = elapsedOf(payload) - fadeIn
+	local flown = 0
+	local connection: RBXScriptConnection
+	connection = RunService.RenderStepped:Connect(function(frameSeconds: number)
+		local deltaTime = GameClock.Dt(frameSeconds)
+		if waited < 0 then
+			waited += deltaTime
+			return
+		end
+		flown += deltaTime
+		if targetRoot and targetRoot:IsA("BasePart") and targetRoot.Parent then
+			aim = targetRoot.Position
+		end
+		local gap = aim - position
+		if gap.Magnitude <= contact or flown >= maxSeconds then
+			connection:Disconnect()
+			burst(position, payload.Radius, ICE_COLOR)
+			retire(shard, emitters, 0.1, 1)
+			return
+		end
+		velocity = velocity:Lerp(gap.Unit * speed, 1 - math.exp(-turnRate * deltaTime))
+		position += velocity * deltaTime
+		-- The part's long axis (Y) along the flight.
+		shard.CFrame = CFrame.lookAt(position, position + velocity) * CFrame.Angles(-math.pi / 2, 0, 0)
+	end)
 end
 
 local function frostOrb(payload: Payload)
@@ -813,7 +907,7 @@ end
 -- Witches Brew's puddle: Frost Field's disc in poison green.
 local function toxicPuddle(payload: Payload)
 	local radius = payload.Radius
-	local disc = makePart("ToxicPuddle", Vector3.new(0.3, radius * 2, radius * 2), TOXIC_COLOR)
+	local disc = makePart("ToxicPuddle", Vector3.new(0.3, radius * 2, radius * 2), toxicColorFor(payload.Caster))
 	disc.Shape = Enum.PartType.Cylinder
 	disc.Transparency = 1
 	disc.CFrame = CFrame.new(payload.From + Vector3.new(0, 0.15, 0)) * CFrame.Angles(0, 0, math.rad(90))
@@ -830,13 +924,14 @@ end
 local function staticCharge(payload: Payload)
 	local target = payload.Target
 	local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
-	local ball = makePart("StaticCharge", Vector3.one * STATIC_CHARGE_SIZE, SHOCK_COLOR)
+	local shockColor = shockColorFor(payload.Caster)
+	local ball = makePart("StaticCharge", Vector3.one * STATIC_CHARGE_SIZE, shockColor)
 	ball.Shape = Enum.PartType.Ball
 	ball.Transparency = 0.2
 	ball.Position = payload.From
 	ball.Parent = effectsFolder()
 	local light = Instance.new("PointLight")
-	light.Color = SHOCK_COLOR
+	light.Color = shockColor
 	light.Brightness = 3
 	light.Range = 8
 	light.Parent = ball
@@ -856,7 +951,7 @@ local function staticCharge(payload: Payload)
 			lastSpark = GameClock.Now()
 			local spark = ball.Position
 				+ Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit * 3
-			bolt(ball.Position, spark)
+			bolt(ball.Position, spark, true)
 		end
 	end, function()
 		retire(ball, emitters, 0.1, 1)
@@ -1005,13 +1100,14 @@ local function keepStormPrime(payload: Payload)
 		prime.expiresAt = expiresAt
 		return
 	end
-	local part = makePart("StormPrime", Vector3.one * PRIME_SIZE, SHOCK_COLOR)
+	local shockColor = shockColorFor(caster)
+	local part = makePart("StormPrime", Vector3.one * PRIME_SIZE, shockColor)
 	part.Shape = Enum.PartType.Ball
 	part.Transparency = 0.5
 	part.Position = payload.From + Vector3.new(0, PRIME_HEIGHT, 0)
 	part.Parent = effectsFolder()
 	local light = Instance.new("PointLight")
-	light.Color = SHOCK_COLOR
+	light.Color = shockColor
 	light.Brightness = 1.5
 	light.Range = 8
 	light.Parent = part
@@ -1038,7 +1134,7 @@ local function stepPrimes()
 		if now - prime.lastSpark > PRIME_SPARK_SECONDS then
 			prime.lastSpark = now
 			local away = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
-			bolt(prime.part.Position, prime.part.Position + away * PRIME_SPARK_REACH)
+			bolt(prime.part.Position, prime.part.Position + away * PRIME_SPARK_REACH, true)
 		end
 	end
 end
@@ -1212,19 +1308,29 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	BanHammer = banHammer,
 	PhoenixTrail = phoenixTrail,
 	FrostField = frostField,
-	IceShard = function(payload)
-		local shard = makePart("BlizzardShard", Vector3.new(0.8, 2.2, 0.8), ICE_COLOR)
-		shard.Transparency = 0.1
-		lob(payload, shard, ICE_COLOR, true, SHARD_ARC_HEIGHT, true)
-	end,
+	IceShard = iceShard,
 	ToxicBubble = function(payload)
-		local bubble = makePart("ToxicBubble", Vector3.one * 1.1, TOXIC_COLOR)
+		local toxicColor = toxicColorFor(payload.Caster)
+		local bubble = makePart("ToxicBubble", Vector3.one * 1.1, toxicColor)
 		bubble.Shape = Enum.PartType.Ball
 		bubble.Transparency = 0.25
-		lob(payload, bubble, TOXIC_COLOR, false, ARC_HEIGHT)
+		lob(payload, bubble, toxicColor, false, ARC_HEIGHT)
 	end,
 	Bolt = function(payload)
-		bolt(payload.From, payload.To)
+		ChainLightningVFXController:Play(payload.From, payload.Target, payload.To, payload.Caster)
+	end,
+	-- The ranged relics' straight shots (RelicShotVFXController).
+	IceArrowShot = function(payload)
+		RelicShotVFXController:Launch(payload)
+	end,
+	VolleyballShot = function(payload)
+		RelicShotVFXController:Launch(payload)
+	end,
+	BrewShot = function(payload)
+		RelicShotVFXController:Launch(payload)
+	end,
+	RelicShotEnd = function(payload)
+		RelicShotVFXController:Land(payload)
 	end,
 	WyrmSummon = summonWyrm,
 	FrostOrb = frostOrb,
@@ -1250,7 +1356,8 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 
 function RelicGimmickFXController.Start(_self: typeof(RelicGimmickFXController))
 	RelicNetwork.GimmickEffect.On(function(payload: Payload)
-		local color = BURST_COLORS[payload.Kind]
+		local casterColor = CASTER_BURST_COLORS[payload.Kind]
+		local color = if casterColor then casterColor(payload.Caster) else BURST_COLORS[payload.Kind]
 		if color then
 			burst(payload.From, payload.Radius, color)
 			return

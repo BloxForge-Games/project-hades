@@ -136,14 +136,6 @@ function ArcaneController.GetEffectiveManaCost(_self: typeof(ArcaneController), 
 		return 0
 	end
 
-	-- Korblox Evil Eye (2026-11-01): the server stamps the next cast's
-	-- cost multiplier (ArcaneService.CommitEvilEyeCast), 0.5 on the
-	-- discounted cast.
-	local nextCostMultiplier = Players.LocalPlayer:GetAttribute("NextSpellCostMultiplier")
-	if type(nextCostMultiplier) == "number" then
-		manaCostMultiplier *= nextCostMultiplier
-	end
-
 	return arcaneIndexData.manaCost * manaCostMultiplier
 end
 
@@ -365,10 +357,6 @@ function ArcaneController.Start(self: typeof(ArcaneController))
 	end)
 	-- So does the worn armor's Mana Cost Reduction (gear lines).
 	Players.LocalPlayer:GetAttributeChangedSignal("ManaCostReductionPercent"):Connect(function()
-		self.Signals.OnManaCostsChanged:Fire()
-	end)
-	-- And Korblox Evil Eye's discounted cast coming up.
-	Players.LocalPlayer:GetAttributeChangedSignal("NextSpellCostMultiplier"):Connect(function()
 		self.Signals.OnManaCostsChanged:Fire()
 	end)
 	-- And Korblox Mage Staff's free cast coming up.

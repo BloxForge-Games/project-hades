@@ -71,6 +71,7 @@
 --[ Roblox Services ]--
 
 local GroupService = game:GetService("GroupService")
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -102,6 +103,8 @@ local BonusStatData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Bonu
 local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollBonusStats)
 local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
+local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+local WeaponNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.WeaponNames)
 local rollWeaponEnchantment =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
@@ -135,6 +138,16 @@ end
 -- RelicService requires half the place at load; reached on first use.
 local function getRelicService(): any
 	return (require :: any)(ServerScriptService.Services.RelicService)
+end
+
+-- /allcards: the gallery each player is watching ([player] = its token;
+-- a new /allcards or "/allcards stop" replaces it, ending the old one).
+local galleries: { [Player]: {} } = {}
+local GALLERY_TREE_ORDER = { "Blaze", "Frost", "Storm", "Venom", "Earth", "Neutral" }
+local GALLERY_RARITY_ORDER = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Duo", "Cursed" }
+
+local function getRelicOfferService(): any
+	return (require :: any)(ServerScriptService.Services.RelicOfferService)
 end
 
 -- A relic name squashed for matching typed input: lower case, letters and
@@ -526,6 +539,137 @@ COMMANDS = {
 				return ("Granted %s."):format(name)
 			end
 			return ("Could not grant %s (already owned, or no slot left)."):format(name)
+		end,
+	},
+
+	card = {
+		usage = "/card <name>[, name, name]",
+		description = "Deals up to 3 relics (by partial name, comma-separated) as relic cards on your screen, as a vending machine would; taking one grants it.",
+		handler = function(player: Player, args: { string }): string?
+			local query = table.concat(args, " ")
+			if query == "" then
+				return ("Usage: %s"):format(COMMANDS.card.usage)
+			end
+			local names: { string } = {}
+			for part in string.gmatch(query, "[^,]+") do
+				local trimmed = string.match(part, "^%s*(.-)%s*$") or part
+				if trimmed ~= "" then
+					local name, candidates = findRelic(trimmed)
+					if not name then
+						if #candidates == 0 then
+							return ("No relic matches '%s'."):format(trimmed)
+						end
+						return ("'%s' matches %d relics: %s"):format(
+							trimmed,
+							#candidates,
+							table.concat(candidates, ", ", 1, math.min(#candidates, 6))
+						)
+					end
+					if not table.find(names, name) then
+						table.insert(names, name)
+					end
+				end
+			end
+			if #names > 3 then
+				return "At most 3 cards at once."
+			end
+			local offers = getRelicOfferService()
+			local queued = offers:HasOpenOffer(player)
+			if not offers:Offer(player, names, "ChatCommand") then
+				return "Could not deal the cards."
+			end
+			return ("%s: %s."):format(
+				if queued then "Queued behind the open offer" else "Dealt",
+				table.concat(names, ", ")
+			)
+		end,
+	},
+
+	allcards = {
+		usage = "/allcards [seconds | stop]",
+		description = "Shows every active relic as relic cards, 3 at a time, switching every few seconds (default 5) -- an icon pass. Sorted by tree, rarity and name. Taking a card grants it. '/allcards stop' ends it.",
+		handler = function(player: Player, args: { string }): string?
+			local offers = getRelicOfferService()
+			if args[1] and string.lower(args[1]) == "stop" then
+				galleries[player] = nil
+				offers:Dismiss(player)
+				return "Card gallery stopped."
+			end
+			local seconds = math.clamp(tonumber(args[1]) or 5, 1, 60)
+			local names: { string } = {}
+			for name, row in RelicData do
+				if type(row) == "table" and row.retired ~= true and row.rarity ~= nil then
+					table.insert(names, name)
+				end
+			end
+			local function rank(list: { string }, value: string?): number
+				return table.find(list, value or "") or #list + 1
+			end
+			table.sort(names, function(a: string, b: string): boolean
+				local rowA, rowB = (RelicData :: any)[a], (RelicData :: any)[b]
+				local treeA, treeB = rank(GALLERY_TREE_ORDER, rowA.tree), rank(GALLERY_TREE_ORDER, rowB.tree)
+				if treeA ~= treeB then
+					return treeA < treeB
+				end
+				local rarityA, rarityB =
+					rank(GALLERY_RARITY_ORDER, rowA.rarity), rank(GALLERY_RARITY_ORDER, rowB.rarity)
+				if rarityA ~= rarityB then
+					return rarityA < rarityB
+				end
+				return a < b
+			end)
+			local token = {}
+			galleries[player] = token
+			local pages = math.ceil(#names / 3)
+			task.spawn(function()
+				for page = 1, pages do
+					if galleries[player] ~= token or not player.Parent then
+						return
+					end
+					offers:Dismiss(player)
+					local batch = {}
+					for index = (page - 1) * 3 + 1, math.min(page * 3, #names) do
+						table.insert(batch, names[index])
+					end
+					offers:Offer(player, batch, "ChatCommand")
+					task.wait(seconds)
+				end
+				if galleries[player] == token then
+					galleries[player] = nil
+					offers:Dismiss(player)
+				end
+			end)
+			return ("Showing %d relics, 3 at a time every %ds (%d hands). '/allcards stop' ends it."):format(
+				#names,
+				seconds,
+				pages
+			)
+		end,
+	},
+
+	bow = {
+		usage = "/bow",
+		description = "Adds a Travelers Bow to your inventory. Equip it from the inventory like any weapon.",
+		handler = function(player: Player, _args: { string }): string?
+			local profile = DataService:GetProfileData(player)
+			local weapons = profile and profile.Inventory and profile.Inventory[InventoryType.Weapon]
+			if not weapons then
+				return "No profile inventory."
+			end
+			table.insert(weapons, {
+				uuid = HttpService:GenerateGUID(false),
+				name = WeaponNames["Travelers Bow"],
+				enchantment = EnchantmentNames.None,
+				rarity = ItemRarity.Common,
+				level = 1,
+				upgrades = 0,
+				equipSlot = 0,
+				scalarMultiplier = 1,
+				bonusStats = {},
+				shiny = false,
+			})
+			DataService:SetProfileValue(player, "Inventory", profile.Inventory)
+			return "Added a Travelers Bow to your inventory."
 		end,
 	},
 

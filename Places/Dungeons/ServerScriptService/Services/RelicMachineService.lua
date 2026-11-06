@@ -294,9 +294,10 @@ function RelicMachineService.Start(_self: typeof(RelicMachineService))
 		-- EVERY cleared Combat segment drops a relic machine: relic pickups
 		-- are the single reward cadence, so the element-affinity snowball
 		-- gets a chance to compound every room.
-		-- After the room-clear slow motion (GateService), on the real clock:
-		-- the kill lands in slow motion, then the machines fall at speed.
-		task.wait(GameClock.RealSecondsUntilNormal())
+		-- DURING the room-clear slow motion (2026-11-04; after it before):
+		-- the machines drop straight away and fall on game time
+		-- (_animateFall), so the fall plays slowed with the killing blow
+		-- and speeds back up as time returns.
 		for _, player in Players:GetPlayers() do
 			task.wait(0.25)
 			RelicMachineService:DropMachineOnPlayer(player)

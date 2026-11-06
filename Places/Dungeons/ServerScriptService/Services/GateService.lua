@@ -26,7 +26,6 @@
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
@@ -46,6 +45,7 @@ local ROOM_CLEAR_SLOW_HOLD_SECONDS = 0.8
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type Room = DungeonService.Room
 type Dungeon = DungeonService.Dungeon
@@ -393,7 +393,7 @@ local function tweenGateVisuals(highlight: Instance?, billboard: Instance?, fade
 			highlight.FillTransparency = 1
 			highlight.OutlineTransparency = 1
 		end
-		TweenService:Create(highlight, tweenInfo, {
+		GameClock.Tween(highlight, tweenInfo, {
 			FillTransparency = if fadeIn then GATE_HIGHLIGHT_FILL_TRANSPARENCY else 1,
 			OutlineTransparency = if fadeIn then GATE_HIGHLIGHT_OUTLINE_TRANSPARENCY else 1,
 		}):Play()
@@ -405,12 +405,12 @@ local function tweenGateVisuals(highlight: Instance?, billboard: Instance?, fade
 				if fadeIn then
 					descendant.TextTransparency = 1
 				end
-				TweenService:Create(descendant, tweenInfo, { TextTransparency = if fadeIn then 0 else 1 }):Play()
+				GameClock.Tween(descendant, tweenInfo, { TextTransparency = if fadeIn then 0 else 1 }):Play()
 			elseif descendant:IsA("UIStroke") then
 				if fadeIn then
 					descendant.Transparency = 1
 				end
-				TweenService:Create(descendant, tweenInfo, { Transparency = if fadeIn then 0.5 else 1 }):Play()
+				GameClock.Tween(descendant, tweenInfo, { Transparency = if fadeIn then 0.5 else 1 }):Play()
 			end
 		end
 	end

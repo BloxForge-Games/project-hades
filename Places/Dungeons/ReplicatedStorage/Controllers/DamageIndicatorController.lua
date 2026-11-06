@@ -1,9 +1,7 @@
 --!strict
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 
 local InputPlatformController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.InputPlatformController)
 local CharacterHighlightController = require(ReplicatedStorage.Controllers.CharacterHighlightController)
@@ -18,6 +16,8 @@ local isArcaneCutscenePlaying =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Cutscene.isArcaneCutscenePlaying)
 local playHitBurst = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.playHitBurst)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
 
 local DEFAULT_TWEEN_INFO_PROPS = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, false, 0)
 local FONT_SCALED = 1.25
@@ -49,6 +49,23 @@ local ARC_FALL_TWEEN_INFO = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.Easin
 local FADE_TWEEN_INFO = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.In) -- = the fall
 -- Teardown once the fall (and its fade) has landed, with a small margin.
 local INDICATOR_LIFETIME = ARC_RISE_TWEEN_INFO.Time + ARC_FALL_TWEEN_INFO.Time + 0.15
+
+-- Live-number cap (2026-11-05, the mobile pass). Every number is a cloned
+-- Part + BillboardGui running ~6 tweens, and a DoT tick or an AoE across
+-- twenty mobs used to put twenty of them up in one frame. At most
+-- MAX_LIVE_INDICATORS are on screen, scaled by vfxBudget and never below
+-- MIN_LIVE_INDICATORS (30 on PC, 15 on a phone). Over the cap the least
+-- important live number makes way: status ticks first, then plain hits; a
+-- crit only ever replaces an older crit. A new number that ranks below
+-- everything on screen is dropped instead (its sound still plays).
+local MAX_LIVE_INDICATORS = 30
+local MIN_LIVE_INDICATORS = 15
+local RANK_STATUS = 1
+local RANK_HIT = 2
+local RANK_CRIT = 3
+
+-- One number on screen and its rank under the cap.
+type LiveIndicator = { part: Instance, rank: number }
 
 -- Critical hits: gold number, and a larger indicator frame than a normal
 -- hit. The TextLabel is forced TextScaled at spawn (see the handler), so
@@ -148,6 +165,8 @@ local DamageIndicatorController = {
 	-- Heartbeat connection per crit.
 	_critJitters = {} :: { CritJitter },
 	_critJitterConnection = nil :: RBXScriptConnection?,
+	-- Every number on screen, oldest first (see MAX_LIVE_INDICATORS).
+	_liveIndicators = {} :: { LiveIndicator },
 }
 
 DamageIndicatorController.OnIndicatorRequested = Signal.new()
@@ -158,7 +177,7 @@ DamageIndicatorController.OnIndicatorRequested = Signal.new()
 -- Finished (or torn down early) numbers are reset and dropped; the
 -- connection goes with the last one.
 function DamageIndicatorController._stepCritJitters(self: typeof(DamageIndicatorController))
-	local now = os.clock()
+	local now = GameClock.Now()
 	local jitters = self._critJitters
 	for index = #jitters, 1, -1 do
 		local jitter = jitters[index]
@@ -189,12 +208,41 @@ end
 -- Starts the rattle on a crit number's label, connecting the shared
 -- Heartbeat if this is the first live one.
 function DamageIndicatorController._addCritJitter(self: typeof(DamageIndicatorController), label: TextLabel)
-	table.insert(self._critJitters, { label = label, startedAt = os.clock() })
+	table.insert(self._critJitters, { label = label, startedAt = GameClock.Now() })
 	if not self._critJitterConnection then
 		self._critJitterConnection = RunService.Heartbeat:Connect(function()
 			self:_stepCritJitters()
 		end)
 	end
+end
+
+-- Whether a new number of `rank` may go up (see MAX_LIVE_INDICATORS).
+-- Forgets numbers that have already been torn down; at the cap, destroys
+-- the oldest of the lowest-ranked live numbers when the new one outranks
+-- it (or both are crits), else refuses the new one.
+function DamageIndicatorController._admitIndicator(self: typeof(DamageIndicatorController), rank: number): boolean
+	local live = self._liveIndicators
+	for index = #live, 1, -1 do
+		if not live[index].part.Parent then
+			table.remove(live, index)
+		end
+	end
+	if #live < vfxBudget.count(MAX_LIVE_INDICATORS, MIN_LIVE_INDICATORS) then
+		return true
+	end
+	local victimIndex = 1
+	for index = 2, #live do
+		if live[index].rank < live[victimIndex].rank then
+			victimIndex = index
+		end
+	end
+	local victim = live[victimIndex]
+	if victim.rank < rank or (rank == RANK_CRIT and victim.rank == RANK_CRIT) then
+		victim.part:Destroy()
+		table.remove(live, victimIndex)
+		return true
+	end
+	return false
 end
 
 function DamageIndicatorController.Start(self: typeof(DamageIndicatorController))
@@ -293,7 +341,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			end
 		end
 
-		Debris:AddItem(statusVFX, longestLifetime + STATUS_VFX_CLEANUP_MARGIN)
+		GameClock.Debris(statusVFX, longestLifetime + STATUS_VFX_CLEANUP_MARGIN)
 	end)
 
 	-- `resistKind` ("Projectile" | "Magic" | nil) picks the resist sound.
@@ -334,12 +382,6 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			self.OnIndicatorRequested:Fire()
 		end
 
-		local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()
-		local indicator = damageIndicator.Indicator
-		local textLabel = damageIndicator.Indicator.TextLabel
-		textLabel.FontFace = DAMAGE_FONT
-		local indicatorSize
-
 		if resistKind == "Projectile" then
 			ReplicatedStorage.GameAssets.Sounds.Bulletproof:Play()
 		elseif resistKind == "Magic" then
@@ -350,6 +392,20 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 				ReplicatedStorage.GameAssets.Sounds.BulletHit:Play()
 			end
 		end
+
+		-- The live-number cap (see MAX_LIVE_INDICATORS). Status ticks never
+		-- crit, so a crit always ranks as one.
+		local rank = if critical then RANK_CRIT elseif isStatus then RANK_STATUS else RANK_HIT
+		if not self:_admitIndicator(rank) then
+			return
+		end
+
+		local damageIndicator = game.ReplicatedStorage.GameAssets.Particles.DamageIndicator:Clone()
+		table.insert(self._liveIndicators, { part = damageIndicator, rank = rank })
+		local indicator = damageIndicator.Indicator
+		local textLabel = damageIndicator.Indicator.TextLabel
+		textLabel.FontFace = DAMAGE_FONT
+		local indicatorSize
 
 		-- Indicator Billboard GUI prop changes
 		indicator.ExtentsOffsetWorldSpace = Vector3.new(0, 0, 0)
@@ -417,7 +473,7 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 		local fullSize = UDim2.fromScale(1, 1)
 		if isStatus then
 			textLabel.Size = UDim2.fromScale(0, 0)
-			TweenService:Create(textLabel, DEFAULT_TWEEN_INFO_PROPS, { Size = fullSize }):Play()
+			GameClock.Tween(textLabel, DEFAULT_TWEEN_INFO_PROPS, { Size = fullSize }):Play()
 		else
 			-- +PULSE_OVERSHOOT_PX on each axis, expressed as a scale of the
 			-- frame so it's the same relative pop on desktop and mobile.
@@ -427,11 +483,11 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			)
 
 			textLabel.Size = UDim2.fromScale(0, 0)
-			local pulseIn = TweenService:Create(textLabel, PULSE_IN_TWEEN_INFO, { Size = overshootSize })
+			local pulseIn = GameClock.Tween(textLabel, PULSE_IN_TWEEN_INFO, { Size = overshootSize })
 
 			-- Settle back to full size once the overshoot lands.
 			pulseIn.Completed:Once(function()
-				TweenService:Create(textLabel, PULSE_SETTLE_TWEEN_INFO, { Size = fullSize }):Play()
+				GameClock.Tween(textLabel, PULSE_SETTLE_TWEEN_INFO, { Size = fullSize }):Play()
 			end)
 
 			pulseIn:Play()
@@ -454,28 +510,28 @@ function DamageIndicatorController.Start(self: typeof(DamageIndicatorController)
 			self:_addCritJitter(textLabel)
 		end
 
-		TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {
+		GameClock.Tween(indicator, ARC_RISE_TWEEN_INFO, {
 			ExtentsOffset = Vector3.new(lateral * 0.5, 0, 0),
 		}):Play()
-		local rise = TweenService:Create(indicator, ARC_RISE_TWEEN_INFO, {
+		local rise = GameClock.Tween(indicator, ARC_RISE_TWEEN_INFO, {
 			ExtentsOffsetWorldSpace = Vector3.new(0, peak, 0),
 		})
 		rise.Completed:Once(function()
 			if not damageIndicator.Parent then
 				return
 			end
-			TweenService:Create(indicator, ARC_FALL_TWEEN_INFO, {
+			GameClock.Tween(indicator, ARC_FALL_TWEEN_INFO, {
 				ExtentsOffsetWorldSpace = Vector3.new(0, landing, 0),
 			}):Play()
-			TweenService:Create(indicator, ARC_FALL_TWEEN_INFO, {
+			GameClock.Tween(indicator, ARC_FALL_TWEEN_INFO, {
 				ExtentsOffset = Vector3.new(lateral, 0, 0),
 			}):Play()
-			TweenService:Create(textLabel, FADE_TWEEN_INFO, { TextTransparency = 1 }):Play()
-			TweenService:Create(textLabel.UIStroke, FADE_TWEEN_INFO, { Transparency = 1 }):Play()
+			GameClock.Tween(textLabel, FADE_TWEEN_INFO, { TextTransparency = 1 }):Play()
+			GameClock.Tween(textLabel.UIStroke, FADE_TWEEN_INFO, { Transparency = 1 }):Play()
 		end)
 		rise:Play()
 
-		Debris:AddItem(damageIndicator, INDICATOR_LIFETIME)
+		GameClock.Debris(damageIndicator, INDICATOR_LIFETIME)
 	end)
 end
 

@@ -13,6 +13,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local CombatNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Combat)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local GLYPH_ASSET_NAME = "StaffofAzureIceGlyph"
 local GLYPH_CLONE_NAME = "AzureIceGlyph"
@@ -88,7 +89,7 @@ function azureGlyph.dismiss(glyph: Model)
 		ToAlpha = 0,
 		Duration = GLYPH_FADE_OUT_SECONDS,
 	})
-	task.delay(GLYPH_FADE_OUT_SECONDS, function()
+	GameClock.Delay(GLYPH_FADE_OUT_SECONDS, function()
 		glyph:Destroy()
 	end)
 end

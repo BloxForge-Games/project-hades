@@ -3,7 +3,6 @@
      Module: RelicController.lua
 ]]
 
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -24,6 +23,7 @@ local Shatter = require(script.Shatter)
 local LightningStrike = require(script.LightningStrike)
 local Jail = require(script.Jail)
 local Fireworks = require(script.Fireworks)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local RelicController = {
 	Name = "RelicController",
@@ -113,14 +113,14 @@ function RelicController._playPerfectDodgeBurst(_self: typeof(RelicController), 
 		end
 	end
 
-	task.delay(PERFECT_DODGE_ACTIVE_SECONDS, function()
+	GameClock.Delay(PERFECT_DODGE_ACTIVE_SECONDS, function()
 		for _, emitter in emitters do
 			if emitter.Parent then
 				emitter.Enabled = false
 			end
 		end
 	end)
-	Debris:AddItem(clone, PERFECT_DODGE_LIFETIME)
+	GameClock.Debris(clone, PERFECT_DODGE_LIFETIME)
 end
 
 -- See the TntExplosionEffect handler in Start.
@@ -229,8 +229,8 @@ function RelicController.Start(self: typeof(RelicController))
 		Shatter.new(payload.Position, payload.Scale):PlayEffect()
 	end)
 
-	RelicNetwork.LightningStrikeEffect.On(function(position: Vector3)
-		LightningStrike.new(position):PlayEffect()
+	RelicNetwork.LightningStrikeEffect.On(function(payload: { Position: Vector3, Caster: Player? })
+		LightningStrike.new(payload.Position, payload.Caster):PlayEffect()
 	end)
 
 	-- Perfect dodge: the burst on the dodger's root, read HERE so it sits
@@ -288,7 +288,7 @@ function RelicController.Start(self: typeof(RelicController))
 
 			superStompBootsVFX.Part.Stomp:Play()
 
-			Debris:AddItem(superStompBootsVFX, 5)
+			GameClock.Debris(superStompBootsVFX, 5)
 		end
 	)
 end

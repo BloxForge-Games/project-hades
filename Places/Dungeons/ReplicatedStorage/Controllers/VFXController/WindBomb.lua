@@ -11,6 +11,8 @@ local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functi
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
+local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
@@ -26,7 +28,8 @@ return function(player: Player, preload: boolean?)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
-	local windbombAnimation = (character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator):LoadAnimation(
+	local windbombAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
 		ReplicatedStorage.GameAssets.Animations:FindFirstChild("WindBombAnimation")
 	)
 
@@ -80,7 +83,7 @@ return function(player: Player, preload: boolean?)
 		end
 
 		for _, particle in pairs(windbombExplosionVFX.Attachment:GetDescendants()) do
-			particle:Emit(35)
+			vfxBudget.emit(particle, 35)
 		end
 
 		GameClock.Debris(windbombExplosionVFX, 5)

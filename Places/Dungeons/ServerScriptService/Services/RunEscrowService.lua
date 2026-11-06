@@ -248,21 +248,27 @@ function RunEscrowService.SpendGems(self: typeof(RunEscrowService), player: Play
 	return true
 end
 
--- Dragon Lantern's drawback: strips `fraction` of the player's Gems AND
--- carried Coins (each rounded down). Crystals and gear are never touched.
-function RunEscrowService.TaxCurrencies(self: typeof(RunEscrowService), player: Player, fraction: number)
-	local entry = self._escrow[player.UserId]
-	if not entry then
-		return
+-- Dragon Lantern's drawback (2026-11-04; a 10% cut of the run's coins
+-- before, which read as nothing against the HUD's banked-plus-run total):
+-- takes `amount` coins, from this run's coins first, then from the
+-- profile's banked Gold, never below 0. Returns what was taken.
+function RunEscrowService.LoseCoins(self: typeof(RunEscrowService), player: Player, amount: number): number
+	local entry = self:_getOrCreate(player)
+	local remaining = math.max(math.floor(amount), 0)
+	local fromRun = math.min(entry.coins or 0, remaining)
+	if fromRun > 0 then
+		self:_commitCoins(player, entry.coins - fromRun)
+		remaining -= fromRun
 	end
-	local gemsLoss = math.floor((entry.gems or 0) * fraction)
-	if gemsLoss > 0 then
-		self:_commitGems(player, entry.gems - gemsLoss)
+	local fromBank = 0
+	if remaining > 0 and DataService and DataService:GetProfileData(player) then
+		local banked = CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) or 0
+		fromBank = math.min(banked, remaining)
+		if fromBank > 0 then
+			CurrencyService:SetCurrencyValue(player, CurrencyTypes.Gold, banked - fromBank)
+		end
 	end
-	local coinsLoss = math.floor((entry.coins or 0) * fraction)
-	if coinsLoss > 0 then
-		self:_commitCoins(player, entry.coins - coinsLoss)
-	end
+	return fromRun + fromBank
 end
 
 -- Credits Coins (a reward chest's payout, post dungeon scale). Cargo

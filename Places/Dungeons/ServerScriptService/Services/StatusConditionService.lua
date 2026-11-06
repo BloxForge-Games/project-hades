@@ -62,7 +62,6 @@
 --[ Roblox Services ]--
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Debris = game:GetService("Debris")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
@@ -504,7 +503,7 @@ local function playApplyVFX(vfxName: string?, hrp: BasePart)
 		end
 	end
 
-	Debris:AddItem(burst, APPLY_VFX_LIFETIME)
+	GameClock.Debris(burst, APPLY_VFX_LIFETIME)
 end
 
 -- Plays the status's proc sting at the mob. The clone is CACHED on the HRP
@@ -668,6 +667,19 @@ end
 -- tick, at once (each stack's per-tick damage x its remaining ticks, the
 -- tick cap applied per tick as it would have been). A black-fire burst
 -- plays on every client. Returns the damage dealt (0 = nothing to burn).
+-- The relic BURSTS here (the Black Flame detonation, Ice Breaker's
+-- Shatter) hit the breakables around the mob they burst on, like every
+-- other relic hit (2026-11-04). Breakable is a component reached at call
+-- time (it requires services that require this one).
+local BURST_BREAK_RADIUS = 3
+local function hitBreakablesAt(player: Player?, position: Vector3)
+	local breakable = ServerScriptService:FindFirstChild("Components")
+		and ServerScriptService.Components:FindFirstChild("Breakable")
+	if breakable then
+		(require :: any)(breakable).HitInRadius(position, BURST_BREAK_RADIUS, player)
+	end
+end
+
 function StatusConditionService:DetonateBlackFlame(sourcePlayer: Player, model: Model): number
 	local entry = self._active[model]
 	local value = entry and entry[StatusConditions.BlackFlame]
@@ -695,6 +707,7 @@ function StatusConditionService:DetonateBlackFlame(sourcePlayer: Player, model: 
 	DamageService:TakeDamage(sourcePlayer, humanoid, total, false, true, nil, nil, nil, color)
 	local hrp = model:FindFirstChild("HumanoidRootPart") :: BasePart?
 	if hrp then
+		hitBreakablesAt(sourcePlayer, hrp.Position)
 		RelicNetwork.GimmickEffect.FireAll({
 			Kind = "BlackBurst",
 			Caster = sourcePlayer,
@@ -814,9 +827,10 @@ end
 -- for the SAME status stack ADDITIVELY; the hub sums them and makes ONE
 -- roll per status per hit.
 -- Row conditions:
---   meleeOnly               : Skeletal Scythe Poisons on melee weapon hits
---   weaponOnly / rangedOnly : Magenta Paintball Gun paints on ranged
---                             weapon hits only.
+--   meleeOnly               : melee weapon hits only (none since
+--                             2026-11-05).
+--   weaponOnly / rangedOnly : ranged weapon hits only (Magenta Paintball
+--                             Gun, Skeletal Scythe).
 --   auraGate                : row counts only while the OWNER has that
 --                             aura up (the "While <aura>..." relics).
 --   spellOnly               : arcane hits from a real SPELL only, never a
@@ -839,27 +853,29 @@ local RELIC_HIT_STATUSES: {
 	}
 } =
 	{
-		-- Skeletal Scythe (2026-11-01 evening): Venom's melee opener, 30% of
-		-- melee weapon hits Poison (which its own redirect turns into Death
-		-- Venom). Added so the Scythe works alone (NC) and Zombie Bomb is
-		-- the tree's one C relic.
+		-- Skeletal Scythe: Venom's opener, 30% of RANGED weapon hits
+		-- (2026-11-05; melee hits since 2026-11-01 before) Poison, which
+		-- its own redirect turns into Death Venom. So the Scythe works
+		-- alone (NC) and Zombie Bomb is the tree's one C relic. rangedOnly:
+		-- the chance is not scaled by the gun coefficient again.
 		{
 			relicName = RelicNames["Skeletal Scythe"],
 			status = StatusConditions.Poison,
 			chance = 0.30,
 			weaponOnly = true,
-			meleeOnly = true,
+			rangedOnly = true,
 		},
 		-- The four tree openers left on 2026-11-01: statuses open from the
 		-- weapon ENCHANTMENTS (EnchantmentData openerStatus / openerChance,
 		-- read in ApplyWeaponOnHitStatuses) and from each tree's own relics
 		-- (a wave, an arrow, a cloud, a strike, a shard).
-		-- Magenta Paintball Gun: 15% of ranged weapon hits Paint (the
-		-- callback is its damage multiplier, so the chance lives here).
+		-- Magenta Paintball Gun: 30% of ranged weapon hits Paint (15% until
+		-- 2026-11-05; the callback is its damage multiplier, so the chance
+		-- lives here).
 		{
 			relicName = RelicNames["Magenta Paintball Gun"],
 			status = StatusConditions.Paint,
-			chance = 0.15,
+			chance = 0.30,
 			weaponOnly = true,
 			rangedOnly = true,
 		},
@@ -1455,6 +1471,7 @@ function StatusConditionService:_tryIceBreakerShatter(sourcePlayer: Player, targ
 
 	if hrp then
 		RelicNetwork.ShatterEffect.FireAll({ Position = hrp.Position, Scale = 1 })
+		hitBreakablesAt(sourcePlayer, hrp.Position)
 	end
 
 	local function dealShatter(targetHumanoid: Humanoid, model: Model)

@@ -23,7 +23,6 @@
 	this aura is up, but RelicGimmickService/Lib/azureGlyph owns it.)
 ]]
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -130,6 +129,6 @@ return function(player: Player, character: Model, duration: number?)
 				clone:Destroy()
 			end
 		end)
-		Debris:AddItem(marker, grace)
+		GameClock.Debris(marker, grace)
 	end)
 end

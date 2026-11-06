@@ -37,6 +37,7 @@ local arcPath = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.
 local privateDropVisibility = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.privateDropVisibility)
 local dressRelicDisplay = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.dressRelicDisplay)
 local buildPromptCard = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.buildPromptCard)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -447,7 +448,7 @@ function GearDrop:_fadeOutAndDestroy()
 		disable = { "BillboardGui", "ProximityPrompt", "ParticleEmitter" },
 	})
 
-	task.delay(FADE_DURATION + 0.1, function()
+	GameClock.Delay(FADE_DURATION + 0.1, function()
 		if self.Instance and self.Instance.Parent then
 			self.Instance:Destroy()
 		end
@@ -581,7 +582,7 @@ function GearDrop:Start()
 			-- retry, and the label is released. Refresh rather than a plain
 			-- enable — if the player is still standing in range the prompt
 			-- is up again, and the label must stay down for that instead.
-			task.delay(1, function()
+			GameClock.Delay(1, function()
 				if self._prompt and self.Instance and self.Instance.Parent then
 					self._prompt.Enabled = true
 					self.Instance:SetAttribute(ATTR_PICKUP_PENDING, false)

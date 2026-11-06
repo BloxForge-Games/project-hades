@@ -7,10 +7,8 @@
 
 --[ Roblox Services ]--
 
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
@@ -458,7 +456,7 @@ function VFXService._breakBuildingPart(self: typeof(VFXService), part: BasePart,
 	local direction = (radial.Unit + Vector3.new(0, BUILDING_UPWARD_KICK, 0)).Unit
 	local mass = part.AssemblyMass
 
-	part:ApplyImpulse(direction * mass * BUILDING_BREAK_SPEED)
+	GameClock.ApplyImpulse(part, direction * mass * BUILDING_BREAK_SPEED)
 
 	part:ApplyAngularImpulse(
 		Vector3.new(
@@ -468,7 +466,7 @@ function VFXService._breakBuildingPart(self: typeof(VFXService), part: BasePart,
 		) * mass
 	)
 
-	task.delay(math.random(BROKEN_BUILDING_MIN_LIFETIME, BROKEN_BUILDING_MAX_LIFETIME), function()
+	GameClock.Delay(math.random(BROKEN_BUILDING_MIN_LIFETIME, BROKEN_BUILDING_MAX_LIFETIME), function()
 		if not part.Parent then
 			return
 		end
@@ -477,12 +475,12 @@ function VFXService._breakBuildingPart(self: typeof(VFXService), part: BasePart,
 			if child:IsA("ParticleEmitter") then
 				child.Enabled = false
 			elseif child:IsA("Texture") then
-				TweenService:Create(child, TweenInfo.new(1), { Transparency = 1 }):Play()
+				GameClock.Tween(child, TweenInfo.new(1), { Transparency = 1 }):Play()
 			end
 		end
 
-		TweenService:Create(part, TweenInfo.new(1), { Transparency = 1 }):Play()
-		Debris:AddItem(part, 1)
+		GameClock.Tween(part, TweenInfo.new(1), { Transparency = 1 }):Play()
+		GameClock.Debris(part, 1)
 	end)
 end
 
@@ -674,7 +672,7 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 			if alpha >= 1 then
 				break
 			end
-			task.wait()
+			GameClock.Wait(0)
 		end
 	end
 
@@ -706,7 +704,7 @@ function VFXService._spawnArcaneSigil(self: typeof(VFXService), player: Player)
 			end
 		end
 	end)
-	Debris:AddItem(sigil, MYSTICAL_SIGIL_DURATION + MYSTICAL_SIGIL_FADE_SECONDS)
+	GameClock.Debris(sigil, MYSTICAL_SIGIL_DURATION + MYSTICAL_SIGIL_FADE_SECONDS)
 
 	self:_pruneExpiredSigils()
 	table.insert(self._activeSigils, {
@@ -765,11 +763,6 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	--     replicated ManaCostReductionPercent attribute by PlayerStatsService.
 	manaCostMultiplier *= 1 - ((player:GetAttribute("ManaCostReductionPercent") :: number?) or 0)
 
-	--   * Korblox Evil Eye (2026-11-01): every everyCasts-th cast at
-	--     costMultiplier. ArcaneService prices it here and counts it once
-	--     the cast is committed below.
-	manaCostMultiplier *= ArcaneService:GetEvilEyeCostMultiplier(player)
-
 	local effectiveManaCost = ArcaneData[vfxName].manaCost * manaCostMultiplier
 
 	-- Korblox Mage Staff: the owner's every castsPerFree-th cast costs
@@ -822,7 +815,6 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 
 	ArcaneService:SetPlayerArcaneCooldown(player, vfxName, newCooldown)
 	self:_commitCast(player, freeCast)
-	ArcaneService:CommitEvilEyeCast(player, vfxName)
 
 	-- Mystical Staff of Cyan: the cast is COMMITTED (mana paid, cooldown
 	-- stamped), so drop a sigil at the caster's feet. Equipped casts
@@ -843,7 +835,7 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	-- Frost Field's arming, ...).
 	local gimmicks = Blitz.OptionalService("RelicGimmickService")
 	if gimmicks then
-		gimmicks:OnSpellCast(player, vfxName)
+		gimmicks:OnSpellCast(player, vfxName, cframe)
 	end
 
 	if self._vfxReplicationQueue[player.UserId] == nil then

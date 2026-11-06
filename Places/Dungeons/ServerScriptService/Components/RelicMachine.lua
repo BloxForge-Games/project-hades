@@ -26,7 +26,6 @@ local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicCombo = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicCombo)
-local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
 local LifeService = require(ServerScriptService.Services.LifeService)
 
@@ -131,7 +130,8 @@ local STARTER_GUARANTEED_ELEMENTS = 0
 -- Slot roles for one pull, shuffled in place. See the call site for the
 -- per-machine rules.
 -- Picks ONE offer. Selection is PURE RANDOM inside a rolled rarity -- the
--- only filtering left is `premiumOnly` (Pinata's Epic+ restriction) plus the
+-- only filtering left is `premiumOnly` (Pinata's old Epic+ restriction, unused
+-- since 2026-11-04) plus the
 -- ownership / already-offered exclusions applied above.
 -- STARTER SLOT: an unowned, ungated relic of `tree`, or nil when the tree
 -- has none left. Bypasses the rarity roll -- the point is a guaranteed
@@ -335,13 +335,9 @@ function RelicMachine:Start()
 			self.Instance.PrimaryPart.VendingMachineName.Frame.VendingMachineText.TextColor3 =
 				Color3.fromRGB(255, 85, 85)
 
-			-- Pinata (Cursed): the owner gets TWO choices instead of three,
-			-- but the pool is filtered to Epic-or-higher (Epic / Legendary /
-			-- Cursed -- the premium tiers) inside _getRandomRelicData. Purely
-			-- per-owner: machines belong to one player, so nobody else's
-			-- choices are affected.
-			local ownsPinata = RelicService:GetSpecificRelicRegistry(player, RelicNames.Pinata) > 0
-			local offerCount = if ownsPinata then 2 else 3
+			-- Three choices. (Pinata cut it to two Epic+ until 2026-11-04;
+			-- it bursts coins from crits now.)
+			local offerCount = 3
 
 			-- First machine of the run for this owner: every offer must be a
 			-- different primary archetype. Rarity weights are untouched -- only
@@ -392,7 +388,7 @@ function RelicMachine:Start()
 				if tree then
 					relicData = self:_getStarterRelicData(tree)
 				end
-				relicData = relicData or self:_getRandomRelicData(ownsPinata)
+				relicData = relicData or self:_getRandomRelicData()
 				if relicData then
 					table.insert(offers, relicData.name)
 				end
@@ -425,7 +421,7 @@ function RelicMachine:Start()
 				end
 				if #freeSlots > 0 then
 					local slot = freeSlots[math.random(1, #freeSlots)]
-					local neutralData = self:_getRandomRelicData(ownsPinata, ElementTrees.Neutral)
+					local neutralData = self:_getRandomRelicData(nil, ElementTrees.Neutral)
 					if neutralData then
 						table.insert(self._relics, offers[slot])
 						offers[slot] = neutralData.name

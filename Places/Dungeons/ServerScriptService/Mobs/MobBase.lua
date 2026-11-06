@@ -794,12 +794,12 @@ function MobBase._fadeInOnSpawn(self: MobBase)
 		part.Transparency = 1
 	end)
 
-	task.delay(MODEL_LOAD_DURATION, function()
+	GameClock.Delay(MODEL_LOAD_DURATION, function()
 		-- Bail once the mob is gone: death destroys the RaycastHitbox and
 		-- despawn destroys the model, so a mob that died inside the load
 		-- window could never satisfy the condition and this polled forever.
 		repeat
-			task.wait(MODEL_LOAD_DURATION)
+			GameClock.Wait(MODEL_LOAD_DURATION)
 		until (self._model:FindFirstChild("RaycastHitbox") and self._model:FindFirstChildOfClass("Humanoid"))
 			or self._state == STATE_DEAD
 			or not self._model.Parent
@@ -818,7 +818,7 @@ function MobBase._fadeInOnSpawn(self: MobBase)
 		-- Land the value the clients' tween ends on. A mob that died in the
 		-- meantime lands too: its corpse is meant to be opaque, and the
 		-- despawn dissolve (DESPAWN_TIMER later) starts from there.
-		task.wait(MobFadeData.SpawnFadeSeconds + MobFadeData.SpawnLandingMarginSeconds)
+		GameClock.Wait(MobFadeData.SpawnFadeSeconds + MobFadeData.SpawnLandingMarginSeconds)
 		if not self._model.Parent then
 			return
 		end
@@ -1584,7 +1584,10 @@ function MobBase._applyDeathImpulse(self: MobBase, killer: Player)
 	end
 	local direction = (self._rootPart.Position - killerRoot.Position).Unit
 	direction = Vector3.new(direction.X, 0, direction.Z).Unit
-	self._rootPart:ApplyImpulse((direction + Vector3.new(0, 1, 0)) * self._rootPart.AssemblyMass * (200 * 0.35))
+	GameClock.ApplyImpulse(
+		self._rootPart,
+		(direction + Vector3.new(0, 1, 0)) * self._rootPart.AssemblyMass * (200 * 0.35)
+	)
 end
 
 -- True for minibosses + bosses (the encounter-tier mobs whose death plays an
@@ -1606,7 +1609,10 @@ function MobBase._playDeathSound(self: MobBase)
 end
 
 function MobBase._applyForwardKnockback(self: MobBase)
-	self._rootPart:ApplyImpulse(-self._rootPart.CFrame.LookVector * (DEFAULT_KNOCKBACK * self._rootPart.AssemblyMass))
+	GameClock.ApplyImpulse(
+		self._rootPart,
+		-self._rootPart.CFrame.LookVector * (DEFAULT_KNOCKBACK * self._rootPart.AssemblyMass)
+	)
 end
 
 -- Death-style hooks (overridable). Default mobs collapse via ragdoll

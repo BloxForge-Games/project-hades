@@ -27,6 +27,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 --[ Imports ]--
 
@@ -103,6 +104,18 @@ local LUNGE_SECONDS = 0.4
 -- impulse and knockback, applied to the local copy).
 local DEATH_IMPULSE_PER_MASS = 200 * 0.35
 local DEATH_KNOCKBACK_PER_MASS = 2.5
+-- Live physics ragdolls at once (2026-11-05): an AoE kill of 20 mobs was
+-- ~300 simulated limbs. Past the cap a corpse topples as one anchored
+-- piece instead (_die). Fewer on a touch-only device.
+local MAX_RAGDOLLS = if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then 3 else 8
+-- The anchored topple: back by this angle over this long, sinking by this
+-- share of the root's height above the ground.
+local TOPPLE_ANGLE = math.rad(80)
+local TOPPLE_SECONDS = 0.45
+local TOPPLE_SINK = 0.6
+
+-- Ragdolls currently simulating (released when their rig goes).
+local liveRagdolls = 0
 
 --[ Types ]--
 
@@ -320,6 +333,10 @@ function MobRenderController._dressProxy(_self: typeof(MobRenderController), ent
 		highlight.FillTransparency = 1
 		highlight.OutlineTransparency = 1
 		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		-- Off until CharacterHighlightController has a layer to draw
+		-- (2026-11-05): an Enabled Highlight is its own render pass even
+		-- fully transparent, one per mob, costly on mobile.
+		highlight.Enabled = false
 		highlight.Parent = proxy
 	end
 
@@ -619,6 +636,33 @@ function MobRenderController._die(self: typeof(MobRenderController), entry: Entr
 		sound:Play()
 	end
 
+	-- Over the ragdoll cap: the body keeps its joints and its anchored
+	-- root and topples back as one piece (2026-11-05). Removal is
+	-- unchanged: the rig still goes with the proxy (_untrack).
+	if liveRagdolls >= MAX_RAGDOLLS then
+		local pivot = rigRoot.CFrame
+		GameClock.Tween(rigRoot, TweenInfo.new(TOPPLE_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			CFrame = (pivot - Vector3.yAxis * (entry.rootOffset * TOPPLE_SINK)) * CFrame.Angles(TOPPLE_ANGLE, 0, 0),
+		}):Play()
+		return
+	end
+	liveRagdolls += 1
+	local released = false
+	local function release()
+		if not released then
+			released = true
+			liveRagdolls -= 1
+		end
+	end
+	-- Destroying covers _untrack's rig:Destroy() and the proxy's own; the
+	-- ancestry check covers a rig dropped out of the world without one.
+	rig.Destroying:Once(release)
+	rig.AncestryChanged:Connect(function()
+		if not rig:IsDescendantOf(workspace) then
+			release()
+		end
+	end)
+
 	for _, joint in rig:GetDescendants() do
 		if joint:IsA("Motor6D") and joint.Part0 and joint.Part1 then
 			local attachment0 = Instance.new("Attachment")
@@ -649,9 +693,9 @@ function MobRenderController._die(self: typeof(MobRenderController), entry: Entr
 
 	local mass = rigRoot.AssemblyMass
 	if direction then
-		rigRoot:ApplyImpulse((direction + Vector3.yAxis) * mass * DEATH_IMPULSE_PER_MASS)
+		GameClock.ApplyImpulse(rigRoot, (direction + Vector3.yAxis) * mass * DEATH_IMPULSE_PER_MASS)
 	end
-	rigRoot:ApplyImpulse(-rigRoot.CFrame.LookVector * (DEATH_KNOCKBACK_PER_MASS * mass))
+	GameClock.ApplyImpulse(rigRoot, -rigRoot.CFrame.LookVector * (DEATH_KNOCKBACK_PER_MASS * mass))
 end
 
 --[ Per frame ]--
@@ -764,6 +808,76 @@ function MobRenderController._step(self: typeof(MobRenderController), dt: number
 		if clock - pending.receivedAt > PENDING_MOVE_SECONDS then
 			self._pendingMoves[id] = nil
 		end
+	end
+end
+
+--[ Lookups ]--
+
+-- The rig this client draws for a sim mob's server proxy, or nil (not a
+-- sim mob, or its rig is not built yet). Effects that should sit on the
+-- body the player sees (Chain Lightning's shock) attach to this, not to
+-- the invisible proxy.
+function MobRenderController.GetRig(self: typeof(MobRenderController), proxy: Instance): Model?
+	local entry = self._byProxy[proxy :: Model]
+	return if entry then entry.rig else nil
+end
+
+-- The body this client draws for any server model: a sim mob's rig, else
+-- the model itself (a MobBase rig, a player).
+function MobRenderController.GetVisualModel(self: typeof(MobRenderController), model: Model): Model
+	return self:GetRig(model) or model
+end
+
+local BODY_ANCHOR_PART_NAMES = { "UpperTorso", "Torso", "HumanoidRootPart" }
+
+-- Where on `body` an effect sits, for ANY rig (R6, R15 or a custom mob):
+-- a descendant Attachment named `attachmentName` when the rig has one
+-- (so a custom rig can choose the spot), else its UpperTorso, Torso or
+-- HumanoidRootPart, else its PrimaryPart. A part and an offset from it.
+function MobRenderController.FindBodyAnchor(
+	_self: typeof(MobRenderController),
+	body: Model,
+	attachmentName: string?
+): (BasePart?, CFrame)
+	if attachmentName then
+		local attachment = body:FindFirstChild(attachmentName, true)
+		if attachment and attachment:IsA("Attachment") then
+			local parent = attachment.Parent
+			if parent and parent:IsA("BasePart") then
+				return parent, attachment.CFrame
+			end
+		end
+	end
+	for _, name in BODY_ANCHOR_PART_NAMES do
+		local part = body:FindFirstChild(name)
+		if part and part:IsA("BasePart") then
+			return part, CFrame.identity
+		end
+	end
+	return body.PrimaryPart, CFrame.identity
+end
+
+-- A function giving the world position, right now, of the anchor on the
+-- body this client draws for `model` (FindBodyAnchor), or the last one it
+-- had once that body is gone; `fallback` with no model or no anchor.
+function MobRenderController.TrackBody(
+	self: typeof(MobRenderController),
+	model: Model?,
+	fallback: Vector3,
+	attachmentName: string?
+): () -> Vector3
+	if not model then
+		return function()
+			return fallback
+		end
+	end
+	local part, offset = self:FindBodyAnchor(self:GetVisualModel(model), attachmentName)
+	local last = if part then (part.CFrame * offset).Position else fallback
+	return function()
+		if part and part.Parent then
+			last = (part.CFrame * offset).Position
+		end
+		return last
 	end
 end
 

@@ -35,7 +35,6 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -56,6 +55,7 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
 local UserNotificationSystem = require(ReplicatedStorage.Submodules.Core.Libraries.UserNotificationSystem).Controller
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -98,7 +98,7 @@ local EventController = {
 	-- true once this conversation accepted the shrine's bargain — gates
 	-- the leave-path twin of the "Bargain is struck" node.
 	ShrineAccepted = false,
-	-- "drink" | "attune" | nil — the fountain choice latched THIS
+	-- "drink" | "pray" | nil — the fountain choice latched THIS
 	-- conversation. Gates the outcome twins in the graph; the server call
 	-- fires AT THE CHOICE (one of the few events that pays out
 	-- mid-dialogue). nil = left / no choice.
@@ -107,6 +107,9 @@ local EventController = {
 	-- fountain — fetched by the graph's opening node so the conversation
 	-- routes to the "waters lie still" line instead of the choice.
 	FountainSpent = false,
+	-- The coins the active fountain's Pray pays (its PrayCoins attribute,
+	-- stamped by EventService), read by the graph's option text.
+	FountainPrayCoins = 0,
 	-- "Spirit" | "Power" | "Fortune" | nil -- the Greater Blessing latched
 	-- THIS conversation; the server call fires at the choice, like the
 	-- fountain. GreaterShrineSpent mirrors FountainSpent.
@@ -299,7 +302,7 @@ function EventController.PlaySwordSuccessVFX(_self: typeof(EventController))
 		if descendant:IsA("ParticleEmitter") then
 			descendant.Enabled = false
 		elseif descendant:IsA("Light") then
-			local tween = TweenService:Create(descendant, LIGHT_FADE_INFO, { Brightness = 0 })
+			local tween = GameClock.Tween(descendant, LIGHT_FADE_INFO, { Brightness = 0 })
 			tween.Completed:Once(function()
 				descendant.Enabled = false
 			end)
@@ -337,6 +340,8 @@ function EventController.BeginFountainDialogue(self: typeof(EventController))
 		self.FountainSpent = true
 		return
 	end
+	local prayCoins = model:GetAttribute("PrayCoins")
+	self.FountainPrayCoins = if type(prayCoins) == "number" then prayCoins else 0
 	local ok, spent = pcall(function()
 		return DungeonNetwork.IsFountainSpent.Invoke(model)
 	end)
@@ -345,7 +350,7 @@ end
 
 -- The two choices latch the flag AND yield through the server right
 -- here — the fountain is one of the few events whose payoff lands
--- DURING the dialogue: the outcome line narrates a heal / attunement
+-- DURING the dialogue: the outcome line narrates a heal / prayer
 -- that has already happened.
 function EventController.ChooseFountainDrink(self: typeof(EventController))
 	self.FountainChoice = "drink"
@@ -358,14 +363,14 @@ function EventController.ChooseFountainDrink(self: typeof(EventController))
 	end)
 end
 
-function EventController.ChooseFountainAttune(self: typeof(EventController))
-	self.FountainChoice = "attune"
+function EventController.ChooseFountainPray(self: typeof(EventController))
+	self.FountainChoice = "pray"
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	if not model then
 		return
 	end
 	pcall(function()
-		DungeonNetwork.AttuneToFountain.Invoke(model)
+		DungeonNetwork.PrayAtFountain.Invoke(model)
 	end)
 end
 
@@ -448,7 +453,7 @@ function EventController._dimGreaterShrine(_self: typeof(EventController), model
 			-- cannot write a property through a class union.
 			(descendant :: any).Enabled = false
 		elseif descendant:IsA("Light") then
-			local tween = TweenService:Create(descendant, LIGHT_FADE_INFO, { Brightness = 0 })
+			local tween = GameClock.Tween(descendant, LIGHT_FADE_INFO, { Brightness = 0 })
 			tween.Completed:Once(function()
 				descendant.Enabled = false
 			end)

@@ -1,5 +1,5 @@
 --!strict
-local Debris = game:GetService("Debris")
+local GameClock = require(game:GetService("ReplicatedStorage").Submodules.Core.Shared.GameClock)
 
 local QuadraticBezierController = {
 	Name = "QuadraticBezierController",
@@ -66,8 +66,8 @@ function QuadraticBezierController.GenerateBezierParts(
 		Vector3.new(intermediatePoint.Position.X, rootPart.Position.Y, intermediatePoint.Position.Z)
 	)
 
-	Debris:AddItem(intermediatePoint, BEZIER_PART_LIFETIME)
-	Debris:AddItem(endPoint, BEZIER_PART_LIFETIME)
+	GameClock.Debris(intermediatePoint, BEZIER_PART_LIFETIME)
+	GameClock.Debris(endPoint, BEZIER_PART_LIFETIME)
 
 	return intermediatePoint, endPoint
 end

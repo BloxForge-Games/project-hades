@@ -11,17 +11,17 @@
 	                        deals a share of the swing's damage as MELEE
 	                        weapon damage (crits, weapon relics, on-hit
 	                        statuses), more to Burning enemies.
-	  Berserker's Claymore  INFERNO CLEAVE (2026-11-01): a CRITICAL
+	  Phoenix               INFERNO CLEAVE (2026-11-01): a CRITICAL
 	                        STRIKE erupts in fire around its target,
 	                        dealing the whole hit again to the nearest few
 	                        enemies as weapon damage. Once per fan-out.
-	  Phoenix               PHOENIX DASH: a dodge leaves a fire trail along
+	  Phoenix Dash          PHOENIX DASH (retired): a dodge leaves a fire trail along
 	                        its path; every second it Burns and damages the
 	                        enemies on it (a per-level relic burst).
 
 	  Flaming Bo Staff      THE Nth SWING (2026-11-01, the tree's enabler):
-	                        every Nth melee swing (N by weapon type:
-	                        Daggers 5, Sword 4, Greatsword 3) is a
+	                        every 4th melee swing, a miss included (on
+	                        every weapon since 2026-11-05) is a
 	                        guaranteed Critical Strike and Burns. The crit
 	                        is DamageService's one-shot forced crit, armed
 	                        on the swing before (see countBoStaffSwing).
@@ -46,12 +46,14 @@ local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
 local helpers = require(script.Parent.Lib.gimmickHelpers)
+local relicTriggers = require(script.Parent.Lib.relicTriggers)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local FLAME_SWORD = RelicNames["Dragon's Flame Sword"]
 local BO_STAFF = RelicNames["Flaming Bo Staff"]
-local CLAYMORE = RelicNames["Berserker's Claymore"]
-local PHOENIX = RelicNames.Phoenix
+-- Berserker's Claymore until 2026-11-05, now Phoenix (same effect).
+local CLAYMORE = RelicNames.Phoenix
+local PHOENIX = RelicNames["Phoenix Dash"]
 local RONIN = RelicNames["Flame Ronin Katana"]
 local RED_LASER = RelicNames["Red Laser Scythe"]
 
@@ -110,31 +112,38 @@ end
 
 --[ Flaming Bo Staff: the Nth swing ]--
 
--- Counts one melee SWING (2026-11-01; hits per mob before, which wound
--- the rhythm several steps in a crowd). The crit has to be decided
--- BEFORE a hit's damage is rolled, and the swing hook runs after the
--- swing's hitbox resolves, so the swing before the Nth arms
--- DamageService's one-shot Melee forced crit: the next weapon hit (the
--- Nth swing's first) spends it -- its crit rolls at 100 and the arm's
--- onHit Burns the target as it lands -- and the Nth swing's hook then
--- sees the count reach N and starts over. A whiffed Nth swing leaves the
--- arm up for the next hit. The gimmicks' own melee-typed hits (Flame
--- Wave, Inferno Cleave) run under WithRelicKnockback and never spend it.
-local function countBoStaffSwing(player: Player, weaponType: string?)
+-- Counts EVERY melee swing, a whiff included (2026-11-05, like Dragon's
+-- Flame Sword and the Gloves; only swings that landed 2026-11-04, hits per
+-- mob before 2026-11-01). The crit has to be decided BEFORE a hit's damage
+-- is rolled, and the swing hook runs after the swing's hitbox resolves, so
+-- the swing before the Nth arms DamageService's one-shot Melee forced
+-- crit: the Nth swing's first hit spends it -- its crit rolls at 100 and
+-- the arm's onHit Burns the target as it lands -- and the Nth swing's hook
+-- then sees the count reach N and starts over. A whiffed Nth swing takes
+-- the arm back, so the crit is that swing's or nobody's. The gimmicks' own
+-- melee-typed hits (Flame Wave, Inferno Cleave) run under
+-- WithRelicKnockback and never spend it.
+local function countBoStaffSwing(player: Player, connected: boolean, weaponType: string?)
 	if not helpers.owns(player, BO_STAFF) then
 		boStaffHits[player] = nil
+		relicTriggers.set(player, BO_STAFF, false)
 		return
 	end
 	local needed = helpers.swingsFor(BO_STAFF, weaponType)
 	local count = (boStaffHits[player] or 0) + 1
 	if count >= needed then
 		count = 0
+		if not connected then
+			helpers.damageService():ClearForcedCrit(player, "Melee")
+		end
 	elseif count == needed - 1 then
 		helpers.damageService():ForceNextCrit(player, "Melee", nil, function(target: Model)
 			helpers.statusService():ApplyStatus(player, target, StatusConditions.Burn, true)
 		end)
 	end
 	boStaffHits[player] = count
+	-- The arm is up: the next hit is the guaranteed crit.
+	relicTriggers.set(player, BO_STAFF, count == needed - 1)
 end
 
 function Blaze.onMeleeSwing(
@@ -142,19 +151,36 @@ function Blaze.onMeleeSwing(
 	origin: Vector3,
 	look: Vector3,
 	swingDamage: number,
-	_connected: boolean,
+	connected: boolean,
 	weaponType: string?
 )
-	countBoStaffSwing(player, weaponType)
+	countBoStaffSwing(player, connected, weaponType)
 	if not helpers.owns(player, FLAME_SWORD) then
+		swingCounts[player] = nil
+		relicTriggers.set(player, FLAME_SWORD, false)
 		return
 	end
+	local needed = helpers.swingsFor(FLAME_SWORD, weaponType)
 	local count = (swingCounts[player] or 0) + 1
-	if count >= helpers.swingsFor(FLAME_SWORD, weaponType) then
+	if count >= needed then
 		count = 0
 		launchFlameWave(player, origin, look, swingDamage)
 	end
 	swingCounts[player] = count
+	relicTriggers.set(player, FLAME_SWORD, count == needed - 1)
+end
+
+-- The melee weapon was put away: both counts start over, and an armed
+-- Bo Staff crit is taken back.
+function Blaze.onWeaponStowed(player: Player, lane: string)
+	if lane ~= "Melee" then
+		return
+	end
+	swingCounts[player] = nil
+	if boStaffHits[player] then
+		boStaffHits[player] = nil
+		helpers.damageService():ClearForcedCrit(player, "Melee")
+	end
 end
 
 --[ Inferno Cleave ]--

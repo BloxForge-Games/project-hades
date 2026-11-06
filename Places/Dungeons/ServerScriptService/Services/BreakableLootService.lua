@@ -38,7 +38,6 @@
 --[ Roblox Services ]--
 
 local CollectionService = game:GetService("CollectionService")
-local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -56,6 +55,7 @@ local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Dif
 local DropService = require(ServerScriptService.Services.DropService)
 local Breakable = require(ServerScriptService.Components.Breakable)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
@@ -237,7 +237,7 @@ local function dropOrigin(position: Vector3): BasePart
 	part.CanTouch = false
 	part.Position = position + Vector3.new(0, 1.5, 0)
 	part.Parent = workspace.IgnoreInstances
-	Debris:AddItem(part, DROP_ORIGIN_LIFETIME)
+	GameClock.Debris(part, DROP_ORIGIN_LIFETIME)
 	return part
 end
 

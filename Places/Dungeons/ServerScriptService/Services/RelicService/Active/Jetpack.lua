@@ -1,7 +1,5 @@
 --!strict
-local Debris = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
@@ -11,6 +9,7 @@ local WeldConstraintService = require(ServerScriptService.Submodules.Core.Source
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local Jetpack = {}
 Jetpack.__index = Jetpack
@@ -74,12 +73,12 @@ function Jetpack.Invoke(self: Jetpack)
 	jetpackClone.Handle.InitialThrust:Play()
 	jetpackClone.Handle.Thrusting:Play()
 
-	TweenService:Create(jetpackClone.Handle.Thrusting, TweenInfo.new(0.5), { Volume = 0.1 }):Play()
+	GameClock.Tween(jetpackClone.Handle.Thrusting, TweenInfo.new(0.5), { Volume = 0.1 }):Play()
 
 	jetpackClone.Handle.Transparency = 1
 	jetpackClone.Parent = character
 
-	task.delay(0.1, function()
+	GameClock.Delay(0.1, function()
 		for _, p in pairs(jetpackClone.Handle.ActiveAttachment:GetChildren()) do
 			if p:IsA("ParticleEmitter") then
 				p.Enabled = false
@@ -88,7 +87,7 @@ function Jetpack.Invoke(self: Jetpack)
 		end
 	end)
 
-	TweenService:Create(jetpackClone.Handle, TweenInfo.new(1), { Transparency = 0 }):Play()
+	GameClock.Tween(jetpackClone.Handle, TweenInfo.new(1), { Transparency = 0 }):Play()
 
 	WeldConstraintService:CreateWeldConstraint(jetpackClone.Handle, character:FindFirstChild("Torso") :: BasePart)
 
@@ -109,7 +108,7 @@ function Jetpack.Invoke(self: Jetpack)
 		"Experimental Jetpack!"
 	)
 
-	task.delay(RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"]), function()
+	GameClock.Delay(RelicService:GetRelicEffect(self._player, RelicNames["Experimental Jetpack"]) :: number, function()
 		character:SetAttribute(Attributes.JetpackOnCooldown, false)
 
 		-- Restore to effective base (NOT raw WalkSpeed) — base-walkspeed
@@ -125,14 +124,14 @@ function Jetpack.Invoke(self: Jetpack)
 		-- automatically by InvulnerabilityService's expiry timer (matched
 		-- duration above) — don't double-clear here.
 
-		TweenService:Create(jetpackClone.Handle.Thrusting, TweenInfo.new(0.5), { Volume = 0 }):Play()
+		GameClock.Tween(jetpackClone.Handle.Thrusting, TweenInfo.new(0.5), { Volume = 0 }):Play()
 
 		jetpackClone.Handle.ThrusterAttachment1.Fire.Enabled = false
 		jetpackClone.Handle.ThrusterAttachment2.Fire.Enabled = false
 
-		TweenService:Create(jetpackClone.Handle, TweenInfo.new(1), { Transparency = 1 }):Play()
+		GameClock.Tween(jetpackClone.Handle, TweenInfo.new(1), { Transparency = 1 }):Play()
 
-		Debris:AddItem(jetpackClone, 2)
+		GameClock.Debris(jetpackClone, 2)
 	end)
 end
 

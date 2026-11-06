@@ -35,7 +35,13 @@
 	                     via the MobHighlightAttackActive attribute on
 	                     the model. Client tweens local intensity over
 	                     WINDUP_FADE_DURATION for fade-in / fade-out.
-	  4. NONE          — FillTransparency / OutlineTransparency = 1.
+	  4. NONE          — Enabled = false (2026-11-05: was FillTransparency /
+	                     OutlineTransparency = 1 on a still-Enabled
+	                     Highlight, which Roblox still renders as a pass
+	                     per mob -- costly on mobile).
+
+	Every property write is skipped when it would write the value already
+	there (2026-11-05): an idle mob costs no writes per tick.
 
 	The local player highlight is separate — kept on the player's own
 	model — and resolves FIVE layers through the same single Instance,
@@ -77,6 +83,7 @@ local Janitor = require(ReplicatedStorage.Submodules.Core.Packages.Janitor)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local PlayerEventController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.PlayerEventController)
 local OcclusionController = require(ReplicatedStorage.Controllers.OcclusionController)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local MOB_HIGHLIGHT_NAME = "MobHighlight"
 local MOB_ATTACK_ATTRIBUTE = "MobHighlightAttackActive"
@@ -200,10 +207,89 @@ local WINDUP_COLOR = Color3.fromRGB(255, 255, 255)
 -- be slow under load. If it never arrives we just skip the mob.
 local MOB_HIGHLIGHT_WAIT_TIMEOUT = 5
 
+-- What this controller last wrote to one Highlight (2026-11-05). nil =
+-- never written, so the first write always lands. Only this controller
+-- writes these properties on the highlights it drives, so the cache
+-- stands in for reading them back.
+type HighlightWritten = {
+	enabled: boolean?,
+	fillColor: Color3?,
+	fillTransparency: number?,
+	outlineTransparency: number?,
+	depthMode: Enum.HighlightDepthMode?,
+}
+
+-- Writes one active layer's look, skipping every property already holding
+-- that value. Every layer draws fill only (outline fully transparent).
+local function writeLayer(
+	highlight: Highlight,
+	written: HighlightWritten,
+	fillColor: Color3,
+	fillTransparency: number,
+	depthMode: Enum.HighlightDepthMode
+)
+	if written.fillColor ~= fillColor then
+		highlight.FillColor = fillColor
+		written.fillColor = fillColor
+	end
+	if written.fillTransparency ~= fillTransparency then
+		highlight.FillTransparency = fillTransparency
+		written.fillTransparency = fillTransparency
+	end
+	if written.outlineTransparency ~= 1 then
+		highlight.OutlineTransparency = 1
+		written.outlineTransparency = 1
+	end
+	if written.depthMode ~= depthMode then
+		highlight.DepthMode = depthMode
+		written.depthMode = depthMode
+	end
+end
+
+-- A mob's active layer: its look, then Enabled on the change (2026-11-05).
+local function showMobLayer(
+	highlight: Highlight,
+	written: HighlightWritten,
+	fillColor: Color3,
+	fillTransparency: number
+)
+	writeLayer(highlight, written, fillColor, fillTransparency, Enum.HighlightDepthMode.AlwaysOnTop)
+	if written.enabled ~= true then
+		highlight.Enabled = true
+		written.enabled = true
+	end
+end
+
+-- The local player's active layer: its look, then back onto the character
+-- on the change (2026-11-05). Idle hides it by UNPARENTING, not through
+-- Enabled: vanishCharacter (the perfect-dodge vanish) switches every
+-- Highlight under the character off by Enabled and restores it after, and
+-- a layer starting mid-vanish (the jetpack it grants) must not switch it
+-- back on. Re-parented, it is one of the vanish's arrivals and is hidden
+-- with the rest.
+local function showPlayerLayer(
+	highlight: Highlight,
+	written: HighlightWritten,
+	character: Model,
+	fillColor: Color3,
+	fillTransparency: number,
+	depthMode: Enum.HighlightDepthMode
+)
+	writeLayer(highlight, written, fillColor, fillTransparency, depthMode)
+	if written.enabled ~= true then
+		highlight.Parent = character
+		written.enabled = true
+	end
+end
+
 -- Per-mob state for the priority resolver (see _RegisterMob).
 type MobHighlightData = {
 	head: BasePart,
 	highlight: Highlight,
+	written: HighlightWritten,
+	-- The server's MOB_ATTACK_ATTRIBUTE, cached off its changed signal
+	-- instead of read per tick (2026-11-05).
+	attackActive: boolean,
 	-- Damage flash state: nil if not flashing, else the os.clock()
 	-- timestamp at which the flash expires.
 	damageFlashEndAt: number?,
@@ -225,6 +311,7 @@ local CharacterHighlightController = {
 
 	-- Local player highlight state (see _InitHighlightThread).
 	_playerHighlight = nil :: Highlight?,
+	_playerHighlightWritten = {} :: HighlightWritten,
 	_playerInvulnIntensity = 0,
 	_playerDamageFlashEndAt = nil :: number?,
 	_playerDodgeStartAt = nil :: number?,
@@ -294,9 +381,13 @@ function CharacterHighlightController._registerMob(self: typeof(CharacterHighlig
 		end
 
 		local head = mob:FindFirstChild("Head") :: BasePart
-		self._mobRegistry[mob] = {
+		local data: MobHighlightData = {
 			head = head,
 			highlight = highlight :: Highlight,
+			-- Empty: the first resolve writes everything, including
+			-- Enabled = false on an idle mob (2026-11-05).
+			written = {},
+			attackActive = mob:GetAttribute(MOB_ATTACK_ATTRIBUTE) == true,
 
 			-- Damage flash state: nil if not flashing, else tick()
 			-- timestamp at which the flash expires.
@@ -309,6 +400,10 @@ function CharacterHighlightController._registerMob(self: typeof(CharacterHighlig
 			-- of snapping.
 			windupIntensity = 0,
 		}
+		self._mobRegistry[mob] = data
+		mob:GetAttributeChangedSignal(MOB_ATTACK_ATTRIBUTE):Connect(function()
+			data.attackActive = mob:GetAttribute(MOB_ATTACK_ATTRIBUTE) == true
+		end)
 		-- Into the shared occlusion pass, on the head.
 		OcclusionController:Track(mob, head)
 
@@ -333,7 +428,7 @@ end
 -- any other model (those go through the legacy onDamageIndicator path).
 function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterHighlightController), model: Model)
 	if model == Players.LocalPlayer.Character then
-		self._playerDamageFlashEndAt = os.clock() + DAMAGE_HOLD + DAMAGE_FADE
+		self._playerDamageFlashEndAt = GameClock.Now() + DAMAGE_HOLD + DAMAGE_FADE
 		ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
 		return
 	end
@@ -341,7 +436,7 @@ function CharacterHighlightController.RequestDamageFlash(self: typeof(CharacterH
 	if not data then
 		return
 	end
-	data.damageFlashEndAt = os.clock() + DAMAGE_HOLD + DAMAGE_FADE
+	data.damageFlashEndAt = GameClock.Now() + DAMAGE_HOLD + DAMAGE_FADE
 	-- One sound per hit, mirroring the old onDamageIndicator behavior.
 	ReplicatedStorage.GameAssets.Sounds.HitIndicator:Play()
 end
@@ -351,7 +446,7 @@ end
 function CharacterHighlightController.RequestHealFlash(self: typeof(CharacterHighlightController), model: Model)
 	local data = self._mobRegistry[model]
 	if data then
-		data.healFlashEndAt = os.clock() + DAMAGE_HOLD + DAMAGE_FADE
+		data.healFlashEndAt = GameClock.Now() + DAMAGE_HOLD + DAMAGE_FADE
 	end
 end
 
@@ -360,7 +455,7 @@ function CharacterHighlightController.RequestDodgeFlash(self: typeof(CharacterHi
 	if model ~= Players.LocalPlayer.Character then
 		return
 	end
-	self._playerDodgeStartAt = os.clock()
+	self._playerDodgeStartAt = GameClock.Now()
 end
 
 -- Death: the red flash, as a layer. Local player only.
@@ -368,7 +463,7 @@ function CharacterHighlightController.RequestDeathFlash(self: typeof(CharacterHi
 	if model ~= Players.LocalPlayer.Character then
 		return
 	end
-	self._playerDeathStartAt = os.clock()
+	self._playerDeathStartAt = GameClock.Now()
 end
 
 -- Per-frame resolver for the LOCAL player's single highlight. Same shape
@@ -380,9 +475,13 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	deltaTime: number
 )
 	local highlight = self._playerHighlight
-	if not highlight or not highlight.Parent then
+	-- The highlight sits unparented while idle (showPlayerLayer), so the
+	-- liveness test is the character's: a destroyed character takes the
+	-- slot with it, and a parent write onto it would throw.
+	if not highlight or not character.Parent then
 		return
 	end
+	local written = self._playerHighlightWritten
 
 	-- Ramp the invulnerable intensity toward the attribute (1 / 0). NOT
 	-- during ANY cutscene: a cinematic framed on your character should not
@@ -412,17 +511,21 @@ function CharacterHighlightController._resolvePlayerHighlight(
 		end
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
 
 	-- Priority 0: death (red, opaque -> clear over DEATH_DECAY_DURATION).
 	if self._playerDeathStartAt then
 		local elapsed = now - self._playerDeathStartAt
 		if elapsed < DEATH_DECAY_DURATION then
 			local progress = elapsed / DEATH_DECAY_DURATION
-			highlight.FillColor = DEATH_COLOR
-			highlight.FillTransparency = DEATH_PEAK_TRANSPARENCY + (1 - DEATH_PEAK_TRANSPARENCY) * progress
-			highlight.OutlineTransparency = 1
-			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+			showPlayerLayer(
+				highlight,
+				written,
+				character,
+				DEATH_COLOR,
+				DEATH_PEAK_TRANSPARENCY + (1 - DEATH_PEAK_TRANSPARENCY) * progress,
+				Enum.HighlightDepthMode.Occluded
+			)
 			return
 		end
 		self._playerDeathStartAt = nil
@@ -434,20 +537,28 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	if character:GetAttribute(Attributes.Downed) == true then
 		local downedStartAt = self._playerDownedStartAt or now
 		self._playerDownedStartAt = downedStartAt
-		highlight.FillColor = DOWNED_COLOR
-		highlight.FillTransparency = downedPulseTransparency(now - downedStartAt)
-		highlight.OutlineTransparency = 1
 		-- Occluded: the pulse is on the body, not a through-wall marker.
-		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+		showPlayerLayer(
+			highlight,
+			written,
+			character,
+			DOWNED_COLOR,
+			downedPulseTransparency(now - downedStartAt),
+			Enum.HighlightDepthMode.Occluded
+		)
 		return
 	end
 	self._playerDownedStartAt = nil
 
 	if self._playerDamageFlashEndAt and now < self._playerDamageFlashEndAt then
-		highlight.FillColor = DAMAGE_COLOR
-		highlight.FillTransparency = damageFlashTransparency(self._playerDamageFlashEndAt, now)
-		highlight.OutlineTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		showPlayerLayer(
+			highlight,
+			written,
+			character,
+			DAMAGE_COLOR,
+			damageFlashTransparency(self._playerDamageFlashEndAt, now),
+			Enum.HighlightDepthMode.AlwaysOnTop
+		)
 		return
 	end
 	self._playerDamageFlashEndAt = nil
@@ -467,12 +578,14 @@ function CharacterHighlightController._resolvePlayerHighlight(
 				local progress = (elapsed - DODGE_ATTACK_DURATION) / DODGE_DECAY_DURATION
 				transparency = DODGE_PEAK_TRANSPARENCY + (1 - DODGE_PEAK_TRANSPARENCY) * progress
 			end
-			highlight.FillColor = DODGE_COLOR
-			highlight.FillTransparency = transparency
-			highlight.OutlineTransparency = 1
-			highlight.DepthMode = if occluded
-				then Enum.HighlightDepthMode.AlwaysOnTop
-				else Enum.HighlightDepthMode.Occluded
+			showPlayerLayer(
+				highlight,
+				written,
+				character,
+				DODGE_COLOR,
+				transparency,
+				if occluded then Enum.HighlightDepthMode.AlwaysOnTop else Enum.HighlightDepthMode.Occluded
+			)
 			return
 		end
 		self._playerDodgeStartAt = nil
@@ -482,21 +595,34 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	-- occluded so the fill still reads behind cover.
 	local intensity = self._playerInvulnIntensity or 0
 	if intensity > 0 then
-		highlight.FillColor = INVULN_COLOR
-		highlight.FillTransparency = 1 - intensity * (1 - INVULN_FILL_TRANSPARENCY)
-		highlight.OutlineTransparency = 1
-		highlight.DepthMode = if occluded then Enum.HighlightDepthMode.AlwaysOnTop else Enum.HighlightDepthMode.Occluded
+		showPlayerLayer(
+			highlight,
+			written,
+			character,
+			INVULN_COLOR,
+			1 - intensity * (1 - INVULN_FILL_TRANSPARENCY),
+			if occluded then Enum.HighlightDepthMode.AlwaysOnTop else Enum.HighlightDepthMode.Occluded
+		)
 		return
 	end
 
 	if occluded then
-		highlight.FillColor = OUTLINE_COLOR
-		highlight.FillTransparency = OUTLINE_TRANSPARENCY
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-	else
-		highlight.FillColor = OUTLINE_COLOR
-		highlight.FillTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+		showPlayerLayer(
+			highlight,
+			written,
+			character,
+			OUTLINE_COLOR,
+			OUTLINE_TRANSPARENCY,
+			Enum.HighlightDepthMode.AlwaysOnTop
+		)
+		return
+	end
+
+	-- No layer: off the character (2026-11-05: was a fully transparent
+	-- fill, still rendered every frame). Written once, on the change.
+	if written.enabled ~= false then
+		highlight.Parent = nil
+		written.enabled = false
 	end
 end
 
@@ -521,14 +647,14 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 			highlight.Parent = character
 			if not isJetpack then
-				TweenService:Create(
+				GameClock.Tween(
 					highlight,
 					TweenInfo.new(INVULN_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 					{ FillTransparency = INVULN_FILL_TRANSPARENCY }
 				):Play()
 			end
 		elseif not wants and existing then
-			local fade = TweenService:Create(
+			local fade = GameClock.Tween(
 				existing,
 				TweenInfo.new(INVULN_FADE_DURATION, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 				{ FillTransparency = 1 }
@@ -562,7 +688,7 @@ function CharacterHighlightController._bindOtherCharacter(_self: typeof(Characte
 			-- through-wall beacon.
 			highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 			highlight.Parent = character
-			TweenService:Create(highlight, DOWNED_TWEEN_INFO, { FillTransparency = DOWNED_TRANSPARENCY_NEAR }):Play()
+			GameClock.Tween(highlight, DOWNED_TWEEN_INFO, { FillTransparency = DOWNED_TRANSPARENCY_NEAR }):Play()
 		elseif not wants and existing then
 			existing:Destroy()
 		end
@@ -615,32 +741,29 @@ function CharacterHighlightController._resolveMobHighlight(
 	-- target (1 when attribute is true, 0 when false). Linear ramp
 	-- over WINDUP_FADE_DURATION matches the previous TweenInfo curve
 	-- closely enough that the visual is indistinguishable.
-	local targetIntensity = if mob:GetAttribute(MOB_ATTACK_ATTRIBUTE) then 1 else 0
-	local step = deltaTime / WINDUP_FADE_DURATION
-	local diff = targetIntensity - data.windupIntensity
-	if math.abs(diff) <= step then
-		data.windupIntensity = targetIntensity
-	else
-		data.windupIntensity += if diff > 0 then step else -step
+	local targetIntensity = if data.attackActive then 1 else 0
+	if data.windupIntensity ~= targetIntensity then
+		local step = deltaTime / WINDUP_FADE_DURATION
+		local diff = targetIntensity - data.windupIntensity
+		if math.abs(diff) <= step then
+			data.windupIntensity = targetIntensity
+		else
+			data.windupIntensity += if diff > 0 then step else -step
+		end
 	end
 
-	local now = os.clock()
+	local now = GameClock.Now()
+	local written = data.written
 
 	-- Priority 1: damage flash (red; held, then an ease-in fade, see
 	-- DAMAGE_HOLD / DAMAGE_FADE).
 	if data.damageFlashEndAt and now < data.damageFlashEndAt then
-		highlight.FillColor = DAMAGE_COLOR
-		highlight.FillTransparency = damageFlashTransparency(data.damageFlashEndAt, now)
-		highlight.OutlineTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		showMobLayer(highlight, written, DAMAGE_COLOR, damageFlashTransparency(data.damageFlashEndAt, now))
 		return
 	end
 	-- Priority 1b: heal flash (green, the damage flash's curve).
 	if data.healFlashEndAt and now < data.healFlashEndAt then
-		highlight.FillColor = HEAL_COLOR
-		highlight.FillTransparency = damageFlashTransparency(data.healFlashEndAt, now)
-		highlight.OutlineTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		showMobLayer(highlight, written, HEAL_COLOR, damageFlashTransparency(data.healFlashEndAt, now))
 		return
 	end
 	-- Clear stale damageFlashEndAt so subsequent frames don't pay the
@@ -655,10 +778,7 @@ function CharacterHighlightController._resolveMobHighlight(
 	-- Priority 2: occlusion outline (white, 0.65, AlwaysOnTop).
 	local occluded = OcclusionController:IsOccluded(mob)
 	if occluded then
-		highlight.FillColor = OUTLINE_COLOR
-		highlight.FillTransparency = OUTLINE_TRANSPARENCY
-		highlight.OutlineTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		showMobLayer(highlight, written, OUTLINE_COLOR, OUTLINE_TRANSPARENCY)
 		return
 	end
 
@@ -666,19 +786,18 @@ function CharacterHighlightController._resolveMobHighlight(
 	if data.windupIntensity > 0 then
 		-- intensity 1 → FillTransparency = ATTACK_WINDUP_PEAK_TRANSPARENCY
 		-- intensity 0 → FillTransparency = 1
-		highlight.FillColor = WINDUP_COLOR
-		highlight.FillTransparency = 1 - data.windupIntensity * (1 - ATTACK_WINDUP_PEAK_TRANSPARENCY)
-		highlight.OutlineTransparency = 1
-		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		showMobLayer(highlight, written, WINDUP_COLOR, 1 - data.windupIntensity * (1 - ATTACK_WINDUP_PEAK_TRANSPARENCY))
 		return
 	end
 
-	-- Default: fully invisible. Important to write this every frame
-	-- (rather than only on transition) because the priority above can
-	-- have left non-default values; without explicit reset they'd
-	-- linger when no layer is active.
-	highlight.FillTransparency = 1
-	highlight.OutlineTransparency = 1
+	-- Default: switched off (2026-11-05: was a fully transparent fill on
+	-- a still-Enabled Highlight, rewritten every tick, which Roblox still
+	-- rendered as its own pass). Written once, on the change; the layers
+	-- above rewrite their whole look before switching it back on.
+	if written.enabled ~= false then
+		highlight.Enabled = false
+		written.enabled = false
+	end
 end
 
 function CharacterHighlightController._initHighlightThread(self: typeof(CharacterHighlightController))
@@ -697,6 +816,8 @@ function CharacterHighlightController._initHighlightThread(self: typeof(Characte
 	end
 
 	self._playerHighlight = janitor:Add(self:_createPlayerHighlightInstance(character))
+	-- A fresh instance: nothing cached, so the first resolve writes it all.
+	self._playerHighlightWritten = {}
 	self._playerDamageFlashEndAt = nil
 	self._playerDodgeStartAt = nil
 	self._playerDeathStartAt = nil
@@ -705,9 +826,9 @@ function CharacterHighlightController._initHighlightThread(self: typeof(Characte
 
 	janitor:Add(
 		task.spawn(function()
-			local lastTick = os.clock()
+			local lastTick = GameClock.Now()
 			while task.wait(TICK_INTERVAL) do
-				local now = os.clock()
+				local now = GameClock.Now()
 				local deltaTime = now - lastTick
 				lastTick = now
 

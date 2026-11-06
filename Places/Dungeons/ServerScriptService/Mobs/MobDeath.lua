@@ -47,6 +47,9 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
+local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local relicProcColors = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.relicProcColors)
+local recolorSaturated = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.recolorSaturated)
 local EnemyType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
@@ -135,7 +138,10 @@ type BombSpec = {
 	onHit: (player: Player, model: Model, targetCFrame: CFrame) -> (),
 }
 
--- Trick Or Trap: 1-3 pumpkins. ANY takedown drops them. The
+-- Trick Or Trap: 1-3 pumpkins. Only a MELEE takedown drops them
+-- (2026-11-05; any takedown before): the killer or an assister whose LAST
+-- weapon hit on the mob was a melee hit, inside the assist window
+-- (DamageService.LastHitWasMelee). The
 -- Burning-target requirement came off in the 2026-08 pass when the relic
 -- became NC: gating an opener behind a Burn the player might have no way
 -- to apply made it dead on pickup. The pumpkins apply Burn themselves
@@ -385,15 +391,31 @@ local function runPoisonCloud(context: Context, player: Player)
 	end
 	RelicService:SetRelicLimitRegistry(limitKey, liveClouds + 1)
 
+	-- A mob that died Poisoned (or in Death Venom) leaves a cloud twice as
+	-- wide (2026-11-05).
+	local statusService = StatusConditionService :: any
+	local wasPoisoned = statusService:IsStatusActive(context.model, StatusConditions.Poison)
+		or statusService:IsStatusActive(context.model, StatusConditions.NoxiousVenom)
+	local cloudRadius = MOB_BOMB_CLOUD_RADIUS
+		* (
+			if wasPoisoned
+				then (RelicData[RelicNames["Foul Poison Fowl"]].data or {}).poisonedRadiusMultiplier or 2
+				else 1
+		)
+
 	local cloudTemplate = ReplicatedStorage.GameAssets.VFX:FindFirstChild("PoisonCloud")
 	local cloudPosition = context.rootPart.Position
 	local cloud
 	if cloudTemplate then
 		cloud = cloudTemplate:Clone()
 		if cloud:IsA("Model") then
-			cloud:ScaleTo(cloud:GetScale() * MOB_BOMB_CLOUD_RADIUS / MOB_BOMB_CLOUD_VFX_AUTHORED_RADIUS)
+			cloud:ScaleTo(cloud:GetScale() * cloudRadius / MOB_BOMB_CLOUD_VFX_AUTHORED_RADIUS)
 		end
 		cloud:PivotTo(CFrame.new(cloudPosition))
+		-- Death Venom's purple for a Skeletal Scythe owner (2026-11-05).
+		if relicProcColors.hasDeathVenom(RelicService:GetRelicsRegistry(player)) then
+			recolorSaturated(cloud, relicProcColors.DEATH_VENOM)
+		end
 		for _, part in cloud:GetDescendants() do
 			if part:IsA("BasePart") then
 				part.Anchored = true
@@ -409,32 +431,39 @@ local function runPoisonCloud(context: Context, player: Player)
 
 	local tickDamage = math.round(damagePerLevel * getRelicLevel(player))
 	task.spawn(function()
-		local elapsed = 0
-		while elapsed < MOB_BOMB_CLOUD_DURATION do
-			GameClock.Wait(MOB_BOMB_CLOUD_TICK_SECONDS)
-			elapsed += MOB_BOMB_CLOUD_TICK_SECONDS
+		-- The ticks run protected (2026-11-05): an error mid-cloud used to
+		-- skip the slot release and the cloud's cleanup below for good.
+		local ok, problem = pcall(function()
+			local elapsed = 0
+			while elapsed < MOB_BOMB_CLOUD_DURATION do
+				GameClock.Wait(MOB_BOMB_CLOUD_TICK_SECONDS)
+				elapsed += MOB_BOMB_CLOUD_TICK_SECONDS
 
-			-- Relic damage breaks breakables too.
-			Breakable.HitInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, player)
-			forEachEnemyInRadius(cloudPosition, MOB_BOMB_CLOUD_RADIUS, function(model, targetHumanoid)
-				-- One tick per mob per interval across every cloud (above).
-				local now = GameClock.Now()
-				local lastTick = cloudTickedAt[model]
-				if lastTick and now - lastTick < MOB_BOMB_CLOUD_TICK_SECONDS * 0.9 then
-					return
-				end
-				cloudTickedAt[model] = now
-				-- Relic damage, NEUTRAL type (isMagic = false): no arcane
-				-- amplifiers, no arcane resist, white number — the same bucket
-				-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
-				-- (isRelicSourced = true).
-				if DamageService and tickDamage > 0 then
-					DamageService:TakeDamage(player, targetHumanoid, tickDamage, false, false, nil, true)
-				end
-				-- "...and Poisoning enemies": every tick, no roll.
-				-- Cast: see TRICK_OR_TRAP_BOMBS.
-				(StatusConditionService :: any):ApplyStatus(player, model, StatusConditions.Poison, false)
-			end)
+				-- Relic damage breaks breakables too.
+				Breakable.HitInRadius(cloudPosition, cloudRadius, player)
+				forEachEnemyInRadius(cloudPosition, cloudRadius, function(model, targetHumanoid)
+					-- One tick per mob per interval across every cloud (above).
+					local now = GameClock.Now()
+					local lastTick = cloudTickedAt[model]
+					if lastTick and now - lastTick < MOB_BOMB_CLOUD_TICK_SECONDS * 0.9 then
+						return
+					end
+					cloudTickedAt[model] = now
+					-- Relic damage, NEUTRAL type (isMagic = false): no arcane
+					-- amplifiers, no arcane resist, white number — the same bucket
+					-- as TNT / tremor / Ghost Dragon. Full amp chain + crit roll
+					-- (isRelicSourced = true).
+					if DamageService and tickDamage > 0 then
+						DamageService:TakeDamage(player, targetHumanoid, tickDamage, false, false, nil, true)
+					end
+					-- "...and Poisoning enemies": every tick, no roll.
+					-- Cast: see TRICK_OR_TRAP_BOMBS.
+					(StatusConditionService :: any):ApplyStatus(player, model, StatusConditions.Poison, false)
+				end)
+			end
+		end)
+		if not ok then
+			warn("[MobDeath] Poison cloud: " .. tostring(problem))
 		end
 
 		RelicService:SetRelicLimitRegistry(limitKey, (RelicService:GetRelicLimitRegistry(limitKey) or 1) - 1)
@@ -628,7 +657,9 @@ function MobDeath.RunTakedownRewards(context: Context, killer: Player?)
 		if not player or not player:IsA("Player") then
 			continue
 		end
-		lobBombs(context, player, TRICK_OR_TRAP_BOMBS)
+		if DamageService and DamageService:LastHitWasMelee(context.model, player.Name, ASSIST_WINDOW_SECONDS) then
+			lobBombs(context, player, TRICK_OR_TRAP_BOMBS)
+		end
 		lobBombs(context, player, FUSE_BOMBS)
 		runPoisonCloud(context, player)
 	end

@@ -2,8 +2,8 @@
 -- This is a client-side executable, so it should be required through a locally handled system or Controller.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local SusanooExecutable = {}
 
@@ -67,7 +67,7 @@ function SusanooExecutable:Play()
 			else math.rad(waypointData.tilt) - workspace.CurrentCamera.CFrame:ToOrientation()
 		local finalCameraCFrame = waypointModel[tostring(i)].CFrame * CFrame.Angles(0, 0, finalCameraTilt)
 
-		SusanooExecutable.CutsceneConnection = TweenService:Create(workspace.CurrentCamera, tweenInfo, {
+		SusanooExecutable.CutsceneConnection = GameClock.Tween(workspace.CurrentCamera, tweenInfo, {
 			CFrame = finalCameraCFrame,
 			FieldOfView = tonumber(waypointData.fov),
 		})
