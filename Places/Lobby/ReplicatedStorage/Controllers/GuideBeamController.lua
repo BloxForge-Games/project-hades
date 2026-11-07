@@ -2,32 +2,28 @@
 --[[
 	Module: GuideBeamController.lua
 	Description:
-	The hub's guide path (2026-11-06): a ribbon of chevrons on the ground
-	from the local player to a destination, scrolling toward it, bending
-	round whatever is in the way.
+	The hub's guide (2026-11-06; golden wisps since 2026-11-07): every
+	WISP_INTERVAL seconds a golden wisp leaves the local player, arcs up
+	and drifts along the walkable path to the destination like a gust of
+	fairy wind, trailing gold and shedding star sparkles, and fades out
+	there.
 
 	  PATH    PathfindingService, on this client, from the player's feet to
 	          the destination (stopped STOP_SHORT_STUDS short of it, on the
 	          player's side, so an NPC's own collider never blocks it).
 	          Recomputed every RECOMPUTE_SECONDS while the player or the
 	          target moves; never per frame. A failed path falls back to a
-	          straight line.
-	  SMOOTH  The waypoints go through a Catmull-Rom spline, then are cut
-	          into points SPACING apart measured FROM THE DESTINATION. A
-	          point is keyed by its distance from the destination, so the
-	          same key lands in about the same place each recompute and
-	          the drawn point eases toward it (POINT_EASE): the ribbon
-	          re-angles smoothly instead of snapping.
-	  DRAW    One Beam per pair of points (MAX_POINTS at most, nearest the
-	          player), lying flat on the ground (each point raycast down,
-	          lifted GROUND_LIFT), FaceCamera off, plus a thin rail along
-	          each edge. The texture is the mobile skillshot arrow
-	          (GameAssets.MobileHitMarkers.ArrowBeamPart's chevron), one
-	          chevron per segment, scrolling toward the destination. The
-	          end at the player fades in over FADE_SEGMENTS; points behind
-	          the player are dropped every frame, so the tail keeps up
-	          between recomputes.
-	  ARRIVE  Within ARRIVE_STUDS of the destination the path fades out
+	          straight line. Waypoints go through a Catmull-Rom spline and
+	          are cut into points SPACING apart, each raycast to the ground.
+	  WISP    Each wisp takes a snapshot of the path when it launches and
+	          flies it start to finish on its own: from the player's
+	          shoulder, ARC_RISE above the path at its middle (an arc, lower
+	          on short paths), gently swaying sideways and bobbing, eased
+	          in and out, at about WISP_SPEED studs a second. A neon mote
+	          with a gold Trail, a star ParticleEmitter (the VIP star image,
+	          gold) and a soft light. At the end it stops emitting and its
+	          trail and sparkles die out.
+	  ARRIVE  Within ARRIVE_STUDS of the destination no more wisps launch
 	          and OnArrived fires.
 
 	Public: PointTo(target: Instance | Vector3), Clear(), IsActive(),
@@ -57,41 +53,46 @@ local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local IGNORE_INSTANCES_NAME = "IgnoreInstances"
 local NPC_FOLDER_NAME = "NPCs"
 
--- The chevron (the mobile skillshot arrow's texture). Read off the asset
--- when it is there, so a re-skin of that arrow re-skins this too.
-local FALLBACK_TEXTURE = "rbxassetid://6798365555"
+-- One wisp every WISP_INTERVAL seconds while guiding.
+local WISP_INTERVAL = 2
+-- Flight speed (studs a second) and its bounds on the whole flight.
+-- (2026-11-07: slowed from 22 and 0.9-4 s, to linger.)
+local WISP_SPEED = 13
+local WISP_DURATION = NumberRange.new(1.6, 6)
+-- Heights above the ground: where it leaves (your shoulder), where it
+-- arrives (an NPC's chest), and the arc's extra height at the middle
+-- (ARC_RISE_PER_STUD of the path's length, capped).
+local START_HEIGHT = 4.5
+local END_HEIGHT = 3.5
+local ARC_RISE_PER_STUD = 0.12
+local ARC_RISE = NumberRange.new(1.5, 7)
+-- The wind: sideways sway and a bob (studs; waves along the flight).
+-- (2026-11-07: fewer, wider waves for a smoother, lazier swirl; were
+-- 2.5 and 4.)
+local SWAY = 1.1
+local SWAY_WAVES = 1.25
+local BOB = 0.4
+local BOB_WAVES = 1.75
 
--- Studs between drawn points (one chevron each).
+local GOLD = Color3.fromRGB(255, 205, 90)
+local GOLD_DEEP = Color3.fromRGB(255, 170, 0)
+local MOTE_SIZE = 0.45
+local STAR_IMAGE = "rbxassetid://14488863746"
+-- Seconds the trail and the sparkles outlive the wisp.
+-- (2026-11-07: longer, were 0.7 and 0.5-1.)
+local TRAIL_LIFETIME = 1.4
+local SPARKLE_LIFETIME = NumberRange.new(0.8, 1.6)
+local SPARKLE_RATE = 45
+
+-- Studs between path points.
 local SPACING = 1.6
--- The most points drawn (the ones nearest the player); 60 covers ~96 studs.
-local MAX_POINTS = 60
-local WIDTH = 2.6
-local RAIL_WIDTH = 0.14
 local GROUND_LIFT = 0.12
-local COLOR = Color3.fromRGB(255, 255, 255)
--- The tail by the player is warmer, the head white.
-local TAIL_COLOR = Color3.fromRGB(255, 214, 120)
-local LIGHT_EMISSION = 0.6
-local BRIGHTNESS = 1.6
--- Chevrons per second, toward the destination (negative: the texture runs
--- from Attachment1, the player's side, to Attachment0).
-local TEXTURE_SPEED = -1.2
--- Segments over which the end at the player fades in.
-local FADE_SEGMENTS = 5
--- Base transparency of the ribbon and the rails.
-local RIBBON_TRANSPARENCY = 0.05
-local RAIL_TRANSPARENCY = 0.15
 
 local RECOMPUTE_SECONDS = 0.12
 -- A recompute is skipped while neither end moved this much.
 local MOVE_STUDS = 0.3
 local STOP_SHORT_STUDS = 3.5
 local ARRIVE_STUDS = 6
--- How fast a drawn point eases toward its place on the newest path (per
--- second; higher is snappier).
-local POINT_EASE = 18
--- How fast the whole path fades in and out (per second).
-local FADE_EASE = 6
 -- Spline samples per stud before the resample.
 local SPLINE_DENSITY = 2
 local RAY_UP = 4
@@ -106,13 +107,21 @@ local AGENT_PARAMS = {
 
 --[ Types ]--
 
-type Slot = {
-	center: Attachment,
-	left: Attachment,
-	right: Attachment,
-	ribbon: Beam,
-	leftRail: Beam,
-	rightRail: Beam,
+type Wisp = {
+	-- The flight: ground points from the player to the destination, and the
+	-- running distance at each.
+	points: { Vector3 },
+	distances: { number },
+	length: number,
+	duration: number,
+	rise: number,
+	seed: number,
+	age: number,
+	mote: BasePart,
+	sparkles: ParticleEmitter,
+	trail: Trail,
+	light: PointLight,
+	done: boolean,
 }
 
 --[ Controller ]--
@@ -128,13 +137,9 @@ GuideBeamController._target = nil :: Instance | Vector3 | nil
 GuideBeamController._goal = {} :: { [number]: Vector3 }
 GuideBeamController._goalNormal = {} :: { [number]: Vector3 }
 GuideBeamController._goalCount = 0
--- The drawn points, easing toward _goal.
-GuideBeamController._drawn = {} :: { [number]: Vector3 }
-GuideBeamController._drawnNormal = {} :: { [number]: Vector3 }
-GuideBeamController._slots = {} :: { Slot }
-GuideBeamController._holder = nil :: BasePart?
-GuideBeamController._texture = FALLBACK_TEXTURE
-GuideBeamController._opacity = 0
+GuideBeamController._wisps = {} :: { Wisp }
+GuideBeamController._folder = nil :: Folder?
+GuideBeamController._sinceWisp = math.huge
 GuideBeamController._computing = false
 GuideBeamController._lastCompute = -math.huge
 GuideBeamController._lastFrom = nil :: Vector3?
@@ -236,74 +241,188 @@ local function resample(line: { Vector3 }): { Vector3 }
 	return out
 end
 
-local function newAttachment(holder: BasePart): Attachment
-	local attachment = Instance.new("Attachment")
-	attachment.Parent = holder
-	return attachment
-end
-
-local function newBeam(holder: BasePart, a0: Attachment, a1: Attachment, width: number): Beam
-	local beam = Instance.new("Beam")
-	beam.Attachment0 = a0
-	beam.Attachment1 = a1
-	beam.FaceCamera = false
-	beam.Segments = 1
-	beam.Width0 = width
-	beam.Width1 = width
-	beam.LightEmission = LIGHT_EMISSION
-	beam.LightInfluence = 0
-	beam.Brightness = BRIGHTNESS
-	beam.Color = ColorSequence.new(COLOR)
-	beam.Enabled = false
-	beam.Parent = holder
-	return beam
+-- 0 -> 1 eased at both ends.
+local function easeInOut(t: number): number
+	return 0.5 - math.cos(math.pi * math.clamp(t, 0, 1)) / 2
 end
 
 --[ Private ]--
 
-function GuideBeamController._ensureHolder(self: typeof(GuideBeamController)): BasePart
-	local holder = self._holder
-	if holder and holder.Parent then
-		return holder
+function GuideBeamController._ensureFolder(self: typeof(GuideBeamController)): Folder
+	local folder = self._folder
+	if folder and folder.Parent then
+		return folder
 	end
-	local part = Instance.new("Part")
-	part.Name = "GuidePath"
-	part.Anchored = true
-	part.CanCollide = false
-	part.CanQuery = false
-	part.CanTouch = false
-	part.Transparency = 1
-	part.Size = Vector3.one
-	part.CFrame = CFrame.new()
-	part.Parent = workspace
-	self._holder = part
-	self._slots = {}
-	return part
+	local newFolder = Instance.new("Folder")
+	newFolder.Name = "GuideWisps"
+	newFolder.Parent = workspace
+	self._folder = newFolder
+	return newFolder
 end
 
-function GuideBeamController._slot(self: typeof(GuideBeamController), index: number): Slot
-	local slot = self._slots[index]
-	if slot then
-		return slot
+-- A mote with its trail, sparkles and glow.
+function GuideBeamController._newMote(
+	self: typeof(GuideBeamController),
+	at: Vector3
+): (BasePart, ParticleEmitter, Trail, PointLight)
+	local mote = Instance.new("Part")
+	mote.Name = "Wisp"
+	mote.Shape = Enum.PartType.Ball
+	mote.Size = Vector3.one * MOTE_SIZE
+	mote.Material = Enum.Material.Neon
+	mote.Color = GOLD
+	mote.Transparency = 0.15
+	mote.Anchored = true
+	mote.CanCollide = false
+	mote.CanQuery = false
+	mote.CanTouch = false
+	mote.CastShadow = false
+	mote.CFrame = CFrame.new(at)
+
+	local top = Instance.new("Attachment")
+	top.Position = Vector3.new(0, 0.18, 0)
+	top.Parent = mote
+	local bottom = Instance.new("Attachment")
+	bottom.Position = Vector3.new(0, -0.18, 0)
+	bottom.Parent = mote
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = top
+	trail.Attachment1 = bottom
+	trail.FaceCamera = true
+	trail.Lifetime = TRAIL_LIFETIME
+	trail.MinLength = 0.05
+	trail.LightEmission = 1
+	trail.LightInfluence = 0
+	trail.Color = ColorSequence.new(GOLD, GOLD_DEEP)
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.1),
+		NumberSequenceKeypoint.new(0.6, 0.6),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.WidthScale = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	trail.Parent = mote
+
+	local sparkles = Instance.new("ParticleEmitter")
+	sparkles.Texture = STAR_IMAGE
+	sparkles.Color = ColorSequence.new(GOLD)
+	sparkles.LightEmission = 1
+	sparkles.LightInfluence = 0
+	sparkles.Rate = SPARKLE_RATE
+	sparkles.Lifetime = SPARKLE_LIFETIME
+	sparkles.Speed = NumberRange.new(0.3, 1.4)
+	sparkles.SpreadAngle = Vector2.new(180, 180)
+	sparkles.Drag = 2
+	sparkles.Acceleration = Vector3.new(0, -1.2, 0)
+	sparkles.Rotation = NumberRange.new(0, 360)
+	sparkles.RotSpeed = NumberRange.new(-90, 90)
+	sparkles.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.32),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	sparkles.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.7, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	sparkles.Parent = mote
+
+	local light = Instance.new("PointLight")
+	light.Color = GOLD
+	light.Brightness = 1.5
+	light.Range = 6
+	light.Shadows = false
+	light.Parent = mote
+
+	mote.Parent = self:_ensureFolder()
+	return mote, sparkles, trail, light
+end
+
+-- Launches one wisp along the current path (player side first).
+function GuideBeamController._launch(self: typeof(GuideBeamController), root: BasePart)
+	local count = self._goalCount
+	if count < 2 then
+		return
 	end
-	local holder = self:_ensureHolder()
-	local center = newAttachment(holder)
-	local left = newAttachment(holder)
-	local right = newAttachment(holder)
-	local newSlot: Slot = {
-		center = center,
-		left = left,
-		right = right,
-		ribbon = newBeam(holder, center, center, WIDTH),
-		leftRail = newBeam(holder, left, left, RAIL_WIDTH),
-		rightRail = newBeam(holder, right, right, RAIL_WIDTH),
-	}
-	newSlot.ribbon.Texture = self._texture
-	newSlot.ribbon.TextureMode = Enum.TextureMode.Stretch
-	newSlot.ribbon.TextureLength = 1
-	newSlot.ribbon.TextureSpeed = TEXTURE_SPEED
-	self._slots[index] = newSlot
-	return newSlot
+	local points: { Vector3 } = { feet(root) }
+	for key = count - 2, 0, -1 do
+		table.insert(points, self._goal[key])
+	end
+	local distances = { 0 }
+	for index = 2, #points do
+		distances[index] = distances[index - 1] + (points[index] - points[index - 1]).Magnitude
+	end
+	local length = distances[#distances]
+	if length < 1 then
+		return
+	end
+	local mote, sparkles, trail, light = self:_newMote(points[1] + Vector3.new(0, START_HEIGHT, 0))
+	table.insert(self._wisps, {
+		points = points,
+		distances = distances,
+		length = length,
+		duration = math.clamp(length / WISP_SPEED, WISP_DURATION.Min, WISP_DURATION.Max),
+		rise = math.clamp(length * ARC_RISE_PER_STUD, ARC_RISE.Min, ARC_RISE.Max),
+		seed = math.random() * 100,
+		age = 0,
+		mote = mote,
+		sparkles = sparkles,
+		trail = trail,
+		light = light,
+		done = false,
+	})
+end
+
+-- Where a wisp is at `u` (0 at the player, 1 at the destination).
+local function wispPosition(wisp: Wisp, u: number): Vector3
+	local at = u * wisp.length
+	local points, distances = wisp.points, wisp.distances
+	local index = 1
+	while index < #points - 1 and distances[index + 1] < at do
+		index += 1
+	end
+	local a, b = points[index], points[index + 1]
+	local span = distances[index + 1] - distances[index]
+	local ground = if span > 0 then a:Lerp(b, (at - distances[index]) / span) else a
+	local along = b - a
+	along = if along.Magnitude > 1e-3 then along.Unit else Vector3.zAxis
+	local across = along:Cross(Vector3.yAxis)
+	across = if across.Magnitude > 1e-3 then across.Unit else Vector3.xAxis
+
+	-- The arc, and the wind on it (both settle to nothing at the ends).
+	local settle = math.sin(math.pi * u)
+	local height = START_HEIGHT + (END_HEIGHT - START_HEIGHT) * u + wisp.rise * settle
+	local sway = math.sin((u * SWAY_WAVES + wisp.seed) * math.pi * 2) * SWAY * settle
+	local bob = math.sin((u * BOB_WAVES + wisp.seed) * math.pi * 2) * BOB * settle
+	return ground + Vector3.new(0, height + bob, 0) + across * sway
+end
+
+function GuideBeamController._stepWisps(self: typeof(GuideBeamController), dt: number)
+	for index = #self._wisps, 1, -1 do
+		local wisp = self._wisps[index]
+		wisp.age += dt
+		if not wisp.done then
+			local t = wisp.age / wisp.duration
+			wisp.mote.CFrame = CFrame.new(wispPosition(wisp, easeInOut(t)))
+			-- Fade in over the first tenth, out over the last.
+			local fade = math.min(1, t * 10, (1 - t) * 10)
+			wisp.mote.Transparency = 1 - 0.85 * math.clamp(fade, 0, 1)
+			wisp.light.Brightness = 1.5 * math.clamp(fade, 0, 1)
+			if t >= 1 then
+				-- Arrived: stop shedding and let the trail and sparkles die.
+				wisp.done = true
+				wisp.age = 0
+				wisp.sparkles.Enabled = false
+				wisp.mote.Transparency = 1
+				wisp.light.Enabled = false
+			end
+		elseif wisp.age > math.max(TRAIL_LIFETIME, SPARKLE_LIFETIME.Max) then
+			wisp.mote:Destroy()
+			table.remove(self._wisps, index)
+		end
+	end
 end
 
 function GuideBeamController._raycastParams(_self: typeof(GuideBeamController)): RaycastParams
@@ -423,152 +542,28 @@ function GuideBeamController._requestCompute(self: typeof(GuideBeamController), 
 	end)
 end
 
-function GuideBeamController._hideFrom(self: typeof(GuideBeamController), first: number)
-	for index = first, #self._slots do
-		local slot = self._slots[index]
-		slot.ribbon.Enabled = false
-		slot.leftRail.Enabled = false
-		slot.rightRail.Enabled = false
-	end
-end
-
 function GuideBeamController._step(self: typeof(GuideBeamController), dt: number)
+	self:_stepWisps(dt)
+
 	local root = rootPart()
-	local active = self._target ~= nil and root ~= nil and not self._arrived
-
-	if active and root then
-		self:_requestCompute(root)
-		local target = self._target
-		local position = target and targetPosition(target)
-		if position and (flat(root.Position) - flat(position)).Magnitude <= ARRIVE_STUDS then
-			self._arrived = true
-			active = false
-			self.OnArrived:Fire(target)
-		end
+	if self._target == nil or root == nil or self._arrived then
+		return
 	end
-
-	self._opacity += ((if active then 1 else 0) - self._opacity) * math.min(1, dt * FADE_EASE)
-	if self._opacity < 0.02 and not active then
-		self._opacity = 0
-		self:_hideFrom(1)
-		if self._target == nil or self._arrived then
-			self._drawn = {}
-			self._drawnNormal = {}
-		end
+	self:_requestCompute(root)
+	local target = self._target
+	local position = target and targetPosition(target)
+	if position and (flat(root.Position) - flat(position)).Magnitude <= ARRIVE_STUDS then
+		self._arrived = true
+		self.OnArrived:Fire(target)
 		return
 	end
 
-	local count = self._goalCount
-	if count < 2 or not root then
-		self:_hideFrom(1)
-		return
+	-- The first wisp as soon as there is a path, then one every interval.
+	self._sinceWisp += dt
+	if self._sinceWisp >= WISP_INTERVAL and self._goalCount >= 2 then
+		self._sinceWisp = 0
+		self:_launch(root)
 	end
-
-	-- Ease every drawn point toward the newest path.
-	local ease = math.min(1, dt * POINT_EASE)
-	local drawn = self._drawn
-	local drawnNormal = self._drawnNormal
-	for key = 0, count - 1 do
-		local goalPoint = self._goal[key]
-		local goalNormal = self._goalNormal[key]
-		local current = drawn[key]
-		if current then
-			drawn[key] = current:Lerp(goalPoint, ease)
-			drawnNormal[key] = (drawnNormal[key] or goalNormal):Lerp(goalNormal, ease)
-		else
-			-- A new key grows out of its neighbour toward the destination.
-			local neighbour = drawn[key - 1]
-			drawn[key] = if neighbour then neighbour:Lerp(goalPoint, 0.5) else goalPoint
-			drawnNormal[key] = goalNormal
-		end
-	end
-	for key in drawn do
-		if key >= count then
-			drawn[key] = nil
-			drawnNormal[key] = nil
-		end
-	end
-
-	-- Drop the points behind the player: the last kept key is the one
-	-- nearest the player's feet.
-	local playerAt = flat(root.Position)
-	local nearestKey = count - 1
-	local nearestDistance = math.huge
-	for key = 0, count - 1 do
-		local distance = (flat(drawn[key]) - playerAt).Magnitude
-		if distance < nearestDistance then
-			nearestDistance = distance
-			nearestKey = key
-		end
-	end
-	local lastKey = math.min(nearestKey, MAX_POINTS - 1)
-	if lastKey < 1 then
-		self:_hideFrom(1)
-		return
-	end
-
-	-- The points drawn this frame: the path up to (not including) the
-	-- point nearest the player, then the player's own feet, so the tail
-	-- stays on the player every frame instead of waiting for a recompute.
-	local points: { Vector3 } = {}
-	local normals: { Vector3 } = {}
-	for key = 0, lastKey - 1 do
-		table.insert(points, drawn[key])
-		table.insert(normals, drawnNormal[key])
-	end
-	local tail = points[#points]
-	table.insert(points, Vector3.new(root.Position.X, tail.Y, root.Position.Z))
-	table.insert(normals, normals[#normals])
-
-	-- Place every point. A Beam with FaceCamera off spreads its width
-	-- along its attachments' Y axis and faces their X axis, so X is the
-	-- ground's normal and Y runs across the path (2026-11-06: it was the
-	-- other way round, which stood the ribbon on its edge). The rails sit
-	-- WIDTH/2 either side. Point `index` lives in slot `index`.
-	for index, position in points do
-		local along = if index > 1 then points[index - 1] - position else position - points[2]
-		if along.Magnitude < 1e-3 then
-			along = Vector3.zAxis
-		end
-		local up = normals[index]
-		local across = along:Cross(up)
-		across = if across.Magnitude < 1e-3 then Vector3.xAxis else across.Unit
-		local frame = CFrame.fromMatrix(position, up, across)
-		local slot = self:_slot(index)
-		slot.center.CFrame = frame
-		slot.left.CFrame = frame * CFrame.new(0, -WIDTH / 2, 0)
-		slot.right.CFrame = frame * CFrame.new(0, WIDTH / 2, 0)
-	end
-
-	-- Segment `index` runs from point index - 1 (destination side,
-	-- Attachment0, which the chevrons point at) to point index.
-	local opacity = self._opacity
-	local segments = #points - 1
-	for index = 1, segments do
-		local slot = self._slots[index]
-		local nextSlot = self._slots[index + 1]
-		slot.ribbon.Attachment1 = nextSlot.center
-		slot.leftRail.Attachment1 = nextSlot.left
-		slot.rightRail.Attachment1 = nextSlot.right
-
-		-- Fade and warm the end at the player (segments counted from it).
-		local fromTail = segments - index
-		local nearAlpha = math.clamp((fromTail + 1) / FADE_SEGMENTS, 0, 1) * opacity
-		local farAlpha = math.clamp(fromTail / FADE_SEGMENTS, 0, 1) * opacity
-		slot.ribbon.Transparency =
-			NumberSequence.new(1 - nearAlpha * (1 - RIBBON_TRANSPARENCY), 1 - farAlpha * (1 - RIBBON_TRANSPARENCY))
-		local railSequence =
-			NumberSequence.new(1 - nearAlpha * (1 - RAIL_TRANSPARENCY), 1 - farAlpha * (1 - RAIL_TRANSPARENCY))
-		slot.leftRail.Transparency = railSequence
-		slot.rightRail.Transparency = railSequence
-		local nearWarmth = math.clamp(1 - (fromTail + 1) / (FADE_SEGMENTS * 2), 0, 1)
-		local farWarmth = math.clamp(1 - fromTail / (FADE_SEGMENTS * 2), 0, 1)
-		slot.ribbon.Color = ColorSequence.new(COLOR:Lerp(TAIL_COLOR, nearWarmth), COLOR:Lerp(TAIL_COLOR, farWarmth))
-		slot.ribbon.Enabled = true
-		slot.leftRail.Enabled = true
-		slot.rightRail.Enabled = true
-	end
-	self:_hideFrom(segments + 1)
 end
 
 function GuideBeamController._findNpc(_self: typeof(GuideBeamController), name: string): Instance?
@@ -594,21 +589,20 @@ end
 
 --[ Public ]--
 
--- Points the path at `target` (a model, part, attachment or position).
+-- Guides the player to `target` (a model, part, attachment or position).
 function GuideBeamController.PointTo(self: typeof(GuideBeamController), target: Instance | Vector3)
 	self._target = target
 	self._arrived = false
 	self._goal = {}
 	self._goalNormal = {}
 	self._goalCount = 0
-	self._drawn = {}
-	self._drawnNormal = {}
 	self._lastFrom = nil
 	self._lastTo = nil
 	self._lastCompute = -math.huge
+	self._sinceWisp = math.huge
 end
 
--- Fades the path out.
+-- Stops launching wisps (those in flight finish).
 function GuideBeamController.Clear(self: typeof(GuideBeamController))
 	self._target = nil
 	self._lastFrom = nil
@@ -622,14 +616,6 @@ end
 --[ Lifecycle ]--
 
 function GuideBeamController.Start(self: typeof(GuideBeamController))
-	local markers = ReplicatedStorage:FindFirstChild("GameAssets")
-	markers = markers and markers:FindFirstChild("MobileHitMarkers")
-	local arrowPart = markers and markers:FindFirstChild("ArrowBeamPart")
-	local arrow = arrowPart and arrowPart:FindFirstChild("ArrowBeam")
-	if arrow and arrow:IsA("Beam") and arrow.Texture ~= "" then
-		self._texture = arrow.Texture
-	end
-
 	Players.LocalPlayer:GetAttributeChangedSignal(Attributes.GuideTarget):Connect(function()
 		self:_onGuideTarget()
 	end)
