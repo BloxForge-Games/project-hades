@@ -90,6 +90,8 @@ type NpcState = {
 
 local LobbyNpcLifeController = {
 	Name = "LobbyNpcLifeController",
+	-- Public: NpcMarkerController hides an NPC's marker on the same rule.
+	HIGHLIGHT_STUDS = HIGHLIGHT_STUDS,
 	_npcs = {} :: { [Model]: NpcState },
 }
 

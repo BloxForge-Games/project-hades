@@ -17,7 +17,7 @@
 	          are cut into points SPACING apart, each raycast to the ground.
 	  WISP    Each wisp takes a snapshot of the path when it launches and
 	          flies it start to finish on its own: from the player's
-	          shoulder, ARC_RISE above the path at its middle (an arc, lower
+	          HumanoidRootPart, ARC_RISE above the path at its middle (an arc, lower
 	          on short paths), gently swaying sideways and bobbing, eased
 	          in and out, at about WISP_SPEED studs a second. A neon mote
 	          with a gold Trail, a star ParticleEmitter (the VIP star image,
@@ -59,10 +59,9 @@ local WISP_INTERVAL = 2
 -- (2026-11-07: slowed from 22 and 0.9-4 s, to linger.)
 local WISP_SPEED = 13
 local WISP_DURATION = NumberRange.new(1.6, 6)
--- Heights above the ground: where it leaves (your shoulder), where it
--- arrives (an NPC's chest), and the arc's extra height at the middle
--- (ARC_RISE_PER_STUD of the path's length, capped).
-local START_HEIGHT = 4.5
+-- Heights above the ground: where it arrives (an NPC's chest), and the
+-- arc's extra height at the middle (ARC_RISE_PER_STUD of the path's
+-- length, capped). It leaves from your HumanoidRootPart.
 local END_HEIGHT = 3.5
 local ARC_RISE_PER_STUD = 0.12
 local ARC_RISE = NumberRange.new(1.5, 7)
@@ -115,6 +114,8 @@ type Wisp = {
 	length: number,
 	duration: number,
 	rise: number,
+	-- Height above the ground it leaves from: the HumanoidRootPart's.
+	startHeight: number,
 	seed: number,
 	age: number,
 	mote: BasePart,
@@ -358,13 +359,17 @@ function GuideBeamController._launch(self: typeof(GuideBeamController), root: Ba
 	if length < 1 then
 		return
 	end
-	local mote, sparkles, trail, light = self:_newMote(points[1] + Vector3.new(0, START_HEIGHT, 0))
+	-- Leaves from the HumanoidRootPart (2026-11-07; was a fixed 4.5 studs,
+	-- about head height).
+	local startHeight = root.Position.Y - points[1].Y
+	local mote, sparkles, trail, light = self:_newMote(root.Position)
 	table.insert(self._wisps, {
 		points = points,
 		distances = distances,
 		length = length,
 		duration = math.clamp(length / WISP_SPEED, WISP_DURATION.Min, WISP_DURATION.Max),
 		rise = math.clamp(length * ARC_RISE_PER_STUD, ARC_RISE.Min, ARC_RISE.Max),
+		startHeight = startHeight,
 		seed = math.random() * 100,
 		age = 0,
 		mote = mote,
@@ -393,7 +398,7 @@ local function wispPosition(wisp: Wisp, u: number): Vector3
 
 	-- The arc, and the wind on it (both settle to nothing at the ends).
 	local settle = math.sin(math.pi * u)
-	local height = START_HEIGHT + (END_HEIGHT - START_HEIGHT) * u + wisp.rise * settle
+	local height = wisp.startHeight + (END_HEIGHT - wisp.startHeight) * u + wisp.rise * settle
 	local sway = math.sin((u * SWAY_WAVES + wisp.seed) * math.pi * 2) * SWAY * settle
 	local bob = math.sin((u * BOB_WAVES + wisp.seed) * math.pi * 2) * BOB * settle
 	return ground + Vector3.new(0, height + bob, 0) + across * sway
