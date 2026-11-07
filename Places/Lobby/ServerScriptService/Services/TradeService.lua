@@ -11,7 +11,9 @@
 	            both. Both must be MIN_LEVEL+ and in no trade.
 	  OFFER     SetOffer replaces the sender's whole offer. Every uuid must
 	            be theirs, unequipped, unfavourited and not a spell; the
-	            Gold and Crystals must be in their wallet.
+	            Gold and Crystals must be in their wallet -- and are
+	            always 0 while TradeData.CURRENCY_TRADABLE is false
+	            (items only, 2026-11-06).
 	            ANY offer change bumps the version and clears both players'
 	            Ready and Confirm.
 	  READY     SetReady names the version it means; a stale one is ignored.
@@ -524,8 +526,10 @@ function TradeService._onSetOffer(self: typeof(TradeService), player: Player, up
 	end
 	local offer: Offer = {
 		items = items,
-		gold = math.max(math.floor(update.Gold), 0),
-		crystals = math.max(math.floor(update.Crystals), 0),
+		-- Items only unless currency trading is on: what a client sends
+		-- for these is ignored.
+		gold = if TradeData.CURRENCY_TRADABLE then math.max(math.floor(update.Gold), 0) else 0,
+		crystals = if TradeData.CURRENCY_TRADABLE then math.max(math.floor(update.Crystals), 0) else 0,
 	}
 	local ok, reason = checkOffer(player, offer)
 	if not ok then
