@@ -7,7 +7,7 @@
 	pointing to it while it is off screen -- the dungeon's marker system
 	(Libraries/LocationMarkerSystem), started here for the hub.
 
-	A marker floats a stud above its NPC's head and hides while it has
+	A marker floats 2 studs above its NPC's head and hides while it has
 	nothing to tell you: when you are close enough for the NPC's highlight
 	(LobbyNpcLifeController: your Head within HIGHLIGHT_STUDS of its
 	HumanoidRootPart, the same rule), and while you are talking to it. It
@@ -34,7 +34,7 @@ local MARKER_IMAGE = "rbxassetid://8239524757"
 local MARKER_COLOR = Color3.fromRGB(255, 170, 0)
 local MARKER_SIZE = 0.04
 -- Studs between the top of the NPC's head and the marker.
-local HEAD_PADDING = 1
+local HEAD_PADDING = 2
 -- How often the NPC list is checked for change (NPCs present at join).
 local REFRESH_SECONDS = 2
 
