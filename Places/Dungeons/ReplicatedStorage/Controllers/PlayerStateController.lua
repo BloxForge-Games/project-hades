@@ -23,7 +23,6 @@ local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.I
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ValueNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ValueNames)
-local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 
 -- AimController requires this module at load, so this side reaches it
@@ -55,10 +54,7 @@ local function getArcaneController(): any
 	end
 	return arcaneControllerLazy
 end
-local getEffectiveBaseWalkSpeed =
-	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveBaseWalkSpeed)
-local getEffectiveJetpackWalkSpeed =
-	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveJetpackWalkSpeed)
+local walkSpeedClaims = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.walkSpeedClaims)
 
 local PlayerStateController = {
 	Name = "PlayerStateController",
@@ -104,8 +100,17 @@ local PlayerStateController = {
 -- restores skipped by design (e.g. the weapon components skip their
 -- WalkSpeed restore when a gate is closed at swing end).
 --
--- Not watched: RagdollTrigger (server-owned, long knockdowns are legit)
--- and Death (LifeController owns the dead state end to end).
+-- Not watched: RagdollTrigger (server-owned, long knockdowns are legit),
+-- Death (LifeController owns the dead state end to end) and, since
+-- 2026-11-06, WalkSpeed: every slow is a walkSpeedClaims claim that
+-- EXPIRES on its own, so a lost restore heals itself without a watchdog
+-- (its old "WalkSpeed below baseline" check fired on healthy bow + dodge
+-- play and cancelled held fire as it "restored").
+--
+-- EVERY CHECK IS EVENT-TRACKED (2026-11-06): each watched attribute's
+-- stretch starts on the change signal that set it and ends on the one that
+-- cleared it (_watchAttributes), so back-to-back dodges or casts can never
+-- read as one long stuck stretch between two polls.
 --
 -- THE WATCHDOG STANDS DOWN WHILE THE PLAYER IS ATTACKING. Its whole
 -- purpose is a player who is trapped while doing NOTHING — alive, idle,
@@ -162,10 +167,13 @@ end
 
 -- os.clock() when MeleeWeaponEnabled last went false with no `true`
 -- since; nil whenever the gate is open. Maintained by
--- _watchMeleeGate off the attribute's own change signal, because the
+-- _watchAttributes off the attribute's own change signal, because the
 -- once-a-second poll cannot tell a swing loop's flicker from a stuck
 -- gate (see the watchdog header).
 PlayerStateController._meleeGateFalseSince = nil :: number?
+-- os.clock() when each watched flag last went TRUE with no clear since; a
+-- missing key = the flag is down. Kept by _watchAttributes.
+PlayerStateController._trueSince = {} :: { [string]: number }
 -- os.clock() of the last attack the game EXECUTED for this player (a
 -- server-accepted swing, a cast that fired). The watchdog stands down
 -- for WATCHDOG_ATTACK_GRACE_SECONDS past it. See the watchdog header.
@@ -247,62 +255,12 @@ end
 
 --[ Initializers ]--
 
--- Restores the local character's WalkSpeed to its relic-composed baseline
--- (jetpack-aware). The weapon components' own restores are GATED on
--- GeneralActionEnabled, so an attack whose active window overlaps a
--- cutscene starting (killing blow on a boss → outro) writes the slow
--- attack speed and then SKIPS the restore — leaving the player crawling
--- until their next completed attack. This is the unconditional back-stop.
+-- Re-applies the local character's WalkSpeed claims over its current
+-- baseline (walkSpeedClaims, 2026-11-06). Safe at any moment: a live slow
+-- (a cast's root, a held bow) is a claim and stays, so this can never pop
+-- one the way the old unconditional baseline write did.
 function PlayerStateController.RestoreWalkSpeed(_self: typeof(PlayerStateController))
-	local character = Players.LocalPlayer.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if not character or not humanoid then
-		return
-	end
-	if character:GetAttribute(Attributes.Death) == true then
-		return -- LifeController owns the dead state's movement
-	end
-	local ragdollTrigger = character:FindFirstChild(ValueNames.RagdollTrigger)
-	if ragdollTrigger and ragdollTrigger.Value == true then
-		return -- knocked down: physics owns the body until unragdoll
-	end
-
-	if character:GetAttribute(Attributes.OnJetpack) == true then
-		humanoid.WalkSpeed = getEffectiveJetpackWalkSpeed()
-	else
-		humanoid.WalkSpeed = getEffectiveBaseWalkSpeed(HumanoidProperties.WalkSpeed)
-	end
-end
-
--- Baseline WalkSpeed the character should hold in a NEUTRAL state (same
--- resolution RestoreWalkSpeed writes; jetpack-aware, relic-composed).
-local function expectedBaseWalkSpeed(character: Model): number
-	if character:GetAttribute(Attributes.OnJetpack) == true then
-		return getEffectiveJetpackWalkSpeed()
-	end
-	return getEffectiveBaseWalkSpeed(HumanoidProperties.WalkSpeed)
-end
-
--- True while some system LEGITIMATELY owns the character's movement or
--- actions right now — every state in which a sub-baseline WalkSpeed is
--- expected. The WalkSpeed check only counts time spent slow OUTSIDE these.
-local function movementLegitimatelyLocked(character: Model): boolean
-	if
-		character:GetAttribute(Attributes.IsDodging) == true
-		or character:GetAttribute(Attributes.ArcaneEnabled) == true
-		or character:GetAttribute(Attributes.CutscenePlaying) == true
-		or character:GetAttribute(Attributes.Death) == true
-		-- A running weapon attack loop (held mouse / held mobile shoot
-		-- stick) legitimately holds WalkSpeed at the attack-slow value for
-		-- as long as the player keeps attacking. Without this, holding fire
-		-- past WATCHDOG_STUCK_SECONDS read as "stuck slow" and the restore
-		-- released the held inputs — cancelling a perfectly healthy attack.
-		or character:GetAttribute(Attributes.Attacking) == true
-	then
-		return true
-	end
-	local ragdollTrigger = character:FindFirstChild(ValueNames.RagdollTrigger) :: BoolValue?
-	return ragdollTrigger ~= nil and ragdollTrigger.Value == true
+	walkSpeedClaims.apply(Players.LocalPlayer.Character)
 end
 
 -- Drops every HELD input the combat systems are tracking: the mobile
@@ -351,15 +309,38 @@ function PlayerStateController._isAttacking(self: typeof(PlayerStateController),
 	return false
 end
 
--- Tracks MeleeWeaponEnabled's transitions on the local character so the
--- watchdog can ask how long it has been CONTINUOUSLY closed. Re-bound per
--- character (a fresh body starts with the gate open, and the old
--- character's connection dies with it).
-function PlayerStateController._watchMeleeGate(self: typeof(PlayerStateController))
+-- The flags whose stuck-TRUE stretches the watchdog times exactly.
+local WATCHED_TRUE_FLAGS = {
+	Attributes.IsDodging,
+	Attributes.ArcaneEnabled,
+	Attributes.CutscenePlaying,
+}
+
+-- Tracks the watched attributes' transitions on the local character so the
+-- watchdog can ask how long each has been CONTINUOUSLY in its trapped
+-- state: MeleeWeaponEnabled closed, and each WATCHED_TRUE_FLAGS flag up.
+-- Re-bound per character (a fresh body starts clean, and the old
+-- character's connections die with it).
+function PlayerStateController._watchAttributes(self: typeof(PlayerStateController))
 	local localPlayer = Players.LocalPlayer
 
 	local function bind(character: Model)
 		self._meleeGateFalseSince = nil
+		table.clear(self._trueSince)
+		for _, flag in WATCHED_TRUE_FLAGS do
+			local function refreshFlag()
+				if character:GetAttribute(flag) == true then
+					-- Only the first raise of a stretch starts the clock.
+					if self._trueSince[flag] == nil then
+						self._trueSince[flag] = os.clock()
+					end
+				else
+					self._trueSince[flag] = nil
+				end
+			end
+			character:GetAttributeChangedSignal(flag):Connect(refreshFlag)
+			refreshFlag()
+		end
 		local function refresh()
 			if character:GetAttribute(Attributes.MeleeWeaponEnabled) == false then
 				-- Only the FIRST close of a stretch starts the clock; a
@@ -401,8 +382,14 @@ function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateCont
 			stuck = function(character: Model)
 				return character:GetAttribute(attribute) == true
 			end,
+			-- Event-tracked (_watchAttributes): the stretch is timed from
+			-- the change that raised the flag, never a poll's first sight.
+			trappedSince = function(_character: Model): number?
+				return self._trueSince[attribute]
+			end,
 			restore = function(character: Model)
 				character:SetAttribute(attribute, false)
+				self._trueSince[attribute] = nil
 			end,
 		}
 	end
@@ -423,7 +410,7 @@ function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateCont
 		-- EVENT-TRACKED, not sampled: this is the flickering state the
 		-- watchdog header warns about. Holding attack closes and reopens the
 		-- gate every swing, and the polled version fired mid-combo on
-		-- players who were never stuck at all. _watchMeleeGate owns the
+		-- players who were never stuck at all. _watchAttributes owns the
 		-- timestamp, so any real reopen resets it.
 		{
 			name = "MeleeWeaponEnabled stuck false (server swing gate)",
@@ -442,7 +429,7 @@ function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateCont
 
 		-- Attacking flag up with NO live attack input behind it. Attacking
 		-- is a legitimate movement lock for as long as the player holds
-		-- fire (see movementLegitimatelyLocked) — so this check must NOT
+		-- fire (its walkSpeedClaims claim) — so this check must NOT
 		-- key off duration alone, or a long hold would trip it. It only
 		-- counts as trapped when the flag is up but nothing could still be
 		-- driving the loop: no auto-attack session and no held mouse
@@ -467,32 +454,6 @@ function PlayerStateController._buildWatchdogChecks(self: typeof(PlayerStateCont
 			restore = function(character: Model)
 				character:SetAttribute(Attributes.Attacking, false)
 				self:_releaseHeldInputs()
-			end,
-		},
-
-		-- WalkSpeed below baseline while NOTHING legitimately owns movement.
-		-- The weapon components' own restores are conditional (skipped when
-		-- a gate is closed at swing end) and a backgrounded app can leave a
-		-- swing/shot loop running with the button "held" -- both strand
-		-- WalkSpeed at the attack-slow value ("I can only crawl"). Restore
-		-- to baseline AND release held inputs, or a runaway loop just
-		-- re-slows it on its next iteration.
-		{
-			name = "WalkSpeed below baseline with no movement lock",
-			threshold = WATCHDOG_STUCK_SECONDS,
-			stuck = function(character: Model, humanoid: Humanoid)
-				if movementLegitimatelyLocked(character) then
-					return false
-				end
-				local heldSpeed = character:GetAttribute("WalkSpeedUnscaled")
-				if typeof(heldSpeed) ~= "number" then
-					heldSpeed = humanoid.WalkSpeed
-				end
-				return heldSpeed < expectedBaseWalkSpeed(character) - 0.01
-			end,
-			restore = function()
-				self:_releaseHeldInputs()
-				self:RestoreWalkSpeed()
 			end,
 		},
 
@@ -618,17 +579,11 @@ function PlayerStateController.Start(self: typeof(PlayerStateController))
 	-- no guaranteed order — the delay lets the whole release settle before
 	-- the write, and a double-write of the same value is harmless anyway.
 	--
-	-- NOT while something legitimately owns movement. A spell's cast
-	-- cutscene beat ends here too, and this wrote baseline over the cast's
-	-- own root and over a woven swing's slow -- the "my walkspeed reset
-	-- mid-cast" pop. Those owners restore on their own timers; a lost
-	-- restore is the watchdog's job, not this back-stop's.
+	-- A re-apply of the claims (2026-11-06), so a cast's root or a woven
+	-- swing's slow that is still live stays live (the old baseline write
+	-- popped them mid-cast).
 	CinematicInterfaceController.Signals.OnCinematicEnd:Connect(function()
 		task.delay(0.1, function()
-			local character = Players.LocalPlayer.Character
-			if character and movementLegitimatelyLocked(character) then
-				return
-			end
 			self:RestoreWalkSpeed()
 		end)
 	end)
@@ -641,8 +596,8 @@ function PlayerStateController.Start(self: typeof(PlayerStateController))
 		end)
 	end
 
-	-- Before the watchdog: its melee check reads the timestamp this keeps.
-	self:_watchMeleeGate()
+	-- Before the watchdog: its checks read the timestamps this keeps.
+	self:_watchAttributes()
 	self:_startWatchdog()
 end
 

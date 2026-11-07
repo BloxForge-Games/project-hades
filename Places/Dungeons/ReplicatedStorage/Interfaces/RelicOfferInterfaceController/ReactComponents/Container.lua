@@ -96,6 +96,12 @@ local COUNTDOWN_FLASH_TWEEN = TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.Eas
 local COUNTDOWN_PULSE_SCALE = 1.35
 local COUNTDOWN_PULSE_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local COUNTDOWN_TICK_SOUND_ID = "rbxassetid://134410911353980"
+-- 2026-11-06, once per card (three in a hand): the slide as a card starts
+-- rising, and the flip the moment its face turns up (DEAL_REVEAL_AT).
+local CARD_SLIDE_SOUND_ID = "rbxassetid://9113578399"
+local CARD_SLIDE_VOLUME = 1
+local CARD_FLIP_SOUND_ID = "rbxassetid://3456145589"
+local CARD_FLIP_VOLUME = 1.1
 local COUNTDOWN_TICK_VOLUME = 0.6
 
 -- Card row: height as a fraction of the screen, by platform. The width
@@ -154,12 +160,19 @@ local HEADER_OUT_FADE_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Sine, Enum.Ea
 -- roll. Its front wears the card-back COVER until the turn passes
 -- DEAL_REVEAL_YAW (edge-on), so the turn reads as one spin that reveals
 -- the card. The front fades in under the cover and sweeps as it lands.
-local DEAL_STAGGER = 0.14
+-- 0.14 -> 0.3 (2026-11-06): a cascade, each card's flip sound heard on its own.
+local DEAL_STAGGER = 0.3
 local DEAL_LEAD_SECONDS = 0.12
 local DEAL_MOVE_TWEEN = TweenInfo.new(1.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local DEAL_SPIN_TWEEN = TweenInfo.new(1.05, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 local DEAL_SPIN = 360
 local DEAL_REVEAL_YAW = 270
+-- The spin starts this long after the card starts rising (2026-11-06): it
+-- slides up first, then turns over.
+local DEAL_FLIP_DELAY = 0.25
+-- When, into the spin, the face turns up: the Quad-InOut passing
+-- DEAL_REVEAL_YAW (past the halfway point, t = 1 - sqrt((1 - share) / 2)).
+local DEAL_REVEAL_AT = DEAL_SPIN_TWEEN.Time * (1 - math.sqrt((1 - DEAL_REVEAL_YAW / DEAL_SPIN) / 2))
 local DEAL_FADE_TWEEN = TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 -- 2026-11-05: Legendary cards (handle.legendaryReveal, OfferCard) are
 -- dealt AFTER the rest: this beat behind the last other card's start,
@@ -574,21 +587,34 @@ local function Container(props: any)
 					return
 				end
 				local move = handle.tweenPose({ y = 0 }, DEAL_MOVE_TWEEN)
-				handle.revealAtYaw(DEAL_REVEAL_YAW)
-				local spin = handle.tweenPose({ yaw = DEAL_SPIN }, DEAL_SPIN_TWEEN)
+				playSoundId(CARD_SLIDE_SOUND_ID, CARD_SLIDE_VOLUME)
 				tween(handle.alpha, DEAL_FADE_TWEEN, { Value = 0 })
-				-- The text follows the art in, a beat later (OfferCard).
-				handle.revealDescription()
-				if spin then
-					-- A full turn is where it started: rest at 0 so the later
-					-- flip-back turns half, not one and a half.
-					spin.Completed:Once(function()
-						if offerRef.current == thisOffer then
-							handle.setCover(false)
-							handle.setPose({ yaw = 0 })
+				-- Slides up first, then turns over (DEAL_FLIP_DELAY).
+				task.delay(DEAL_FLIP_DELAY, function()
+					if offerRef.current ~= thisOffer or phaseRef.current == "closed" then
+						return
+					end
+					handle.revealAtYaw(DEAL_REVEAL_YAW)
+					local spin = handle.tweenPose({ yaw = DEAL_SPIN }, DEAL_SPIN_TWEEN)
+					-- The text follows the art in, a beat later (OfferCard).
+					handle.revealDescription()
+					-- The flip sound lands as the face turns up.
+					task.delay(DEAL_REVEAL_AT, function()
+						if offerRef.current == thisOffer and phaseRef.current ~= "closed" then
+							playSoundId(CARD_FLIP_SOUND_ID, CARD_FLIP_VOLUME)
 						end
 					end)
-				end
+					if spin then
+						-- A full turn is where it started: rest at 0 so the later
+						-- flip-back turns half, not one and a half.
+						spin.Completed:Once(function()
+							if offerRef.current == thisOffer then
+								handle.setCover(false)
+								handle.setPose({ yaw = 0 })
+							end
+						end)
+					end
+				end)
 				if move then
 					move.Completed:Once(function()
 						if offerRef.current == thisOffer then
@@ -604,7 +630,7 @@ local function Container(props: any)
 
 		-- Open only once the LAST card's flight and spin have completed:
 		-- a hover before that would add its depth and tilt to the spin.
-		task.delay(lastStart + DEAL_MOVE_TWEEN.Time + 0.05, function()
+		task.delay(lastStart + math.max(DEAL_MOVE_TWEEN.Time, DEAL_FLIP_DELAY + DEAL_SPIN_TWEEN.Time) + 0.05, function()
 			if offerRef.current == thisOffer and phaseRef.current == "dealing" then
 				phaseRef.current = "open"
 				applyPendingHover()

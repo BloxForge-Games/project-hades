@@ -1222,6 +1222,14 @@ function StatusConditionService:ApplyStatus(
 	isWeaponHit: boolean?
 )
 	local applied = self:_applyStatusOnce(sourcePlayer, targetModel, status, isWeaponHit)
+	-- A FRESH Status (not a refresh) counts toward Portable Justice's
+	-- unlock feat (2026-11-06).
+	if applied == true and sourcePlayer then
+		local unlocks = Blitz.OptionalService("RelicUnlockService")
+		if unlocks then
+			unlocks:AddFeat(sourcePlayer, "StatusesApplied")
+		end
+	end
 	if applied ~= nil and status then
 		self:_trySpiderExtraStatus(sourcePlayer, targetModel, status)
 		self:_refreshMelted(targetModel, sourcePlayer)

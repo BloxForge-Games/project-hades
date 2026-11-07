@@ -837,6 +837,11 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 	if gimmicks then
 		gimmicks:OnSpellCast(player, vfxName, cframe)
 	end
+	-- Korblox Mage Staff's unlock feat: committed casts (2026-11-06).
+	local unlocks = Blitz.OptionalService("RelicUnlockService")
+	if unlocks then
+		unlocks:AddFeat(player, "SpellsCast")
+	end
 
 	if self._vfxReplicationQueue[player.UserId] == nil then
 		self._vfxReplicationQueue[player.UserId] = {}

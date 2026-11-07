@@ -333,6 +333,12 @@ function RelicService.OnPlayerPerfectDodged(self: typeof(RelicService), player: 
 	-- dodge path (melee, projectile, hitbox) runs through.
 	playPerfectDodgeVFX(player)
 
+	-- The Experimental Jetpack's unlock feat (2026-11-06).
+	local unlocks = Blitz.OptionalService("RelicUnlockService")
+	if unlocks then
+		unlocks:AddFeat(player, "PerfectDodges")
+	end
+
 	-- Jetpack proc — existing behavior, kept identical. GetRelicActiveModule
 	-- internally checks ownership before invoking.
 	self:GetRelicActiveModule(player, "Jetpack")
@@ -910,7 +916,7 @@ function RelicService.GetUnownedNCRelicsForTree(self: typeof(RelicService), play
 	local found = {}
 	for relicName, data in RelicData do
 		if data.tree == tree and (data.combo == nil or data.combo == RelicCombo.NC) then
-			if (registry[relicName] or 0) == 0 then
+			if (registry[relicName] or 0) == 0 and self:IsRelicUnlocked(player, relicName) then
 				table.insert(found, relicName)
 			end
 		end
@@ -918,7 +924,16 @@ function RelicService.GetUnownedNCRelicsForTree(self: typeof(RelicService), play
 	return found
 end
 
+-- Unlocked for this player (2026-11-06, RelicUnlockService)? Every offer
+-- path asks this: a locked relic is never rolled, sold or dealt. True when
+-- the unlock service is absent.
+function RelicService.IsRelicUnlocked(_self: typeof(RelicService), player: Player, relicName: string): boolean
+	local unlocks = Blitz.OptionalService("RelicUnlockService")
+	return unlocks == nil or unlocks:IsUnlocked(player, relicName)
+end
+
 -- May this relic be OFFERED to this player? (2026-10-31, GDD.md "Relics")
+--   Locked (RelicUnlockService) never, whatever its combo.
 --   NC  always offerable.
 --   C   offerable once the player HOLDS any relic of the same tree.
 -- A retired (shelved) relic never is. `granted` is kept for the callers'
@@ -931,6 +946,9 @@ function RelicService.IsRelicRollEligible(
 ): boolean
 	local data = RelicData[relicName]
 	if not data or data.retired then
+		return false
+	end
+	if ownerPlayer and not self:IsRelicUnlocked(ownerPlayer, relicName) then
 		return false
 	end
 	if data.combo == nil or data.combo == RelicCombo.NC then

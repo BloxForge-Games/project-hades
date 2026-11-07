@@ -31,6 +31,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local DropService = require(ServerScriptService.Services.DropService)
 local Breakable = require(ServerScriptService.Components.Breakable)
 local RelicService = require(ServerScriptService.Services.RelicService)
@@ -662,6 +663,11 @@ function MobDeath.RunTakedownRewards(context: Context, killer: Player?)
 		end
 		lobBombs(context, player, FUSE_BOMBS)
 		runPoisonCloud(context, player)
+		-- The Codex and the relic unlocks' takedown counts (2026-11-06).
+		local unlocks = Blitz.OptionalService("RelicUnlockService")
+		if unlocks then
+			unlocks:OnTakedown(player, context.model)
+		end
 	end
 	handleAssists(context)
 
