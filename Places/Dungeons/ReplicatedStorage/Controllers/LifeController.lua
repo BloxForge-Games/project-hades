@@ -55,15 +55,10 @@ local ScreenSweepController = require(ReplicatedStorage.Submodules.Core.Source.C
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
-local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ColorCorrectionDefaults = require(ReplicatedStorage.Submodules.Core.Shared.Data.ColorCorrectionDefaults)
-local HumanoidProperties = require(ReplicatedStorage.Submodules.Core.Shared.Data.HumanoidProperties)
-local getEffectiveBaseWalkSpeed =
-	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveBaseWalkSpeed)
-local getEffectiveJetpackWalkSpeed =
-	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.getEffectiveJetpackWalkSpeed)
 local DeathCinematicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DeathCinematicData)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local walkSpeedClaims = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.walkSpeedClaims)
 local fadeSubtree = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.fadeSubtree)
 -- The death flash is a LAYER of the local character's single Highlight
 -- (CharacterHighlightController), not its own instance: the old
@@ -76,6 +71,8 @@ local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.I
 -- it composes: a revive releasing it won't bring the HUD back if a cutscene
 -- or a manual CloseInterface is still holding the same scope.
 local HUD_DEATH_SOURCE = "Death"
+-- The downed body's WalkSpeed 0, in walkSpeedClaims.
+local DOWNED_CLAIM = "Downed"
 
 -- HUD interface controllers we drive via their SetVisible signals during
 -- the death + revive lifecycle. We never reach into PlayerGui to flip
@@ -375,8 +372,10 @@ function LifeController._lockControls(self: typeof(LifeController))
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
 	if humanoid then
-		Log.debug("[LifeController] Locking controls: setting WalkSpeed=0 to stop residual movement")
-		humanoid.WalkSpeed = 0
+		Log.debug("[LifeController] Locking controls: a WalkSpeed 0 claim stops residual movement")
+		-- Held until revive (walkSpeedClaims; no expiry: being downed is
+		-- not a slow a timer may lift).
+		walkSpeedClaims.claim(character, DOWNED_CLAIM, 0, math.huge)
 	end
 end
 
@@ -399,15 +398,7 @@ function LifeController._unlockControls(self: typeof(LifeController))
 	-- weapon / VFX code: jetpack speed if on jetpack, default otherwise.
 	-- (Jetpack is almost certainly off after revive, but the check is
 	-- cheap insurance.)
-	local character = Players.LocalPlayer.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		if character:GetAttribute(Attributes.OnJetpack) == true then
-			humanoid.WalkSpeed = getEffectiveJetpackWalkSpeed()
-		else
-			humanoid.WalkSpeed = getEffectiveBaseWalkSpeed(HumanoidProperties.WalkSpeed)
-		end
-	end
+	walkSpeedClaims.release(Players.LocalPlayer.Character, DOWNED_CLAIM)
 end
 
 -- Updates the local spectating state + fires OnSpectateStateChanged.

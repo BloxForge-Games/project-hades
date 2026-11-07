@@ -542,6 +542,25 @@ COMMANDS = {
 		end,
 	},
 
+	unlockrelics = {
+		usage = "/unlockrelics all | /unlockrelics reset",
+		description = "Relic unlocks (RelicUnlockService): 'all' unlocks every relic; 'reset' goes back to the 27 starting relics and clears every counter and the Codex's monsters.",
+		handler = function(player: Player, args: { string }): string?
+			local unlocks = Blitz.OptionalService("RelicUnlockService")
+			if not unlocks then
+				return "RelicUnlockService is not loaded."
+			end
+			local mode = args[1]
+			if mode ~= "all" and mode ~= "reset" then
+				return ("Usage: %s"):format(COMMANDS.unlockrelics.usage)
+			end
+			if not unlocks:DebugSet(player, mode == "all") then
+				return "Your profile has not loaded yet."
+			end
+			return if mode == "all" then "Every relic unlocked." else "Relic unlocks reset to the starting pool."
+		end,
+	},
+
 	card = {
 		usage = "/card <name>[, name, name]",
 		description = "Deals up to 3 relics (by partial name, comma-separated) as relic cards on your screen, as a vending machine would; taking one grants it.",

@@ -370,6 +370,17 @@ local function atRelicCap(player: Player): boolean
 	return RelicService:GetOwnedRelicCount(player) >= RelicService:GetRelicSlots(player)
 end
 
+-- The Sword with no Legendary to give this player (none unlocked and
+-- unheld, 2026-11-06): nothing paid, the stone stays for later.
+local function refuseNoLegendary(player: Player)
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if TextIndicatorService and hrp and hrp:IsA("BasePart") then
+		TextIndicatorService:ShowIndicator(player, hrp, "The stone holds nothing for you yet", RELIC_CAP_COLOR, true)
+	end
+	playFeedbackSound(if hrp and hrp:IsA("BasePart") then hrp else nil, "Error")
+end
+
 local function refuseAtRelicCap(player: Player)
 	local character = player.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
@@ -444,6 +455,8 @@ function EventService._rollUsableRelics(
 			data.rarity == rarity
 			and not data.retired
 			and RelicService:GetSpecificRelicRegistry(player, relicName) == 0
+			-- Locked relics never deal, gates ignored or not (2026-11-06).
+			and RelicService:IsRelicUnlocked(player, relicName)
 			and (ignoreGates or RelicService:IsRelicRollEligible(relicName, granted :: any, player))
 		then
 			table.insert(candidates, relicName)
@@ -823,6 +836,15 @@ function EventService._onAttemptSwordPull(_self: typeof(EventService), player: P
 		return "full"
 	end
 
+	-- The hand scales with the player's unlocks (2026-11-06): only
+	-- Legendaries they have unlocked and do not hold, up to
+	-- SWORD_OFFER_COUNT -- never Epics, never locked ones. With none,
+	-- nothing is paid (answered like the relic cap).
+	if #EventService:_rollUsableRelics(player, ItemRarity.Legendary, 1) == 0 then
+		refuseNoLegendary(player)
+		return "full"
+	end
+
 	if EventService:_applyHealthCost(player, SWORD_PULL_HEALTH_FRACTION) == "dead" then
 		return "dead"
 	end
@@ -883,8 +905,15 @@ function EventService._onAcceptCurse(_self: typeof(EventService), player: Player
 		humanoid.Health = math.max(humanoid.Health - cost, 1)
 	end
 
-	-- Completely random among unowned Cursed relics — no usability gate,
-	-- matching the merchant's anything-goes rule.
+	-- The bargain unlocks the next Cursed relic (2026-11-06), before the
+	-- hand is dealt, so a fresh curse can already be in it.
+	local unlocks = Blitz.OptionalService("RelicUnlockService")
+	if unlocks then
+		unlocks:OnCursedBargain(player)
+	end
+
+	-- Completely random among unowned, UNLOCKED Cursed relics — no
+	-- usability gate, matching the merchant's anything-goes rule.
 	local curses = EventService:_rollUsableRelics(player, ItemRarity.Cursed, SHRINE_CURSE_COUNT, true)
 	-- DEFERRED: the cost just landed; the hand is dealt at conversation end.
 	EventService._pendingRelicFans[player.UserId] =
@@ -1341,6 +1370,7 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 			BUY_PRICES[data.rarity]
 			and not data.retired
 			and RelicService:GetSpecificRelicRegistry(player, relicName) == 0
+			and RelicService:IsRelicUnlocked(player, relicName)
 		then
 			local bucket = byRarity[data.rarity]
 			if not bucket then

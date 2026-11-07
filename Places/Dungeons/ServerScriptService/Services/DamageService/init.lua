@@ -229,7 +229,9 @@ local FLAMING_ORB_AURA_MARKERS = {
 -- Recorded before the damage lands, so the death handlers already see the
 -- killing blow (Trick Or Trap's weapon takedowns, MobDeath; 2026-11-05).
 -- Weak-keyed: a despawned enemy drops out.
-type WeaponHit = { melee: boolean, weapon: boolean, at: number }
+-- `magic`: the hit dealt Arcane Damage (a spell, or a converted weapon
+-- hit), for the Codex's Arcane takedowns (2026-11-06).
+type WeaponHit = { melee: boolean, weapon: boolean, magic: boolean, at: number }
 local lastWeaponHit: { [Model]: { [string]: WeaponHit } } = setmetatable({}, { __mode = "k" }) :: any
 
 -- Dragon Lantern (Cursed): every hit that reaches HEALTH costs the owner
@@ -1516,11 +1518,20 @@ function DamageService.TakeDamage(
 	if not isStatusConditionDamage and not isRelicSourced then
 		local hits = lastWeaponHit[targetModel] or {}
 		lastWeaponHit[targetModel] = hits
+		local first = hits[player.Name] == nil
 		hits[player.Name] = {
 			melee = isMelee == true and isMagic ~= true,
 			weapon = isMagic ~= true,
+			magic = isMagic == true,
 			at = GameClock.Now(),
 		}
+		-- The first hit on this enemy: the Codex lists its kind as met.
+		if first then
+			local unlocks = Blitz.OptionalService("RelicUnlockService")
+			if unlocks then
+				unlocks:MarkMonsterSeen(player, targetModel.Name)
+			end
+		end
 	end
 
 	-- Status condition damage (DoT) bypasses the whole pipeline: no
@@ -1835,6 +1846,26 @@ function DamageService.LastHitWasWeapon(
 	local hits = lastWeaponHit[model]
 	local hit = hits and hits[playerName]
 	return hit ~= nil and hit.weapon == true and GameClock.Now() - hit.at <= window
+end
+
+-- What `playerName`'s last weapon or spell hit on `model` was, no more
+-- than `window` seconds ago: "Melee", "Ranged" (a ranged weapon), "Arcane"
+-- (Arcane Damage), or nil (2026-11-06, the Codex's takedown feats).
+function DamageService.LastHitKind(
+	_self: typeof(DamageService),
+	model: Model,
+	playerName: string,
+	window: number
+): string?
+	local hits = lastWeaponHit[model]
+	local hit = hits and hits[playerName]
+	if hit == nil or GameClock.Now() - hit.at > window then
+		return nil
+	end
+	if hit.magic then
+		return "Arcane"
+	end
+	return if hit.melee then "Melee" else "Ranged"
 end
 
 --[ Initializers ]--
