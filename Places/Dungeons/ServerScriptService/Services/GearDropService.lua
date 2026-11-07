@@ -216,6 +216,11 @@ function GearDropService._getLuckyRarityWeights(self: typeof(GearDropService), p
 		return weights
 	end
 	local luck = PlayerStatsService:GetGearStat(player, "Luck")
+	-- The Store's Luck boost (2026-11-06) adds to the gear line's Luck.
+	local storeService = Blitz.OptionalService("StoreService")
+	if storeService then
+		luck += storeService:GetLuckBonus(player)
+	end
 	if luck <= 0 then
 		return weights
 	end

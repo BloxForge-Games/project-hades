@@ -106,6 +106,8 @@ local ExperienceService =
 	require(ServerScriptService.Submodules.Core.Source.Services.DataService.SubServices.ExperienceService)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local DungeonData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DungeonData)
+local CosmeticData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CosmeticData)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local DungeonIds = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DungeonIds)
 local dungeonProgress = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.dungeonProgress)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
@@ -446,6 +448,43 @@ COMMANDS = {
 				DungeonData[dungeonId].displayName,
 				difficulty
 			)
+		end,
+	},
+	cosmetics = {
+		usage = "/cosmetics grantall | clear",
+		description = "Gives you every cosmetic in the catalogue (skins, auras, mounts), or takes them all back and wears nothing.",
+		handler = function(player: Player, args: { string }): string?
+			local action = string.lower(args[1] or "")
+			if action ~= "grantall" and action ~= "clear" then
+				return "Usage: /cosmetics grantall | clear"
+			end
+			local profile = DataService:GetProfileData(player)
+			if next(profile) == nil then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			local unlocks = if type(profile.Unlocks) == "table" then profile.Unlocks else {}
+			local count = 0
+			for name, item in CosmeticData.Items do
+				local unlockKind = CosmeticData.UnlockKindFor(item.kind)
+				local owned = if type(unlocks[unlockKind]) == "table" then unlocks[unlockKind] else {}
+				unlocks[unlockKind] = owned
+				owned[name] = if action == "grantall" then true else nil
+				count += 1
+			end
+			DataService:SetProfileValue(player, "Unlocks", unlocks)
+			if action == "clear" then
+				local cosmeticService = Blitz.OptionalService("CosmeticService")
+				if cosmeticService then
+					cosmeticService:Equip(player, CosmeticData.Kinds.Aura, "")
+					cosmeticService:Equip(player, CosmeticData.Kinds.ArmorSkin, "")
+					cosmeticService:Equip(player, CosmeticData.Kinds.Mount, "")
+					for _, weaponType in CosmeticData.WeaponTypes do
+						cosmeticService:Equip(player, CosmeticData.WeaponSlotPrefix .. weaponType, "")
+					end
+				end
+				return ("Took back %d cosmetics; wearing none."):format(count)
+			end
+			return ("Gave you %d cosmetics. Open the Wardrobe."):format(count)
 		end,
 	},
 	loadingscreen = {

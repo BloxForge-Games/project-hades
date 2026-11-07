@@ -246,13 +246,27 @@ local function writeLayer(
 	end
 end
 
--- A mob's active layer: its look, then Enabled on the change (2026-11-05).
+-- A mob's active layer: its look, then Enabled on the change (2026-11-05),
+-- back onto the mob first: an idle mob's highlight is UNPARENTED
+-- (2026-11-06), since even a disabled one held one of the client's 31
+-- Highlight render slots, and a big wave pushed the map's art-style
+-- outline past the cap.
 local function showMobLayer(
+	mob: Model,
 	highlight: Highlight,
 	written: HighlightWritten,
 	fillColor: Color3,
 	fillTransparency: number
 )
+	if highlight.Parent ~= mob then
+		-- A destroyed highlight (the mob's death cleanup) has a locked
+		-- Parent: nothing to show.
+		if not pcall(function()
+			highlight.Parent = mob
+		end) then
+			return
+		end
+	end
 	writeLayer(highlight, written, fillColor, fillTransparency, Enum.HighlightDepthMode.AlwaysOnTop)
 	if written.enabled ~= true then
 		highlight.Enabled = true
@@ -416,6 +430,9 @@ function CharacterHighlightController._registerMob(self: typeof(CharacterHighlig
 		mob.AncestryChanged:Connect(function(_, parent)
 			if parent ~= workspace.IgnoreInstances.Mobs then
 				self._mobRegistry[mob] = nil
+				-- Dead (DeadMobs) or gone: its highlight off the model, out of
+				-- the slot count, rather than parked on the body.
+				data.highlight.Parent = nil
 				OcclusionController:Untrack(mob)
 			end
 		end)
@@ -726,10 +743,9 @@ function CharacterHighlightController._resolveMobHighlight(
 	deltaTime: number
 )
 	local highlight = data.highlight
-	if not highlight or not highlight.Parent then
-		-- Server already destroyed the Highlight (mob death janitor
-		-- cleanup). Nothing to do; AncestryChanged will scrub the
-		-- registry entry shortly.
+	-- The mob gone (its highlight is unparented while idle, so the MOB is
+	-- what says it is alive). AncestryChanged scrubs the entry shortly.
+	if not highlight or not mob.Parent then
 		return
 	end
 	local head = data.head
@@ -758,12 +774,12 @@ function CharacterHighlightController._resolveMobHighlight(
 	-- Priority 1: damage flash (red; held, then an ease-in fade, see
 	-- DAMAGE_HOLD / DAMAGE_FADE).
 	if data.damageFlashEndAt and now < data.damageFlashEndAt then
-		showMobLayer(highlight, written, DAMAGE_COLOR, damageFlashTransparency(data.damageFlashEndAt, now))
+		showMobLayer(mob, highlight, written, DAMAGE_COLOR, damageFlashTransparency(data.damageFlashEndAt, now))
 		return
 	end
 	-- Priority 1b: heal flash (green, the damage flash's curve).
 	if data.healFlashEndAt and now < data.healFlashEndAt then
-		showMobLayer(highlight, written, HEAL_COLOR, damageFlashTransparency(data.healFlashEndAt, now))
+		showMobLayer(mob, highlight, written, HEAL_COLOR, damageFlashTransparency(data.healFlashEndAt, now))
 		return
 	end
 	-- Clear stale damageFlashEndAt so subsequent frames don't pay the
@@ -778,7 +794,7 @@ function CharacterHighlightController._resolveMobHighlight(
 	-- Priority 2: occlusion outline (white, 0.65, AlwaysOnTop).
 	local occluded = OcclusionController:IsOccluded(mob)
 	if occluded then
-		showMobLayer(highlight, written, OUTLINE_COLOR, OUTLINE_TRANSPARENCY)
+		showMobLayer(mob, highlight, written, OUTLINE_COLOR, OUTLINE_TRANSPARENCY)
 		return
 	end
 
@@ -786,7 +802,13 @@ function CharacterHighlightController._resolveMobHighlight(
 	if data.windupIntensity > 0 then
 		-- intensity 1 → FillTransparency = ATTACK_WINDUP_PEAK_TRANSPARENCY
 		-- intensity 0 → FillTransparency = 1
-		showMobLayer(highlight, written, WINDUP_COLOR, 1 - data.windupIntensity * (1 - ATTACK_WINDUP_PEAK_TRANSPARENCY))
+		showMobLayer(
+			mob,
+			highlight,
+			written,
+			WINDUP_COLOR,
+			1 - data.windupIntensity * (1 - ATTACK_WINDUP_PEAK_TRANSPARENCY)
+		)
 		return
 	end
 
@@ -797,6 +819,9 @@ function CharacterHighlightController._resolveMobHighlight(
 	if written.enabled ~= false then
 		highlight.Enabled = false
 		written.enabled = false
+	end
+	if highlight.Parent ~= nil then
+		highlight.Parent = nil
 	end
 end
 

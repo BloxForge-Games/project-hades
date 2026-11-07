@@ -159,6 +159,8 @@ local function playIdle(humanoid: Humanoid)
 end
 
 -- The NPC's highlight, hidden until the player comes near (client only).
+-- It is PARENTED only while it shows (2026-11-06): a hidden one parked on
+-- the model was still one of the client's 31 Highlight slots.
 local function makeHighlight(model: Model): Highlight
 	local highlight = Instance.new("Highlight")
 	highlight.Name = "NearHighlight"
@@ -168,7 +170,6 @@ local function makeHighlight(model: Model): Highlight
 	highlight.FillColor = HIGHLIGHT_FILL_COLOR
 	highlight.OutlineTransparency = 1
 	highlight.FillTransparency = 1
-	highlight.Parent = model
 	return highlight
 end
 
@@ -220,10 +221,24 @@ local function setHighlighted(state: NpcState, on: boolean)
 		return
 	end
 	state.highlighted = on
-	TweenService:Create(state.highlight, HIGHLIGHT_TWEEN, {
+	local highlight = state.highlight
+	if on then
+		highlight.Parent = state.model
+	end
+	local tween = TweenService:Create(highlight, HIGHLIGHT_TWEEN, {
 		OutlineTransparency = if on then HIGHLIGHT_OUTLINE_TRANSPARENCY else 1,
 		FillTransparency = if on then HIGHLIGHT_FILL_TRANSPARENCY else 1,
-	}):Play()
+	})
+	if not on then
+		-- Faded out: off the model, out of the slot count. A walk back in
+		-- before the fade ends re-parents it above.
+		tween.Completed:Once(function(state_: Enum.PlaybackState)
+			if state_ == Enum.PlaybackState.Completed and not state.highlighted then
+				highlight.Parent = nil
+			end
+		end)
+	end
+	tween:Play()
 end
 
 -- The yaw and pitch the NPC turns toward `target` -- measured in the
