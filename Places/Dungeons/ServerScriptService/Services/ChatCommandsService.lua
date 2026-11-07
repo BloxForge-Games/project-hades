@@ -393,6 +393,22 @@ type Command = {
 
 local COMMANDS: { [string]: Command }
 COMMANDS = {
+	pet = {
+		usage = "/pet on | off",
+		description = "The ground pet prototype: a ball that follows you on the floor (this session only).",
+		handler = function(player: Player, args: { string }): string?
+			local action = string.lower(args[1] or "")
+			if action ~= "on" and action ~= "off" then
+				return "Usage: /pet on | off"
+			end
+			local groundPets = Blitz.OptionalService("GroundPetService")
+			if not groundPets then
+				return "GroundPetService is unavailable."
+			end
+			groundPets:SetEnabled(player, action == "on")
+			return if action == "on" then "Ground pet on." else "Ground pet off."
+		end,
+	},
 	fight = {
 		usage = "/fight [miniboss|boss]",
 		description = "Teleports everyone into this floor's miniboss (default) or boss fight and starts it.",
