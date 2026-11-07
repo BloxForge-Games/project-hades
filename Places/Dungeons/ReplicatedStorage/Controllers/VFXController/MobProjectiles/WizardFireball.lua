@@ -164,6 +164,9 @@ return function(
 	wallParams.FilterDescendantsInstances = { dungeonRooms }
 
 	local localCharacter = Players.LocalPlayer.Character
+	-- Shadow Clone proxies (ShadowCloneService): a shot that reaches one
+	-- breaks there; the server counts the hit and ends the cast.
+	local shadowClones = workspace.IgnoreInstances:FindFirstChild("ShadowClones")
 
 	-- Trajectory loop. Fire-and-forget along the initial direction
 	-- vector. Per-tick: move forward by speed*tickInterval, apply
@@ -251,6 +254,24 @@ return function(
 			if wallResult then
 				hit = true
 				hitCFrame = CFrame.new(wallResult.Position)
+				break
+			end
+		end
+
+		if shadowClones then
+			local struckClone = false
+			for _, clone in shadowClones:GetChildren() do
+				local cloneRoot = clone:IsA("Model") and clone.PrimaryPart
+				-- Flat, like the server's test (MobService CLONE_SHOT_REACH).
+				local gap = cloneRoot and (cloneRoot.Position - projectilePosition)
+				if gap and Vector3.new(gap.X, 0, gap.Z).Magnitude <= hitRadius + 1.5 then
+					struckClone = true
+					break
+				end
+			end
+			if struckClone then
+				hit = true
+				hitCFrame = projectile:GetPivot()
 				break
 			end
 		end

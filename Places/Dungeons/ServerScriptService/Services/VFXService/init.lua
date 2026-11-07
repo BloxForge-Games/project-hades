@@ -148,6 +148,11 @@ local HITBOX_PLACEMENT_SLACK_STUDS = 12
 local SWEEP_MAX_QUERIES = 25
 
 local vfxServer = script.VFXServer
+-- Spells whose effect the SERVER runs (2026-11-07 prototypes: Shadow Clone
+-- Barrage's clones, Hurricane Leaf Kick's hit and stun). One module per
+-- spell, named like the VFXController module (spaces removed), called as
+-- module(VFXService, player, cframe) once a cast is committed.
+local serverCasts = script:WaitForChild("ServerCasts")
 
 local VFXService = {
 	Name = "VFXService",
@@ -196,6 +201,7 @@ VFXService._vfxAttackRegistry = {}
 -- every read/write.
 VFXService._activeSigils = {}
 VFXService._vfxRegistry = {}
+VFXService._serverCastRegistry = {} :: { [string]: (any, Player, CFrame) -> () }
 
 VFXService.OnBuildingBroken = Signal.new()
 
@@ -931,6 +937,11 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		cframe = casterRoot.CFrame
 	end
 
+	local serverCast = self._serverCastRegistry[modifiedVfxName]
+	if serverCast then
+		task.spawn(serverCast, self, activePlayer, cframe)
+	end
+
 	-- EVERYONE, caster included. The caster's VFXController already ran the
 	-- effect module locally at cast time and skips it here, but other
 	-- listeners on this event (the cast dialogue strip) still need the
@@ -1257,6 +1268,11 @@ function VFXService.Start(self: typeof(VFXService))
 		if vfxModule:IsA("ModuleScript") then
 			local vfxName = vfxModule.Name:gsub(" ", "")
 			self._vfxRegistry[vfxName] = (require :: any)(vfxModule)
+		end
+	end
+	for _, castModule in serverCasts:GetChildren() do
+		if castModule:IsA("ModuleScript") then
+			self._serverCastRegistry[castModule.Name] = (require :: any)(castModule)
 		end
 	end
 

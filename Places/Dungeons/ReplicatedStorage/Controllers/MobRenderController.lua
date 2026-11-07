@@ -762,6 +762,13 @@ function MobRenderController._step(self: typeof(MobRenderController), dt: number
 				-- A leg that starts ahead of now is a knockback's stagger hold
 				-- (MobSimService): the mob stands while it slides, not runs.
 				running = moving and now >= move.startTime
+				-- Carried (MobSimService:Carry: Water Dragon, Rasenshuriken's
+				-- pull): it slides standing, keeping its facing.
+				local carriedUntil = entry.proxy:GetAttribute("CarriedUntil")
+				if type(carriedUntil) == "number" and now < carriedUntil then
+					running = false
+					targetYaw = entry.yaw
+				end
 
 				local flatGap = position - proxyCFrame.Position
 				local allowance = CORRECTION_STUDS + move.speed * CORRECTION_STALE_SECONDS

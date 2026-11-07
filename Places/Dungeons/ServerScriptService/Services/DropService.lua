@@ -198,6 +198,13 @@ local DropService = {
 	OrbBankIntercept = nil :: ((player: Player, dropType: string) -> boolean)?,
 }
 
+-- The Health / Mana Orb pickup flourish on `player` (playOrbPickupVFX),
+-- for a restore that did not come from walking over an orb: Earth
+-- Protection Orb's bank spending a stored one (2026-11-07).
+function DropService.PlayOrbPickupVFX(_self: typeof(DropService), player: Player, dropType: string)
+	playOrbPickupVFX(player, dropType)
+end
+
 -- Orb restores: the base fraction of the bar's max each Orb gives.
 local ORB_RESTORE_FRACTIONS: { [string]: number } = {
 	-- 0.05 -> 0.10 (2026-11-02): one orb now undoes about half a Hard hit.

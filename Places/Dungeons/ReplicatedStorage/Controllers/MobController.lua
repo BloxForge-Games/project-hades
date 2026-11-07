@@ -212,9 +212,123 @@ type FlashState = {
 	parts: { BasePart },
 	aborted: boolean,
 	diedConn: RBXScriptConnection?,
+	-- Every tween this flash started, so an abort can stop them all (the
+	-- white hit flash used to run on under the fade).
+	tweens: { any },
+	-- The FILL copies (makeFill), one per part, growing over the windup.
+	fills: { BasePart },
+	-- The mob's AttackInterrupted watch (stun, carry, death, phase change).
+	interruptConn: RBXScriptConnection?,
+	-- Where the attacking mob stood when the telegraph spawned (nil when
+	-- this client has no copy of it): picks where each fill grows from.
+	origin: Vector3?,
 }
 
+-- The windup FILL (2026-11-07): a copy of each telegraph part that grows
+-- from nothing to the part's full size over the windup, so the attack
+-- lands the moment the fill reaches the edge -- players read the timing
+-- instead of guessing it. Where it grows from (makeFill):
+--   * a DIRECTIONAL attack (the mob at or just off one end of the part: a
+--     slash, a lunge box, the Walker's swing) sweeps from the end nearest
+--     the mob to the far end, at full width;
+--   * an AREA attack (a circle, a part the mob stands in the middle of, or
+--     a zone cast away from the mob, like the Healer's heal square) grows
+--     from the centre across both wide axes.
+-- The part's thinnest axis is its thickness and never grows.
+local FILL_TRANSPARENCY = 0.45
+-- Studs the fill sits above its part, so the two never z-fight.
+local FILL_LIFT = 0.03
+-- The collapsed size of a growing axis (Roblox clamps true zero).
+local FILL_START = 0.05
+-- A part counts as DIRECTIONAL when the mob stands toward one end of it:
+-- at least FILL_SWEEP_SHARE of the half-length out from the centre along
+-- that axis (the Walker's swing box starts just BEHIND the mob, so the mob
+-- stands inside it, near its back edge), and no farther than
+-- FILL_EDGE_REACH studs beyond that edge. A mob near the middle (a spin)
+-- or a zone cast away from the mob (the Healer's square) is an area.
+local FILL_SWEEP_SHARE = 0.5
+local FILL_EDGE_REACH = 5
+
 local activeFlashes: { [any]: boolean } = {}
+
+-- Starts a tween owned by `state`, so fadeOutHitbox can cancel it.
+local function playTracked(state: FlashState, instance: Instance, info: TweenInfo, goals: { [string]: any })
+	local tween = GameClock.Tween(instance, info, goals)
+	table.insert(state.tweens, tween)
+	tween:Play()
+end
+
+-- The fill for `part` (the rules are in the FILL notes above): a bare
+-- copy (no outline) in the telegraph's colour, collapsed where it grows
+-- from. Returns it with the size and CFrame it grows to. `origin` is the
+-- attacking mob's position, nil when unknown (grows from the centre).
+local function makeFill(part: BasePart, origin: Vector3?): (BasePart, Vector3, CFrame)
+	local fill = part:Clone()
+	fill:ClearAllChildren()
+	fill.Name = "Fill"
+	fill.Anchored = true
+	fill.CanCollide = false
+	fill.CanQuery = false
+	fill.CanTouch = false
+	fill.CastShadow = false
+	-- A template's visible red is its outline box's surface, not the part.
+	local outline = part:FindFirstChildOfClass("SelectionBox")
+	fill.Color = if outline and outline.SurfaceTransparency < 1 then outline.SurfaceColor3 else part.Color
+	fill.Transparency = FILL_TRANSPARENCY
+	local full = part.Size
+	local fullCFrame = part.CFrame + Vector3.new(0, FILL_LIFT, 0)
+	local thinnest = math.min(full.X, full.Y, full.Z)
+	local axes = { Vector3.xAxis, Vector3.yAxis, Vector3.zAxis }
+	local sizes = { full.X, full.Y, full.Z }
+	local thinIndex = if full.X == thinnest then 1 elseif full.Y == thinnest then 2 else 3
+
+	-- Directional? The growing axis the mob lies farthest out along
+	-- (relative to that axis's half size), if it is just off that edge and
+	-- within the part's span on the other wide axis.
+	local sweepIndex: number? = nil
+	local sweepSign = 1
+	local isCircle = part:IsA("Part") and part.Shape == Enum.PartType.Cylinder
+	if origin and not isCircle then
+		local localOrigin = part.CFrame:PointToObjectSpace(origin)
+		local coords = { localOrigin.X, localOrigin.Y, localOrigin.Z }
+		local best, bestRatio = nil, FILL_SWEEP_SHARE
+		for index = 1, 3 do
+			if index ~= thinIndex then
+				local ratio = math.abs(coords[index]) / math.max(sizes[index] / 2, 0.01)
+				if ratio > bestRatio then
+					best, bestRatio = index, ratio
+				end
+			end
+		end
+		if best then
+			local other = 6 - thinIndex - best
+			local beyondEdge = math.abs(coords[best]) - sizes[best] / 2
+			local besideSpan = math.abs(coords[other]) <= sizes[other] / 2 + FILL_EDGE_REACH
+			if beyondEdge <= FILL_EDGE_REACH and besideSpan then
+				sweepIndex = best
+				sweepSign = if coords[best] >= 0 then 1 else -1
+			end
+		end
+	end
+
+	local startSizes = table.clone(sizes)
+	local startCFrame = fullCFrame
+	if sweepIndex then
+		-- A bar at the near edge, full width, sweeping to the far edge.
+		startSizes[sweepIndex] = FILL_START
+		startCFrame = fullCFrame * CFrame.new(axes[sweepIndex] * sweepSign * (sizes[sweepIndex] - FILL_START) / 2)
+	else
+		for index = 1, 3 do
+			if index ~= thinIndex then
+				startSizes[index] = FILL_START
+			end
+		end
+	end
+	fill.Size = Vector3.new(startSizes[1], startSizes[2], startSizes[3])
+	fill.CFrame = startCFrame
+	fill.Parent = part.Parent
+	return fill, full, fullCFrame
+end
 
 -- Cancels the in-flight flash and fades every part on the hitbox to
 -- transparency 1. Idempotent. Called either from the death listener
@@ -231,6 +345,16 @@ local function fadeOutHitbox(state: FlashState)
 		state.diedConn:Disconnect()
 		state.diedConn = nil
 	end
+	if state.interruptConn then
+		state.interruptConn:Disconnect()
+		state.interruptConn = nil
+	end
+	-- Stop every tween where it is (the fill's growth, the white hit
+	-- flash), so the telegraph only fades from its current look.
+	for _, tween in state.tweens do
+		tween:Cancel()
+	end
+	table.clear(state.tweens)
 
 	if not state.model.Parent then
 		return
@@ -244,13 +368,17 @@ local function fadeOutHitbox(state: FlashState)
 			GameClock.Tween(selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 }):Play()
 		end
 	end
+	for _, fill in state.fills do
+		GameClock.Tween(fill, fadeInfo, { Transparency = 1 }):Play()
+	end
 
 	GameClock.Debris(state.model, HITBOX_DEATH_FADE_DURATION + 0.1)
 end
 
 -- Drives the telegraph → fade chain. Two phases:
---   Phase 1 (windup): Transparency 1 → 0.75 over windUpDuration.
---                     Visual builds in intensity as the swing winds up.
+--   Phase 1 (windup): Transparency 1 → 0.75 over windUpDuration, and the
+--                     FILL grows from the centre to the full outline over
+--                     the same time (makeFill): full fill = the hit.
 --   Flash (hit-frame start): Color tweens to white over hitFrameDuration,
 --                     and half-way through Transparency 0.75 → 0.
 --   Phase 2 (hit-frame): Transparency 0 → 1 over hitFrameDuration.
@@ -277,15 +405,22 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	end
 
 	local rampInfo = TweenInfo.new(windUpDuration, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+	-- Linear, so the fill's edge moves at a steady, readable pace and
+	-- touches the outline exactly as the hit frame starts.
+	local fillInfo = TweenInfo.new(windUpDuration, Enum.EasingStyle.Linear)
 
 	for _, part in state.parts do
-		GameClock.Tween(part, rampInfo, { Transparency = 0.75 }):Play()
+		playTracked(state, part, rampInfo, { Transparency = 0.75 })
 
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 
 		if selectionBox then
-			GameClock.Tween(selectionBox, rampInfo, { Transparency = 0 }):Play()
+			playTracked(state, selectionBox, rampInfo, { Transparency = 0 })
 		end
+
+		local fill, fullSize, fullCFrame = makeFill(part, state.origin)
+		table.insert(state.fills, fill)
+		playTracked(state, fill, fillInfo, { Size = fullSize, CFrame = fullCFrame })
 	end
 
 	GameClock.Wait(windUpDuration)
@@ -303,21 +438,31 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	-- part's hit-frame tween — corrected here.
 	local flashInfo = TweenInfo.new(hitFrameDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
+	if state.aborted or not state.model.Parent then
+		return
+	end
+
 	for _, part in state.parts do
-		GameClock.Tween(part, flashInfo, { Color = FLASH_WHITE }):Play()
+		playTracked(state, part, flashInfo, { Color = FLASH_WHITE })
 
 		GameClock.Delay(hitFrameDuration / 2, function()
-			GameClock.Tween(part, flashInfo, { Transparency = 0 }):Play()
+			if not state.aborted then
+				playTracked(state, part, flashInfo, { Transparency = 0 })
+			end
 		end)
 
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 
 		if selectionBox then
-			GameClock.Tween(selectionBox, flashInfo, {
+			playTracked(state, selectionBox, flashInfo, {
 				Color3 = FLASH_WHITE,
 				SurfaceColor3 = FLASH_WHITE,
-			}):Play()
+			})
 		end
+	end
+	-- The full fill flashes with the outline: the attack has landed.
+	for _, fill in state.fills do
+		playTracked(state, fill, flashInfo, { Color = FLASH_WHITE, Transparency = 0.2 })
 	end
 
 	if state.aborted or not state.model.Parent then
@@ -334,23 +479,30 @@ local function runHitboxFlash(state: FlashState, windUpDuration: number, hitFram
 	local fadeInfo = TweenInfo.new(hitFrameDuration, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 
 	for _, part in state.parts do
-		GameClock.Tween(part, fadeInfo, { Transparency = 1 }):Play()
+		playTracked(state, part, fadeInfo, { Transparency = 1 })
 
 		local selectionBox = part:FindFirstChildOfClass("SelectionBox")
 
 		if selectionBox then
-			GameClock.Tween(selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 }):Play()
+			playTracked(state, selectionBox, fadeInfo, { Transparency = 1, SurfaceTransparency = 1 })
 		end
+	end
+	for _, fill in state.fills do
+		playTracked(state, fill, fadeInfo, { Transparency = 1 })
 	end
 
 	if state.aborted then
 		return
 	end
 
-	-- Normal completion: drop the death listener + Debris-clean.
+	-- Normal completion: drop the death / interrupt listeners + Debris-clean.
 	if state.diedConn then
 		state.diedConn:Disconnect()
 		state.diedConn = nil
+	end
+	if state.interruptConn then
+		state.interruptConn:Disconnect()
+		state.interruptConn = nil
 	end
 	activeFlashes[state] = nil
 
@@ -440,8 +592,25 @@ local function spawnHitboxFlash(
 		parts = parts,
 		aborted = false,
 		diedConn = nil,
+		tweens = {},
+		fills = {},
+		interruptConn = nil,
+		origin = if mobModel then mobModel:GetPivot().Position else nil,
 	}
 	activeFlashes[state] = true
+
+	-- Any interrupt the server stamps on the mob (a stun, a carry, a boss
+	-- phase change; MobService AttackInterrupted) cancels its damage, so
+	-- the telegraph fades with it rather than playing out a hit that never
+	-- comes. Only a CHANGE to true counts: the flag is reset as each new
+	-- attack starts.
+	if mobModel then
+		state.interruptConn = mobModel:GetAttributeChangedSignal("AttackInterrupted"):Connect(function()
+			if mobModel:GetAttribute("AttackInterrupted") == true then
+				fadeOutHitbox(state)
+			end
+		end)
+	end
 
 	-- Hook the mob's death so a kill mid-flash fades the visual.
 	local humanoid = if mobModel then mobModel:FindFirstChildOfClass("Humanoid") else nil

@@ -150,6 +150,11 @@ local DamageService = {
 	} :: { any },
 
 	_onDamageModules = {} :: { [string]: any },
+	-- Timed incoming damage reduction by key per player (AddTimedReduction,
+	-- 2026-11-07: Stone Body). Weak-keyed on the player.
+	_timedReductions = (
+			setmetatable({}, { __mode = "k" }) :: any
+		) :: { [Player]: { [string]: { fraction: number, untilAt: number, taken: number } } },
 	-- What last hurt each player (2026-11-03): "Slain by Pot Head" /
 	-- "Killed by Spike Trap", read by DungeonProgressService for the run
 	-- history's cause of death (GetLastHitCause).
@@ -443,6 +448,21 @@ function DamageService.PlayerTakeDamage(
 	if character:GetAttribute(Attributes.SusanooEnabled) == true then
 		local susanoo = ArcaneData[ArcaneNames["Susanoo Armor"]]
 		damage = damage * (1 - (susanoo and susanoo.damageReduction or 0))
+	end
+
+	-- Timed reductions (AddTimedReduction: Stone Body): each live one takes
+	-- its fraction off and tallies what the hit would have dealt.
+	local timed = self._timedReductions[player]
+	if timed then
+		local now = GameClock.Now()
+		for key, entry in timed do
+			if now >= entry.untilAt then
+				timed[key] = nil
+			else
+				entry.taken += damage
+				damage = damage * (1 - entry.fraction)
+			end
+		end
 	end
 
 	-- Teddy Trap (incoming side): +100% damage taken if owned. Callback
@@ -744,6 +764,65 @@ function DamageService.TryExecute(
 	end)
 end
 
+-- Runs `fn` with a spell's crit damage bonus (ArcaneData `critDamageBonus`,
+-- 2026-11-07: Chidori): a spell hit inside it that crits adds `bonus` to
+-- the crit multiplier. onHitboxDamage wraps a spell's hit in it.
+DamageService._spellCritBonus = 0
+function DamageService.WithSpellCritBonus(_self: typeof(DamageService), bonus: number, fn: () -> ())
+	local previous = DamageService._spellCritBonus
+	DamageService._spellCritBonus = bonus
+	local ok, err: any = pcall(fn :: any)
+	DamageService._spellCritBonus = previous
+	if not ok then
+		error(err, 0)
+	end
+end
+
+-- Timed incoming damage reduction (2026-11-07: Stone Body), by key per
+-- player: `fraction` off every hit until it lapses. The entry also tallies
+-- `taken`, what the hits would have dealt before it, for a payoff on end.
+function DamageService.AddTimedReduction(
+	self: typeof(DamageService),
+	player: Player,
+	key: string,
+	fraction: number,
+	seconds: number
+): { fraction: number, untilAt: number, taken: number }
+	local entries = self._timedReductions[player] or {}
+	self._timedReductions[player] = entries
+	local entry = { fraction = math.clamp(fraction, 0, 0.95), untilAt = GameClock.Now() + seconds, taken = 0 }
+	entries[key] = entry
+	return entry
+end
+
+-- Runs `fn` with relic procs off (2026-11-07, Shadow Clone Barrage's
+-- clones): TakeDamage calls inside it deal their damage (crits and the
+-- damage bonuses included) but skip _postDamage, where every on-hit,
+-- on-crit and every-damage proc rolls.
+DamageService._noProcDepth = 0
+function DamageService.WithoutProcs(_self: typeof(DamageService), fn: () -> ())
+	DamageService._noProcDepth += 1
+	local ok, err: any = pcall(fn :: any)
+	DamageService._noProcDepth -= 1
+	if not ok then
+		error(err, 0)
+	end
+end
+
+-- Runs `fn` with a spell's own knockback (ArcaneData `knockbackStuds`,
+-- 2026-11-07): spell hits inside it push `studs` instead of
+-- KNOCKBACK_ARCANE_STUDS. onHitboxDamage wraps a spell's hit in it.
+DamageService._arcaneKnockbackStuds = nil :: number?
+function DamageService.WithArcaneKnockback(_self: typeof(DamageService), studs: number, fn: () -> ())
+	local previous = DamageService._arcaneKnockbackStuds
+	DamageService._arcaneKnockbackStuds = studs
+	local ok, err: any = pcall(fn :: any)
+	DamageService._arcaneKnockbackStuds = previous
+	if not ok then
+		error(err, 0)
+	end
+end
+
 -- Runs `fn` with relic knockback: TakeDamage calls inside it push only
 -- KNOCKBACK_RELIC_STUDS. The relic gimmicks' typed hits (melee waves,
 -- arcane orbs) go through here, since their lanes would otherwise carry
@@ -901,7 +980,7 @@ function DamageService._knockback(
 	local distance = if relicPush
 		then KNOCKBACK_RELIC_STUDS
 		elseif isMelee then (KNOCKBACK_MELEE_STUDS_BY_TYPE[getEquippedMeleeType(player) or ""] or KNOCKBACK_MELEE_STUDS)
-		elseif isArcane then KNOCKBACK_ARCANE_STUDS
+		elseif isArcane then (DamageService._arcaneKnockbackStuds or KNOCKBACK_ARCANE_STUDS)
 		elseif isGunShot then KNOCKBACK_BULLET_STUDS
 		else KNOCKBACK_RELIC_STUDS
 	-- A zero distance is no push at all: skip the call so the mob is not
@@ -927,6 +1006,9 @@ function DamageService._postDamage(
 	-- that pay a share of it.
 	dealt: number?
 )
+	if DamageService._noProcDepth > 0 then
+		return
+	end
 	self:TryExecute(player, humanoid, isRelicSourced)
 
 	-- A bullet rolls the chance relics below at its gun's proc
@@ -1681,6 +1763,10 @@ function DamageService.TakeDamage(
 			if forced.onHit then
 				forced.onHit(targetModel)
 			end
+		end
+		-- A spell's own crit damage bonus (WithSpellCritBonus: Chidori).
+		if isMagic and DamageService._spellCritBonus > 0 then
+			critMultiplier += DamageService._spellCritBonus
 		end
 	end
 

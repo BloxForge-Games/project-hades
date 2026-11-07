@@ -150,7 +150,19 @@ local ATTR_SILENT_POP = "SilentPop"
 
 local GearDropService = {
 	Name = "GearDropService",
+	-- The gear types each player has been dropped this run (the run's
+	-- weapon + armor guarantee, see _guaranteedType). Weak: a player who
+	-- leaves drops out.
+	_runGear = setmetatable({}, { __mode = "k" }) :: any,
 }
+
+-- THE RUN'S GEAR GUARANTEE (2026-11-06): every player gets at least one
+-- weapon and one armor piece per run. The miniboss and boss chests roll
+-- freely; only on the FINAL floor's boss chest, when the slots left are
+-- just enough for the types still missing, does a slot draw from a missing
+-- type only (a weapon first). Every tier pays at least 2 pieces (miniboss 1
+-- + boss bossGearPieces), so the guarantee always fits.
+local GUARANTEED_TYPES = { GearTypes.Weapon, GearTypes.Armor }
 
 --[ Private helpers ]--
 
@@ -992,6 +1004,61 @@ function GearDropService._fireSingleDrop(
 	return uuid
 end
 
+-- This run's record for `player` ({ run, [gear type] = true }), started
+-- afresh when the run changes.
+function GearDropService._runRecord(self: typeof(GearDropService), player: Player): { [any]: any }
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	local run = dungeonService and dungeonService:GetRun()
+	local record = self._runGear[player]
+	if not record or record.run ~= run then
+		record = { run = run }
+		self._runGear[player] = record
+	end
+	return record
+end
+
+-- The gear type this slot must be (the guarantee), or nil to roll freely.
+-- `slotsLeft` counts this slot and the ones after it in the same chest.
+function GearDropService._guaranteedType(
+	self: typeof(GearDropService),
+	player: Player,
+	enemyType: string?,
+	slotsLeft: number
+): string?
+	if enemyType ~= EnemyTypes.Boss then
+		return nil
+	end
+	local dungeonService = Blitz.OptionalService("DungeonService")
+	if not dungeonService or not dungeonService:IsFinalDungeon() then
+		return nil
+	end
+	local record = self:_runRecord(player)
+	local missing = {}
+	for _, gearType in GUARANTEED_TYPES do
+		if not record[gearType] then
+			table.insert(missing, gearType)
+		end
+	end
+	if #missing == 0 or slotsLeft > #missing then
+		return nil
+	end
+	return missing[1]
+end
+
+-- The pool's entries of one gear type (the whole pool when it has none).
+local function poolOfType(pool: { any }, gearType: string?): { any }
+	if not gearType then
+		return pool
+	end
+	local filtered = {}
+	for _, entry in pool do
+		if entry.type == gearType then
+			table.insert(filtered, entry)
+		end
+	end
+	return if #filtered > 0 then filtered else pool
+end
+
 --[ Public API ]--
 
 function GearDropService.DropGear(
@@ -1066,16 +1133,22 @@ function GearDropService.DropGear(
 		-- Legendary Steel Sword cannot exist (GDD). A dungeon with no uniques
 		-- yet downgrades the roll to Epic rather than dropping nothing.
 		local rolledRarity = rollItemRarity(self:_getLuckyRarityWeights(player) or {}, ItemRarity.Common)
-		local slotPool = pool
+		-- The run's weapon + armor guarantee may pin this slot's type.
+		local requiredType = self:_guaranteedType(player, enemyType, dropCount - slot + 1)
+		local slotPool = poolOfType(pool, requiredType)
 		if rolledRarity == ItemRarity.Legendary then
-			if dropConfig.legendaryPool and #dropConfig.legendaryPool > 0 then
-				slotPool = dropConfig.legendaryPool
+			local legendaryPool = dropConfig.legendaryPool
+			local uniques = if legendaryPool then poolOfType(legendaryPool, requiredType) else nil
+			if uniques and #uniques > 0 and (requiredType == nil or uniques[1].type == requiredType) then
+				slotPool = uniques
 			else
+				-- No unique of the required type (or none at all): Epic.
 				rolledRarity = ItemRarity.Epic
 			end
 		end
 		local candidates = table.clone(slotPool)
 		local uuid: string? = nil
+		local droppedType: string? = nil
 		for _ = 1, #slotPool do
 			local entry = self:_rollFromPool(candidates)
 			if not entry then
@@ -1083,6 +1156,7 @@ function GearDropService.DropGear(
 			end
 			uuid = self:_fireSingleDrop(player, originPosition, entry, fromChest, rolledRarity)
 			if uuid then
+				droppedType = entry.type
 				break
 			end
 			local failedIndex = table.find(candidates, entry)
@@ -1092,6 +1166,9 @@ function GearDropService.DropGear(
 		end
 		if uuid then
 			table.insert(uuids, uuid)
+			if droppedType then
+				self:_runRecord(player)[droppedType] = true
+			end
 		else
 			warn(
 				("[GearDropService] DropGear: slot %d of %d could not be filled — every pool entry failed to build (see the warns above)"):format(

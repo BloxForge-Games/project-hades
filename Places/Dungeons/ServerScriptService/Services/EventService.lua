@@ -499,6 +499,13 @@ function EventService._spawnRelicFan(
 	end
 	local origin = primary.Position
 
+	-- Shown to the player: the relic cards' NEW / UNCOLLECTED badges and the
+	-- Codex read it (RelicUnlockService, 2026-11-06).
+	local unlocks = Blitz.OptionalService("RelicUnlockService")
+	if unlocks then
+		unlocks:RecordSeen(player, relicNames)
+	end
+
 	-- TargetPosition is a FLOOR-LEVEL contract (the vending machine
 	-- drops at its base; the client bob adds the hover). The offsets
 	-- above are relative to the interactable's PrimaryPart, which sits
@@ -1427,6 +1434,17 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 		stock[index], stock[swap] = stock[swap], stock[index]
 	end
 	byPlayer[roomId] = stock
+
+	local shelf = {}
+	for _, slot in stock do
+		table.insert(shelf, slot.relicName)
+	end
+	-- Shown to the player: the relic cards' NEW / UNCOLLECTED badges and the
+	-- Codex read it (RelicUnlockService, 2026-11-06).
+	local unlocks = Blitz.OptionalService("RelicUnlockService")
+	if unlocks then
+		unlocks:RecordSeen(player, shelf)
+	end
 	return stock
 end
 

@@ -69,6 +69,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 --[ Imports ]--
 
 local MobService = require(ServerScriptService.Services.MobService)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EnemyScalingService = require(ServerScriptService.Services.EnemyScalingService)
 local MobDeath = require(ServerScriptService.Mobs.MobDeath)
@@ -772,12 +774,14 @@ function MobSimService._issueMove(
 	record: Record,
 	now: number,
 	points: { Vector3 },
-	kind: string
+	kind: string,
+	-- A forced speed (Carry: the mob is moved, not walking). Nil = its own.
+	speedOverride: number?
 )
 	if #points > MAX_LEG_POINTS then
 		points = table.move(points, 1, MAX_LEG_POINTS, 1, table.create(MAX_LEG_POINTS))
 	end
-	local speed = effectiveSpeed(record)
+	local speed = speedOverride or effectiveSpeed(record)
 	record.move = mobPath.new(now, speed, record.ground, points, record.yaw)
 	record.moveKind = kind
 	MobNetwork.MobMove.FireAll({
@@ -1165,7 +1169,10 @@ function MobSimService._startAttack(self: typeof(MobSimService), record: Record,
 				and not record.model:GetAttribute(Attributes.Jailed)
 				and (not attack.requiresLineOfSight or hasLineOfSight(rootPosition(record), liveRoot))
 			then
-				local player = Players:GetPlayerFromCharacter(target)
+				-- A clone target fires on its owner's registry (the shot's lane
+				-- decides whether the clone takes it, MobService).
+				local clones = Blitz.OptionalService("ShadowCloneService")
+				local player = Players:GetPlayerFromCharacter(target) or (clones and clones:OwnerOf(target))
 				if player then
 					MobService:FireMobRangedAttack(record.model, player, attack)
 				end
@@ -1528,6 +1535,25 @@ function MobSimService._findTarget(_self: typeof(MobSimService), record: Record)
 		end
 	end
 	record.nearestPlayerDistance = nearestDistance
+	-- A taunt (TauntService: Stone Body) outranks everything.
+	local taunts = Blitz.OptionalService("TauntService")
+	if taunts then
+		local taunter, taunterRoot = taunts:GetTaunter(record.model)
+		if taunter then
+			record.target, record.targetRoot = taunter, taunterRoot
+			return
+		end
+	end
+	-- Shadow Clones draw aggro (ShadowCloneService:PickTarget); encounter
+	-- enemies ignore them.
+	local clones = Blitz.OptionalService("ShadowCloneService")
+	if clones and not isEncounterEnemy(record.model) then
+		local clone, cloneRoot = clones:PickTarget(from, record.detectionRange, nearestDistance)
+		if clone then
+			record.target, record.targetRoot = clone, cloneRoot
+			return
+		end
+	end
 	if nearestDistance < record.detectionRange then
 		record.target, record.targetRoot = nearest, nearestRoot
 	else
@@ -2020,6 +2046,120 @@ function MobSimService.ApplyKnockback(
 	record.pushPending += direction.Unit * distance
 	record.staggerPending =
 		math.min(math.max(record.staggerPending, distance * KNOCKBACK_STAGGER_PER_STUD), KNOCKBACK_STAGGER_MAX)
+end
+
+-- Stuns a live sim mob for `seconds` (2026-11-07, Hurricane Leaf Kick).
+-- An attack in progress is cancelled: its thread stops on the new
+-- generation, and AttackInterrupted stops a wind-up from landing its hit
+-- (MobService) and clears the telegraph on clients (MobController). The
+-- mob then holds where it is, making no decisions until the stun ends
+-- (staggerUntil, as a knockback does). Callers keep encounter enemies out.
+-- Returns whether the stun took.
+function MobSimService.Stun(self: typeof(MobSimService), model: Model, seconds: number): boolean
+	-- A Hold: its stand-still leg starts now, so a Carry landing during the
+	-- stun (Water Dragon, Rasenshuriken) still plays on every client.
+	return self:Hold(model, seconds)
+end
+
+-- Holds a live sim mob in place for `seconds` (2026-11-07, Rasenshuriken):
+-- an attack in progress is cancelled (as Stun does) and it makes no
+-- decisions until the hold ends, but unlike Stun its stand-still leg
+-- starts NOW. Stun's leg starts at its END, and clients drop any leg that
+-- starts before the one they hold, so a Carry issued during a Stun never
+-- showed: the mob stood, then snapped. Carries layer on top of a Hold.
+function MobSimService.Hold(self: typeof(MobSimService), model: Model, seconds: number): boolean
+	local record = self._byModel[model]
+	if not record or not record.alive or seconds <= 0 then
+		return false
+	end
+	local now = GameClock.Now()
+	if record.state == STATE_ATTACKING then
+		record.attackGeneration += 1
+		model:SetAttribute("AttackInterrupted", true)
+		self:_setAttacking(record, false)
+		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
+		record.written = record.root.CFrame
+		record.state = STATE_ROAMING
+		record.chosenAttack = nil
+		record.chaseGoal = nil
+	else
+		record.ground = (mobPath.sample(record.move, now))
+	end
+	record.staggerUntil = math.max(record.staggerUntil, now + seconds)
+	record.stateEndTime = math.max(record.stateEndTime, now + seconds)
+	self:_stop(record, now)
+	return true
+end
+
+-- Server time a carry ends, on the proxy (Carry; MobRenderController).
+local CARRIED_UNTIL_ATTRIBUTE = "CarriedUntil"
+
+-- Carries a live sim mob `distance` studs along `direction` at `speed`
+-- studs/s (2026-11-07, Water Dragon): a timed leg every client plays back
+-- smoothly, where a knockback lands the mob at its end spot at once. An
+-- attack in progress is cancelled (as Stun does), and the mob makes no
+-- decisions until it has arrived. The walk checks clip the carry short of
+-- a wall or a drop. Returns whether it moved.
+function MobSimService.Carry(
+	self: typeof(MobSimService),
+	model: Model,
+	direction: Vector3,
+	distance: number,
+	speed: number
+): boolean
+	local record = self._byModel[model]
+	if not record or not record.alive or distance <= 0 or speed <= 0 then
+		return false
+	end
+	if model:GetAttribute(Attributes.Jailed) then
+		return false
+	end
+	local heading = flat(direction)
+	if heading.Magnitude < 0.05 then
+		return false
+	end
+	heading = heading.Unit
+	local now = GameClock.Now()
+
+	if record.state == STATE_ATTACKING then
+		record.attackGeneration += 1
+		model:SetAttribute("AttackInterrupted", true)
+		self:_setAttacking(record, false)
+		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
+		record.written = record.root.CFrame
+		record.state = STATE_ROAMING
+		record.chosenAttack = nil
+		record.chaseGoal = nil
+	else
+		record.ground = (mobPath.sample(record.move, now))
+	end
+
+	-- The farthest share of the carry the walk checks allow.
+	local from = record.ground
+	local lift = Vector3.new(0, record.rootOffset, 0)
+	local landing: Vector3? = nil
+	for _, scale in { 1, 0.75, 0.5, 0.25 } do
+		local floor = floorBelow(
+			from + heading * distance * scale + lift + Vector3.new(0, WALK_STEP_STUDS, 0),
+			record.rootOffset + WALK_STEP_STUDS * 2
+		)
+		if floor and canWalkStraight(record, from, floor) then
+			landing = floor
+			break
+		end
+	end
+	if not landing then
+		return false
+	end
+
+	local seconds = flat(landing - from).Magnitude / speed
+	record.staggerUntil = math.max(record.staggerUntil, now + seconds)
+	record.stateEndTime = math.max(record.stateEndTime, now + seconds)
+	-- Clients draw a carried mob sliding as it stands, facing where it
+	-- faced, not running toward where it is taken (MobRenderController).
+	model:SetAttribute(CARRIED_UNTIL_ATTRIBUTE, now + seconds)
+	self:_issueMove(record, now, { landing }, "carry", speed)
+	return true
 end
 
 -- True when `model` is a live sim mob's proxy.

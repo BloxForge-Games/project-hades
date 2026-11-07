@@ -33,12 +33,15 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local RelicController = require(ReplicatedStorage.Controllers.RelicController)
+local DropIndicatorController = require(ReplicatedStorage.Controllers.DropIndicatorController)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Constants ]--
 
 -- Written by RelicGimmickService/Earth (ORB_BANK_ATTRIBUTE there).
 local ORB_BANK_ATTRIBUTE = "EarthOrbBank"
+-- Stamped by the server each time the bank spends an orb (letter + count).
+local ORB_SPENT_ATTRIBUTE = "EarthOrbSpent"
 local ORB_BANK = RelicNames["Earth Protection Orb"]
 local LETTER_BY_TYPE: { [string]: string } = {
 	[DropTypes.Health] = "H",
@@ -451,6 +454,24 @@ function EarthOrbBankController.Start(_self: typeof(EarthOrbBankController))
 	end
 	Players.PlayerAdded:Connect(watchPlayer)
 	RunService.RenderStepped:Connect(step)
+
+	-- A stored orb used on OUR character plays the orb pickup's sound and
+	-- sparkle (DropIndicatorController), the same as walking over one; the
+	-- server plays the heal / mana burst for everyone (2026-11-07).
+	local function watchSpends(character: Model)
+		character:GetAttributeChangedSignal(ORB_SPENT_ATTRIBUTE):Connect(function()
+			local value = character:GetAttribute(ORB_SPENT_ATTRIBUTE)
+			local dropType = if type(value) == "string" then TYPE_BY_LETTER[string.sub(value, 1, 1)] else nil
+			if dropType then
+				DropIndicatorController.OnDropIndicatorRequested:Fire(character, dropType, 0)
+			end
+		end)
+	end
+	local localPlayer = Players.LocalPlayer
+	if localPlayer.Character then
+		watchSpends(localPlayer.Character)
+	end
+	localPlayer.CharacterAdded:Connect(watchSpends)
 end
 
 return EarthOrbBankController

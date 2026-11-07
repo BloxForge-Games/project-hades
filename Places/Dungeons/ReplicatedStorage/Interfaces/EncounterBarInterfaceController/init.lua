@@ -54,7 +54,11 @@ function EncounterBarInterfaceController._render(_self: typeof(EncounterBarInter
 		React.useEffect(function()
 			-- The wire payload is structural (`kind: string`); EncounterData narrows it.
 			local disconnect = EncounterBarInterfaceController.EncounterData:Observe(function(data)
-				setEncounterData(data :: any)
+				-- A 0 HP payload is the fight ending (the server's last
+				-- health flush can trail its nil): treat it as over, so the
+				-- bar fades out rather than flickering back (2026-11-07).
+				local over = data == nil or (tonumber((data :: any).currentHP) or 1) <= 0
+				setEncounterData(if over then nil else data :: any)
 			end)
 
 			-- Hide the bar during boss phase-change cutscenes, reveal it after.

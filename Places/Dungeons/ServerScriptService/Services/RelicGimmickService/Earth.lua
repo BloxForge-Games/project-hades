@@ -62,6 +62,9 @@ local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local GLOVES = RelicNames["Golden Steampunk Gloves"]
 local ORB_BANK = RelicNames["Earth Protection Orb"]
+-- Stamped on the character each time the bank spends an orb: its letter
+-- (H / M) and a running count, so every spend is a change.
+local ORB_SPENT_ATTRIBUTE = "EarthOrbSpent"
 local TNT = RelicNames["Bundle of TNT"]
 local HORN = RelicNames["Earth Summoning Horn"]
 local GOLEM = RelicNames["Golem's Hammer"]
@@ -89,7 +92,7 @@ local Earth = {}
 
 --[ State ]--
 
-type Bank = { orbs: { string }, lastSpend: number }
+type Bank = { orbs: { string }, lastSpend: number, spends: number? }
 local banks: { [Player]: Bank } = {}
 
 local lastTntBlast: { [Player]: number } = {}
@@ -264,6 +267,15 @@ local function spendFromBank(player: Player, bank: Bank, now: number)
 		stampBank(player, bank)
 		local drops = dropService()
 		drops:RestoreOrb(player, dropType, drops:OrbRestoreMultiplier(player))
+		-- Used like a picked-up orb (2026-11-07): the heal / mana burst for
+		-- everyone, and the owner's client plays the pickup sound and
+		-- sparkle on ORB_SPENT_ATTRIBUTE (EarthOrbBankController).
+		drops:PlayOrbPickupVFX(player, dropType)
+		local character = player.Character
+		if character then
+			bank.spends = (bank.spends or 0) + 1
+			character:SetAttribute(ORB_SPENT_ATTRIBUTE, (ORB_LETTERS[dropType] or "H") .. tostring(bank.spends))
+		end
 		return
 	end
 end

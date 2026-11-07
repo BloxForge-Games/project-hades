@@ -851,6 +851,31 @@ function MobBase.FindTarget(self: MobBase): boolean
 
 	self._currentTarget = nearestPlayer
 	self._currentTargetHRP = nearestPlayerHRP
+
+	-- A taunt (TauntService: Stone Body) outranks everything.
+	local taunts = Blitz.OptionalService("TauntService")
+	if taunts then
+		local taunter, taunterRoot = taunts:GetTaunter(self._model)
+		if taunter then
+			self._currentTarget = taunter
+			self._currentTargetHRP = taunterRoot
+			return true
+		end
+	end
+
+	-- Shadow Clones draw aggro (ShadowCloneService:PickTarget); minibosses
+	-- and bosses ignore them.
+	local clones = Blitz.OptionalService("ShadowCloneService")
+	if clones and not self:_isEncounterMob() then
+		local playerDistance = if nearestPlayerHRP
+			then (nearestPlayerHRP.Position - self._rootPart.Position).Magnitude
+			else math.huge
+		local clone, cloneRoot = clones:PickTarget(self._rootPart.Position, self._detectionRange, playerDistance)
+		if clone then
+			self._currentTarget = clone
+			self._currentTargetHRP = cloneRoot
+		end
+	end
 	return self._currentTarget ~= nil
 end
 
@@ -1371,7 +1396,11 @@ function MobBase._runRangedSwing(self: MobBase, entry)
 		return
 	end
 
+	-- A clone target fires on its owner's registry (the shot's lane decides
+	-- whether the clone takes it, MobService).
+	local clones = Blitz.OptionalService("ShadowCloneService")
 	local targetPlayer = Players:GetPlayerFromCharacter(self._currentTarget)
+		or (clones and clones:OwnerOf(self._currentTarget))
 	if not targetPlayer then
 		return
 	end

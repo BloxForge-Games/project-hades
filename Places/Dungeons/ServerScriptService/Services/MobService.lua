@@ -72,6 +72,50 @@ local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local CorruptionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CorruptionData)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local mobHitbox = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.mobHitbox)
+
+-- Shadow Clone Barrage's live clones (ShadowCloneService, 2026-11-07):
+-- mob attacks hit them too, one hit per attack. Their roots, for the hit
+-- checks below.
+local function cloneRoots(): { BasePart }
+	local clones = Blitz.OptionalService("ShadowCloneService")
+	local roots = {}
+	if clones then
+		for _, clone in clones:GetClones() do
+			if clone.alive and clone.root.Parent then
+				table.insert(roots, clone.root)
+			end
+		end
+	end
+	return roots
+end
+
+-- A mob shot hits a Shadow Clone within its hitRadius plus this (studs)
+-- of the shot's line, checked every CLONE_SHOT_STEP seconds of its flight
+-- (MobService:FireMobRangedAttack; the clients' copies break on the same).
+local CLONE_SHOT_REACH = 1.5
+local CLONE_SHOT_STEP = 0.03
+
+-- True when `position` stands on `part`'s FOOTPRINT: inside its box on
+-- the part's two widest axes. The thinnest axis is the plate's thickness
+-- and is ignored -- template hitboxes are paper-thin ground plates (the
+-- Walker's is 0 studs tall) and a clone's root sits ~3 studs over the
+-- floor, so a full 3D test missed almost every clone (2026-11-07).
+local function insideBox(part: BasePart, position: Vector3): boolean
+	local localPoint = part.CFrame:PointToObjectSpace(position)
+	local half = part.Size / 2
+	local coords = { math.abs(localPoint.X), math.abs(localPoint.Y), math.abs(localPoint.Z) }
+	local halves = { half.X, half.Y, half.Z }
+	local thinnest = math.min(half.X, half.Y, half.Z)
+	local skipped = false
+	for index = 1, 3 do
+		if not skipped and halves[index] == thinnest then
+			skipped = true
+		elseif coords[index] > halves[index] then
+			return false
+		end
+	end
+	return true
+end
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local snapToGround = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.snapToGround)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
@@ -222,6 +266,8 @@ function MobService._runHitDetection(
 	hitboxModel: Model?
 )
 	local hitRegistry: { [Player]: boolean } = {}
+	local cloneRegistry: { [Model]: boolean } = {}
+	local clones = Blitz.OptionalService("ShadowCloneService")
 	local hitCount = 0
 	local frameIndex = 0
 	local startTime = GameClock.Now()
@@ -274,6 +320,16 @@ function MobService._runHitDetection(
 				if not model then
 					continue
 				end
+				-- A Shadow Clone BEFORE the Humanoid gate: its proxy is a bare
+				-- part with no Humanoid, so it never got past that gate and no
+				-- melee or area attack ever counted on a clone (2026-11-07).
+				if clones and clones:IsClone(model) then
+					if not cloneRegistry[model] then
+						cloneRegistry[model] = true
+						clones:HitClone(model)
+					end
+					continue
+				end
 				local humanoid = model:FindFirstChildOfClass("Humanoid")
 				if not humanoid or humanoid.Health <= 0 then
 					continue
@@ -308,9 +364,22 @@ function MobService._runHitDetection(
 
 		-- Every hittable player is already registered (hit or dodged): the
 		-- registry cannot grow, so the rest of the window has nothing left
-		-- to find.
+		-- to find. Not while a Shadow Clone stands unhit: it may still step
+		-- in (the early stop used to end the window the frame the player
+		-- was hit, 2026-11-07).
 		if hitCount >= self:_countHittablePlayers() then
-			return
+			local cloneLeft = false
+			if clones then
+				for _, clone in clones:GetClones() do
+					if clone.alive and not cloneRegistry[clone.model] then
+						cloneLeft = true
+						break
+					end
+				end
+			end
+			if not cloneLeft then
+				return
+			end
 		end
 
 		frameIndex += 1
@@ -519,6 +588,11 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 					table.insert(inside, root)
 				end
 			end
+			for _, root in cloneRoots() do
+				if mobHitbox.contains(cframe, spec, root.Position) then
+					table.insert(inside, root)
+				end
+			end
 			return inside
 		end)
 	else
@@ -539,6 +613,15 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 				for _, hitboxPart in hitParts do
 					for _, part in workspace:GetPartBoundsInBox(hitboxPart.CFrame, hitboxPart.Size, overlapParams) do
 						table.insert(touched, part)
+					end
+				end
+				-- Clones sit under IgnoreInstances, which the overlap skips.
+				for _, root in cloneRoots() do
+					for _, hitboxPart in hitParts do
+						if insideBox(hitboxPart, root.Position) then
+							table.insert(touched, root)
+							break
+						end
 					end
 				end
 				return touched
@@ -1016,6 +1099,49 @@ function MobService.FireMobRangedAttack(self: typeof(MobService), mobModel: Mode
 	flatFacing = if flatFacing.Magnitude > 0.001 then flatFacing.Unit else Vector3.zAxis
 	local travelDistance = (attack.projectileSpeed or 40) * lifetime
 	local targetPosition = originCFrame.Position + flatFacing * travelDistance
+
+	-- A Shadow Clone the shot reaches takes it (2026-11-07). The server
+	-- flies the same straight line, step by step, and the first clone it
+	-- touches (within CLONE_SHOT_REACH of the shot's line, the same test
+	-- each client's copy breaks on) takes the hit; the cast is then spent,
+	-- so the player behind it is not hit by the same shot, and every
+	-- client's copy is told to stop. Flown live, not predicted at the
+	-- throw: a clone that walks into the shot later used to break it on
+	-- screen without the hit counting.
+	local clonesService = Blitz.OptionalService("ShadowCloneService")
+	if clonesService and #clonesService:GetClones() > 0 then
+		local reach = (attack.hitRadius or 4) + CLONE_SHOT_REACH
+		local speed = math.max(attack.projectileSpeed or 40, 1)
+		local origin = originCFrame.Position
+		task.spawn(function()
+			local startedAt = GameClock.Now()
+			while true do
+				GameClock.Wait(CLONE_SHOT_STEP)
+				local entry = self._pendingRangedCasts[castUuid]
+				-- Spent (it hit the player, or expired): nothing left to fly.
+				if not entry or entry.expireToken ~= expireToken then
+					return
+				end
+				local travelled = math.min((GameClock.Now() - startedAt) * speed, travelDistance)
+				local shotAt = origin + flatFacing * travelled
+				for _, clone in clonesService:GetClones() do
+					if not clone.alive then
+						continue
+					end
+					local offset = clone.root.Position - shotAt
+					if Vector3.new(offset.X, 0, offset.Z).Magnitude <= reach then
+						self._pendingRangedCasts[castUuid] = nil
+						clonesService:HitClone(clone.model)
+						Combat.MobProjectileDespawn.FireAll(castUuid)
+						return
+					end
+				end
+				if travelled >= travelDistance then
+					return
+				end
+			end
+		end)
+	end
 
 	Combat.MobRangedAttack.FireAll({
 		Mob = mobModel,

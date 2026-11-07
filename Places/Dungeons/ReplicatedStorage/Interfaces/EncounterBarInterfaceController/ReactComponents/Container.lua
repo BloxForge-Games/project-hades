@@ -354,6 +354,11 @@ local function Container(props: any)
 			if not displayData then
 				return
 			end
+			-- Cleared NOW, not when the fade finishes: data coming back mid-
+			-- fade cancels the fade's tail, and with the flag still set the
+			-- show above skipped its intro and left every element faded out
+			-- (the "boss bar never appears" bug, 2026-11-07).
+			hasShownRef.current = false
 
 			task.defer(function()
 				if transitionTokenRef.current ~= myToken then
