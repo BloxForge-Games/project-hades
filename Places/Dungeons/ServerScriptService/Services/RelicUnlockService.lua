@@ -6,8 +6,9 @@
 	Shared/Data/RelicUnlockData, reads in Shared/Functions/Relic/
 	relicUnlocks). It keeps three profile keys:
 	  RelicUnlocks   the relics earned beyond the starting pool
-	  RelicProgress  Found (relics picked up), Feats (lifetime counts),
-	                 CursedBargains
+	  RelicProgress  Found (relics picked up), Seen (relics shown: offer
+	                 cards, merchant shelves, floor fans), Feats (lifetime
+	                 counts), CursedBargains
 	  Codex          Monsters: lifetime takedowns per mob (0 = met only)
 
 	What feeds it, each through Blitz.OptionalService at call time:
@@ -82,6 +83,9 @@ local function progressOf(data: any): any
 	end
 	if type(progress.Found) ~= "table" then
 		progress.Found = {}
+	end
+	if type(progress.Seen) ~= "table" then
+		progress.Seen = {}
 	end
 	if type(progress.Feats) ~= "table" then
 		progress.Feats = {}
@@ -169,7 +173,29 @@ function RelicUnlockService.RecordRelicFound(self: typeof(RelicUnlockService), p
 			return
 		end
 	end
-	self:_push(player)
+	-- Pushed at once: the client toasts the discovery off the snapshot.
+	self:_push(player, true)
+end
+
+-- Relics shown to the player (an offer's cards, a merchant's shelf, an
+-- event's floor fan). Batched: the cards dealt now already chose their
+-- badges from the snapshot they arrived with.
+function RelicUnlockService.RecordSeen(self: typeof(RelicUnlockService), player: Player, relicNames: { string })
+	local data = profileOf(player)
+	if not data then
+		return
+	end
+	local seen = progressOf(data).Seen
+	local changed = false
+	for _, relicName in relicNames do
+		if type(relicName) == "string" and RelicData[relicName] and not seen[relicName] then
+			seen[relicName] = true
+			changed = true
+		end
+	end
+	if changed then
+		self:_push(player)
+	end
 end
 
 -- Adds to a feat's lifetime count; unlocks its relic at the target.
@@ -206,7 +232,8 @@ function RelicUnlockService.MarkMonsterSeen(self: typeof(RelicUnlockService), pl
 	local monsters = monstersOf(data)
 	if monsters[mobName] == nil then
 		monsters[mobName] = 0
-		self:_push(player)
+		-- Pushed at once: the client toasts the discovery off the snapshot.
+		self:_push(player, true)
 	end
 end
 

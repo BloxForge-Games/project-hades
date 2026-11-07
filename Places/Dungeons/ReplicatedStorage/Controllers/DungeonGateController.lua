@@ -87,8 +87,6 @@ local SLAM_TWEEN_SECONDS = 1
 -- moving across the room shouldn't shake you.
 local GATE_SHAKE_RANGE_STUDS = 75
 local GATE_OPEN_SOUND_ID = "rbxassetid://107033324149762"
--- The boss-room ExitPortal surfacing is only heard this close to it.
-local EXIT_PORTAL_SOUND_RADIUS = 80
 local GATE_CLOSE_SOUND_ID = "rbxassetid://85204139841993"
 
 -- Locked-gate dressing (see the header). Template under GameAssets.VFX;
@@ -434,24 +432,6 @@ function DungeonGateController.Start(self: typeof(DungeonGateController))
 	end)
 	CollectionService:GetInstanceRemovedSignal(TagList.LockedExitGate):Connect(function(gate: Instance)
 		self:_detachGateVFX(gate)
-	end)
-
-	-- Boss-room ExitPortal surfacing: same open sound as a gate, played on
-	-- the portal (its PrimaryPart / first BasePart) so it's positional.
-	DungeonNetwork.ExitPortalRising.On(function(portal: Model?)
-		if not portal or not portal.Parent then
-			return
-		end
-		local anchor = portal.PrimaryPart or portal:FindFirstChildWhichIsA("BasePart", true)
-		if not anchor then
-			return
-		end
-		local character = Players.LocalPlayer.Character
-		local hrp = character and character:FindFirstChild("HumanoidRootPart")
-		if not hrp or (hrp.Position - anchor.Position).Magnitude > EXIT_PORTAL_SOUND_RADIUS then
-			return
-		end
-		playGateSound(anchor, GATE_OPEN_SOUND_ID)
 	end)
 
 	DungeonNetwork.GateOpened.On(function(payload: { Gate: BasePart?, RiseStuds: number, TweenSeconds: number })

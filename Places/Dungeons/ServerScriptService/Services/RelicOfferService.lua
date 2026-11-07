@@ -57,6 +57,8 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 -- player. Counted from the DEAL, not from when the cards are on screen:
 -- hiding the cards does not pause it.
 local OFFER_SECONDS = 30
+-- How long after a hand is dealt its relics are marked seen (see _deal).
+local SEEN_AFTER_DEAL_SECONDS = 1
 
 -- The relic-cap refusal, the same red the old floor pickup used.
 local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
@@ -137,6 +139,15 @@ function RelicOfferService._deal(self: typeof(RelicOfferService), offer: Offer)
 		ExpiresAt = offer.expiresAt,
 		CanSkip = offer.canSkip,
 	})
+	-- Now on screen: the cards are seen (RelicUnlockService, 2026-11-06).
+	-- Marked when DEALT, not when queued, and a beat later, so the cards
+	-- choose their NEW / UNCOLLECTED badges from the profile before it.
+	task.delay(SEEN_AFTER_DEAL_SECONDS, function()
+		local unlocks = Blitz.OptionalService("RelicUnlockService")
+		if unlocks and player.Parent then
+			unlocks:RecordSeen(player, offer.relics)
+		end
+	end)
 	Log.debug(
 		("[RelicOfferService] dealt offer %d (%s) to %s: %s"):format(
 			offer.id,

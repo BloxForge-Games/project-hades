@@ -1,0 +1,716 @@
+--!strict
+--[[
+	ShadowCloneService (PROTOTYPE, 2026-11-07): Shadow Clone Barrage's
+	clones, server side.
+
+	The server owns a clone as an invisible anchored PROXY (a one-part model
+	under workspace.IgnoreInstances.ShadowClones) that it moves itself every
+	frame: no physics, no Humanoid, so a clone never jumps, never lags behind
+	a physics owner and never pushes anything. Every client draws the clone
+	(ShadowCloneController): a copy of its caster holding the caster's own
+	melee weapon, easing after the proxy and swinging with the player's own
+	animations, slash VFX, lunge and dust.
+
+	  * SLOTS: each clone owns one of three spots behind its caster
+	    (SLOT_OFFSETS). It appears there, and runs back to it whenever it has
+	    nothing to fight.
+	  * FIGHTING: each clone takes the nearest living mob near its caster
+	    that the fewest other clones are on, so they spread over the pack
+	    and only share a mob when mobs run short. It walks to its spot by
+	    that mob (its own arc position when shared), sidestepping walls, and
+	    swings the weapon's three-hit combo at the weapon's own timing: the
+	    lunge (meleeSwingFeel) at half the dash delay, the hit at
+	    hitboxDelay.
+	  * SPACING: clones ease apart whenever two get within CLONE_SPACING,
+	    and out of their caster, so they never stand inside each other.
+	  * SPEED: the caster's own cruising speed (RelicService), matched to
+	    the caster's real speed while following.
+	  * DAMAGE: ArcaneData `damage` per swing x the caster's Arcane Rank, to
+	    every mob in front within the weapon's range. Crits and Arcane
+	    bonuses apply; relic procs do not (DamageService.WithoutProcs) and
+	    nothing is pushed (WithArcaneKnockback 0).
+	  * LIFE: `lifetime` seconds, or `cloneHits` mob hits (MobService counts
+	    them through HitClone: melee, projectiles and area attacks alike).
+	  * AGGRO: mobs ask PickTarget. A mob goes for its nearest clone unless a
+	    player is more than `aggroMargin` studs closer. Encounter enemies
+	    (minibosses, bosses) ignore clones.
+
+	Proxy attributes the clients read: OwnerId, WeaponName, OwnerWeapon
+	(true: copy the caster's drawn melee weapon, with its skin and
+	enchantment; false: a plain Steel Sword), Moving, SwingIteration +
+	SwingSerial (a swing started), HitSerial (a hit taken).
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local MeleeWeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MeleeWeaponData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local WeaponNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.WeaponNames)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local arcaneIndex = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Arcane.arcaneIndex)
+local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
+local meleeSwingFeel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.meleeSwingFeel)
+
+local SPELL = ArcaneNames["Shadow Clone Barrage"]
+local FALLBACK_WEAPON = WeaponNames["Steel Sword"]
+local FOLDER_NAME = "ShadowClones"
+-- The three spots behind the caster, in the caster's frame (+Z is behind).
+local SLOT_OFFSETS = {
+	Vector3.new(-4, 0, 3.5),
+	Vector3.new(0, 0, 5.5),
+	Vector3.new(4, 0, 3.5),
+}
+-- Studs from its slot a clone settles at (it stops walking).
+local SLOT_SETTLE = 0.6
+-- How far (studs) from its caster a clone will go for a mob.
+local SEEK_RANGE = 40
+-- Share of the weapon's range a clone closes to before it swings.
+local REACH_SHARE = 0.75
+-- A swing hits mobs within this angle of the clone's facing (cosine).
+local SWING_CONE_DOT = 0.2
+-- The clone's body radius for the wall probe, and its turn rate (per s).
+local BODY_RADIUS = 1.5
+local TURN_RATE = 14
+-- Headings tried, in degrees off straight: straight first, then the
+-- sidesteps when the way is blocked.
+local HEADINGS = { 0, 40, -40, 80, -80 }
+-- How far below the walk height the floor probe reaches (a step down).
+local FLOOR_PROBE = 8
+-- Clones never stand inside each other or their caster: closer than these
+-- (studs) and they ease apart, at up to SEPARATION_SPEED studs/s.
+local CLONE_SPACING = 3.5
+local CASTER_SPACING = 3
+local SEPARATION_SPEED = 14
+-- Clones sharing one target take spots around it, these many degrees
+-- apart, facing it from the caster's side.
+local SHARED_SPREAD = 70
+-- A clone counts as moving for this long after its last step (s), so its
+-- run does not flicker on and off between frames.
+local MOVING_GRACE = 0.15
+-- Left this far behind (studs), a following clone runs faster to catch up.
+local CATCH_UP_STUDS = 20
+local CATCH_UP_SPEED = 1.5
+
+type Mob = { model: Model, humanoid: Humanoid, root: BasePart }
+
+export type Clone = {
+	model: Model,
+	root: BasePart,
+	owner: Player,
+	slot: number,
+	hitsLeft: number,
+	endsAt: number,
+	alive: boolean,
+	position: Vector3,
+	look: Vector3,
+	standHeight: number,
+	weapon: { [string]: any },
+	damage: number,
+	target: Mob?,
+	combo: number,
+	busyUntil: number,
+	lungeFrom: number,
+	lungeUntil: number,
+	moving: boolean,
+	movedAt: number,
+	swings: number,
+}
+
+local ShadowCloneService = {
+	Name = "ShadowCloneService",
+	_clones = {} :: { Clone },
+	_byModel = {} :: { [Model]: Clone },
+	_step = nil :: RBXScriptConnection?,
+	_folder = nil :: Folder?,
+}
+
+--[ Helpers ]--
+
+local function flat(vector: Vector3): Vector3
+	return Vector3.new(vector.X, 0, vector.Z)
+end
+
+local function livingMobs(): { Mob }
+	local result = {}
+	local ignore = workspace:FindFirstChild("IgnoreInstances")
+	local folder = ignore and ignore:FindFirstChild("Mobs")
+	if not folder then
+		return result
+	end
+	for _, model in folder:GetChildren() do
+		if not model:IsA("Model") then
+			continue
+		end
+		local humanoid = model:FindFirstChildOfClass("Humanoid")
+		local root = model:FindFirstChild("HumanoidRootPart")
+		if humanoid and humanoid.Health > 0 and root and root:IsA("BasePart") then
+			table.insert(result, { model = model, humanoid = humanoid, root = root })
+		end
+	end
+	return result
+end
+
+local function isAlive(mob: Mob?): boolean
+	return mob ~= nil and mob.model.Parent ~= nil and mob.humanoid.Health > 0
+end
+
+-- The level geometry clones walk on and bump into: the dungeon rooms.
+local worldParams = RaycastParams.new()
+local function refreshWorldParams()
+	local ignore = workspace:FindFirstChild("IgnoreInstances")
+	local map = ignore and ignore:FindFirstChild("Map")
+	local rooms = map and map:FindFirstChild("DungeonRooms")
+	if rooms then
+		worldParams.FilterType = Enum.RaycastFilterType.Include
+		worldParams.FilterDescendantsInstances = { rooms }
+	else
+		worldParams.FilterType = Enum.RaycastFilterType.Exclude
+		local exclude: { Instance } = {}
+		if ignore then
+			table.insert(exclude, ignore)
+		end
+		for _, player in Players:GetPlayers() do
+			if player.Character then
+				table.insert(exclude, player.Character)
+			end
+		end
+		worldParams.FilterDescendantsInstances = exclude
+	end
+end
+
+local function floorBelow(position: Vector3, standHeight: number): number?
+	local hit =
+		workspace:Raycast(position + Vector3.new(0, 2, 0), Vector3.new(0, -(standHeight + FLOOR_PROBE), 0), worldParams)
+	return hit and hit.Position.Y
+end
+
+-- The caster's melee weapon (Primary slot) and whether the clients copy
+-- the caster's own (skin, enchantment); else a plain Steel Sword.
+local function meleeWeaponOf(player: Player): (string, boolean)
+	local loadoutService = Blitz.OptionalService("WeaponLoadoutService")
+	local loadout = loadoutService and loadoutService:GetWeaponLoadout(player)
+	local primary = loadout and loadout[1]
+	local name = primary and primary.name
+	if type(name) == "string" and MeleeWeaponData[name] then
+		return name, true
+	end
+	return FALLBACK_WEAPON, false
+end
+
+--[ Public ]--
+
+-- Summons the caster's clones (the spell's ServerCast module calls this).
+function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Player)
+	local data = ArcaneData[SPELL]
+	local character = player.Character
+	local casterRoot = character and getRoot(character)
+	if not character or not casterRoot then
+		return
+	end
+	refreshWorldParams()
+	local weaponName, ownerWeapon = meleeWeaponOf(player)
+	local weapon = MeleeWeaponData[weaponName] or MeleeWeaponData[FALLBACK_WEAPON]
+	local rank = arcaneIndex.getRankDamageMultiplier(DataService:GetProfileData(player), SPELL)
+	local casterFloor = floorBelow(casterRoot.Position, 3)
+	local standHeight = if casterFloor then math.clamp(casterRoot.Position.Y - casterFloor, 1, 6) else 3
+
+	-- A recast replaces the caster's clones still standing.
+	for index = #self._clones, 1, -1 do
+		local old = self._clones[index]
+		if old and old.owner == player then
+			self:_dismiss(old)
+		end
+	end
+
+	for slot = 1, math.min(data.cloneCount or 3, #SLOT_OFFSETS) do
+		local spot = (casterRoot.CFrame * CFrame.new(SLOT_OFFSETS[slot])).Position
+		local floor = floorBelow(spot, standHeight)
+		local position = Vector3.new(spot.X, if floor then floor + standHeight else casterRoot.Position.Y, spot.Z)
+		local look = flat(casterRoot.CFrame.LookVector)
+		look = if look.Magnitude > 0.01 then look.Unit else Vector3.zAxis
+
+		local model = Instance.new("Model")
+		model.Name = "ShadowClone"
+		local root = Instance.new("Part")
+		root.Name = "HumanoidRootPart"
+		root.Size = Vector3.new(2, 2, 1)
+		root.Transparency = 1
+		root.Anchored = true
+		root.CanCollide = false
+		root.CanQuery = false
+		root.CanTouch = false
+		root.CFrame = CFrame.lookAt(position, position + look)
+		root.Parent = model
+		model.PrimaryPart = root
+		model:SetAttribute("OwnerId", player.UserId)
+		model:SetAttribute("WeaponName", weaponName)
+		model:SetAttribute("OwnerWeapon", ownerWeapon)
+		model:SetAttribute("Slot", slot)
+		model:SetAttribute("Moving", false)
+		model:SetAttribute("SwingSerial", 0)
+		model:SetAttribute("HitSerial", 0)
+		-- A client reads the root the moment the model streams in.
+		model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+		model.Parent = self:_cloneFolder()
+
+		local clone: Clone = {
+			model = model,
+			root = root,
+			owner = player,
+			slot = slot,
+			hitsLeft = data.cloneHits or 3,
+			endsAt = GameClock.Now() + (data.lifetime or 8),
+			alive = true,
+			position = position,
+			look = look,
+			standHeight = standHeight,
+			weapon = weapon,
+			damage = (data.damage or 20) * rank,
+			target = nil,
+			combo = 0,
+			busyUntil = 0,
+			lungeFrom = 0,
+			lungeUntil = 0,
+			moving = false,
+			movedAt = 0,
+			swings = 0,
+		}
+		table.insert(self._clones, clone)
+		self._byModel[model] = clone
+	end
+	self:_ensureStepping()
+end
+
+-- The live clones (do not mutate).
+function ShadowCloneService.GetClones(self: typeof(ShadowCloneService)): { Clone }
+	return self._clones
+end
+
+function ShadowCloneService.IsClone(self: typeof(ShadowCloneService), model: Instance?): boolean
+	return model ~= nil and model:IsA("Model") and self._byModel[model] ~= nil
+end
+
+-- The player whose clone `model` is, or nil.
+function ShadowCloneService.OwnerOf(self: typeof(ShadowCloneService), model: Instance?): Player?
+	local clone = if model and model:IsA("Model") then self._byModel[model] else nil
+	return clone and clone.owner
+end
+
+-- The clone a mob at `from` should chase instead of its nearest player
+-- (`nearestPlayerDistance` away): the nearest clone within `range`, unless
+-- that player is more than aggroMargin studs closer. nil = keep the player.
+function ShadowCloneService.PickTarget(
+	self: typeof(ShadowCloneService),
+	from: Vector3,
+	range: number,
+	nearestPlayerDistance: number
+): (Model?, BasePart?)
+	if #self._clones == 0 then
+		return nil, nil
+	end
+	local margin = ArcaneData[SPELL].aggroMargin or 5
+	local best: Clone? = nil
+	local bestDistance = range
+	for _, clone in self._clones do
+		if not clone.alive then
+			continue
+		end
+		local distance = (clone.position - from).Magnitude
+		if distance < bestDistance then
+			best, bestDistance = clone, distance
+		end
+	end
+	if best and bestDistance <= nearestPlayerDistance + margin then
+		return best.model, best.root
+	end
+	return nil, nil
+end
+
+-- One mob attack landed on `model` (a clone): one of its hits gone.
+function ShadowCloneService.HitClone(self: typeof(ShadowCloneService), model: Model)
+	local clone = self._byModel[model]
+	if not clone or not clone.alive then
+		return
+	end
+	clone.hitsLeft -= 1
+	if clone.hitsLeft <= 0 then
+		self:_dismiss(clone)
+		return
+	end
+	model:SetAttribute("HitSerial", ((model:GetAttribute("HitSerial") :: number?) or 0) + 1)
+end
+
+--[ Private ]--
+
+function ShadowCloneService._cloneFolder(self: typeof(ShadowCloneService)): Folder
+	local folder = self._folder
+	if folder and folder.Parent then
+		return folder
+	end
+	local ignore = workspace:FindFirstChild("IgnoreInstances") or workspace
+	local existing = ignore:FindFirstChild(FOLDER_NAME)
+	if existing and existing:IsA("Folder") then
+		self._folder = existing
+		return existing
+	end
+	local created = Instance.new("Folder")
+	created.Name = FOLDER_NAME
+	created.Parent = ignore
+	self._folder = created
+	return created
+end
+
+function ShadowCloneService._dismiss(self: typeof(ShadowCloneService), clone: Clone)
+	if not clone.alive then
+		return
+	end
+	clone.alive = false
+	self._byModel[clone.model] = nil
+	local index = table.find(self._clones, clone)
+	if index then
+		table.remove(self._clones, index)
+	end
+	if clone.model.Parent then
+		clone.model:Destroy()
+	end
+end
+
+function ShadowCloneService._ensureStepping(self: typeof(ShadowCloneService))
+	if self._step then
+		return
+	end
+	self._step = RunService.Heartbeat:Connect(function(dt: number)
+		self:_stepAll(dt)
+	end)
+end
+
+-- Moves the clone up to `distance` studs along `direction` (flat, unit),
+-- sidestepping a wall, holding to the floor. Returns whether it moved.
+function ShadowCloneService._walk(
+	_self: typeof(ShadowCloneService),
+	clone: Clone,
+	direction: Vector3,
+	distance: number
+): boolean
+	if distance <= 0 then
+		return false
+	end
+	local origin = clone.position
+	for _, degrees in HEADINGS do
+		local heading = if degrees == 0
+			then direction
+			else CFrame.fromAxisAngle(Vector3.yAxis, math.rad(degrees)):VectorToWorldSpace(direction)
+		local wall = workspace:Raycast(origin, heading * (distance + BODY_RADIUS), worldParams)
+		if wall then
+			continue
+		end
+		local nextSpot = origin + heading * distance
+		local floor = floorBelow(nextSpot, clone.standHeight)
+		if not floor then
+			continue
+		end
+		clone.position = Vector3.new(nextSpot.X, floor + clone.standHeight, nextSpot.Z)
+		return true
+	end
+	return false
+end
+
+function ShadowCloneService._turnToward(_self: typeof(ShadowCloneService), clone: Clone, want: Vector3, dt: number)
+	local wantFlat = flat(want)
+	if wantFlat.Magnitude < 0.01 then
+		return
+	end
+	local blend = 1 - math.exp(-TURN_RATE * dt)
+	local look = clone.look:Lerp(wantFlat.Unit, blend)
+	clone.look = if look.Magnitude > 0.01 then look.Unit else wantFlat.Unit
+end
+
+-- Damage to every mob in front of the clone within the weapon's range.
+function ShadowCloneService._swingHit(_self: typeof(ShadowCloneService), clone: Clone)
+	local damageService = Blitz.OptionalService("DamageService")
+	if not damageService or not clone.alive then
+		return
+	end
+	local reach = clone.weapon.range or 9
+	for _, mob in livingMobs() do
+		local offset = flat(mob.root.Position - clone.position)
+		if offset.Magnitude - mob.root.Size.X / 2 > reach then
+			continue
+		end
+		if offset.Magnitude > 0.5 and clone.look:Dot(offset.Unit) < SWING_CONE_DOT then
+			continue
+		end
+		local humanoid = mob.humanoid
+		damageService:WithArcaneKnockback(0, function()
+			damageService:WithoutProcs(function()
+				damageService:TakeDamage(clone.owner, humanoid, clone.damage, true)
+			end)
+		end)
+	end
+end
+
+function ShadowCloneService._startSwing(self: typeof(ShadowCloneService), clone: Clone, now: number)
+	local weapon = clone.weapon
+	clone.combo = clone.combo % 3 + 1
+	local combo = clone.combo
+	local hitAt = (weapon.hitboxDelay and weapon.hitboxDelay[combo]) or 0.2
+	local nextAt = (weapon.animationDelay and weapon.animationDelay[combo]) or 0.5
+	local lungeAt = ((weapon.dashDelay and weapon.dashDelay[combo]) or 0.25) / 2
+	clone.busyUntil = now + nextAt
+	clone.lungeFrom = now + lungeAt
+	clone.lungeUntil = clone.lungeFrom + meleeSwingFeel.LUNGE_SECONDS
+	clone.swings += 1
+	clone.model:SetAttribute("SwingIteration", combo)
+	clone.model:SetAttribute("SwingSerial", clone.swings)
+	GameClock.Delay(hitAt, function()
+		self:_swingHit(clone)
+	end)
+end
+
+-- The caster's own cruising speed (relic and stat bonuses included), so a
+-- clone always keeps pace with the player it copies.
+local function walkSpeedFor(owner: Player): number
+	local relicService = Blitz.OptionalService("RelicService")
+	local speed = relicService and relicService:GetEffectiveBaseWalkSpeed(owner)
+	if type(speed) == "number" and speed > 0 then
+		return speed
+	end
+	return ArcaneData[SPELL].cloneWalkSpeed or 16
+end
+
+-- The mob for `clone`: the nearest living mob near the caster that the
+-- fewest OTHER clones are already on, so clones spread over the pack and
+-- only pile onto one mob when there are fewer mobs than clones.
+function ShadowCloneService._pickTarget(self: typeof(ShadowCloneService), clone: Clone, ownerAt: Vector3): Mob?
+	local best: Mob? = nil
+	local bestClaims, bestDistance = math.huge, math.huge
+	for _, mob in livingMobs() do
+		if (mob.root.Position - ownerAt).Magnitude > SEEK_RANGE then
+			continue
+		end
+		local claims = 0
+		for _, other in self._clones do
+			if other ~= clone and other.alive and other.target and other.target.model == mob.model then
+				claims += 1
+			end
+		end
+		local distance = (mob.root.Position - clone.position).Magnitude
+		if claims < bestClaims or (claims == bestClaims and distance < bestDistance) then
+			best, bestClaims, bestDistance = mob, claims, distance
+		end
+	end
+	-- Keep the current target unless a less crowded one is free, so two
+	-- clones never trade mobs back and forth.
+	local current = clone.target
+	if current and isAlive(current) and (current.root.Position - ownerAt).Magnitude <= SEEK_RANGE then
+		local currentClaims = 0
+		for _, other in self._clones do
+			if other ~= clone and other.alive and other.target and other.target.model == current.model then
+				currentClaims += 1
+			end
+		end
+		if currentClaims <= bestClaims then
+			return current
+		end
+	end
+	return best
+end
+
+-- Where `clone` stands to fight its target. Alone on it: the near side,
+-- along its approach. Sharing it: its own spot on an arc around the
+-- target, facing it from the caster's side, SHARED_SPREAD degrees from the
+-- next clone's, so two clones on one mob never stand in the same place.
+function ShadowCloneService._engageSpot(
+	self: typeof(ShadowCloneService),
+	clone: Clone,
+	target: Mob,
+	ownerAt: Vector3
+): Vector3
+	local center = target.root.Position
+	local standOff = target.root.Size.X / 2 + (clone.weapon.range or 9) * REACH_SHARE * 0.8
+	local sharing: { Clone } = {}
+	for _, other in self._clones do
+		if other.alive and other.target and other.target.model == target.model then
+			table.insert(sharing, other)
+		end
+	end
+	local base: Vector3
+	local angle = 0
+	if #sharing <= 1 then
+		base = flat(clone.position - center)
+	else
+		base = flat(ownerAt - center)
+		table.sort(sharing, function(a: Clone, b: Clone): boolean
+			if a.owner ~= b.owner then
+				return a.owner.UserId < b.owner.UserId
+			end
+			return a.slot < b.slot
+		end)
+		local index = table.find(sharing, clone) or 1
+		-- Centred on the caster's side: -1, 0, +1 steps for three clones.
+		angle = (index - (#sharing + 1) / 2) * SHARED_SPREAD
+	end
+	if base.Magnitude < 0.05 then
+		base = flat(clone.position - center)
+		if base.Magnitude < 0.05 then
+			base = Vector3.xAxis
+		end
+	end
+	local direction = CFrame.fromAxisAngle(Vector3.yAxis, math.rad(angle)):VectorToWorldSpace(base.Unit)
+	return center + direction * standOff
+end
+
+-- Eases `clone` out of any other clone and out of its caster.
+function ShadowCloneService._separate(self: typeof(ShadowCloneService), clone: Clone, ownerAt: Vector3, dt: number)
+	local push = Vector3.zero
+	for _, other in self._clones do
+		if other == clone or not other.alive then
+			continue
+		end
+		local away = flat(clone.position - other.position)
+		local distance = away.Magnitude
+		if distance < CLONE_SPACING then
+			-- Exactly on top of each other: split by slot.
+			local direction = if distance > 0.05
+				then away.Unit
+				else CFrame.fromAxisAngle(Vector3.yAxis, clone.slot * 2.1):VectorToWorldSpace(Vector3.xAxis)
+			push += direction * (CLONE_SPACING - distance)
+		end
+	end
+	local fromOwner = flat(clone.position - ownerAt)
+	if fromOwner.Magnitude < CASTER_SPACING and fromOwner.Magnitude > 0.05 then
+		push += fromOwner.Unit * (CASTER_SPACING - fromOwner.Magnitude)
+	end
+	if push.Magnitude > 0.01 then
+		self:_walk(clone, push.Unit, math.min(push.Magnitude, SEPARATION_SPEED * dt))
+	end
+end
+
+function ShadowCloneService._stepClone(self: typeof(ShadowCloneService), clone: Clone, now: number, dt: number)
+	local owner = clone.owner
+	local ownerRoot = owner.Character and getRoot(owner.Character)
+	if not ownerRoot then
+		self:_dismiss(clone)
+		return
+	end
+	local ownerAt = ownerRoot.Position
+	local walkSpeed = walkSpeedFor(owner)
+	local stepped = false
+
+	if now < clone.busyUntil then
+		-- Mid-swing: face the target, and the lunge carries it forward.
+		local target = clone.target
+		if target and isAlive(target) then
+			self:_turnToward(clone, target.root.Position - clone.position, dt)
+		end
+		if now >= clone.lungeFrom and now < clone.lungeUntil then
+			local speed = meleeSwingFeel.LUNGE_STUDS / meleeSwingFeel.LUNGE_SECONDS
+			-- Never lunge through the target: stop at half the reach.
+			local stopAt = (clone.weapon.range or 9) * REACH_SHARE * 0.5
+			local gap = if target and isAlive(target)
+				then flat(target.root.Position - clone.position).Magnitude - target.root.Size.X / 2
+				else math.huge
+			if gap > stopAt then
+				self:_walk(clone, clone.look, math.min(speed * dt, gap - stopAt))
+			end
+		end
+	else
+		-- Re-pick every step while not swinging: a clone moves off a mob
+		-- another clone is on as soon as a free one is near.
+		clone.target = self:_pickTarget(clone, ownerAt)
+		local target = clone.target
+		if target then
+			local spot = self:_engageSpot(clone, target, ownerAt)
+			local toSpot = flat(spot - clone.position)
+			local toTarget = flat(target.root.Position - clone.position)
+			local gap = toTarget.Magnitude - target.root.Size.X / 2
+			local reach = (clone.weapon.range or 9) * REACH_SHARE
+			if toSpot.Magnitude > 1 and (gap > reach or toSpot.Magnitude > 2.5) then
+				stepped = self:_walk(clone, toSpot.Unit, math.min(walkSpeed * dt, toSpot.Magnitude))
+				self:_turnToward(clone, if gap > reach then toSpot else toTarget, dt)
+			else
+				self:_turnToward(clone, toTarget, dt)
+				-- At its spot and turned in: swing.
+				if toTarget.Magnitude < 0.05 or clone.look:Dot(toTarget.Unit) > 0.7 then
+					self:_startSwing(clone, now)
+				end
+			end
+		else
+			clone.combo = 0
+			-- Nothing to fight: run to the slot behind the caster.
+			local slotSpot = (ownerRoot.CFrame * CFrame.new(SLOT_OFFSETS[clone.slot])).Position
+			local offset = flat(slotSpot - clone.position)
+			if offset.Magnitude > SLOT_SETTLE then
+				-- Keep pace with the caster, however fast they are going.
+				local ownerSpeed = flat(ownerRoot.AssemblyLinearVelocity).Magnitude
+				local speed = math.max(walkSpeed, ownerSpeed)
+				if offset.Magnitude > CATCH_UP_STUDS then
+					speed *= CATCH_UP_SPEED
+				end
+				stepped = self:_walk(clone, offset.Unit, math.min(speed * dt, offset.Magnitude))
+				self:_turnToward(clone, offset, dt)
+				-- Stranded behind a wall it cannot get round: rejoin the slot.
+				if not stepped and offset.Magnitude > 30 then
+					local floor = floorBelow(slotSpot, clone.standHeight)
+					if floor then
+						clone.position = Vector3.new(slotSpot.X, floor + clone.standHeight, slotSpot.Z)
+					end
+				end
+			else
+				self:_turnToward(clone, ownerRoot.CFrame.LookVector, dt)
+			end
+		end
+	end
+
+	self:_separate(clone, ownerAt, dt)
+
+	if stepped then
+		clone.movedAt = now
+	end
+	local moving = now - clone.movedAt < MOVING_GRACE
+	if moving ~= clone.moving then
+		clone.moving = moving
+		clone.model:SetAttribute("Moving", moving)
+	end
+	clone.root.CFrame = CFrame.lookAt(clone.position, clone.position + clone.look)
+end
+
+function ShadowCloneService._stepAll(self: typeof(ShadowCloneService), dt: number)
+	local now = GameClock.Now()
+	for index = #self._clones, 1, -1 do
+		local clone = self._clones[index]
+		if not clone then
+			continue
+		end
+		if not clone.alive or now >= clone.endsAt or not clone.owner.Parent or not clone.model.Parent then
+			self:_dismiss(clone)
+			continue
+		end
+		self:_stepClone(clone, now, dt)
+	end
+	if #self._clones == 0 and self._step then
+		self._step:Disconnect()
+		self._step = nil
+	end
+end
+
+function ShadowCloneService.Start(self: typeof(ShadowCloneService))
+	-- Made up front, so clients can wait on it.
+	self:_cloneFolder()
+	Players.PlayerRemoving:Connect(function(player: Player)
+		for index = #self._clones, 1, -1 do
+			local clone = self._clones[index]
+			if clone and clone.owner == player then
+				self:_dismiss(clone)
+			end
+		end
+	end)
+end
+
+return ShadowCloneService

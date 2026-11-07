@@ -929,8 +929,15 @@ function EncounterService._startFight(
 		local encounter = self._activeEncounter
 		local hpConn: RBXScriptConnection?
 		local flushPending = false
+		-- Set when the mob dies: a flush scheduled by a hit just before the
+		-- death would otherwise land AFTER the encounter's Set(nil) and put
+		-- the data back, leaving the HUD bar stuck (2026-11-07).
+		local streamEnded = false
 		local function sendHealth()
 			flushPending = false
+			if streamEnded then
+				return
+			end
 			local healthData: EncounterData = {
 				kind = kind,
 				name = mobName,
@@ -957,6 +964,7 @@ function EncounterService._startFight(
 		end
 
 		humanoid.Died:Once(function()
+			streamEnded = true
 			if hpConn then
 				hpConn:Disconnect()
 				hpConn = nil

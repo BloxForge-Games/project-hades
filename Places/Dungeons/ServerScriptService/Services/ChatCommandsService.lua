@@ -109,6 +109,26 @@ local rollWeaponEnchantment =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.WeaponLoadoutService)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local arcaneIndex = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Arcane.arcaneIndex)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+
+-- /spell: the prototype spells it hands out, by alias, with the slot each
+-- goes to when none is given.
+local SPELL_GRANTS: { [string]: { name: string, slot: number } } = {
+	clones = { name = ArcaneNames["Shadow Clone Barrage"], slot = 3 },
+	clone = { name = ArcaneNames["Shadow Clone Barrage"], slot = 3 },
+	hurricane = { name = ArcaneNames["Hurricane Leaf Kick"], slot = 4 },
+	kick = { name = ArcaneNames["Hurricane Leaf Kick"], slot = 4 },
+	chidori = { name = ArcaneNames.Chidori, slot = 3 },
+	stone = { name = ArcaneNames["Stone Body"], slot = 4 },
+	stonebody = { name = ArcaneNames["Stone Body"], slot = 4 },
+	water = { name = ArcaneNames["Water Dragon"], slot = 4 },
+	dragon = { name = ArcaneNames["Water Dragon"], slot = 4 },
+	rasen = { name = ArcaneNames.Rasenshuriken, slot = 4 },
+	rasenshuriken = { name = ArcaneNames.Rasenshuriken, slot = 4 },
+	susanoo = { name = ArcaneNames["Susanoo Armor"], slot = 3 },
+}
 
 -- RunFlowService's Studio-only difficulty pick; /difficulty writes it so a
 -- Studio restart replays the chosen tier.
@@ -705,6 +725,55 @@ COMMANDS = {
 			})
 			DataService:SetProfileValue(player, "Inventory", profile.Inventory)
 			return "Added a Travelers Bow to your inventory."
+		end,
+	},
+
+	spell = {
+		usage = "/spell <clones|hurricane|chidori|stone|water|rasen|susanoo> [slot 3-4]",
+		description = "Gives you a prototype spell and equips it (in its default slot unless you name one).",
+		handler = function(player: Player, args: { string }): string?
+			local grant = SPELL_GRANTS[string.lower(args[1] or "")]
+			if not grant then
+				return ("Usage: %s"):format(COMMANDS.spell.usage)
+			end
+			local slot = math.floor(tonumber(args[2]) or grant.slot)
+			if not arcaneIndex.isArcaneSlot(slot) then
+				return "Slot must be 3 or 4."
+			end
+			local profile = DataService:GetProfileData(player)
+			if not profile or not profile.Inventory then
+				return "Your profile isn't loaded yet -- try again in a moment."
+			end
+			local entry = arcaneIndex.findOwned(profile, grant.name)
+			if not entry then
+				profile.Inventory[InventoryType.Arcane] = arcaneIndex.getOwnedArray(profile)
+				local created = {
+					uuid = HttpService:GenerateGUID(false),
+					name = grant.name,
+					enchantment = EnchantmentNames.None,
+					rarity = (ArcaneData[grant.name] and ArcaneData[grant.name].rarity) or ItemRarity.Rare,
+					upgrades = 0,
+					level = 1,
+					equipSlot = 0,
+					scalarMultiplier = 1,
+					bonusStats = {},
+					shiny = false,
+				}
+				table.insert(profile.Inventory[InventoryType.Arcane], created)
+				entry = created
+				profile.Arcane = if type(profile.Arcane) == "table" then profile.Arcane else {}
+				profile.Arcane[grant.name] = profile.Arcane[grant.name] or { Rank = 1, Xp = 0 }
+				DataService:SetProfileValue(player, "Arcane", profile.Arcane)
+			end
+			local inventoryService = Blitz.OptionalService("ArcaneInventoryService")
+			if not inventoryService then
+				DataService:SetProfileValue(player, "Inventory", profile.Inventory)
+				return ("Added %s, but ArcaneInventoryService is unavailable to equip it."):format(grant.name)
+			end
+			if not inventoryService:EquipArcane(player, (entry :: any).uuid, slot) then
+				return ("Added %s, but equipping it failed (see the output)."):format(grant.name)
+			end
+			return ("Equipped %s in slot %d."):format(grant.name, slot)
 		end,
 	},
 

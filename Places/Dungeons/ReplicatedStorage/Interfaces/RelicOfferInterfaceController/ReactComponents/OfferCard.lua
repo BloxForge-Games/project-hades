@@ -354,6 +354,7 @@ local EMBER_DIM_TRANSPARENCY = 0.5
 -- Text caps so a 4K desktop does not blow the copy up with the card.
 local TITLE_MAX_TEXT_SIZE = 21
 local RARITY_MAX_TEXT_SIZE = 19
+
 local DESCRIPTION_MAX_TEXT_SIZE = 14
 -- Phones only (ScreenSizes.Mobile: touch, no mouse, a short viewport) pin
 -- the title and description to one fixed size each. Tablets, PC and

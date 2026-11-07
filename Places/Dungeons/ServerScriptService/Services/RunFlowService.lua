@@ -8,9 +8,10 @@
                   freezes the party, tears the floor down and generates the
                   next one; GenerateDungeon is the generate-and-wire step
                   both share (DungeonGenerator places, this module flips the
-                  active dungeon, prepares the exit portal and fires the
-                  lifecycle signals). Also the extraction: the Boss room's
-                  ExitPortal rising after the rewards, and the walk into it.
+                  active dungeon, puts the way home on the final Boss room's
+                  ExitGate and fires the lifecycle signals). Also the
+                  extraction: that gate's prompt, enabled once the boss's
+                  rewards drop, sends the player to the lobby.
 ]]
 
 --[ Roblox Services ]--
@@ -18,7 +19,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Exports & Types & Defaults ]--
@@ -28,17 +28,14 @@ local DungeonGenerator = require(ServerScriptService.Services.DungeonGenerator)
 local GateService = require(ServerScriptService.Services.GateService)
 local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EncounterService = require(ServerScriptService.Services.EncounterService)
-local CameraShakeService = require(ServerScriptService.Services.CameraShakeService)
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local Difficulty = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Difficulty)
 local getPlaceDungeonId = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Dungeon.getPlaceDungeonId)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
-local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
-local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 type Room = DungeonService.Room
 type Dungeon = DungeonService.Dungeon
@@ -56,7 +53,6 @@ local RunFlowService = {
 		GateService,
 		MobSpawnService,
 		EncounterService,
-		CameraShakeService,
 	} :: { any },
 }
 
@@ -65,9 +61,13 @@ local RunFlowService = {
 local EXIT_GATE_NAME = "ExitGate"
 
 local AUTO_GENERATE_DELAY = 5
--- The ExitPortal prompt's ActionText (its ObjectText stays as authored,
--- "Mysterious Portal").
-local EXIT_PORTAL_ACTION_TEXT = "Teleport to Lobby"
+-- The way home (2026-11-06; a "Mysterious Portal" rose out of the floor
+-- before): the final Boss room's ExitGate carries the prompt. Its texts.
+local EXIT_PROMPT_OBJECT_TEXT = "Exit Gate"
+local EXIT_PROMPT_ACTION_TEXT = "Teleport to Lobby"
+-- Studs from the gate's centre (the portal prefabs authored 10; the gate is
+-- wide, so its ends sat near the edge of that).
+local EXIT_PROMPT_DISTANCE = 15
 
 -- The run's difficulty when nothing asks otherwise (Studio, a direct join
 -- without teleport data). A request is still clamped to the leader's unlocks.
@@ -80,25 +80,22 @@ local LEADER_PROFILE_WAIT_SECONDS = 15
 local DEBUG_DIFFICULTY_ATTRIBUTE = "DebugDifficulty"
 
 -- RUN LOOP (see StartRun / AdvanceRun). After a boss: outro + rewards
--- (EncounterService) -> EXIT_PORTAL_DELAY -> the ExitPortal rises out of the
--- floor (Medium shake) and, only mid-chain (a run of several dungeons, the
--- future Keystone Trial), the "next dungeon" vote pad appears (EncounterService lobby, kind NextDungeon:
--- 30s auto / 3s when everyone remaining is on it). Vote expiry ->
--- AdvanceRun: fade every screen to black, tear the whole map down,
--- generate the next DungeonSequence entry, land everyone (same landing as
--- a fresh join). Walking into the portal fires OnPlayerExtracted and sends
--- THAT player to the lobby place (the escrow banks off LifeService's
--- OnPlayerLeavingToLobby once the teleport is issued); they leave the
--- vote's required count. Last dungeon (every normal run): OnFinalDungeonCompleted
--- fires (progress records off it) and the portal rises with no vote pad.
-local EXIT_PORTAL_DELAY = 3
--- The ExitPortal is a Model AUTHORED INSIDE each Boss prefab, sitting
--- UNDERGROUND at its resting pose. After the boss it rises straight up by
--- its own Y extent (so its base ends level with where its top was) with a
--- MediumLong shake for everyone within EXIT_PORTAL_SHAKE_RADIUS studs.
+-- (EncounterService) -> EXIT_PROMPT_DELAY -> on the LAST floor, the Boss
+-- room's ExitGate prompt turns on (and the extraction theme starts); on an
+-- earlier floor, the "next dungeon" vote pad appears (EncounterService
+-- lobby, kind NextDungeon: 30s auto / 3s when everyone remaining is on it).
+-- Vote expiry -> AdvanceRun: fade every screen to black, tear the whole
+-- map down, generate the next DungeonSequence entry, land everyone (same
+-- landing as a fresh join). Triggering the gate's prompt fires
+-- OnPlayerExtracted and sends THAT player to the lobby place (the escrow
+-- banks off LifeService's OnPlayerLeavingToLobby once the teleport is
+-- issued). OnFinalDungeonCompleted fires as the rewards drop (progress
+-- records off it).
+local EXIT_PROMPT_DELAY = 3
+-- Boss prefabs still carry an authored "ExitPortal" model: its
+-- ProximityPrompt (custom-renderer styling and all) moves onto the
+-- ExitGate at generation, and the model is removed.
 local EXIT_PORTAL_MODEL_NAME = "ExitPortal"
-local EXIT_PORTAL_RISE_SECONDS = 2
-local EXIT_PORTAL_SHAKE_RADIUS = 80
 
 local RUN_TRANSITION_FADE_SECONDS = 0.6
 local RUN_TRANSITION_BLACK_HOLD_SECONDS = 1.4 -- fully black before teardown starts
@@ -107,7 +104,6 @@ local GENERATE_CHARACTER_WAIT_SECONDS = 5 -- bounded wait for characterless play
 
 --[ Properties ]--
 
-RunFlowService._exitPortal = nil :: Model?
 RunFlowService._transitioning = false
 -- Players frozen (HRP anchored) for the map swap; released at their teleport.
 RunFlowService._transitionFrozen = {} :: { [Player]: true }
@@ -139,24 +135,16 @@ function RunFlowService.GenerateDungeon(
 		seed = seed,
 		originCFrame = originCFrame,
 	})
-	-- Boss rooms: keep the authored ExitPortal buried until the boss falls
-	-- (see _prepareExitPortal / _raiseExitPortal).
-	-- The portal home exists on the FINAL floor only (design call, 2026-10:
-	-- no extraction). Earlier floors' Boss prefabs still carry the authored
-	-- model, so it is removed outright there and the Descend pad is the
-	-- only way on. No run (a bare Studio generate) counts as final.
+	-- Boss rooms: the way home is the FINAL floor's ExitGate prompt (off
+	-- until the boss's rewards drop, _openExitGate). Earlier floors have no
+	-- way home (design call, 2026-10: no extraction), only the Descend pad.
+	-- Every floor's authored ExitPortal model goes. No run (a bare Studio
+	-- generate) counts as final.
 	local run = DungeonService:GetRun()
 	local finalFloor = run == nil or DungeonService:IsFinalDungeon()
 	for _, room in dungeon.rooms do
 		if room.roomType == RoomTypes.Boss then
-			if finalFloor then
-				self:_prepareExitPortal(room)
-			else
-				local portal = room.model and room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
-				if portal then
-					portal:Destroy()
-				end
-			end
+			self:_prepareExitGate(room, finalFloor)
 		end
 	end
 
@@ -225,7 +213,7 @@ end
 -- new rooms take those ids), machines, markers, then the room models --
 -- Walls live in a shared, cached folder, so its CHILDREN are cleared and
 -- the folder itself kept.
-function RunFlowService._teardownDungeon(self: typeof(RunFlowService)): Dungeon?
+function RunFlowService._teardownDungeon(_self: typeof(RunFlowService)): Dungeon?
 	local dungeon = DungeonService:GetActiveDungeon()
 	-- The lifecycle edge FIRST, while the world is still intact: every
 	-- per-floor system (encounters, chests, the Coffin, fog) resets off it.
@@ -234,7 +222,6 @@ function RunFlowService._teardownDungeon(self: typeof(RunFlowService)): Dungeon?
 	end
 	DungeonService:SetActiveDungeon(nil) -- staleness token for every in-flight thread
 
-	self:_destroyExitPortal()
 	DungeonService:DestroyNextGateMarker()
 	if MobSpawnService then
 		MobSpawnService:ResetForNewDungeon()
@@ -348,131 +335,54 @@ function RunFlowService.ReleaseTransitionFreeze(self: typeof(RunFlowService), pl
 	end
 end
 
---[ Exit portal ]--
+--[ Exit gate ]--
 
--- At generation: find the Boss prefab's authored (underground) ExitPortal,
--- anchor it, and record its resting pivot + Y extent so the raise can rise
--- it by exactly its own height. Missing model = warn once; the room simply
--- has no portal (the vote still runs, players can still descend).
-function RunFlowService._prepareExitPortal(_self: typeof(RunFlowService), room: Room)
-	local portal = room.model and room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
-	if not portal or not portal:IsA("Model") then
-		warn(
-			("[RunFlowService] Boss room %s has no '%s' model -- no exit portal"):format(
-				tostring(room.model and room.model.Name),
-				EXIT_PORTAL_MODEL_NAME
-			)
-		)
+-- At generation: on the final floor, the Boss room's ExitGate gets the
+-- prompt home (the authored ExitPortal's own, so its custom-renderer
+-- styling carries over; a plain one if the prefab has none), disabled
+-- until the boss's rewards drop. The ExitPortal model is removed on every
+-- floor.
+function RunFlowService._prepareExitGate(_self: typeof(RunFlowService), room: Room, finalFloor: boolean)
+	local model = room.model
+	if not model then
 		return
 	end
-	local authored = portal:GetPivot()
-	local riseHeight = portal:GetExtentsSize().Y
-	-- Everything about the portal must be static for the sink / rise to
-	-- hold (an unanchored part would just fall away from the pivot).
-	for _, part in portal:GetDescendants() do
-		if part:IsA("BasePart") then
-			part.Anchored = true
+	local portal = model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
+	local authored = portal and portal:FindFirstChildWhichIsA("ProximityPrompt", true)
+	if finalFloor then
+		local gate = model:FindFirstChild(EXIT_GATE_NAME)
+		if gate and gate:IsA("BasePart") then
+			local prompt: ProximityPrompt = authored or Instance.new("ProximityPrompt")
+			prompt.ObjectText = EXIT_PROMPT_OBJECT_TEXT
+			prompt.ActionText = EXIT_PROMPT_ACTION_TEXT
+			prompt.MaxActivationDistance = EXIT_PROMPT_DISTANCE
+			prompt.Enabled = false
+			prompt.Parent = gate
+		else
+			warn(("[RunFlowService] Boss room %s has no '%s' part -- no way home"):format(model.Name, EXIT_GATE_NAME))
 		end
 	end
-	-- The authored pose lives ON THE MODEL (attribute), so the raise can
-	-- re-find both model and target from the room instance alone -- no
-	-- dependence on which room TABLE reaches it later.
-	portal:SetAttribute("ExitPortalRestCFrame", authored)
-	portal:SetAttribute("ExitPortalRiseHeight", riseHeight)
-	-- The prompt is the ONLY way to use the portal; it stays off while the
-	-- portal is buried and is enabled once the rise finishes.
-	local prompt = portal:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if prompt then
-		prompt.Enabled = false
-	else
-		warn(
-			("[RunFlowService] Boss room %s: ExitPortal has no ProximityPrompt -- it will be unusable"):format(
-				tostring(room.model.Name)
-			)
-		)
+	if portal then
+		portal:Destroy()
 	end
-	room.exitPortal = portal
 end
 
-function RunFlowService._destroyExitPortal(self: typeof(RunFlowService))
-	-- The portal belongs to its Boss room model and dies with the room on
-	-- teardown; this only drops the rise-loop token.
-	self._exitPortal = nil
-end
-
--- Boss down: raise the room's buried ExitPortal by its own height
--- (MediumLong shake for everyone within EXIT_PORTAL_SHAKE_RADIUS), then
--- enable its ProximityPrompt. Triggering the prompt (a deliberate
--- interaction -- never a touch) fires OnPlayerExtracted and sends that player
--- to the lobby place (the escrow banks off OnPlayerLeavingToLobby once the
--- teleport is issued); they drop out of the
--- vote's required count.
-function RunFlowService._raiseExitPortal(self: typeof(RunFlowService), room: Room)
-	-- Re-resolve from the room MODEL: robust to the room table reaching us
-	-- through EncounterService being a different reference than the one
-	-- _prepareExitPortal annotated.
-	local portal = room.model:FindFirstChild(EXIT_PORTAL_MODEL_NAME)
-	if not portal or not portal:IsA("Model") or not portal.Parent then
-		warn("[RunFlowService] _raiseExitPortal: boss room has no ExitPortal model")
+-- Boss down on the final floor: the ExitGate's prompt turns on and the
+-- extraction theme starts (MusicService, OnExitPortalRising). Triggering it
+-- (a deliberate interaction, never a touch) fires OnPlayerExtracted and
+-- sends that player to the lobby place.
+function RunFlowService._openExitGate(self: typeof(RunFlowService), room: Room)
+	local gate = room.model and room.model:FindFirstChild(EXIT_GATE_NAME)
+	local prompt = gate and gate:FindFirstChildWhichIsA("ProximityPrompt")
+	if not gate or not prompt then
+		warn("[RunFlowService] _openExitGate: the boss room's ExitGate has no prompt")
 		return
 	end
-	-- Rise by the model's own Y extent from its authored (underground) rest
-	-- pose. Prepared rooms have both stored; anything else measures now.
-	local restAttribute = portal:GetAttribute("ExitPortalRestCFrame")
-	local riseAttribute = portal:GetAttribute("ExitPortalRiseHeight")
-	local restCFrame: CFrame = if typeof(restAttribute) == "CFrame" then restAttribute else portal:GetPivot()
-	local riseHeight: number = if typeof(riseAttribute) == "number" then riseAttribute else portal:GetExtentsSize().Y
-	local targetCFrame = restCFrame + Vector3.new(0, riseHeight, 0)
-	self._exitPortal = portal
-	-- Every client plays the gate-open sound on the portal locally.
-	DungeonNetwork.ExitPortalRising.FireAll(portal)
-	-- Server-side twin: MusicService fades in the extraction theme.
-	DungeonService.Signals.OnExitPortalRising:Fire(portal)
-
-	if CameraShakeService then
-		local origin = targetCFrame.Position
-		for _, player in Players:GetPlayers() do
-			local character = player.Character
-			local hrp = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-			if hrp and (hrp.Position - origin).Magnitude <= EXIT_PORTAL_SHAKE_RADIUS then
-				CameraShakeService:Shake(player, CameraShakePresets.MediumLong)
-			end
-		end
-	end
-
-	-- Interaction: the portal's ProximityPrompt (authored on the model).
-	-- Enabled only once the rise completes.
-	local prompt = portal:FindFirstChildWhichIsA("ProximityPrompt", true)
-	if prompt then
-		prompt.Enabled = false
-		-- The prompt's verb: the walk-out is a teleport home, not an
-		-- "interact" (the authored prefab says the latter).
-		prompt.ActionText = EXIT_PORTAL_ACTION_TEXT
-		prompt.Triggered:Connect(function(player: Player)
-			self:_extractPlayer(player)
-		end)
-	end
-
-	-- Rise: drive the pivot per frame (models can't be tweened directly),
-	-- then enable the prompt.
-	task.spawn(function()
-		local startCFrame = portal:GetPivot()
-		local startedAt = GameClock.Now()
-		while portal.Parent and self._exitPortal == portal do
-			local t = math.clamp((GameClock.Now() - startedAt) / EXIT_PORTAL_RISE_SECONDS, 0, 1)
-			-- Sine InOut: eases both out of the ground and into rest -- no
-			-- snap at either end.
-			local alpha = TweenService:GetValue(t, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-			portal:PivotTo(startCFrame:Lerp(targetCFrame, alpha))
-			if t >= 1 then
-				break
-			end
-			task.wait()
-		end
-		if prompt and prompt.Parent then
-			prompt.Enabled = true
-		end
+	DungeonService.Signals.OnExitPortalRising:Fire(gate)
+	prompt.Triggered:Connect(function(player: Player)
+		self:_extractPlayer(player)
 	end)
+	prompt.Enabled = true
 end
 
 function RunFlowService._extractPlayer(_self: typeof(RunFlowService), player: Player)
@@ -513,8 +423,8 @@ function RunFlowService._extractPlayer(_self: typeof(RunFlowService), player: Pl
 end
 
 -- Boss rewards have dropped (EncounterService outro done). Final floor:
--- the run is cleared, the hook fires and the portal home rises after a
--- beat. Otherwise: the Descend pad after a beat.
+-- the run is cleared, the hook fires and the ExitGate's prompt home turns
+-- on after a beat. Otherwise: the Descend pad after a beat.
 function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room: Room?)
 	local run = DungeonService:GetRun()
 	local dungeon = DungeonService:GetActiveDungeon()
@@ -526,20 +436,20 @@ function RunFlowService._onBossRewardsDropped(self: typeof(RunFlowService), room
 	if isFinal then
 		-- The run is WON here (design call, 2026-10: no extraction). From
 		-- this point a death banks the escrow instead of discarding it
-		-- (RunEscrowService); the portal that follows is just the way home.
+		-- (RunEscrowService); the gate's prompt that follows is the way home.
 		DungeonService:MarkRunCleared()
 		DungeonService:DestroyNextGateMarker()
 		DungeonService.Signals.OnFinalDungeonCompleted:Fire(dungeon, run)
 	end
 
-	task.delay(EXIT_PORTAL_DELAY, function()
+	task.delay(EXIT_PROMPT_DELAY, function()
 		if DungeonService:GetActiveDungeon() ~= dungeon then
 			return
 		end
 		if isFinal then
-			self:_raiseExitPortal(room)
+			self:_openExitGate(room)
 		elseif EncounterService then
-			-- Not the last floor: NO portal (there is no leaving a run
+			-- Not the last floor: no way home (there is no leaving a run
 			-- early), only the Descend pad in front of the exit gate.
 			local gate = room.model:FindFirstChild(EXIT_GATE_NAME)
 			local gateCFrame = (gate and gate:IsA("BasePart") and gate.CFrame) or room.model:GetPivot()
@@ -651,8 +561,8 @@ end
 --[ Initializers ]--
 
 function RunFlowService.Start(self: typeof(RunFlowService))
-	-- Run loop: the boss's rewards have dropped -> portal + vote (or the
-	-- final-dungeon hook).
+	-- Run loop: the boss's rewards have dropped -> the exit gate's prompt
+	-- (final floor) or the vote.
 	EncounterService.OnEncounterOutroFinished:Connect(function(kind: string, room: EncounterRoom?, _mob: Model?)
 		if kind == RoomTypes.Boss then
 			self:_onBossRewardsDropped(room :: Room?)
