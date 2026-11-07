@@ -32,7 +32,7 @@ local MobProjectiles = require(script:WaitForChild("MobProjectiles"))
 local aimControllerLazy: any = nil
 local function getAimController(): any
 	if aimControllerLazy == nil then
-		aimControllerLazy = (require :: any)(ReplicatedStorage.Controllers.AimController)
+		aimControllerLazy = (require :: any)(ReplicatedStorage.Submodules.Core.Source.Controllers.AimController)
 	end
 	return aimControllerLazy
 end

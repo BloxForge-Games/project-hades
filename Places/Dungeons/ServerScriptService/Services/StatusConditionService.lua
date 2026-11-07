@@ -68,7 +68,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local DamageService = require(ServerScriptService.Services.DamageService)
-local DamageIndicatorService = require(ServerScriptService.Services.DamageIndicatorService)
+local DamageIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.DamageIndicatorService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)

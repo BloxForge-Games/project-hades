@@ -24,10 +24,12 @@
 
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 --[ Imports ]--
 
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local CollisionGroupService = require(ServerScriptService.Submodules.Core.Source.Services.CollisionGroupService)
 
 --[ Constants ]--
 
@@ -118,6 +120,16 @@ function LobbyNPCService._wire(_self: typeof(LobbyNPCService), model: Instance)
 	end
 	model:SetAttribute(DIALOGUE_GRAPH_ATTRIBUTE, graphName)
 	ensurePrompt(model)
+	-- Walk-through (2026-11-07): players pass through an NPC instead of
+	-- bumping it, and a swing's lunge stops short of it (LungeBlocker).
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.CanCollide = false
+			-- The Humanoid forces Head / Torso solid; the group lets players pass.
+			descendant.CollisionGroup = CollisionGroupService:EnsurePassThrough()
+		end
+	end
+	CollectionService:AddTag(model, TagList.LungeBlocker)
 	-- The tag last: the NPC component reads the prompt on Construct.
 	CollectionService:AddTag(model, TagList.NPC)
 end
