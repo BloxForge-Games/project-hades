@@ -863,10 +863,11 @@ function MobBase.FindTarget(self: MobBase): boolean
 		end
 	end
 
-	-- Shadow Clones draw aggro (ShadowCloneService:PickTarget); minibosses
-	-- and bosses ignore them.
+	-- Shadow Clones draw aggro (ShadowCloneService:PickTarget), minibosses
+	-- and bosses included (2026-11-07; they ignored clones before). Their
+	-- unique attacks find a clone's root like a player's (getRoot).
 	local clones = Blitz.OptionalService("ShadowCloneService")
-	if clones and not self:_isEncounterMob() then
+	if clones then
 		local playerDistance = if nearestPlayerHRP
 			then (nearestPlayerHRP.Position - self._rootPart.Position).Magnitude
 			else math.huge

@@ -30,12 +30,16 @@ local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Networ
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ScreenSweepData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ScreenSweepData)
+local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 
 type Dungeon = DungeonService.Dungeon
 
 local LandingService = {
 	Name = "LandingService",
 	Dependencies = { DungeonService, DungeonGenerator, RunFlowService, PlayerEventService } :: { any },
+	-- (player): the player's drop has finished and they stand in the start
+	-- room (2026-11-07; PlayerIndicatorService puts up their marker then).
+	OnPlayerLanded = Signal.new(),
 }
 
 --[ Constants ]--
@@ -379,6 +383,7 @@ function LandingService._runPlayerLanding(self: typeof(LandingService), player: 
 			-- them in off this edge).
 			if character.Parent then
 				character:SetAttribute(Attributes.Landing, nil)
+				self.OnPlayerLanded:Fire(player)
 			end
 			DungeonNetwork.LandingEnd.Fire(player)
 

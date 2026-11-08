@@ -32,8 +32,8 @@
 	  * LIFE: `lifetime` seconds, or `cloneHits` mob hits (MobService counts
 	    them through HitClone: melee, projectiles and area attacks alike).
 	  * AGGRO: mobs ask PickTarget. A mob goes for its nearest clone unless a
-	    player is more than `aggroMargin` studs closer. Encounter enemies
-	    (minibosses, bosses) ignore clones.
+	    player is more than `aggroMargin` studs closer. Minibosses and
+	    bosses too (2026-11-07).
 
 	Proxy attributes the clients read: OwnerId, WeaponName, OwnerWeapon
 	(true: copy the caster's drawn melee weapon, with its skin and

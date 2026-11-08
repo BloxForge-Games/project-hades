@@ -585,14 +585,14 @@ local function wyrmHome(frame: CFrame, orbitAngle: number): Vector3
 	return (frame * CFrame.Angles(0, orbitAngle, 0) * CFrame.new(WYRM_ORBIT_BASE)).Position
 end
 
--- The next drift angle: near one shoulder or the other, usually the
--- other (SpiritCompanion:_pickOrbitTarget).
-local function pickOrbitTarget(current: number): number
+-- The next drift angle: near one shoulder or the other, the RIGHT one
+-- IDLE_ORBIT_LEFT_CHANCE of the time -- the Spirit Companion's odds,
+-- mirrored, since it favours the left (SpiritCompanion:_pickOrbitTarget)
+-- and the two would share a shoulder. 2026-11-07: this read the removed
+-- IDLE_ORBIT_SAME_SIDE_CHANCE, threw every frame and froze the wyrm.
+local function pickOrbitTarget(_current: number): number
 	local halfSweep = math.rad(SpiritCompanionData.IDLE_ORBIT_DEGREES)
-	local sign = if current >= 0 then 1 else -1
-	if orbitRandom:NextNumber() >= SpiritCompanionData.IDLE_ORBIT_SAME_SIDE_CHANCE then
-		sign = -sign
-	end
+	local sign = if orbitRandom:NextNumber() < SpiritCompanionData.IDLE_ORBIT_LEFT_CHANCE then 1 else -1
 	return sign * halfSweep * orbitRandom:NextNumber(SpiritCompanionData.IDLE_ORBIT_MIN_MAGNITUDE, 1)
 end
 
