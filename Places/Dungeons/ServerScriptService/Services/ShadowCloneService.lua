@@ -60,12 +60,24 @@ local meleeSwingFeel = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local SPELL = ArcaneNames["Shadow Clone Barrage"]
 local FALLBACK_WEAPON = WeaponNames["Steel Sword"]
 local FOLDER_NAME = "ShadowClones"
--- The three spots behind the caster, in the caster's frame (+Z is behind).
+-- The spots behind the caster, in the caster's frame (+Z is behind): the
+-- first three for one cast, rows behind them for stacked casts.
 local SLOT_OFFSETS = {
 	Vector3.new(-4, 0, 3.5),
 	Vector3.new(0, 0, 5.5),
 	Vector3.new(4, 0, 3.5),
+	Vector3.new(-7, 0, 6),
+	Vector3.new(7, 0, 6),
+	Vector3.new(-3, 0, 8.5),
+	Vector3.new(3, 0, 8.5),
+	Vector3.new(-6, 0, 10),
+	Vector3.new(6, 0, 10),
 }
+-- Korblox Mage Staff (2026-11-07): its free casts make a recast possible
+-- while clones still stand, so with it a recast ADDS clones instead of
+-- replacing them, up to this many at once (the oldest make way past it).
+local STACKING_RELIC = "Korblox Mage Staff"
+local MAX_STACKED_CLONES = 9
 -- Studs from its slot a clone settles at (it stops walking).
 local SLOT_SETTLE = 0.6
 -- How far (studs) from its caster a clone will go for a mob.
@@ -220,15 +232,39 @@ function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Pla
 	local casterFloor = floorBelow(casterRoot.Position, 3)
 	local standHeight = if casterFloor then math.clamp(casterRoot.Position.Y - casterFloor, 1, 6) else 3
 
-	-- A recast replaces the caster's clones still standing.
-	for index = #self._clones, 1, -1 do
-		local old = self._clones[index]
-		if old and old.owner == player then
-			self:_dismiss(old)
+	-- A recast replaces the caster's clones still standing -- or, with the
+	-- Korblox Mage Staff, stacks on them (oldest dismissed past the cap).
+	local count = math.min(data.cloneCount or 3, #SLOT_OFFSETS)
+	local relicService = Blitz.OptionalService("RelicService")
+	local stacks = relicService ~= nil and relicService:GetSpecificRelicRegistry(player, STACKING_RELIC) > 0
+	local mine: { Clone } = {}
+	for _, old in self._clones do
+		if old.owner == player and old.alive then
+			table.insert(mine, old)
+		end
+	end
+	local keep = if stacks then math.max(0, math.min(MAX_STACKED_CLONES, #SLOT_OFFSETS) - count) else 0
+	table.sort(mine, function(a, b)
+		return a.endsAt < b.endsAt
+	end)
+	while #mine > keep do
+		self:_dismiss(table.remove(mine, 1) :: Clone)
+	end
+	local taken: { [number]: boolean } = {}
+	for _, old in mine do
+		taken[old.slot] = true
+	end
+	local slots: { number } = {}
+	for slot = 1, #SLOT_OFFSETS do
+		if #slots >= count then
+			break
+		end
+		if not taken[slot] then
+			table.insert(slots, slot)
 		end
 	end
 
-	for slot = 1, math.min(data.cloneCount or 3, #SLOT_OFFSETS) do
+	for _, slot in slots do
 		local spot = (casterRoot.CFrame * CFrame.new(SLOT_OFFSETS[slot])).Position
 		local floor = floorBelow(spot, standHeight)
 		local position = Vector3.new(spot.X, if floor then floor + standHeight else casterRoot.Position.Y, spot.Z)
