@@ -61,6 +61,8 @@ local IDLE_TEXT = string.format(READOUT_FORMAT, "--", "--", "--")
 -- The rig: R6 part sizes and their places relative to the Torso.
 -- The Torso's centre above the floor (legs 2 + half the torso 1).
 local TORSO_HEIGHT = 3
+-- The readout over the head, in studs (width, height).
+local READOUT_SIZE = Vector2.new(9, 1.4)
 -- The classic Rig Builder dummy grey (Medium stone grey).
 local DUMMY_COLOR = Color3.fromRGB(163, 162, 165)
 
@@ -205,15 +207,18 @@ end
 
 --[ The rig ]--
 
-local function newLabel(parent: Instance, text: string, color: Color3, size: number, y: number): TextLabel
+-- A line of the readout: `top` and `height` are shares of the billboard,
+-- the text scaled to fit (the billboard is sized in studs, so the text
+-- keeps its size against the dummy on every screen, 2026-11-07).
+local function newLabel(parent: Instance, text: string, color: Color3, top: number, height: number): TextLabel
 	local label = Instance.new("TextLabel")
 	label.BackgroundTransparency = 1
 	label.FontFace = FONT
-	label.Position = UDim2.fromOffset(0, y)
-	label.Size = UDim2.new(1, 0, 0, size + 2)
+	label.Position = UDim2.fromScale(0, top)
+	label.Size = UDim2.fromScale(1, height)
 	label.Text = text
 	label.TextColor3 = color
-	label.TextSize = size
+	label.TextScaled = true
 	label.TextStrokeTransparency = 0.4
 	label.Parent = parent
 	return label
@@ -324,13 +329,16 @@ function TrainingDummyService._setUp(self: typeof(TrainingDummyService), model: 
 	gui.Name = "Readout"
 	local adornee: Instance? = if head and head:IsA("BasePart") then head else model.PrimaryPart
 	gui.Adornee = adornee :: any
-	gui.Size = UDim2.fromOffset(320, 38)
+	-- In studs (scale), not pixels: pixel text stays the same size on a
+	-- phone while the world shrinks, so it read huge there.
+	gui.Size = UDim2.fromScale(READOUT_SIZE.X, READOUT_SIZE.Y)
 	gui.StudsOffset = Vector3.new(0, 2.6, 0)
 	gui.MaxDistance = 120
 	gui.LightInfluence = 0
 	gui.Parent = model
-	newLabel(gui, DUMMY_NAME, TITLE_COLOR, 15, 0)
-	local readout = newLabel(gui, IDLE_TEXT, TEXT_COLOR, 13, 19)
+	-- The name, smaller than it was (2026-11-08; 0.52 of the height).
+	newLabel(gui, DUMMY_NAME, TITLE_COLOR, 0.16, 0.36)
+	local readout = newLabel(gui, IDLE_TEXT, TEXT_COLOR, 0.54, 0.46)
 
 	model:SetAttribute(TrainingDummyData.ATTRIBUTE, true)
 	-- The weapons' target tag: swings and arrows only hit tagged models.

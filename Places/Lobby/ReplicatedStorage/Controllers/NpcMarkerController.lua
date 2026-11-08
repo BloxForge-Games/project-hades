@@ -7,25 +7,20 @@
 	pointing to it while it is off screen -- the dungeon's marker system
 	(Libraries/LocationMarkerSystem), started here for the hub.
 
-	A marker floats 2 studs above its NPC's head and hides while it has
-	nothing to tell you: when you are close enough for the NPC's highlight
-	(LobbyNpcLifeController: your Head within HIGHLIGHT_STUDS of its
-	HumanoidRootPart, the same rule), and while you are talking to it. It
-	comes back as you walk away.
+	A marker sits on its NPC's HumanoidRootPart and only shows while the
+	NPC is OFF SCREEN (2026-11-07): it fades out as the NPC comes into view
+	and back in as it leaves, so it is purely a pointer to NPCs you cannot
+	see.
 
 	Client-only: each marker is a local, invisible anchored part with an
 	"Indicator" Attachment under IgnoreInstances.MapMarkers, which the
 	library picks up; nothing replicates.
 ]]
 
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local LocationMarkerSystem = require(ReplicatedStorage.Submodules.Core.Libraries.LocationMarkerSystem)
-local DialogueBillboardInterface =
-	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.DialogueBillboardInterface)
-local LobbyNpcLifeController = require(script.Parent.LobbyNpcLifeController)
 
 local NPC_FOLDER_NAME = "NPCs"
 local MARKER_FOLDER_NAME = "MapMarkers"
@@ -33,8 +28,9 @@ local MARKER_FOLDER_NAME = "MapMarkers"
 local MARKER_IMAGE = "rbxassetid://8239524757"
 local MARKER_COLOR = Color3.fromRGB(255, 170, 0)
 local MARKER_SIZE = 0.04
--- Studs between the top of the NPC's head and the marker.
-local HEAD_PADDING = 2
+-- On screen means inside the view by this many pixels (so a marker at
+-- the very edge does not flicker).
+local SCREEN_INSET = 8
 -- How often the NPC list is checked for change (NPCs present at join).
 local REFRESH_SECONDS = 2
 
@@ -46,7 +42,6 @@ type Marker = {
 
 local NpcMarkerController = {
 	Name = "NpcMarkerController",
-	Dependencies = { DialogueBillboardInterface, LobbyNpcLifeController } :: { any },
 
 	_markers = {} :: { [Model]: Marker },
 }
@@ -56,14 +51,26 @@ local function npcFolder(): Instance?
 	return ignore and ignore:FindFirstChild(NPC_FOLDER_NAME)
 end
 
--- Where the marker sits: HEAD_PADDING above the top of the NPC's head
--- (2026-11-07), or above its pivot without a Head.
+-- Where the marker sits: the NPC's HumanoidRootPart (its pivot without one).
 local function anchorPosition(npc: Model): Vector3
-	local head = npc:FindFirstChild("Head")
-	if head and head:IsA("BasePart") then
-		return head.Position + Vector3.new(0, head.Size.Y / 2 + HEAD_PADDING, 0)
+	local root = npc:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root.Position else npc:GetPivot().Position
+end
+
+-- Whether `position` is on screen (in front of the camera, inside the
+-- view by SCREEN_INSET).
+local function onScreen(position: Vector3): boolean
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return false
 	end
-	return npc:GetPivot().Position + Vector3.new(0, 3 + HEAD_PADDING, 0)
+	local point, inFront = camera:WorldToViewportPoint(position)
+	local size = camera.ViewportSize
+	return inFront
+		and point.X >= SCREEN_INSET
+		and point.Y >= SCREEN_INSET
+		and point.X <= size.X - SCREEN_INSET
+		and point.Y <= size.Y - SCREEN_INSET
 end
 
 function NpcMarkerController._add(self: typeof(NpcMarkerController), npc: Model)
@@ -124,23 +131,13 @@ function NpcMarkerController._refresh(self: typeof(NpcMarkerController))
 	end
 end
 
--- Shows or hides each marker: hidden while its NPC is highlighted (your
--- Head within HIGHLIGHT_STUDS of its HumanoidRootPart, the highlight's own
--- rule) or while talking to it. Also keeps each one on its NPC.
+-- Shows each marker only while its NPC is off screen, and keeps it on
+-- its NPC.
 function NpcMarkerController._update(self: typeof(NpcMarkerController))
-	local character = Players.LocalPlayer.Character
-	local head = character and character:FindFirstChild("Head")
-	local at = if head and head:IsA("BasePart") then head.Position else nil
-	local talkingTo = if DialogueBillboardInterface:IsInDialogue()
-		then DialogueBillboardInterface:GetActiveDialogueModel()
-		else nil
-
 	for npc, marker in self._markers do
 		local position = anchorPosition(npc)
 		marker.part.CFrame = CFrame.new(position)
-		local near = at ~= nil and (at - position).Magnitude <= LobbyNpcLifeController.HIGHLIGHT_STUDS
-		local show = not near and talkingTo ~= npc
-		local fade = if show then 0 else 1
+		local fade = if onScreen(position) then 1 else 0
 		if marker.indicator:GetAttribute("Fade") ~= fade then
 			marker.indicator:SetAttribute("Fade", fade)
 		end
