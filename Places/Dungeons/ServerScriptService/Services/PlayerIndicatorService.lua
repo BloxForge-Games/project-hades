@@ -11,11 +11,19 @@
                   All visual logic lives in the LocationMarkerSystem
                   library; this service only authors the attachment + its
                   attributes.
+
+                  Put up only once the player has LANDED (2026-11-07:
+                  LandingService.OnPlayerLanded), never on spawn: a
+                  character spawns at the off-map staging point first, and a
+                  marker there pointed every teammate off screen at it.
 ]]
 
 --[ Roblox Services ]--
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 --[ Exports & Types & Defaults ]--
 
@@ -69,22 +77,13 @@ function PlayerIndicatorService._attachIndicator(self: typeof(PlayerIndicatorSer
 	attachment.Parent = hrp
 end
 
-function PlayerIndicatorService._bindPlayer(self: typeof(PlayerIndicatorService), player: Player)
-	local function onCharacter(character: Model)
-		-- HRP may not be parented yet on first frame; wait briefly.
-		local hrp = character:FindFirstChild("HumanoidRootPart")
-		if not hrp then
-			hrp = character:WaitForChild("HumanoidRootPart", 5)
-		end
-		if hrp then
-			self:_attachIndicator(player, character)
-		end
+-- The landed player's character gets its marker (re-authored each landing).
+function PlayerIndicatorService._onLanded(self: typeof(PlayerIndicatorService), player: Player)
+	local character = player.Character
+	if not character or not character:FindFirstChild("HumanoidRootPart") then
+		return
 	end
-
-	player.CharacterAdded:Connect(onCharacter)
-	if player.Character then
-		onCharacter(player.Character)
-	end
+	self:_attachIndicator(player, character)
 end
 
 --[ Public Functions ]--
@@ -92,11 +91,11 @@ end
 --[ Initializers ]--
 
 function PlayerIndicatorService.Start(self: typeof(PlayerIndicatorService))
-	Players.PlayerAdded:Connect(function(player: Player)
-		self:_bindPlayer(player)
-	end)
-	for _, player in Players:GetPlayers() do
-		self:_bindPlayer(player)
+	local landing = Blitz.OptionalService("LandingService")
+	if landing then
+		landing.OnPlayerLanded:Connect(function(player: Player)
+			self:_onLanded(player)
+		end)
 	end
 end
 

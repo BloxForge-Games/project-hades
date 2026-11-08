@@ -825,6 +825,34 @@ end
 function MobService.RunMistAmbush(self: typeof(MobService), mobModel: Model, target: Model, config)
 	local root = getRoot(mobModel)
 	local humanoid = mobModel:FindFirstChildOfClass("Humanoid")
+	-- Always ambushes a PLAYER (2026-11-07): the miniboss may be chasing a
+	-- Shadow Clone, so a clone target hands over to its owner, else to the
+	-- nearest living player.
+	if not Players:GetPlayerFromCharacter(target) then
+		local clones = Blitz.OptionalService("ShadowCloneService")
+		local owner = clones and clones:OwnerOf(target)
+		local ownerCharacter = owner and owner.Character
+		local ownerHumanoid = ownerCharacter and ownerCharacter:FindFirstChildOfClass("Humanoid")
+		if ownerCharacter and ownerHumanoid and ownerHumanoid.Health > 0 then
+			target = ownerCharacter
+		elseif root then
+			local nearest, nearestDistance = nil, math.huge
+			for _, player in Players:GetPlayers() do
+				local character = player.Character
+				local playerHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+				local playerRoot = character and getRoot(character)
+				if character and playerHumanoid and playerHumanoid.Health > 0 and playerRoot then
+					local distance = (playerRoot.Position - root.Position).Magnitude
+					if distance < nearestDistance then
+						nearest, nearestDistance = character, distance
+					end
+				end
+			end
+			if nearest then
+				target = nearest
+			end
+		end
+	end
 	local targetRoot = getRoot(target)
 	if not root or not humanoid or not targetRoot then
 		return

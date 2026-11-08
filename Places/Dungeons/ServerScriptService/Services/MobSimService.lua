@@ -70,7 +70,6 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local MobService = require(ServerScriptService.Services.MobService)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
-local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
 local MobSpawnService = require(ServerScriptService.Services.MobSpawnService)
 local EnemyScalingService = require(ServerScriptService.Services.EnemyScalingService)
 local MobDeath = require(ServerScriptService.Mobs.MobDeath)
@@ -1544,10 +1543,10 @@ function MobSimService._findTarget(_self: typeof(MobSimService), record: Record)
 			return
 		end
 	end
-	-- Shadow Clones draw aggro (ShadowCloneService:PickTarget); encounter
-	-- enemies ignore them.
+	-- Shadow Clones draw aggro (ShadowCloneService:PickTarget), encounter
+	-- enemies included (2026-11-07; they ignored clones before).
 	local clones = Blitz.OptionalService("ShadowCloneService")
-	if clones and not isEncounterEnemy(record.model) then
+	if clones then
 		local clone, cloneRoot = clones:PickTarget(from, record.detectionRange, nearestDistance)
 		if clone then
 			record.target, record.targetRoot = clone, cloneRoot
