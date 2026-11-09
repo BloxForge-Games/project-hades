@@ -65,6 +65,9 @@ local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Cur
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
+local FriendBonusData = require(ReplicatedStorage.Submodules.Core.Shared.Data.FriendBonusData)
+local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
+local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
 
 local RunEscrowService = {
 	Name = "RunEscrowService",
@@ -224,6 +227,11 @@ function RunEscrowService.AddItem(
 	-- above never reads as a gain. Monotonic: it answers "something was
 	-- just picked up" (SpiritCompanion), not "how much is carried".
 	player:SetAttribute(Attributes.GearGained, ((player:GetAttribute(Attributes.GearGained) or 0) :: number) + 1)
+	-- The end-of-run summary's gear list (2026-11-08).
+	local summaries = Blitz.OptionalService("RunSummaryService")
+	if summaries then
+		summaries:NoteGear(player, escrowItem.item)
+	end
 	self:_replicate(player)
 	return true
 end
@@ -249,31 +257,16 @@ function RunEscrowService.SpendGems(self: typeof(RunEscrowService), player: Play
 end
 
 -- Dragon Lantern's drawback (2026-11-04; a 10% cut of the run's coins
--- before, which read as nothing against the HUD's banked-plus-run total):
--- takes `amount` coins, from this run's coins first, then from the
--- profile's banked Gold, never below 0. Returns what was taken.
+-- before): takes `amount` coins from THIS RUN's coins only, never below 0.
+-- Gold banked before the run is never touched (2026-11-08; it spilled
+-- into the bank before). Returns what was taken.
 function RunEscrowService.LoseCoins(self: typeof(RunEscrowService), player: Player, amount: number): number
 	local entry = self:_getOrCreate(player)
-	local remaining = math.max(math.floor(amount), 0)
-	local fromRun = math.min(entry.coins or 0, remaining)
-	if fromRun > 0 then
-		self:_commitCoins(player, entry.coins - fromRun)
-		remaining -= fromRun
+	local taken = math.min(entry.coins or 0, math.max(math.floor(amount), 0))
+	if taken > 0 then
+		self:_commitCoins(player, entry.coins - taken)
 	end
-	local fromBank = 0
-	if remaining > 0 and DataService and DataService:GetProfileData(player) then
-		local banked = CurrencyService:GetCurrencyValue(player, CurrencyTypes.Gold) or 0
-		fromBank = math.min(banked, remaining)
-		if fromBank > 0 then
-			CurrencyService:SetCurrencyValue(
-				player,
-				CurrencyTypes.Gold,
-				banked - fromBank,
-				{ transaction = "Gameplay", sku = "LostToEnemy" }
-			)
-		end
-	end
-	return fromRun + fromBank
+	return taken
 end
 
 -- Credits Coins (a reward chest's payout, post dungeon scale). Cargo
@@ -331,6 +324,30 @@ function RunEscrowService.BankCurrencies(self: typeof(RunEscrowService), player:
 	local keep = math.clamp(keepFraction or 1, 0, 1)
 	local coins = math.floor(entry.coins * keep)
 	local crystals = math.floor((entry.arcaneCrystals or 0) * keep)
+	-- The friend bonus (FriendBonusService, 2026-11-08): each friend in the
+	-- run adds its share on top, before the Store boosts multiply the
+	-- write (CurrencyService), and the player is told what it added.
+	local friendBonus = player:GetAttribute(Attributes.FriendBonus)
+	if type(friendBonus) == "number" and friendBonus > 0 then
+		local bonusCoins = math.floor(coins * friendBonus + 0.5)
+		local bonusCrystals = math.floor(crystals * friendBonus + 0.5)
+		coins += bonusCoins
+		crystals += bonusCrystals
+		if bonusCoins > 0 or bonusCrystals > 0 then
+			local parts = {}
+			if bonusCoins > 0 then
+				table.insert(parts, string.format("+%d Gold", bonusCoins))
+			end
+			if bonusCrystals > 0 then
+				table.insert(parts, string.format("+%d Crystals", bonusCrystals))
+			end
+			UserNotificationService:RequestUserNotification(player, {
+				titleText = "Friend Bonus " .. FriendBonusData.Format(friendBonus),
+				titleTextColor3 = NotificationColors.Success,
+				text = table.concat(parts, ", ") .. " for playing with friends!",
+			})
+		end
+	end
 	if coins > 0 then
 		CurrencyService:SetCurrencyValue(
 			player,

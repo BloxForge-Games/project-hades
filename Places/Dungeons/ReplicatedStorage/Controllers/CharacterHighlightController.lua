@@ -500,6 +500,17 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	end
 	local written = self._playerHighlightWritten
 
+	-- A spell owns the character's highlight (Attributes.HighlightOverride,
+	-- Sand Armor): off the character, so the two never fight for the one
+	-- slot Roblox draws. The layers come back the tick it clears.
+	if character:GetAttribute(Attributes.HighlightOverride) == true then
+		if written.enabled ~= false then
+			highlight.Parent = nil
+			written.enabled = false
+		end
+		return
+	end
+
 	-- Ramp the invulnerable intensity toward the attribute (1 / 0). NOT
 	-- during ANY cutscene: a cinematic framed on your character should not
 	-- also paint it white. That covers the arcane casts (Susanoo, Domain

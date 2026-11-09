@@ -1,6 +1,6 @@
 --!strict
 --[[
-	TauntService (2026-11-07, Stone Body): which player a taunted mob must
+	TauntService (2026-11-07, Sand Armor): which player a taunted mob must
 	chase. Taunt marks every living mob within a radius of the player for
 	a time; the mob brains (MobSimService._findTarget, MobBase.FindTarget)
 	ask GetTaunter before anything else, so a taunt outranks the nearest

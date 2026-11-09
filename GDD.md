@@ -242,8 +242,8 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 |---|---|---|---|
 | Golden Steampunk Gloves | Rare | NC | Every 2nd Melee swing (every weapon, since 2026-11-04; 4th / 3rd / 2nd before) sends out a Shockwave that Fractures enemies for damage. (8 studs around the enemy the swing struck, or just ahead of you on a whiff; Power-scaled; swings counted since 2026-11-01.) |
 | Earth Protection Orb | Rare | NC | Orbs you pick up when your Mana and Health are full are preserved (up to 5). They are used when needed. (Stored when the matching bar is at 90% or above, since an orb heals 10%; spent one a second, Health first; stored orbs never expire and survive a respawn; nobody else can take them. The orb floats into its slot with no pickup burst; the ring uses the drop's own model.) |
-| Bundle of TNT | Epic | C | Collecting an Orb grants a 10% Shield for 5s. When it ends it explodes, dealing damage and Fracturing nearby enemies. |
-| Earth Summoning Horn | Epic | NC | Collecting an Orb sends out a shockwave that deals damage, and players within 15 studs gain the Orb's restore too. |
+| Bundle of TNT | Epic | C | Collecting an Orb grants a +7% Shield for 5s. When it ends it explodes, dealing damage and Fracturing nearby enemies. |
+| Earth Summoning Horn | Epic | NC | Collecting an Orb grants you a +5% Shield for 5s, and players within 15 studs gain the Orb's restore too. (The damage shockwave left 2026-11-08.) |
 | Golem's Hammer | Legendary | NC | Orbs restore +50%. In combat the earth quakes around you, Fracturing enemies. (Every 3 s, 12 studs; Fractured enemies take double from the quake.) |
 
 **Neutral** (all NC)
@@ -270,7 +270,7 @@ turns Health Orbs off, so Earth plus Teddy is a dead pair by design.
 | Relic | Effect |
 |---|---|
 | Double-Bladed Scythe | Deal +100% Weapon Damage, but your Arcane deals no damage. |
-| Dragon Lantern | Gain +200% Coins, but lose Coins every time you take damage (5% of the run's average coins per hit, run coins first, then banked Gold). |
+| Dragon Lantern | Gain +200% Coins, but lose Coins collected this run every time you take damage (5% of the run's average coins per hit; banked Gold is never touched since 2026-11-08). While held, the Gold readout shows "total (this run)". |
 | Forbidden Box | Deal +100% Arcane Damage, but your Weapon deals 50% less. |
 | Slateskin Potion | Gain +35% Damage Reduction, but lose 1 Dodge stack. |
 | Sword of Eternal Abyss | Deal +50% damage, but you can't apply Statuses. |
@@ -286,6 +286,16 @@ Fire Breath Potion, Static Shock Sheep, Zombie Axe) and the Shield Earth cards (
 Shield, Golden Steampunk Gloves, Spartan Sword and Shield) joined the shelf, and Flaming Bo Staff,
 Katana, Korblox Evil Eye, War Rocks, Earth Protection Orb and Earth Summoning Horn came back with
 new cards.
+
+### Relic unlocks
+
+A new player has 27 relics: 3 per element tree, 8 Neutral and 4 Cursed. The other 19 unlock by
+player level, one per level from 2 to 20 (2026-11-08; tree finds, boss holds, lifetime feats and
+Cursed Shrine bargains before), so every relic is offered by level 20. Tree Epics come first (2 to 7),
+the Cursed relics are spaced out mildest first (10, 14, 17) and the Legendaries come last (13 to 20).
+The list is `RelicUnlockData.ByLevel`; the Codex shows "Unlocks at Lv X" on a locked relic, a toast
+announces each one on the level up, and the run summary lists it. Relics earned under the old rules
+stay unlocked.
 
 ## Roguelite mode (future)
 

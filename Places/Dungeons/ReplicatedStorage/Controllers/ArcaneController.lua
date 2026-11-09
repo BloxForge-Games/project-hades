@@ -276,7 +276,8 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 	-- it replaced both the inline CFrame write that raced the humanoid's
 	-- steering here, and the mobile-only SkillshotDelay attribute.
 	if getAimController() then
-		getAimController():BeginCastLock(ArcaneData[vfxName].duration)
+		-- A spell with faceCursorOnCast = false keeps the caster's heading.
+		getAimController():BeginCastLock(ArcaneData[vfxName].duration, ArcaneData[vfxName].faceCursorOnCast == false)
 	end
 
 	-- Runs the caster's OWN effect module immediately (cast animation, cast

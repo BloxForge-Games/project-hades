@@ -563,7 +563,8 @@ local function spawnHitboxFlash(
 	mobModel: Model?,
 	buildHitbox: () -> Model?,
 	windUpDuration: number,
-	hitFrameDuration: number
+	hitFrameDuration: number,
+	sweepFrom: Vector3?
 )
 	-- Race gate #1: server fired this RIGHT as the local player died.
 	-- Suppressed only while the death CINEMATIC owns the screen —
@@ -595,7 +596,9 @@ local function spawnHitboxFlash(
 		tweens = {},
 		fills = {},
 		interruptConn = nil,
-		origin = if mobModel then mobModel:GetPivot().Position else nil,
+		-- Where the fill sweeps from: the server's SweepFrom (an attack
+		-- cast from mid-telegraph, the Tidal Requiem's lanes), else the mob.
+		origin = sweepFrom or (if mobModel then mobModel:GetPivot().Position else nil),
 	}
 	activeFlashes[state] = true
 
@@ -967,7 +970,7 @@ function MobController.Start(self: typeof(MobController))
 		end
 		spawnHitboxFlash(payload.Mob, function()
 			return mobHitbox.build(jittered(payload.CFrame), spec)
-		end, windUp, hitFrame)
+		end, windUp, hitFrame, payload.SweepFrom)
 	end)
 
 	-- Abort any lingering hitbox telegraphs when a boss phase change / outro

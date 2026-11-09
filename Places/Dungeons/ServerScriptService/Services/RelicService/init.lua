@@ -1000,10 +1000,10 @@ end
 -- Rolls ONE relic for an offer slot (2026-10-31, GDD.md "Relics"):
 --   1. Drop candidates the player cannot be offered (IsRelicRollEligible:
 --      retired, or a C relic of a tree they hold nothing of).
---   2. Draw a TREE among those with an eligible candidate: one ticket
---      each plus RelicRollConfig.TreeAffinity per relic the owner holds in
---      it (capped), Neutral at one -- so Neutral's larger pool never
---      crowds the elements and a build leans toward itself.
+--   2. Draw a TREE UNIFORMLY among those with an eligible candidate (one
+--      ticket each, so Neutral's larger pool never crowds the elements).
+--      No lean toward what the owner holds (2026-11-08; TreeAffinity
+--      before).
 --   3. Roll a RARITY from the run-stage table within that tree.
 --   4. Pick UNIFORMLY from that bucket.
 -- No pity, keystone or combo weighting: every offerable card of a rarity
@@ -1054,31 +1054,9 @@ function RelicService.RollRandomRelicFromPool(
 		return nil, nil
 	end
 
-	-- The tree draw (RelicRollConfig.TreeAffinity): one ticket each, plus
-	-- PerOwned for every relic the owner holds in that tree, capped at Cap;
-	-- Neutral stays at one. No owner (the Forge's stock) draws flat.
-	local chosenTree = trees[1]
-	do
-		local affinity = RelicRollConfig.TreeAffinity
-		local tickets: { number } = {}
-		local total = 0
-		for index, tree in trees do
-			local weight = 1
-			if ownerPlayer and tree ~= ElementTrees.Neutral then
-				weight = math.min(1 + self:GetOwnedTreeCount(ownerPlayer, tree) * affinity.PerOwned, affinity.Cap)
-			end
-			tickets[index] = weight
-			total += weight
-		end
-		local roll = math.random() * total
-		for index, tree in trees do
-			roll -= tickets[index]
-			if roll <= 0 then
-				chosenTree = tree
-				break
-			end
-		end
-	end
+	-- The tree draw: flat, one ticket per tree with a candidate left
+	-- (2026-11-08: no lean toward the trees the owner holds).
+	local chosenTree = trees[math.random(1, #trees)]
 	local poolByRarity = byTree[chosenTree]
 
 	local rolledRarity

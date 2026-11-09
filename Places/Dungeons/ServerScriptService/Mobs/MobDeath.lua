@@ -495,6 +495,9 @@ local function handleAssists(context: Context)
 		end
 
 		RoundStatisticsService.Signals.OnKillOrAssist:Fire(player, 1)
+		if isCorrupted(context.model) then
+			RoundStatisticsService.Signals.OnCorruptedKill:Fire(player)
+		end
 
 		local enemyType = context.model:GetAttribute(Attributes.EnemyType)
 

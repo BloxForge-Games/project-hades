@@ -43,7 +43,8 @@ local MIST_LOOK: Look = {
 	Color = Color3.fromRGB(69, 102, 102),
 	Decay = Color3.fromRGB(74, 74, 74),
 	Glare = 0.79,
-	Offset = 0.207,
+	-- 0.207 -> 1 (2026-11-08).
+	Offset = 1,
 }
 -- The authored 0.664 fully zoomed out, thickening by the default range's
 -- 0.1 zoomed in, and 0.1 more in a cutscene close-up.

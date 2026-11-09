@@ -404,6 +404,18 @@ function RunFlowService._extractPlayer(_self: typeof(RunFlowService), player: Pl
 		DungeonService.Signals.OnPlayerExtracted:Fire(player, DungeonService:GetActiveDungeon())
 	end
 
+	-- The end-of-run summary first (2026-11-08): it banks the run and shows
+	-- what was earned; its Continue comes back here for the teleport.
+	local summaries = Blitz.OptionalService("RunSummaryService")
+	if summaries and not summaries:HasClosed(player) then
+		if not summaries:IsOpen(player) then
+			summaries:Open(player, true, function()
+				RunFlowService:_extractPlayer(player)
+			end)
+		end
+		return
+	end
+
 	-- Only a player who is ACTUALLY leaving counts as exited. If the teleport
 	-- can't be issued (Studio; a place-teleport failure) they're still here --
 	-- leaving them flagged would drop them from the vote AND the next

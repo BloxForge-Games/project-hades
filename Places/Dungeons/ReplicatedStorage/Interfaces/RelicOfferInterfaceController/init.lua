@@ -50,6 +50,8 @@ local TAKEN_VFX_LIFETIME_SCALE = 2
 -- Heard by everyone ELSE at the chooser's body; the chooser's own client
 -- plays it flat on the pick (Container).
 local TAKEN_SOUND_NAME = "RelicPickup"
+-- At the same share of the asset's volume as the chooser's (Container).
+local TAKEN_SOUND_VOLUME_SCALE = 0.5
 
 --[ Controller ]--
 
@@ -129,6 +131,7 @@ function RelicOfferInterfaceController._playTaken(
 	local template = sounds and sounds:FindFirstChild(TAKEN_SOUND_NAME)
 	if template and template:IsA("Sound") then
 		local sound = template:Clone()
+		sound.Volume *= TAKEN_SOUND_VOLUME_SCALE
 		sound.Parent = root
 		sound:Play()
 		Debris:AddItem(sound, 5)

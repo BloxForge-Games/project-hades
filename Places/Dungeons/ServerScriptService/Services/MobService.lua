@@ -460,6 +460,8 @@ end
 --                                               signature VFX / camera shake (owns its replication)
 --   rangedTelegraph  : boolean?              — a ranged attack's flash: clients show it even
 --                                               with mob hitboxes hidden (2026-10-30)
+--   sweepFrom        : Vector3?              — data hitboxes: where the client's windup fill
+--                                               sweeps from (default: the mob; 2026-11-08)
 function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, config)
 	if not mobModel or not mobModel.Parent then
 		return
@@ -503,6 +505,7 @@ function MobService.SpawnHitbox(self: typeof(MobService), mobModel: Model, confi
 			WindUpDuration = windUpDuration,
 			HitFrameDuration = hitFrameDuration,
 			Ranged = config.rangedTelegraph == true,
+			SweepFrom = config.sweepFrom,
 		})
 	else
 		Combat.MobAttack.FireAll({
@@ -971,10 +974,11 @@ end
 -- cut into parallel lanes `laneWidth` wide along the arena's X. Wave 1
 -- hits the odd lanes, wave 2 the even, wave 3 the odd again: each wave's
 -- strips flash `firstWindUp` (the first) or `waveGap` (the rest) before
--- they hit, and each wave's flash starts as the one before it lands.
--- Blocks for the whole move.
+-- they hit. The next wave's flash starts only once the one before has hit
+-- and cleared, plus `wavePause` (2026-11-08; back-to-back before, which
+-- read as too fast). Blocks for the whole move.
 --
--- config: laneWidth, arenaInset, waves, firstWindUp, waveGap,
+-- config: laneWidth, arenaInset, waves, firstWindUp, waveGap, wavePause?,
 -- hitFrameDuration, damage, animation?
 export type TidalRequiemConfig = {
 	laneWidth: number,
@@ -982,6 +986,7 @@ export type TidalRequiemConfig = {
 	waves: number,
 	firstWindUp: number,
 	waveGap: number,
+	wavePause: number?,
 	hitFrameDuration: number,
 	damage: number,
 	animation: Animation?,
@@ -1032,6 +1037,13 @@ function MobService.RunTidalRequiem(self: typeof(MobService), mobModel: Model, c
 		return arenaCFrame * CFrame.new(firstOffset + (index - 1) * config.laneWidth, 0, 0)
 	end
 	local laneSpec = { shape = "box", size = Vector3.new(config.laneWidth, 0, depth) }
+	-- Each lane's fill sweeps end to end across the arena (2026-11-08): he
+	-- stands mid-lane, so from him it would grow out of the centre. Waves
+	-- alternate the end they start from.
+	local function laneSweepFrom(index: number, wave: number): Vector3
+		local edge = (depth / 2 + 1) * (if wave % 2 == 1 then -1 else 1)
+		return (laneCFrame(index) * CFrame.new(0, 0, edge)).Position
+	end
 
 	for wave = 1, config.waves do
 		if cancelled() then
@@ -1050,15 +1062,18 @@ function MobService.RunTidalRequiem(self: typeof(MobService), mobModel: Model, c
 						windUpDuration = windUp,
 						hitFrameDuration = config.hitFrameDuration,
 						rangedTelegraph = true,
+						sweepFrom = laneSweepFrom(lane, wave),
 					}
 					self:SpawnHitbox(mobModel, strike)
 				end)
 			end
 		end
-		-- The next wave's flash starts as this one lands.
-		GameClock.Wait(windUp)
+		-- This wave hits and clears; a breather, then the next one's flash.
+		GameClock.Wait(windUp + config.hitFrameDuration)
+		if wave < config.waves then
+			GameClock.Wait(config.wavePause or 0)
+		end
 	end
-	GameClock.Wait(config.hitFrameDuration)
 	InvulnerabilityService:CloseWindow(window)
 end
 

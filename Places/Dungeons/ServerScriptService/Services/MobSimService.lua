@@ -1534,7 +1534,7 @@ function MobSimService._findTarget(_self: typeof(MobSimService), record: Record)
 		end
 	end
 	record.nearestPlayerDistance = nearestDistance
-	-- A taunt (TauntService: Stone Body) outranks everything.
+	-- A taunt (TauntService: Sand Armor) outranks everything.
 	local taunts = Blitz.OptionalService("TauntService")
 	if taunts then
 		local taunter, taunterRoot = taunts:GetTaunter(record.model)
@@ -2047,13 +2047,11 @@ function MobSimService.ApplyKnockback(
 		math.min(math.max(record.staggerPending, distance * KNOCKBACK_STAGGER_PER_STUD), KNOCKBACK_STAGGER_MAX)
 end
 
--- Stuns a live sim mob for `seconds` (2026-11-07, Hurricane Leaf Kick).
--- An attack in progress is cancelled: its thread stops on the new
--- generation, and AttackInterrupted stops a wind-up from landing its hit
--- (MobService) and clears the telegraph on clients (MobController). The
--- mob then holds where it is, making no decisions until the stun ends
--- (staggerUntil, as a knockback does). Callers keep encounter enemies out.
--- Returns whether the stun took.
+-- Stuns a live sim mob for `seconds` (2026-11-07; Hurricane Leaf Kick's, removed 2026-11-08):
+-- it holds where it is, making no decisions until the stun ends
+-- (staggerUntil, as a knockback does). A mob mid-attack is left to finish
+-- it (2026-11-08: magic never cancels a mob's attack; see Hold). Callers
+-- keep encounter enemies out. Returns whether the stun took.
 function MobSimService.Stun(self: typeof(MobSimService), model: Model, seconds: number): boolean
 	-- A Hold: its stand-still leg starts now, so a Carry landing during the
 	-- stun (Water Dragon, Rasenshuriken) still plays on every client.
@@ -2072,18 +2070,12 @@ function MobSimService.Hold(self: typeof(MobSimService), model: Model, seconds: 
 		return false
 	end
 	local now = GameClock.Now()
+	-- Magic never cancels a mob's attack (2026-11-08): a mob mid-attack is
+	-- left to finish it, and the caller may try again later.
 	if record.state == STATE_ATTACKING then
-		record.attackGeneration += 1
-		model:SetAttribute("AttackInterrupted", true)
-		self:_setAttacking(record, false)
-		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
-		record.written = record.root.CFrame
-		record.state = STATE_ROAMING
-		record.chosenAttack = nil
-		record.chaseGoal = nil
-	else
-		record.ground = (mobPath.sample(record.move, now))
+		return false
 	end
+	record.ground = (mobPath.sample(record.move, now))
 	record.staggerUntil = math.max(record.staggerUntil, now + seconds)
 	record.stateEndTime = math.max(record.stateEndTime, now + seconds)
 	self:_stop(record, now)
@@ -2095,10 +2087,12 @@ local CARRIED_UNTIL_ATTRIBUTE = "CarriedUntil"
 
 -- Carries a live sim mob `distance` studs along `direction` at `speed`
 -- studs/s (2026-11-07, Water Dragon): a timed leg every client plays back
--- smoothly, where a knockback lands the mob at its end spot at once. An
--- attack in progress is cancelled (as Stun does), and the mob makes no
--- decisions until it has arrived. The walk checks clip the carry short of
--- a wall or a drop. Returns whether it moved.
+-- smoothly, where a knockback lands the mob at its end spot at once. The
+-- mob makes no decisions until it has arrived. A mob mid-attack is NOT
+-- carried (2026-11-08: magic never cancels a mob's attack): it returns
+-- false and the caller decides (Wind Bomb falls back to its knockback).
+-- The walk checks clip the carry short of a wall or a drop. Returns
+-- whether it moved.
 function MobSimService.Carry(
 	self: typeof(MobSimService),
 	model: Model,
@@ -2121,17 +2115,9 @@ function MobSimService.Carry(
 	local now = GameClock.Now()
 
 	if record.state == STATE_ATTACKING then
-		record.attackGeneration += 1
-		model:SetAttribute("AttackInterrupted", true)
-		self:_setAttacking(record, false)
-		record.ground = record.root.Position - Vector3.new(0, record.rootOffset, 0)
-		record.written = record.root.CFrame
-		record.state = STATE_ROAMING
-		record.chosenAttack = nil
-		record.chaseGoal = nil
-	else
-		record.ground = (mobPath.sample(record.move, now))
+		return false
 	end
+	record.ground = (mobPath.sample(record.move, now))
 
 	-- The farthest share of the carry the walk checks allow.
 	local from = record.ground

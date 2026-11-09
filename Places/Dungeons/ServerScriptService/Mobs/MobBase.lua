@@ -852,7 +852,7 @@ function MobBase.FindTarget(self: MobBase): boolean
 	self._currentTarget = nearestPlayer
 	self._currentTargetHRP = nearestPlayerHRP
 
-	-- A taunt (TauntService: Stone Body) outranks everything.
+	-- A taunt (TauntService: Sand Armor) outranks everything.
 	local taunts = Blitz.OptionalService("TauntService")
 	if taunts then
 		local taunter, taunterRoot = taunts:GetTaunter(self._model)

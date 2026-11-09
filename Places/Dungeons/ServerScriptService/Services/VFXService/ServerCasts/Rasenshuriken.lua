@@ -12,7 +12,9 @@
 	no chasing, no attacking, no turning between pulls or once it reaches
 	the centre, so it never fights the pull (2026-11-07).
 	BURST: it ends in a blast for `damage` on everything within
-	`pullRadius`, which throws them back out `burstKnockback` studs.
+	`pullRadius`, which throws them back out `burstKnockback` studs. The
+	burst also breaks what is in `pullRadius` (pots, veins, props;
+	VFXService's shared hitbox, 2026-11-08: it never touched them).
 
 	Every hit is the spell-hit path (Arcane Rank, crits, Arcane bonuses).
 	Minibosses and bosses take the damage but are never drawn in.
@@ -23,12 +25,15 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
+local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
+local IgnoreListService = require(ServerScriptService.Submodules.Core.Source.Services.IgnoreListService)
 
 local SPELL = ArcaneNames.Rasenshuriken
 local STEP_SECONDS = 0.03
@@ -169,9 +174,15 @@ return function(vfxService: any, player: Player, cframe: CFrame)
 				local pullable = mobSim ~= nil and mob.humanoid.Health > 0 and not isEncounterEnemy(mob.model)
 				-- Caught: held for the rest of the vortex (to just past the
 				-- burst, which throws it out).
-				if mobSim and pullable and not held[mob.model] then
+				-- A mob mid-attack is not held (magic never cancels an
+				-- attack); the next tick catches it once it has finished.
+				if
+					mobSim
+					and pullable
+					and not held[mob.model]
+					and mobSim:Hold(mob.model, math.max(vortexEnds - GameClock.Now(), 0) + HOLD_PAST_BURST)
+				then
 					held[mob.model] = true
-					mobSim:Hold(mob.model, math.max(vortexEnds - GameClock.Now(), 0) + HOLD_PAST_BURST)
 				end
 				if mobSim and pullable and toCenter.Magnitude > PULL_HOLD_STUDS then
 					-- Slightly longer than a tick, so each leg runs into the next.
@@ -193,6 +204,24 @@ return function(vfxService: any, player: Player, cframe: CFrame)
 				vfxService:_spellHit(mob.model, CFrame.new(center), player, SPELL, burstCard)
 			end
 		end
+		-- The breakables: VFXService's shared hitbox owns them (loot
+		-- breakables, and props / gates through canBreakBuildings). The mobs
+		-- were just hit above, so its mob callback does nothing. A fresh
+		-- registry per burst, or a pot from the last cast is skipped.
+		local registry = vfxService._playerDetectedPartsRegistry[player.UserId]
+		if registry then
+			registry[SPELL] = nil
+		end
+		vfxService:CreateHitbox(
+			SPELL,
+			player,
+			CFrame.new(center),
+			TagList.Zombie,
+			IgnoreListService:GetWeaponIgnoreList(),
+			function(_model: Model) end,
+			pullRadius,
+			true
+		)
 		GameClock.Debris(marker, BURST_LINGER)
 	end)
 end

@@ -28,10 +28,12 @@
 	                        for damagePerLevel x level in `radius`,
 	                        Fracturing everything hit, once per
 	                        cooldownSeconds.
-	  Earth Summoning Horn  every Orb pickup pulses a shockwave of
-	                        damagePerLevel x level in `radius` (one per
-	                        cooldownSeconds) and gives every OTHER player
-	                        inside it the same restore the owner got.
+	  Earth Summoning Horn  every Orb pickup grants the owner a
+	                        shieldPercent Shield for shieldSeconds
+	                        (untagged: never a TNT blast) and gives every
+	                        OTHER player within `radius` the same restore
+	                        the owner got. (Its damage shockwave left
+	                        2026-11-08.)
 	  Golem's Hammer        Orbs restore orbMultiplier (DropService). While
 	                        in combat (a living mob within `radius`, or
 	                        damage dealt or taken within COMBAT_LINGER) the
@@ -41,7 +43,7 @@
 	                        Fractured, then Fractures everything hit.
 
 	The visuals are helpers.fx packets (RelicGimmickFXController draws
-	Boulder, Shockwave and Quake) and the TNT blast's own broadcast
+	Boulder and Quake) and the TNT blast's own broadcast
 	(RelicNetwork.TntExplosionEffect, drawn by RelicController).
 ]]
 
@@ -81,9 +83,6 @@ local ORB_LETTERS: { [string]: string } = {
 -- end (ShieldService.OnTaggedShieldEnded).
 local TNT_SHIELD_TAG = "BundleOfTnt"
 
--- How long the Horn's shockwave ring takes to reach its radius.
-local SHOCKWAVE_SECONDS = 0.45
-
 -- Golem's Hammer: damage dealt or taken keeps the owner "in combat" this
 -- long after the last hit, on top of the living-mob proximity check.
 local COMBAT_LINGER_SECONDS = 4
@@ -96,7 +95,6 @@ type Bank = { orbs: { string }, lastSpend: number, spends: number? }
 local banks: { [Player]: Bank } = {}
 
 local lastTntBlast: { [Player]: number } = {}
-local lastShockwave: { [Player]: number } = {}
 
 type GolemState = {
 	lastQuake: number,
@@ -312,9 +310,15 @@ end
 
 --[ Earth Summoning Horn ]--
 
--- An Orb `player` just collected: the shockwave (rate limited) and the
--- share to every other player inside the radius (every time).
+-- An Orb `player` just collected: the owner's Shield and the share to
+-- every other player inside the radius.
 local function hornPulse(player: Player, dropType: string)
+	shieldService():GrantShield(
+		player,
+		player,
+		helpers.data(HORN, "shieldPercent", 0.05),
+		helpers.data(HORN, "shieldSeconds", 5)
+	)
 	local root = getRoot.fromPlayer(player)
 	if not root then
 		return
@@ -330,20 +334,6 @@ local function hornPulse(player: Player, dropType: string)
 			end
 		end
 	end
-
-	local now = GameClock.Now()
-	if now - (lastShockwave[player] or -math.huge) < helpers.data(HORN, "cooldownSeconds", 0.5) then
-		return
-	end
-	lastShockwave[player] = now
-	local damage = helpers.levelDamage(player, helpers.data(HORN, "damagePerLevel", 20))
-	helpers.fx("Shockwave", root.Position, nil, radius, SHOCKWAVE_SECONDS, player)
-	helpers.hitBreakables(player, root.Position, radius)
-	forEachEnemyInRadius(root.Position, radius, function(_model: Model, humanoid: Humanoid)
-		if damage > 0 then
-			helpers.takeDamage(player, humanoid, damage, false, false, nil, true)
-		end
-	end)
 end
 
 -- Every Health or Mana Orb a player collects (DropService.OnDropCollected;
@@ -509,7 +499,6 @@ function Earth.onPlayerRemoved(player: Player)
 	glovesLastTarget[player] = nil
 	banks[player] = nil
 	lastTntBlast[player] = nil
-	lastShockwave[player] = nil
 	dropGolem(player)
 end
 

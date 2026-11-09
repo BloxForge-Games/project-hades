@@ -149,7 +149,7 @@ local SWEEP_MAX_QUERIES = 25
 
 local vfxServer = script.VFXServer
 -- Spells whose effect the SERVER runs (2026-11-07 prototypes: Shadow Clone
--- Barrage's clones, Hurricane Leaf Kick's hit and stun). One module per
+-- Barrage's clones). One module per
 -- spell, named like the VFXController module (spaces removed), called as
 -- module(VFXService, player, cframe) once a cast is committed.
 local serverCasts = script:WaitForChild("ServerCasts")
@@ -246,6 +246,8 @@ local function shouldResetHitRegistry(vfxName: string): boolean
 		or vfxName == ArcaneNames["Ghost Dragon"]
 		or vfxName == ArcaneNames["Susanoo Armor"]
 		or vfxName == ArcaneNames["Domain Expansion"]
+		-- One burst per cast (2026-11-08): a fresh registry each time.
+		or vfxName == ArcaneNames["Sand Armor"]
 end
 
 function VFXService._checkVFXOwned(_self: typeof(VFXService), player: Player, vfxName: string): boolean

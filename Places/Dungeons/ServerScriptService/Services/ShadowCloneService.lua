@@ -78,8 +78,9 @@ local SLOT_OFFSETS = {
 -- replacing them, up to this many at once (the oldest make way past it).
 local STACKING_RELIC = "Korblox Mage Staff"
 local MAX_STACKED_CLONES = 9
--- Studs from its slot a clone settles at (it stops walking).
-local SLOT_SETTLE = 0.6
+-- Studs from its slot a clone settles at (it stops walking). 0.6 -> 1.5
+-- (2026-11-08): a nudge of a stud no longer sends it walking back.
+local SLOT_SETTLE = 1.5
 -- How far (studs) from its caster a clone will go for a mob.
 local SEEK_RANGE = 40
 -- Share of the weapon's range a clone closes to before it swings.
@@ -108,8 +109,29 @@ local MOVING_GRACE = 0.15
 -- Left this far behind (studs), a following clone runs faster to catch up.
 local CATCH_UP_STUDS = 20
 local CATCH_UP_SPEED = 1.5
+-- The FORMATION (2026-11-08): the slots hang off an anchor, not the
+-- caster's live position and facing, so running in circles on the spot or
+-- turning in place leaves the clones standing. The anchor holds until the
+-- caster is FOLLOW_DEADZONE studs from it, then tracks them until they
+-- settle: less than SETTLE_DRIFT studs of real progress in SETTLE_WINDOW s.
+local FOLLOW_DEADZONE = 8
+-- After a hit, a clone shrugs off further hits for this long (2026-11-08):
+-- one ATTACK costs one hit, even a multi-strike one (the PotHead's double
+-- slash, the Cleave's three) or overlapping strips (the Barrage's fan),
+-- which each counted before and killed a 3-hit clone in two attacks.
+local HIT_GRACE = 0.6
+local SETTLE_WINDOW = 0.5
+local SETTLE_DRIFT = 3
 
 type Mob = { model: Model, humanoid: Humanoid, root: BasePart }
+
+-- One caster's formation anchor (FOLLOW_DEADZONE above).
+type Formation = {
+	anchor: CFrame,
+	following: boolean,
+	mark: Vector3,
+	markAt: number,
+}
 
 export type Clone = {
 	model: Model,
@@ -117,6 +139,7 @@ export type Clone = {
 	owner: Player,
 	slot: number,
 	hitsLeft: number,
+	lastHitAt: number,
 	endsAt: number,
 	alive: boolean,
 	position: Vector3,
@@ -140,12 +163,24 @@ local ShadowCloneService = {
 	_byModel = {} :: { [Model]: Clone },
 	_step = nil :: RBXScriptConnection?,
 	_folder = nil :: Folder?,
+	-- Per caster: where their clones' slots hang from.
+	_formations = {} :: { [Player]: Formation },
 }
 
 --[ Helpers ]--
 
 local function flat(vector: Vector3): Vector3
 	return Vector3.new(vector.X, 0, vector.Z)
+end
+
+-- `root`'s position, turned only about Y (its yaw).
+local function yawFrame(root: BasePart): CFrame
+	local at = root.Position
+	local look = flat(root.CFrame.LookVector)
+	if look.Magnitude < 0.01 then
+		return CFrame.new(at)
+	end
+	return CFrame.lookAt(at, at + look.Unit)
 end
 
 local function livingMobs(): { Mob }
@@ -218,19 +253,37 @@ end
 --[ Public ]--
 
 -- Summons the caster's clones (the spell's ServerCast module calls this).
-function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Player)
+-- `origin`: where the caster really stood as they cast -- the CFrame their
+-- client sent with the cast, which VFXService has already held to within
+-- 10 studs of the server's copy (2026-11-08). The server's copy of a
+-- moving character trails it (a dodge, a sprint), and clones formed on
+-- that copy sometimes appeared well behind the caster. Nil: the server's.
+function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Player, origin: CFrame?)
 	local data = ArcaneData[SPELL]
 	local character = player.Character
 	local casterRoot = character and getRoot(character)
 	if not character or not casterRoot then
 		return
 	end
+	local castFrame = origin or casterRoot.CFrame
+	local castLook = flat(castFrame.LookVector)
+	castLook = if castLook.Magnitude > 0.01 then castLook.Unit else Vector3.zAxis
+	-- Level, at the caster's position, facing their way.
+	castFrame = CFrame.lookAt(castFrame.Position, castFrame.Position + castLook)
 	refreshWorldParams()
 	local weaponName, ownerWeapon = meleeWeaponOf(player)
 	local weapon = MeleeWeaponData[weaponName] or MeleeWeaponData[FALLBACK_WEAPON]
 	local rank = arcaneIndex.getRankDamageMultiplier(DataService:GetProfileData(player), SPELL)
-	local casterFloor = floorBelow(casterRoot.Position, 3)
-	local standHeight = if casterFloor then math.clamp(casterRoot.Position.Y - casterFloor, 1, 6) else 3
+	local casterFloor = floorBelow(castFrame.Position, 3)
+	local standHeight = if casterFloor then math.clamp(castFrame.Position.Y - casterFloor, 1, 6) else 3
+
+	-- The new clones form up on the caster where they stand.
+	self._formations[player] = {
+		anchor = castFrame,
+		following = false,
+		mark = castFrame.Position,
+		markAt = GameClock.Now(),
+	}
 
 	-- A recast replaces the caster's clones still standing -- or, with the
 	-- Korblox Mage Staff, stacks on them (oldest dismissed past the cap).
@@ -265,11 +318,10 @@ function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Pla
 	end
 
 	for _, slot in slots do
-		local spot = (casterRoot.CFrame * CFrame.new(SLOT_OFFSETS[slot])).Position
+		local spot = (castFrame * CFrame.new(SLOT_OFFSETS[slot])).Position
 		local floor = floorBelow(spot, standHeight)
-		local position = Vector3.new(spot.X, if floor then floor + standHeight else casterRoot.Position.Y, spot.Z)
-		local look = flat(casterRoot.CFrame.LookVector)
-		look = if look.Magnitude > 0.01 then look.Unit else Vector3.zAxis
+		local position = Vector3.new(spot.X, if floor then floor + standHeight else castFrame.Position.Y, spot.Z)
+		local look = castLook
 
 		local model = Instance.new("Model")
 		model.Name = "ShadowClone"
@@ -301,13 +353,14 @@ function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Pla
 			owner = player,
 			slot = slot,
 			hitsLeft = data.cloneHits or 3,
+			lastHitAt = -math.huge,
 			endsAt = GameClock.Now() + (data.lifetime or 8),
 			alive = true,
 			position = position,
 			look = look,
 			standHeight = standHeight,
 			weapon = weapon,
-			damage = (data.damage or 20) * rank,
+			damage = (data.damage or 6) * rank,
 			target = nil,
 			combo = 0,
 			busyUntil = 0,
@@ -374,6 +427,11 @@ function ShadowCloneService.HitClone(self: typeof(ShadowCloneService), model: Mo
 	if not clone or not clone.alive then
 		return
 	end
+	local now = GameClock.Now()
+	if now - clone.lastHitAt < HIT_GRACE then
+		return
+	end
+	clone.lastHitAt = now
 	clone.hitsLeft -= 1
 	if clone.hitsLeft <= 0 then
 		self:_dismiss(clone)
@@ -603,7 +661,17 @@ function ShadowCloneService._engageSpot(
 end
 
 -- Eases `clone` out of any other clone and out of its caster.
-function ShadowCloneService._separate(self: typeof(ShadowCloneService), clone: Clone, ownerAt: Vector3, dt: number)
+-- `fromOwner`: also keep CASTER_SPACING from the caster. Off while the
+-- formation holds (2026-11-08): the caster walking over a resting clone
+-- shoved it off its slot, it walked back facing them, and was shoved
+-- again, over and over.
+function ShadowCloneService._separate(
+	self: typeof(ShadowCloneService),
+	clone: Clone,
+	ownerAt: Vector3,
+	dt: number,
+	fromOwner: boolean
+)
 	local push = Vector3.zero
 	for _, other in self._clones do
 		if other == clone or not other.alive then
@@ -619,13 +687,46 @@ function ShadowCloneService._separate(self: typeof(ShadowCloneService), clone: C
 			push += direction * (CLONE_SPACING - distance)
 		end
 	end
-	local fromOwner = flat(clone.position - ownerAt)
-	if fromOwner.Magnitude < CASTER_SPACING and fromOwner.Magnitude > 0.05 then
-		push += fromOwner.Unit * (CASTER_SPACING - fromOwner.Magnitude)
+	local awayFromOwner = flat(clone.position - ownerAt)
+	if fromOwner and awayFromOwner.Magnitude < CASTER_SPACING and awayFromOwner.Magnitude > 0.05 then
+		push += awayFromOwner.Unit * (CASTER_SPACING - awayFromOwner.Magnitude)
 	end
 	if push.Magnitude > 0.01 then
 		self:_walk(clone, push.Unit, math.min(push.Magnitude, SEPARATION_SPEED * dt))
 	end
+end
+
+-- The frame `owner`'s clones take their slots from this step: held still
+-- until the caster leaves FOLLOW_DEADZONE, then on the caster until they
+-- settle (FOLLOW_DEADZONE above).
+function ShadowCloneService._formationFrame(
+	self: typeof(ShadowCloneService),
+	owner: Player,
+	ownerRoot: BasePart,
+	now: number
+): CFrame
+	local at = ownerRoot.Position
+	local formation = self._formations[owner]
+	if not formation then
+		formation = { anchor = yawFrame(ownerRoot), following = false, mark = at, markAt = now }
+		self._formations[owner] = formation
+	end
+	if not formation.following and flat(at - formation.anchor.Position).Magnitude > FOLLOW_DEADZONE then
+		formation.following = true
+		formation.mark = at
+		formation.markAt = now
+	end
+	if formation.following then
+		formation.anchor = yawFrame(ownerRoot)
+		if now - formation.markAt >= SETTLE_WINDOW then
+			if flat(at - formation.mark).Magnitude < SETTLE_DRIFT then
+				formation.following = false
+			end
+			formation.mark = at
+			formation.markAt = now
+		end
+	end
+	return formation.anchor
 end
 
 function ShadowCloneService._stepClone(self: typeof(ShadowCloneService), clone: Clone, now: number, dt: number)
@@ -638,6 +739,8 @@ function ShadowCloneService._stepClone(self: typeof(ShadowCloneService), clone: 
 	local ownerAt = ownerRoot.Position
 	local walkSpeed = walkSpeedFor(owner)
 	local stepped = false
+	-- Resting in a held formation: the caster may walk right over it.
+	local resting = false
 
 	if now < clone.busyUntil then
 		-- Mid-swing: face the target, and the lunge carries it forward.
@@ -679,8 +782,12 @@ function ShadowCloneService._stepClone(self: typeof(ShadowCloneService), clone: 
 			end
 		else
 			clone.combo = 0
-			-- Nothing to fight: run to the slot behind the caster.
-			local slotSpot = (ownerRoot.CFrame * CFrame.new(SLOT_OFFSETS[clone.slot])).Position
+			-- Nothing to fight: run to the slot behind the caster's
+			-- formation anchor (held still while they mill about).
+			local formation = self:_formationFrame(owner, ownerRoot, now)
+			local held = self._formations[owner]
+			resting = held ~= nil and not held.following
+			local slotSpot = (formation * CFrame.new(SLOT_OFFSETS[clone.slot])).Position
 			local offset = flat(slotSpot - clone.position)
 			if offset.Magnitude > SLOT_SETTLE then
 				-- Keep pace with the caster, however fast they are going.
@@ -699,12 +806,12 @@ function ShadowCloneService._stepClone(self: typeof(ShadowCloneService), clone: 
 					end
 				end
 			else
-				self:_turnToward(clone, ownerRoot.CFrame.LookVector, dt)
+				self:_turnToward(clone, formation.LookVector, dt)
 			end
 		end
 	end
 
-	self:_separate(clone, ownerAt, dt)
+	self:_separate(clone, ownerAt, dt, not resting)
 
 	if stepped then
 		clone.movedAt = now
@@ -729,6 +836,19 @@ function ShadowCloneService._stepAll(self: typeof(ShadowCloneService), dt: numbe
 			continue
 		end
 		self:_stepClone(clone, now, dt)
+	end
+	-- A caster with no clones left keeps no formation.
+	for owner in self._formations do
+		local any = false
+		for _, clone in self._clones do
+			if clone.owner == owner then
+				any = true
+				break
+			end
+		end
+		if not any then
+			self._formations[owner] = nil
+		end
 	end
 	if #self._clones == 0 and self._step then
 		self._step:Disconnect()
