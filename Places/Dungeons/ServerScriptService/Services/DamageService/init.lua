@@ -52,6 +52,8 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local AuraData = require(ReplicatedStorage.Submodules.Core.Shared.Data.AuraData)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
+-- Attunement's elements (an Elemental's race perk).
+local RACE_ELEMENTS = { StatusConditions.Burn, StatusConditions.Chill, StatusConditions.Shock }
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local getGunProcCoefficient = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.getGunProcCoefficient)
 local isEncounterEnemy = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Mob.isEncounterEnemy)
@@ -1061,6 +1063,21 @@ function DamageService._postDamage(
 	end
 	self:TryExecute(player, humanoid, isRelicSourced)
 
+	-- Attunement (an Elemental's race perk, 2026-11-08): a weapon hit may
+	-- apply a random element.
+	if not isRelicSourced and isMagic ~= true then
+		local raceService = Blitz.OptionalService("RaceService")
+		local attunement = if raceService then raceService:ElementalChance(player) else 0
+		local target = humanoid.Parent
+		if attunement > 0 and math.random() < attunement and target and target:IsA("Model") then
+			local statusService = getStatusConditionService()
+			if statusService then
+				local element = RACE_ELEMENTS[math.random(#RACE_ELEMENTS)]
+				statusService:ApplyStatus(player, target, element, true)
+			end
+		end
+	end
+
 	-- A bullet rolls the chance relics below at its gun's proc
 	-- coefficient; everything else at 1.
 	local procCoefficient = if isGunShot then getGunProcCoefficient(player) else 1
@@ -1568,7 +1585,8 @@ function DamageService._gearDamageBonus(
 	player: Player,
 	damage: number,
 	isMagic: boolean,
-	isConvertedSpell: boolean
+	isConvertedSpell: boolean,
+	isMelee: boolean
 ): number
 	-- Enchantment stats (2026-11-01 rules): always on from both equipped
 	-- weapons, adding, whichever weapon is drawn (PlayerStatsService).
@@ -1579,6 +1597,8 @@ function DamageService._gearDamageBonus(
 	elseif not isConvertedSpell then
 		fraction += PlayerStatsService:GetEnchantmentStat(player, "WeaponDamage")
 		fraction += PlayerStatsService:GetGearStat(player, "WeaponDamage")
+		-- A race's melee / ranged weapon bonus (RaceData: Dwarf, Elf).
+		fraction += PlayerStatsService:GetGearStat(player, if isMelee then "MeleeDamage" else "RangedDamage")
 	end
 	return damage * fraction
 end
@@ -1772,7 +1792,7 @@ function DamageService.TakeDamage(
 	-- Gear: the weapon enchantments (Enflamed / Frostburst) and the damage
 	-- lines, additive like the set bonus and typed the same way.
 	if not untypedOnly then
-		totalDamage += self:_gearDamageBonus(player, damage, isMagic == true, isConvertedSpell == true)
+		totalDamage += self:_gearDamageBonus(player, damage, isMagic == true, isConvertedSpell == true, isMelee == true)
 		totalDamage += self:_bossDamageBonus(player, damage, targetModel)
 	end
 

@@ -63,6 +63,12 @@ local IDLE_TEXT = string.format(READOUT_FORMAT, "--", "--", "--")
 local TORSO_HEIGHT = 3
 -- The readout over the head, in studs (width, height).
 local READOUT_SIZE = Vector2.new(9, 1.4)
+-- The lines' text size limits in pixels (UITextSizeConstraint) and the
+-- distance the readout hides past (2026-11-08).
+local TITLE_TEXT_LIMITS = NumberRange.new(8, 18)
+local READOUT_TEXT_LIMITS = NumberRange.new(8, 14)
+-- 150 (2026-11-08; 60 hid dummies still on screen under the high camera).
+local READOUT_MAX_DISTANCE = 150
 -- The classic Rig Builder dummy grey (Medium stone grey).
 local DUMMY_COLOR = Color3.fromRGB(163, 162, 165)
 
@@ -209,8 +215,18 @@ end
 
 -- A line of the readout: `top` and `height` are shares of the billboard,
 -- the text scaled to fit (the billboard is sized in studs, so the text
--- keeps its size against the dummy on every screen, 2026-11-07).
-local function newLabel(parent: Instance, text: string, color: Color3, top: number, height: number): TextLabel
+-- keeps its size against the dummy on every screen, 2026-11-07), held
+-- between `minSize` and `maxSize` pixels (2026-11-08): up close it stops
+-- growing, far off it stays readable.
+local function newLabel(
+	parent: Instance,
+	text: string,
+	color: Color3,
+	top: number,
+	height: number,
+	minSize: number,
+	maxSize: number
+): TextLabel
 	local label = Instance.new("TextLabel")
 	label.BackgroundTransparency = 1
 	label.FontFace = FONT
@@ -220,6 +236,10 @@ local function newLabel(parent: Instance, text: string, color: Color3, top: numb
 	label.TextColor3 = color
 	label.TextScaled = true
 	label.TextStrokeTransparency = 0.4
+	local limits = Instance.new("UITextSizeConstraint")
+	limits.MinTextSize = minSize
+	limits.MaxTextSize = maxSize
+	limits.Parent = label
 	label.Parent = parent
 	return label
 end
@@ -333,12 +353,14 @@ function TrainingDummyService._setUp(self: typeof(TrainingDummyService), model: 
 	-- phone while the world shrinks, so it read huge there.
 	gui.Size = UDim2.fromScale(READOUT_SIZE.X, READOUT_SIZE.Y)
 	gui.StudsOffset = Vector3.new(0, 2.6, 0)
-	gui.MaxDistance = 120
+	-- Hidden past this (2026-11-08; was 120), so dummies across the room
+	-- don't add text to the screen.
+	gui.MaxDistance = READOUT_MAX_DISTANCE
 	gui.LightInfluence = 0
 	gui.Parent = model
 	-- The name, smaller than it was (2026-11-08; 0.52 of the height).
-	newLabel(gui, DUMMY_NAME, TITLE_COLOR, 0.16, 0.36)
-	local readout = newLabel(gui, IDLE_TEXT, TEXT_COLOR, 0.54, 0.46)
+	newLabel(gui, DUMMY_NAME, TITLE_COLOR, 0.16, 0.36, TITLE_TEXT_LIMITS.Min, TITLE_TEXT_LIMITS.Max)
+	local readout = newLabel(gui, IDLE_TEXT, TEXT_COLOR, 0.59, 0.32, READOUT_TEXT_LIMITS.Min, READOUT_TEXT_LIMITS.Max)
 
 	model:SetAttribute(TrainingDummyData.ATTRIBUTE, true)
 	-- The weapons' target tag: swings and arrows only hit tagged models.
