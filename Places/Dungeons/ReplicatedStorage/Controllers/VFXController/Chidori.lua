@@ -1,105 +1,118 @@
 --!strict
--- Chidori, client side (PROTOTYPE, 2026-11-07), built like Wind Bomb: the
--- caster's client lunges `dashStuds` at `dashDelay`, then at `hitDelay`
--- asks the server for the hitbox `range` ahead of where the lunge ended
--- (Arcane.HitboxRequested; VFXService validates it and deals the hit), so
--- the hit lands where the caster sees it. Crackling lightning on the hand
--- and a blue burst where it strikes.
+-- Chidori, client side (PROTOTYPE): Wind Bomb's module 1:1 (2026-11-08) --
+-- same animation, dash, VFX, sound and hitbox beat. Only the spell it asks
+-- the hitbox for is Chidori. Keep it in step with VFXController/WindBomb.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
-local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
+local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local vfxBudget = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.vfxBudget)
 local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
 
-local SPELL = ArcaneNames.Chidori
-local SPARK_BLUE = Color3.fromRGB(140, 200, 255)
-local SPARK_TEXTURE = "rbxasset://textures/particles/sparkles_main.dds"
+local CASTING_HUMANOID_WALK_SPEED = 2
 
-local function effectsFolder(): Instance
-	local ignore = workspace:FindFirstChild("IgnoreInstances")
-	return (ignore and ignore:FindFirstChild("ArcaneSpells")) or ignore or workspace
-end
-
-local function burst(at: Vector3)
-	local ball = Instance.new("Part")
-	ball.Shape = Enum.PartType.Ball
-	ball.Anchored = true
-	ball.CanCollide = false
-	ball.CanQuery = false
-	ball.CanTouch = false
-	ball.Material = Enum.Material.Neon
-	ball.Color = SPARK_BLUE
-	ball.Transparency = 0.1
-	ball.Size = Vector3.one
-	ball.CFrame = CFrame.new(at)
-	ball.Parent = effectsFolder()
-	TweenService:Create(
-		ball,
-		TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-		{ Size = Vector3.one * 7, Transparency = 1 }
-	):Play()
-	GameClock.Debris(ball, 0.35)
+-- The Roblox type definitions no longer allow indexing the root part off
+-- the character; the cast keeps a missing one erroring where the old index did.
+local function getRootPart(character: Model): BasePart
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart
 end
 
 return function(player: Player, preload: boolean?)
-	local character = player.Character
-	if preload or not character then
-		return
-	end
-	local data = ArcaneData[SPELL]
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
-	local asset = ReplicatedStorage.GameAssets.Animations:FindFirstChild(data.castAnimation)
-	if animator and asset and asset:IsA("Animation") then
-		loadOneShotAnimation(animator, asset):Play(0.05)
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	local sound = ReplicatedStorage.GameAssets.Sounds:FindFirstChild(data.castSound)
-	if root and sound and sound:IsA("Sound") then
-		local copy = sound:Clone()
-		copy.Parent = root
-		copy:Play()
-		GameClock.Debris(copy, 4)
-	end
+	local character = player.Character :: Model
 
-	-- Lightning crackling in the hand for the whole lunge.
-	local hand = character:FindFirstChild("Right Arm") or character:FindFirstChild("RightHand")
-	if hand and hand:IsA("BasePart") then
-		local sparks = Instance.new("ParticleEmitter")
-		sparks.Texture = SPARK_TEXTURE
-		sparks.Color = ColorSequence.new(SPARK_BLUE)
-		sparks.LightEmission = 1
-		sparks.Size = NumberSequence.new(0.8, 0)
-		sparks.Lifetime = NumberRange.new(0.1, 0.25)
-		sparks.Speed = NumberRange.new(6, 14)
-		sparks.SpreadAngle = Vector2.new(180, 180)
-		sparks.Rate = 220
-		sparks.Parent = hand
-		GameClock.Delay(data.hitDelay or 0.35, function()
-			sparks.Enabled = false
-		end)
-		GameClock.Debris(sparks, 1)
-	end
+	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
+	local walkSpeedClaim = claimWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED)
 
-	if player == Players.LocalPlayer then
-		GameClock.Delay(data.dashDelay or 0.1, function()
-			DodgeController:SetDodgeCFrame(data.dashStuds or 18.75, data.dashSeconds or 0.35, true)
+	local windbombAnimation = loadOneShotAnimation(
+		character:WaitForChild("Humanoid"):FindFirstChildOfClass("Animator") :: Animator,
+		ReplicatedStorage.GameAssets.Animations:FindFirstChild("WindBombAnimation")
+	)
+
+	local animationConnection
+
+	windbombAnimation:Play(0.25)
+
+	if not preload and character then
+		animationConnection = windbombAnimation:GetMarkerReachedSignal("MagicRelease"):Connect(function()
+			animationConnection:Disconnect()
+
+			if player == Players.LocalPlayer then
+				-- 15 -> 12 studs (2026-11-08: 20% shorter).
+				DodgeController:SetDodgeCFrame(12, 0.35, true)
+			end
 		end)
 	end
-	GameClock.Delay(data.hitDelay or 0.5, function()
-		local liveRoot = character:FindFirstChild("HumanoidRootPart")
-		if not liveRoot or not liveRoot:IsA("BasePart") then
-			return
+
+	local windbombVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Wind Bomb"]].CastFX:Clone()
+	windbombVFX.Parent = character:FindFirstChild("Right Arm")
+
+	if not preload then
+		local windBombSound = ReplicatedStorage.GameAssets.Sounds.WindBombCast:Clone()
+		windBombSound.Parent = getRootPart(character)
+		windBombSound:Play()
+		GameClock.Debris(windBombSound, 5)
+	end
+
+	-- Where the bomb LANDS: the hitbox CFrame, taken on every viewer at the
+	-- request beat (the caster's client sends it; the others compute the
+	-- same point from the replicated root) so the ground dust below falls
+	-- where the damage did, not where the explosion mesh is drawn.
+	local impactCFrame: CFrame? = nil
+
+	GameClock.Delay(0.75, function()
+		local hitboxCFrame = getRootPart(character).CFrame
+			+ getRootPart(character).CFrame.LookVector * ArcaneData[ArcaneNames.Chidori].range
+		impactCFrame = hitboxCFrame
+		if player == Players.LocalPlayer and not preload then
+			Arcane.HitboxRequested.Fire({ ArcaneName = ArcaneNames.Chidori, CFrame = hitboxCFrame })
 		end
-		local hitboxCFrame = liveRoot.CFrame + liveRoot.CFrame.LookVector * (data.range or 5)
-		if player == Players.LocalPlayer then
-			Arcane.HitboxRequested.Fire({ ArcaneName = SPELL, CFrame = hitboxCFrame })
+	end)
+
+	GameClock.Delay(0.85, function()
+		local windbombExplosionVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Wind Bomb"]].ExplosionFX:Clone()
+		windbombExplosionVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
+		windbombExplosionVFX.CFrame = getRootPart(character).CFrame + getRootPart(character).CFrame.LookVector * 5
+
+		if not preload then
+			windbombExplosionVFX.Explosion:Play()
 		end
-		burst(hitboxCFrame.Position)
+
+		for _, particle in pairs(windbombExplosionVFX.Attachment:GetDescendants()) do
+			vfxBudget.emit(particle, 35)
+		end
+
+		GameClock.Debris(windbombExplosionVFX, 5)
+
+		GameClock.Delay(0.15, function()
+			-- The combat pack's dust at the landing point, on the explosion beat.
+			emitVFXPart(
+				"GroundDust",
+				impactCFrame or windbombExplosionVFX.CFrame,
+				nil,
+				{ GroundSnapDistance = 10, GroundLift = 5 }
+			)
+		end)
+
+		for _, particle in pairs(windbombVFX:GetDescendants()) do
+			particle.Enabled = false
+		end
+
+		GameClock.Debris(windbombVFX, 1)
+
+		GameClock.Wait(0.2)
+
+		-- Only if this cast still OWNS the slow: weaving a swing (or
+		-- another spell) in takes the slow over, and that owner restores
+		-- it on its own timer. See Shared/Functions/Movement/
+		-- restoreWalkSpeed.
+		restoreWalkSpeed(character, CASTING_HUMANOID_WALK_SPEED, walkSpeedClaim)
 	end)
 end

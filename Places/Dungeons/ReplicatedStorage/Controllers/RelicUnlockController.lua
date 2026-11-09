@@ -7,13 +7,15 @@
 	  * a relic picked up for the first time ever (profile.RelicProgress.Found
 	    gains a name): "New Relic Discovered!";
 	  * a monster met for the first time (profile.Codex.Monsters gains a
-	    name): "New Monster Discovered!".
+	    name): "New Monster Discovered!";
+	  * a level reached that unlocks a relic (profile.Level rises past a
+	    RelicUnlockData.ByLevel slot, 2026-11-08): "New Relic Unlocked!".
+	    Earlier relics this was the only unlock path, so it announces again.
 	The name stands out in colour: a relic in its rarity's (RarityColors), a
 	monster in gold (MONSTER_NAME_COLOR).
 	The first snapshot is the baseline: nothing already known is announced.
-	RelicUnlockService pushes both at once when they happen. (A gold "Relic
-	Unlocked" banner played here until 2026-11-06; unlocks are silent and
-	show in the Codex.)
+	RelicUnlockService pushes the first two at once when they happen;
+	ExperienceService writes Level on a level up.
 ]]
 
 --[ Roblox Services ]--
@@ -26,6 +28,7 @@ local DataController = require(ReplicatedStorage.Submodules.Core.Source.Controll
 local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
+local relicUnlocks = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.relicUnlocks)
 local UserNotificationSystem = require(ReplicatedStorage.Submodules.Core.Libraries.UserNotificationSystem).Controller
 
 --[ Constants ]--
@@ -40,6 +43,7 @@ local RelicUnlockController = {
 	Dependencies = { DataController } :: { any },
 	_knownRelics = nil :: { [string]: boolean }?,
 	_knownMonsters = nil :: { [string]: boolean }?,
+	_knownLevel = nil :: number?,
 }
 
 --[ Private ]--
@@ -95,10 +99,21 @@ function RelicUnlockController._onProfile(self: typeof(RelicUnlockController), p
 	local progress = profile.RelicProgress
 	local relics = namesIn(if type(progress) == "table" then progress.Found else nil)
 	local monsters = namesIn(if type(profile.Codex) == "table" then profile.Codex.Monsters else nil)
-	local knownRelics, knownMonsters = self._knownRelics, self._knownMonsters
-	self._knownRelics, self._knownMonsters = relics, monsters
-	if not knownRelics or not knownMonsters then
+	local level = tonumber(profile.Level) or 1
+	local knownRelics, knownMonsters, knownLevel = self._knownRelics, self._knownMonsters, self._knownLevel
+	self._knownRelics, self._knownMonsters, self._knownLevel = relics, monsters, level
+	if not knownRelics or not knownMonsters or not knownLevel then
 		return
+	end
+	for _, relicName in relicUnlocks.unlockedBetween(knownLevel, level) do
+		announce(
+			"New Relic Unlocked!",
+			"Reaching level "
+				.. tostring(relicUnlocks.unlockLevel(relicName) or level)
+				.. " unlocked the Relic: "
+				.. colored(relicName, relicColor(relicName))
+				.. ". It can now appear in your runs!"
+		)
 	end
 	for relicName in relics do
 		if not knownRelics[relicName] then

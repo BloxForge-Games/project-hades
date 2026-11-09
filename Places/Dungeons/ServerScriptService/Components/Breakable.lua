@@ -102,7 +102,16 @@ local function boxOf(instance: Instance): { center: Vector3, reach: number }?
 	return box
 end
 
-function Breakable.HitInRadius(position: Vector3, radius: number, player: Player?, seen: { [Instance]: boolean }?)
+-- `asSpell` (2026-11-08, Eight Inner Gates' punches): each lands as a
+-- spell hit, which breaks the model outright (or counts its ArcaneHits),
+-- instead of one melee hit.
+function Breakable.HitInRadius(
+	position: Vector3,
+	radius: number,
+	player: Player?,
+	seen: { [Instance]: boolean }?,
+	asSpell: boolean?
+)
 	for _, instance in CollectionService:GetTagged(TagList.Breakable) do
 		if seen and seen[instance] then
 			continue
@@ -119,7 +128,7 @@ function Breakable.HitInRadius(position: Vector3, radius: number, player: Player
 			if seen then
 				seen[instance] = true
 			end
-			breakable:Hit(false, true, position, player, nil)
+			breakable:Hit(asSpell == true, asSpell ~= true, position, player, nil)
 		end
 	end
 end
@@ -239,6 +248,16 @@ function Breakable:Hit(isMagic: boolean, isMelee: boolean, origin: Vector3, play
 
 	local arcaneHits = self.Instance:GetAttribute(Attributes.ArcaneHits)
 	if isMagic and type(arcaneHits) ~= "number" then
+		-- The breaking spell hit gets the same red flash a weapon's
+		-- breaking hit does (2026-11-08: a spell broke a barricade with
+		-- no feedback at all): the clients' hit cue, then the break.
+		local breakHits = self.Instance:GetAttribute(Attributes.BreakHits)
+		Combat.BreakableDamaged.FireAll({
+			Breakable = self.Instance,
+			HitCount = if type(breakHits) == "number" then breakHits else MAX_WEAPON_HITS,
+			IsMelee = false,
+			HitPosition = nil,
+		})
 		self:_break(origin, player)
 		return
 	end

@@ -42,8 +42,8 @@ return function(player: Player, preload: boolean?)
 			animationConnection:Disconnect()
 
 			if player == Players.LocalPlayer then
-				print("Wind Bomb released - apply dodge impulse to player")
-				DodgeController:SetDodgeCFrame(15, 0.35, true)
+				-- 15 -> 12 studs (2026-11-08: 20% shorter).
+				DodgeController:SetDodgeCFrame(12, 0.35, true)
 			end
 		end)
 	end

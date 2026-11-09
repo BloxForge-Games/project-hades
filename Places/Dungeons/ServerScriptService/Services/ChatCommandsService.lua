@@ -112,22 +112,30 @@ local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local arcaneIndex = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Arcane.arcaneIndex)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local FriendBonusData = require(ReplicatedStorage.Submodules.Core.Shared.Data.FriendBonusData)
 
 -- /spell: the prototype spells it hands out, by alias, with the slot each
 -- goes to when none is given.
 local SPELL_GRANTS: { [string]: { name: string, slot: number } } = {
 	clones = { name = ArcaneNames["Shadow Clone Barrage"], slot = 3 },
 	clone = { name = ArcaneNames["Shadow Clone Barrage"], slot = 3 },
-	hurricane = { name = ArcaneNames["Hurricane Leaf Kick"], slot = 4 },
-	kick = { name = ArcaneNames["Hurricane Leaf Kick"], slot = 4 },
 	chidori = { name = ArcaneNames.Chidori, slot = 3 },
-	stone = { name = ArcaneNames["Stone Body"], slot = 4 },
-	stonebody = { name = ArcaneNames["Stone Body"], slot = 4 },
+	sand = { name = ArcaneNames["Sand Armor"], slot = 4 },
+	sandarmor = { name = ArcaneNames["Sand Armor"], slot = 4 },
+	stone = { name = ArcaneNames["Sand Armor"], slot = 4 },
 	water = { name = ArcaneNames["Water Dragon"], slot = 4 },
 	dragon = { name = ArcaneNames["Water Dragon"], slot = 4 },
 	rasen = { name = ArcaneNames.Rasenshuriken, slot = 4 },
 	rasenshuriken = { name = ArcaneNames.Rasenshuriken, slot = 4 },
 	susanoo = { name = ArcaneNames["Susanoo Armor"], slot = 3 },
+	domain = { name = ArcaneNames["Domain Expansion"], slot = 3 },
+	domainexpansion = { name = ArcaneNames["Domain Expansion"], slot = 3 },
+	heal = { name = ArcaneNames["Healing Tree"], slot = 4 },
+	healing = { name = ArcaneNames["Healing Tree"], slot = 4 },
+	tree = { name = ArcaneNames["Healing Tree"], slot = 4 },
+	gates = { name = ArcaneNames["Eight Inner Gates"], slot = 3 },
+	gate = { name = ArcaneNames["Eight Inner Gates"], slot = 3 },
+	eightgates = { name = ArcaneNames["Eight Inner Gates"], slot = 3 },
 }
 
 -- RunFlowService's Studio-only difficulty pick; /difficulty writes it so a
@@ -729,7 +737,7 @@ COMMANDS = {
 	},
 
 	spell = {
-		usage = "/spell <clones|hurricane|chidori|stone|water|rasen|susanoo> [slot 3-4]",
+		usage = "/spell <clones|hurricane|chidori|sand|water|rasen|susanoo|domain> [slot 3-4]",
 		description = "Gives you a prototype spell and equips it (in its default slot unless you name one).",
 		handler = function(player: Player, args: { string }): string?
 			local grant = SPELL_GRANTS[string.lower(args[1] or "")]
@@ -774,6 +782,48 @@ COMMANDS = {
 				return ("Added %s, but equipping it failed (see the output)."):format(grant.name)
 			end
 			return ("Equipped %s in slot %d."):format(grant.name, slot)
+		end,
+	},
+
+	summary = {
+		usage = "/summary [win|lose] [party size 1-4]",
+		description = "Shows you the end-of-run summary (CLEARED, or DEFEATED with 'lose') without ending the run; a party size of 2-4 adds mock teammates to preview the co-op strip.",
+		handler = function(player: Player, args: { string }): string?
+			local summaries = Blitz.OptionalService("RunSummaryService")
+			if not summaries then
+				return "RunSummaryService is unavailable."
+			end
+			local cleared = string.lower(args[1] or "win") ~= "lose"
+			-- A preview: no banking, no teleport, and the real one can still
+			-- open later (the record is reset after).
+			local partySize = math.clamp(math.floor(tonumber(args[2]) or 1), 1, 4)
+			summaries:Preview(player, cleared, partySize)
+			return ("Showing the %s summary (party of %d)."):format(
+				if cleared then "CLEARED" else "DEFEATED",
+				partySize
+			)
+		end,
+	},
+
+	friendbonus = {
+		usage = "/friendbonus [friends 0-3 | off]",
+		description = "Forces your friend count so the friend bonus HUD chip shows (a flat +15% with any friend); 'off' goes back to your real friends. The bonus is real while forced.",
+		handler = function(player: Player, args: { string }): string?
+			local friendBonus = Blitz.OptionalService("FriendBonusService")
+			if not friendBonus then
+				return "FriendBonusService is unavailable."
+			end
+			local arg = string.lower(args[1] or "3")
+			if arg == "off" then
+				friendBonus:SetPreview(player, nil)
+				return "Friend bonus back to your real friends."
+			end
+			local friends = math.clamp(math.floor(tonumber(arg) or 3), 0, 3)
+			friendBonus:SetPreview(player, friends)
+			return ("Friend bonus forced to %d friend(s): %s."):format(
+				friends,
+				FriendBonusData.Format(FriendBonusData.BonusFor(friends))
+			)
 		end,
 	},
 

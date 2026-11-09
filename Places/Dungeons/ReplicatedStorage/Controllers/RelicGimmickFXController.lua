@@ -1326,6 +1326,14 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	PaintballShot = function(payload)
 		RelicShotVFXController:Launch(payload)
 	end,
+	-- The shooter's draw, Duration after the shot (the server's StartTime):
+	-- the Paintball's and the Ice Arrow's (2026-11-08).
+	PaintballDraw = function(payload)
+		RelicShotVFXController:DoubleShot(payload.Caster, math.max(payload.Duration - elapsedOf(payload), 0))
+	end,
+	IceArrowDraw = function(payload)
+		RelicShotVFXController:DoubleShot(payload.Caster, math.max(payload.Duration - elapsedOf(payload), 0))
+	end,
 	VolleyballShot = function(payload)
 		RelicShotVFXController:Launch(payload)
 	end,

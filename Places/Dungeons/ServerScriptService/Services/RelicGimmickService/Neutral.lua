@@ -18,8 +18,9 @@
 	                  no weapon lines, no crit). A wall stops it for nothing.
 	  Magenta Paintball Gun
 	                  PAINTBALL (2026-11-05; a splash, a Paint status
-	                  before): at `chance` per gun shot, a PaintballShot
-	                  follows the shot on its own arc (relicShots follow);
+	                  before): every `everyShots`-th gun SHOT (2026-11-08;
+	                  a chance per shot before), a PaintballShot follows
+	                  the shot on its own arc (relicShots follow);
 	                  the first mob it flies into takes shotShare of the
 	                  gun's damage as Arcane Damage.
 	The numbers are the relic's RelicData `data`.
@@ -45,10 +46,18 @@ local VOLLEYBALL = RelicNames["Volleyball"]
 local VOLLEYBALL_SPEED = 70
 -- A Paintball's speed when its weapon has no arc of its own to follow.
 local PAINTBALL_SPEED = 90
+-- The Paintball leaves this long after the shot that sets it off, and the
+-- shooter's draw animation starts PAINTBALL_DRAW_AT after that shot, so the
+-- draw's release lines up with the Paintball (2026-11-08; 0.15 s from a
+-- bow, at once from a gun, with the draw played on launch, before).
+local PAINTBALL_DELAY = 0.5
+local PAINTBALL_DRAW_AT = 0.1
 
 local Neutral = {}
 
 local volleyballShots: { [Player]: number } = {}
+-- Magenta Paintball Gun: gun shots since the last Paintball.
+local paintballShots: { [Player]: number } = {}
 
 local function restoreMana(player: Player)
 	if not helpers.owns(player, MIDNIGHT) then
@@ -114,20 +123,33 @@ local function paintballHit(player: Player, target: Model?, weaponName: string)
 	helpers.takeDamage(player, humanoid, damage, true, false, false)
 end
 
--- Magenta Paintball Gun: a chance per shot for a Paintball to follow it.
-local function rollPaintball(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
-	if not helpers.owns(player, PAINTBALL) or math.random() > helpers.data(PAINTBALL, "chance", 0.35) then
+-- Magenta Paintball Gun: the count, the way the Ice Crossbow counts. The
+-- Nth shot sends a Paintball after it; the shot before glows white.
+local function countPaintball(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
+	if not helpers.owns(player, PAINTBALL) then
+		paintballShots[player] = nil
+		relicTriggers.set(player, PAINTBALL, false)
 		return
 	end
-	relicShots.fire(player, "PaintballShot", origin, direction, weaponName, PAINTBALL_SPEED, function(_, target)
-		paintballHit(player, target, weaponName)
-	end, true)
+	local needed = helpers.data(PAINTBALL, "everyShots", 4)
+	local count = (paintballShots[player] or 0) + 1
+	if count >= needed then
+		count = 0
+		-- The shooter's draw now (their client waits Duration from the
+		-- server's StartTime); the Paintball itself PAINTBALL_DELAY later.
+		helpers.fx("PaintballDraw", origin, origin, 0, PAINTBALL_DRAW_AT, player)
+		relicShots.fire(player, "PaintballShot", origin, direction, weaponName, PAINTBALL_SPEED, function(_, target)
+			paintballHit(player, target, weaponName)
+		end, true, PAINTBALL_DELAY)
+	end
+	paintballShots[player] = count
+	relicTriggers.set(player, PAINTBALL, count == needed - 1)
 end
 
--- Every gun shot, the moment it is fired: the Paintball's roll, and the
--- Volleyball's count (the Nth fires the ball with it).
+-- Every gun shot, the moment it is fired: the Paintball's and the
+-- Volleyball's counts (the Nth fires its shot with it).
 function Neutral.onRangedFire(player: Player, origin: Vector3, direction: Vector3, weaponName: string)
-	rollPaintball(player, origin, direction, weaponName)
+	countPaintball(player, origin, direction, weaponName)
 	if not helpers.owns(player, VOLLEYBALL) then
 		volleyballShots[player] = nil
 		relicTriggers.set(player, VOLLEYBALL, false)
@@ -145,15 +167,17 @@ function Neutral.onRangedFire(player: Player, origin: Vector3, direction: Vector
 	relicTriggers.set(player, VOLLEYBALL, count == needed - 1)
 end
 
--- The gun was put away: the Volleyball's count starts over.
+-- The gun was put away: the Volleyball's and Paintball's counts start over.
 function Neutral.onWeaponStowed(player: Player, lane: string)
 	if lane == "Ranged" then
 		volleyballShots[player] = nil
+		paintballShots[player] = nil
 	end
 end
 
 function Neutral.onPlayerRemoved(player: Player)
 	volleyballShots[player] = nil
+	paintballShots[player] = nil
 end
 
 return Neutral

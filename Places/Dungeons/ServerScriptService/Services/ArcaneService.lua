@@ -41,8 +41,8 @@ ArcaneService._arcaneDataProperty = RemoteProperty.Server({
 
 -- Passive mana regeneration. Every tick, each IN-COMBAT player gains
 -- (PASSIVE_MANA_REGEN_RATE * maxMana) mana, clamped to maxMana.
--- 0.005 per 0.5 s tick = 1% of max per second, so an empty bar refills in
--- about 100 s of fighting. Tunable here without touching the loop.
+-- 0.01 per 0.5 s tick = 2% of max per second, so an empty bar refills in
+-- about 50 s of fighting. Tunable here without touching the loop.
 --
 -- COMBAT-ONLY (design-locked): mana is a combat resource, so it only
 -- flows while there is a fight to spend it on. "In combat" is
@@ -51,8 +51,9 @@ ArcaneService._arcaneDataProperty = RemoteProperty.Server({
 -- the game already tells them they are in a fight. Away from enemies
 -- the bar holds still and mana orbs (and Korblox Mage Staff hits)
 -- become the only way to climb.
--- 1% a second since 2026-11-02 (3% from 2026-10-27, 2% before).
-local PASSIVE_MANA_REGEN_RATE = 0.005
+-- 2% a second (1% every 0.5 s) since 2026-11-08 (1% from 2026-11-02, 3%
+-- from 2026-10-27, 2% before).
+local PASSIVE_MANA_REGEN_RATE = 0.01
 local PASSIVE_MANA_REGEN_INTERVAL = 0.5
 
 --[ Properties ]--
@@ -267,7 +268,7 @@ function ArcaneService.Start(self: typeof(ArcaneService))
 		self._playerArcaneCooldownRegistry[player] = nil
 	end)
 
-	-- Passive 1%/sec regen for every player. Runs as a daemon thread for
+	-- Passive 2%/sec regen for every player. Runs as a daemon thread for
 	-- the lifetime of the server; spawned once here. Regen is a fraction of
 	-- maxMana, so a +Maximum Mana relic speeds up absolute refill too.
 	self:_runPassiveManaRegenLoop()

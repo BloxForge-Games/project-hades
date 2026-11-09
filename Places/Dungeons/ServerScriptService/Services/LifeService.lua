@@ -156,7 +156,10 @@ local DEATH_ANIMATION_HOLD_EPSILON = 0.05
 -- dead. The held track is released only after that fade, so the humanoid
 -- never visibly pops back to standing under a still-visible body.
 local DEATH_ANIMATION_RELEASE_DELAY = 2
-local ALL_DEAD_TELEPORT_DELAY = 6
+-- 6 -> 35 (2026-11-08): the DEFEATED summary (RunSummaryService) rises
+-- 3.5 s in and lets each player read it for up to 30 s; its Continue
+-- teleports that player at once, this takes anyone still here.
+local ALL_DEAD_TELEPORT_DELAY = 35
 
 -- The revive decision window. One source of truth with the client bar
 -- (GameOverGradientInterfaceController), which nonetheless counts down to

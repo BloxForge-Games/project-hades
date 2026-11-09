@@ -297,6 +297,20 @@ local function flat(vector: Vector3): Vector3
 	return Vector3.new(vector.X, 0, vector.Z)
 end
 
+-- The Paintball's second draw (Neutral's PaintballDraw): the shooter's own
+-- client plays it `delay` seconds after the shot that set it off, so its
+-- release meets the Paintball leaving (2026-11-08).
+function RelicShotVFXController.DoubleShot(_self: typeof(RelicShotVFXController), caster: Player?, delay: number)
+	if caster ~= Players.LocalPlayer then
+		return
+	end
+	if delay > 0 then
+		GameClock.Delay(delay, playDoubleShot)
+	else
+		playDoubleShot()
+	end
+end
+
 function RelicShotVFXController.Launch(_self: typeof(RelicShotVFXController), payload: Payload)
 	local velocity = payload.To - payload.From
 	if velocity.Magnitude < 1e-3 or payload.Duration <= 0 then
@@ -310,11 +324,7 @@ function RelicShotVFXController.Launch(_self: typeof(RelicShotVFXController), pa
 	local place: ((CFrame) -> ())? = nil
 	if payload.Kind == "IceArrowShot" or payload.Kind == "PaintballShot" then
 		local painted = payload.Kind == "PaintballShot"
-		-- The shooter's second draw for the Paintball only (the Ice Arrow
-		-- leaves without one, 2026-11-05).
-		if painted and payload.Caster == Players.LocalPlayer then
-			playDoubleShot()
-		end
+		-- (The Paintball's draw plays ahead of it: DoubleShot, 2026-11-08.)
 		local arrow = makeArrow()
 		if arrow then
 			emitVFXPart(ICE_RELEASE_VFX, facing, nil, if painted then { Color = PAINTBALL_COLOR } else nil)
