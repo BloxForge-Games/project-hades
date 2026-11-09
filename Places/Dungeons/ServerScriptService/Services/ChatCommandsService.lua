@@ -804,6 +804,25 @@ COMMANDS = {
 		end,
 	},
 
+	friendbonus = {
+		usage = "/friendbonus [friends 0-3 | off]",
+		description = "Forces your friend count so the friend bonus HUD chip shows (+10% per friend, max +30%); 'off' goes back to your real friends. The bonus is real while forced.",
+		handler = function(player: Player, args: { string }): string?
+			local friendBonus = Blitz.OptionalService("FriendBonusService")
+			if not friendBonus then
+				return "FriendBonusService is unavailable."
+			end
+			local arg = string.lower(args[1] or "3")
+			if arg == "off" then
+				friendBonus:SetPreview(player, nil)
+				return "Friend bonus back to your real friends."
+			end
+			local friends = math.clamp(math.floor(tonumber(arg) or 3), 0, 3)
+			friendBonus:SetPreview(player, friends)
+			return ("Friend bonus forced to %d friend(s): +%d%%."):format(friends, friends * 10)
+		end,
+	},
+
 	revive = {
 		usage = "/revive",
 		description = "Revives every player currently in the death state.",

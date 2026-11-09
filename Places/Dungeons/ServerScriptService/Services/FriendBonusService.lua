@@ -27,6 +27,9 @@ local FriendBonusService = {
 	_friendCache = {} :: { [string]: boolean },
 	-- Bumped per recount, so a slower, older recount never writes last.
 	_generation = 0,
+	-- [player] = a forced friend count (/friendbonus, 2026-11-08), used in
+	-- place of the real count until cleared or the player leaves.
+	_preview = {} :: { [Player]: number },
 }
 
 local function pairKey(a: number, b: number): string
@@ -55,13 +58,16 @@ function FriendBonusService._recount(self: typeof(FriendBonusService))
 	local players = Players:GetPlayers()
 	local bonuses: { [Player]: number } = {}
 	for _, player in players do
-		local friends = 0
-		for _, other in players do
-			if other ~= player and other.Parent == Players and self:_areFriends(player, other) then
-				friends += 1
+		local friends = self._preview[player]
+		if friends == nil then
+			friends = 0
+			for _, other in players do
+				if other ~= player and other.Parent == Players and self:_areFriends(player, other) then
+					friends += 1
+				end
 			end
 		end
-		bonuses[player] = FriendBonusData.BonusFor(friends)
+		bonuses[player] = FriendBonusData.BonusFor(friends :: number)
 	end
 	if generation ~= self._generation then
 		return
@@ -71,6 +77,14 @@ function FriendBonusService._recount(self: typeof(FriendBonusService))
 			player:SetAttribute(Attributes.FriendBonus, if bonus > 0 then bonus else nil)
 		end
 	end
+end
+
+-- Forces `player`'s friend count to `friends` (nil = back to the real
+-- count) and restamps the bonus: a test hook for /friendbonus. The forced
+-- bonus is real, so it multiplies that run's rewards too.
+function FriendBonusService.SetPreview(self: typeof(FriendBonusService), player: Player, friends: number?)
+	self._preview[player] = friends :: any
+	task.spawn(self._recount, self)
 end
 
 -- The bonus share `player` earns with right now (0 with none).
@@ -83,7 +97,8 @@ function FriendBonusService.Start(self: typeof(FriendBonusService))
 	Players.PlayerAdded:Connect(function()
 		task.spawn(self._recount, self)
 	end)
-	Players.PlayerRemoving:Connect(function()
+	Players.PlayerRemoving:Connect(function(player: Player)
+		self._preview[player] = nil
 		-- After the leaver is gone from GetPlayers.
 		task.defer(self._recount, self)
 	end)
