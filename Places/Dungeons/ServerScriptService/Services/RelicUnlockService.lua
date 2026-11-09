@@ -2,30 +2,31 @@
 --[[
 	Module: Services/RelicUnlockService.lua
 	Description:
-	The one writer of relic unlocks and the Codex (2026-11-06; rules in
-	Shared/Data/RelicUnlockData, reads in Shared/Functions/Relic/
-	relicUnlocks). It keeps three profile keys:
-	  RelicUnlocks   the relics earned beyond the starting pool
+	The one writer of the Codex and the relic counters (2026-11-06; rules
+	in Shared/Data/RelicUnlockData, reads in Shared/Functions/Relic/
+	relicUnlocks). Since 2026-11-08 relics unlock by player LEVEL alone
+	(RelicUnlockData.ByLevel, read straight off profile.Level), so nothing
+	here unlocks a relic any more except /unlockrelics. It keeps three
+	profile keys:
+	  RelicUnlocks   relics earned beyond the starting pool under the old
+	                 rules (still honoured) or by /unlockrelics
 	  RelicProgress  Found (relics picked up), Seen (relics shown: offer
 	                 cards, merchant shelves, floor fans), Feats (lifetime
-	                 counts), CursedBargains
+	                 counts, kept as stats), CursedBargains
 	  Codex          Monsters: lifetime takedowns per mob (0 = met only)
 
 	What feeds it, each through Blitz.OptionalService at call time:
-	  * a relic picked up (RelicService.OnRelicsUpdated): Found, and a
-	    tree's Epic at 3 different finds of it;
+	  * a relic picked up (RelicService.OnRelicsUpdated): Found;
 	  * a takedown (MobDeath.RunTakedownRewards, killer and assisters):
-	    the Codex count, Ranged / Arcane takedowns (DamageService
-	    LastHitKind), and on a BOSS the boss feat and the Legendary of
-	    every tree the player holds 2 or more relics of;
+	    the Codex count and the Ranged / Arcane / boss takedown counts;
 	  * a monster hit for the first time (DamageService): met;
 	  * a Perfect Dodge (RelicService), a fresh Status (StatusCondition
-	    Service), a committed spell (VFXService): their feats;
-	  * a Cursed Shrine bargain (EventService): the next Cursed relic.
+	    Service), a committed spell (VFXService): their counts;
+	  * a Cursed Shrine bargain (EventService): the bargain count.
 
 	Counter writes are pushed to the client every FLUSH_SECONDS at most
-	(the profile is sent whole); an unlock is pushed at once, and the
-	client announces it by diffing RelicUnlocks (RelicUnlockController).
+	(the profile is sent whole). The client announces level unlocks by
+	diffing profile.Level (RelicUnlockController).
 ]]
 
 --[ Roblox Services ]--
@@ -153,8 +154,7 @@ function RelicUnlockService.Unlock(self: typeof(RelicUnlockService), player: Pla
 	return true
 end
 
--- A relic picked up, in any run: Found, then the tree's Epic at
--- TreeFindsTarget different finds.
+-- A relic picked up, in any run: Found (the Codex's discovered list).
 function RelicUnlockService.RecordRelicFound(self: typeof(RelicUnlockService), player: Player, relicName: string)
 	local data = profileOf(player)
 	local relic = RelicData[relicName]
@@ -166,13 +166,6 @@ function RelicUnlockService.RecordRelicFound(self: typeof(RelicUnlockService), p
 		return
 	end
 	found[relicName] = true
-	local tree = relic.tree
-	local epic = tree and RelicUnlockData.TreeEpic[tree]
-	if epic and relicUnlocks.treeFoundCount(data, tree) >= RelicUnlockData.TreeFindsTarget then
-		if self:Unlock(player, epic) then
-			return
-		end
-	end
 	-- Pushed at once: the client toasts the discovery off the snapshot.
 	self:_push(player, true)
 end
@@ -198,25 +191,15 @@ function RelicUnlockService.RecordSeen(self: typeof(RelicUnlockService), player:
 	end
 end
 
--- Adds to a feat's lifetime count; unlocks its relic at the target.
+-- Adds to a lifetime count (Perfect Dodges, Statuses applied, ...). A
+-- stat only since 2026-11-08: no relic unlocks from it.
 function RelicUnlockService.AddFeat(self: typeof(RelicUnlockService), player: Player, featId: string, amount: number?)
 	local data = profileOf(player)
-	local feat = nil
-	for _, entry in RelicUnlockData.Feats do
-		if entry.id == featId then
-			feat = entry
-			break
-		end
-	end
-	if not data or not feat then
+	if not data or type(featId) ~= "string" then
 		return
 	end
 	local feats = progressOf(data).Feats
-	local count = (tonumber(feats[featId]) or 0) + (amount or 1)
-	feats[featId] = count
-	if count >= feat.target and self:Unlock(player, feat.relic) then
-		return
-	end
+	feats[featId] = (tonumber(feats[featId]) or 0) + (amount or 1)
 	self:_push(player)
 end
 
@@ -258,26 +241,18 @@ function RelicUnlockService.OnTakedown(self: typeof(RelicUnlockService), player:
 
 	if model:GetAttribute(Attributes.EnemyType) == EnemyTypes.Boss then
 		self:AddFeat(player, "BossesDefeated")
-		for _, tree in RelicUnlockData.Trees do
-			if RelicService:GetOwnedTreeCount(player, tree) >= RelicUnlockData.BossTreeTarget then
-				self:Unlock(player, RelicUnlockData.TreeLegendary[tree])
-			end
-		end
 	end
 	self:_push(player)
 end
 
--- A Cursed Shrine bargain accepted: the next Cursed relic in order.
+-- A Cursed Shrine bargain accepted: the count (a stat since 2026-11-08;
+-- the Cursed relics unlock by level).
 function RelicUnlockService.OnCursedBargain(self: typeof(RelicUnlockService), player: Player)
 	local data = profileOf(player)
 	if not data then
 		return
 	end
-	local progress = progressOf(data)
-	progress.CursedBargains += 1
-	for index = 1, math.min(progress.CursedBargains, #RelicUnlockData.CursedOrder) do
-		self:Unlock(player, RelicUnlockData.CursedOrder[index])
-	end
+	progressOf(data).CursedBargains += 1
 	self:_push(player)
 end
 

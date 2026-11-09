@@ -5,7 +5,7 @@
 	Reports what players do in a run to QuestService (2026-10-28), as the
 	stats in Shared/Data/QuestData:
 
-	  Kills / Elites / Minibosses / Bosses
+	  Kills / Elites / CorruptedKills / Minibosses / Bosses
 	      RoundStatisticsService's kill-or-assist signals: everyone credited
 	      for a kill (the killer and live assisters) counts it.
 	  Runs / FlawlessRuns / PartyRuns
@@ -70,6 +70,9 @@ function QuestTrackingService.Start(self: typeof(QuestTrackingService))
 		end)
 		connect(signals.OnEliteChanged, function(player: Player)
 			record(player, Stats.Elites)
+		end)
+		connect(signals.OnCorruptedKill, function(player: Player)
+			record(player, Stats.CorruptedKills)
 		end)
 		connect(signals.OnMinibossChanged, function(player: Player)
 			record(player, Stats.Minibosses)

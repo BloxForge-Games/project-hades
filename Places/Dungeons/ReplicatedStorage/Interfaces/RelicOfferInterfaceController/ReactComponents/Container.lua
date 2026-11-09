@@ -205,12 +205,15 @@ local SCENE_DOF_FAR_INTENSITY = 0.75
 local SCENE_TWEEN = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 
 local PICK_SOUND_NAME = "RelicPickup"
+-- The pick plays at this share of the asset's own volume (2026-11-08: too
+-- loud at full). The others hear it at the same share (init.lua).
+local PICK_SOUND_VOLUME_SCALE = 0.5
 -- No hover asset yet: set an id here to give the cards a hover tick.
 local HOVER_SOUND_ID: string? = nil
 
 --[ Helpers ]--
 
-local function playUiSound(soundName: string)
+local function playUiSound(soundName: string, volumeScale: number?)
 	local sounds = ReplicatedStorage:FindFirstChild("GameAssets")
 	sounds = sounds and sounds:FindFirstChild("Sounds")
 	local template = sounds and sounds:FindFirstChild(soundName)
@@ -218,6 +221,7 @@ local function playUiSound(soundName: string)
 		return
 	end
 	local sound = template:Clone()
+	sound.Volume *= volumeScale or 1
 	sound.Parent = SoundService
 	sound:Play()
 	Debris:AddItem(sound, 5)
@@ -660,7 +664,7 @@ local function Container(props: any)
 	local function animateTaken(relicName: string)
 		local thisOffer = offerRef.current
 		phaseRef.current = "resolving"
-		playUiSound(PICK_SOUND_NAME)
+		playUiSound(PICK_SOUND_NAME, PICK_SOUND_VOLUME_SCALE)
 		dismiss(relicName)
 		headerOut()
 

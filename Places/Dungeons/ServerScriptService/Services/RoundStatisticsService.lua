@@ -32,6 +32,9 @@ RoundStatisticsService.Signals = {
 	OnEliteChanged = Signal.new(), -- (player: Player, eliteCount: number)
 	OnMinibossChanged = Signal.new(), -- (player: Player, minibossCount: number)
 	OnBossChanged = Signal.new(), -- (player: Player, bossCount: number)
+	-- A CORRUPTED mob's kill credit (2026-11-08, the quests'
+	-- CorruptedKills): fired alongside OnKillOrAssist.
+	OnCorruptedKill = Signal.new(), -- (player: Player)
 }
 
 --[ Private Functions ]--

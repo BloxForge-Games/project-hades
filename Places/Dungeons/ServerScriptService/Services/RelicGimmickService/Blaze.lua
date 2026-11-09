@@ -42,6 +42,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local StatusConditions = require(ReplicatedStorage.Submodules.Core.Shared.Enums.StatusConditions)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local forEachEnemyInRadius = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Combat.forEachEnemyInRadius)
@@ -295,6 +297,8 @@ end
 -- Red Laser Scythe (2026-10-30): the character's MeleeSwingSpeed is its
 -- data.enflamedSwingSpeed while Enflamed, and unset otherwise. The one
 -- writer of Attributes.MeleeSwingSpeed; both MeleeWeapon halves read it.
+-- Eight Inner Gates' open gate (Attributes.InnerGatesOpen, 2026-11-08)
+-- multiplies in its gateSwingSpeed.
 function Blaze.onHeartbeat(now: number)
 	if now < nextSwingSpeedPoll then
 		return
@@ -309,6 +313,10 @@ function Blaze.onHeartbeat(now: number)
 		local speed: number? = nil
 		if root:FindFirstChild(AuraNames.Enflamed) and helpers.owns(player, RED_LASER) then
 			speed = helpers.data(RED_LASER, "enflamedSwingSpeed", 1.25)
+		end
+		if character:GetAttribute(Attributes.InnerGatesOpen) == true then
+			local gates = ArcaneData[ArcaneNames["Eight Inner Gates"]]
+			speed = (speed or 1) * ((gates and gates.gateSwingSpeed) or 1.15)
 		end
 		if character:GetAttribute(Attributes.MeleeSwingSpeed) ~= speed then
 			character:SetAttribute(Attributes.MeleeSwingSpeed, speed)

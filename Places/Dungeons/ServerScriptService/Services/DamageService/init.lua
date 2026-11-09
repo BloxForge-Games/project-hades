@@ -151,7 +151,7 @@ local DamageService = {
 
 	_onDamageModules = {} :: { [string]: any },
 	-- Timed incoming damage reduction by key per player (AddTimedReduction,
-	-- 2026-11-07: Stone Body). Weak-keyed on the player.
+	-- 2026-11-07: Sand Armor). Weak-keyed on the player.
 	_timedReductions = (
 			setmetatable({}, { __mode = "k" }) :: any
 		) :: { [Player]: { [string]: { fraction: number, untilAt: number, taken: number } } },
@@ -170,6 +170,11 @@ local DamageService = {
 	-- Rolling per-player log of damage that actually reached HEALTH (post
 	-- shield / post-mitigation) — Astral Cloak's dodge heal consumes it.
 	_recentDamageTaken = {} :: { [number]: { { t: number, amount: number } } },
+	-- The run's totals per player, for the end-of-run summary
+	-- (RunSummaryService, 2026-11-08): damage dealt to mobs (Shadow Clone
+	-- hits included) and damage taken.
+	_runDamageDealt = {} :: { [number]: number },
+	_runDamageTaken = {} :: { [number]: number },
 	-- Forced crits (2026-11-01): [userId][lane] = the one-shot a relic armed
 	-- (ForceNextCrit). "Melee" is spent by the next melee weapon hit,
 	-- "Arcane" by the next spell / arcane hit; TakeDamage consumes them.
@@ -450,7 +455,7 @@ function DamageService.PlayerTakeDamage(
 		damage = damage * (1 - (susanoo and susanoo.damageReduction or 0))
 	end
 
-	-- Timed reductions (AddTimedReduction: Stone Body): each live one takes
+	-- Timed reductions (AddTimedReduction: Sand Armor): each live one takes
 	-- its fraction off and tallies what the hit would have dealt.
 	local timed = self._timedReductions[player]
 	if timed then
@@ -641,6 +646,18 @@ function DamageService.PlayerTakeDamage(
 	humanoid:TakeDamage(appliedDamage)
 end
 
+-- A hit `player` landed on a mob, for the run's damage-dealt total.
+function DamageService._tallyDealt(self: typeof(DamageService), player: Player?, amount: number)
+	if player and amount > 0 then
+		self._runDamageDealt[player.UserId] = (self._runDamageDealt[player.UserId] or 0) + amount
+	end
+end
+
+-- The run's damage dealt and taken by `player` (RunSummaryService).
+function DamageService.GetRunDamage(self: typeof(DamageService), player: Player): (number, number)
+	return self._runDamageDealt[player.UserId] or 0, self._runDamageTaken[player.UserId] or 0
+end
+
 -- Astral Cloak's heal source. Every hit that reaches health appends here;
 -- ConsumeRecentDamageTaken sums the trailing window THEN CLEARS the log.
 local RECENT_DAMAGE_KEEP_SECONDS = 5 -- write-time prune ceiling
@@ -649,6 +666,7 @@ function DamageService._recordDamageTaken(self: typeof(DamageService), player: P
 	if amount <= 0 then
 		return
 	end
+	self._runDamageTaken[player.UserId] = (self._runDamageTaken[player.UserId] or 0) + amount
 
 	local log = self._recentDamageTaken[player.UserId]
 	if not log then
@@ -778,7 +796,7 @@ function DamageService.WithSpellCritBonus(_self: typeof(DamageService), bonus: n
 	end
 end
 
--- Timed incoming damage reduction (2026-11-07: Stone Body), by key per
+-- Timed incoming damage reduction (2026-11-07: Sand Armor), by key per
 -- player: `fraction` off every hit until it lapses. The entry also tallies
 -- `taken`, what the hits would have dealt before it, for a payoff on end.
 function DamageService.AddTimedReduction(
@@ -812,12 +830,25 @@ end
 -- Runs `fn` with a spell's own knockback (ArcaneData `knockbackStuds`,
 -- 2026-11-07): spell hits inside it push `studs` instead of
 -- KNOCKBACK_ARCANE_STUDS. onHitboxDamage wraps a spell's hit in it.
+-- `slideSpeed` (ArcaneData `knockbackSlideSpeed`, 2026-11-08: Wind Bomb):
+-- the push SLIDES the mob there at that many studs/s (MobSimService:Carry,
+-- Water Dragon's smooth leg) instead of the usual one-step knockback. Only
+-- spells that set it; every other push is untouched.
 DamageService._arcaneKnockbackStuds = nil :: number?
-function DamageService.WithArcaneKnockback(_self: typeof(DamageService), studs: number, fn: () -> ())
+DamageService._arcaneKnockbackSlideSpeed = nil :: number?
+function DamageService.WithArcaneKnockback(
+	_self: typeof(DamageService),
+	studs: number,
+	fn: () -> (),
+	slideSpeed: number?
+)
 	local previous = DamageService._arcaneKnockbackStuds
+	local previousSlide = DamageService._arcaneKnockbackSlideSpeed
 	DamageService._arcaneKnockbackStuds = studs
+	DamageService._arcaneKnockbackSlideSpeed = slideSpeed
 	local ok, err: any = pcall(fn :: any)
 	DamageService._arcaneKnockbackStuds = previous
+	DamageService._arcaneKnockbackSlideSpeed = previousSlide
 	if not ok then
 		error(err, 0)
 	end
@@ -987,6 +1018,25 @@ function DamageService._knockback(
 	-- put into its knockback state for nothing (relic hits since 2026-11-01).
 	if distance <= 0 then
 		return
+	end
+	-- A spell that slides its push (knockbackSlideSpeed): a smooth carry
+	-- away from the hit, as Water Dragon moves mobs.
+	local slideSpeed = DamageService._arcaneKnockbackSlideSpeed
+	if isArcane and not relicPush and not isMelee and slideSpeed and slideSpeed > 0 then
+		local targetRoot = targetModel:FindFirstChild("HumanoidRootPart")
+		if targetRoot and targetRoot:IsA("BasePart") then
+			local away = targetRoot.Position - origin
+			away = Vector3.new(away.X, 0, away.Z)
+			if away.Magnitude < 0.05 and attackerAt then
+				away = targetRoot.Position - attackerAt
+				away = Vector3.new(away.X, 0, away.Z)
+			end
+			-- A mob mid-attack is not carried (magic never cancels an
+			-- attack): it takes the usual knockback instead.
+			if away.Magnitude >= 0.05 and mobSimService:Carry(targetModel, away, distance, slideSpeed) then
+				return
+			end
+		end
 	end
 	mobSimService:ApplyKnockback(targetModel, origin, distance, attackerAt)
 end
@@ -1633,6 +1683,7 @@ function DamageService.TakeDamage(
 				true
 			)
 		end
+		self:_tallyDealt(player, damage)
 		humanoid:TakeDamage(damage)
 		-- Teddy Trap: "on ALL damage" -- a DoT tick is damage you dealt.
 		self._onDamageModules["TeddyTrap"](player, damage)
@@ -1851,6 +1902,7 @@ function DamageService.TakeDamage(
 				resistKind
 			)
 
+			self:_tallyDealt(player, math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
 			humanoid:TakeDamage(math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
 			-- Teddy Trap lifesteal reads the amount that actually landed.
 			self._onDamageModules["TeddyTrap"](player, math.round(combinedDamage * PROJECTILE_RESISTANCE_SCALAR))
@@ -1876,6 +1928,7 @@ function DamageService.TakeDamage(
 			isMelee,
 			resistKind
 		)
+		self:_tallyDealt(player, math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
 		humanoid:TakeDamage(math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage * PROJECTILE_RESISTANCE_SCALAR))
 		self:_postDamage(
@@ -1893,6 +1946,7 @@ function DamageService.TakeDamage(
 			local combinedDamage = math.round(totalDamage * critMultiplier)
 
 			showIndicator(player, targetModel, combinedDamage, true, hitColor, isMelee)
+			self:_tallyDealt(player, combinedDamage)
 			humanoid:TakeDamage(combinedDamage)
 			self._onDamageModules["TeddyTrap"](player, combinedDamage)
 			self:_postDamage(player, humanoid, true, relicSourced, isGunShot, isMelee, isMagic, combinedDamage)
@@ -1901,6 +1955,7 @@ function DamageService.TakeDamage(
 
 		showIndicator(player, targetModel, math.round(totalDamage), false, hitColor, isMelee)
 
+		self:_tallyDealt(player, math.round(totalDamage))
 		humanoid:TakeDamage(math.round(totalDamage))
 		self._onDamageModules["TeddyTrap"](player, math.round(totalDamage))
 		self:_postDamage(player, humanoid, false, relicSourced, isGunShot, isMelee, isMagic, math.round(totalDamage))
@@ -1973,6 +2028,8 @@ function DamageService.Start(self: typeof(DamageService))
 		self._stormExtendLast[player.UserId] = nil
 		self._recentDamageTaken[player.UserId] = nil
 		self._forcedCrits[player.UserId] = nil
+		self._runDamageDealt[player.UserId] = nil
+		self._runDamageTaken[player.UserId] = nil
 	end)
 end
 
