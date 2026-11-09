@@ -112,6 +112,7 @@ local WeaponLoadoutService = require(ServerScriptService.Submodules.Core.Source.
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local arcaneIndex = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Arcane.arcaneIndex)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local FriendBonusData = require(ReplicatedStorage.Submodules.Core.Shared.Data.FriendBonusData)
 
 -- /spell: the prototype spells it hands out, by alias, with the slot each
 -- goes to when none is given.
@@ -806,7 +807,7 @@ COMMANDS = {
 
 	friendbonus = {
 		usage = "/friendbonus [friends 0-3 | off]",
-		description = "Forces your friend count so the friend bonus HUD chip shows (+10% per friend, max +30%); 'off' goes back to your real friends. The bonus is real while forced.",
+		description = "Forces your friend count so the friend bonus HUD chip shows (a flat +15% with any friend); 'off' goes back to your real friends. The bonus is real while forced.",
 		handler = function(player: Player, args: { string }): string?
 			local friendBonus = Blitz.OptionalService("FriendBonusService")
 			if not friendBonus then
@@ -819,7 +820,10 @@ COMMANDS = {
 			end
 			local friends = math.clamp(math.floor(tonumber(arg) or 3), 0, 3)
 			friendBonus:SetPreview(player, friends)
-			return ("Friend bonus forced to %d friend(s): +%d%%."):format(friends, friends * 10)
+			return ("Friend bonus forced to %d friend(s): %s."):format(
+				friends,
+				FriendBonusData.Format(FriendBonusData.BonusFor(friends))
+			)
 		end,
 	},
 
