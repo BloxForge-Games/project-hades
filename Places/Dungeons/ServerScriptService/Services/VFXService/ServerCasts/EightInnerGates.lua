@@ -99,7 +99,7 @@ return function(vfxService: any, player: Player, _cframe: CFrame)
 	end
 	local damageService = Blitz.OptionalService("DamageService")
 	if damageService then
-		damageService:AddTimedReduction(player, SPELL, data.flurryDamageReduction or 0.5, data.duration or 1.3)
+		damageService:AddTimedReduction(player, SPELL, data.flurryDamageReduction or 0.5, data.duration or 1.8)
 	end
 	local gateSeconds = data.gateSeconds or 8
 	openGate(character, gateSeconds)
@@ -112,7 +112,7 @@ return function(vfxService: any, player: Player, _cframe: CFrame)
 	local angle = data.coneAngle or 80
 	local hits = data.flurryHits or 6
 	local flurrySeconds = data.flurrySeconds or 0.6
-	local start = (data.flareSeconds or 0.25) + (data.dashSeconds or 0.2) + AFTER_DASH
+	local start = (data.flareSeconds or 0.75) + (data.dashSeconds or 0.2) + AFTER_DASH
 	local spacing = flurrySeconds / hits
 
 	-- The flurry's own hit row: a small push (`punchKnockbackStuds`; a nil

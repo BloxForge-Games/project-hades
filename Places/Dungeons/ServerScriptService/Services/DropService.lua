@@ -252,7 +252,10 @@ function DropService.RestoreOrb(
 		return 0 -- no arcane data yet: nothing to restore into
 	end
 	local maxMana = arcaneData.maxMana
-	local restored = maxMana * fraction * multiplier
+	-- The race-only Mana from Orbs (Undead's Soul Siphon, RaceData), the
+	-- receiver's own, on top of the shared multiplier.
+	local manaOrbs = 1 + PlayerStatsService:GetGearStat(player, "ManaOrbPotency")
+	local restored = maxMana * fraction * multiplier * manaOrbs
 	ArcaneService:SetPlayerArcaneData(player, math.clamp(arcaneData.mana + restored, 0, maxMana), maxMana)
 	return restored
 end
@@ -496,7 +499,8 @@ function DropService.Start(self: typeof(DropService))
 			--     +50% per dungeon tier; the difficulty's take is already in
 			--     the chest row).
 			--   * Fortune gear lines (BonusStatData, 2026-11-02; Gold Find
-			--     until 2026-11-01): Coins only, never Crystals.
+			--     until 2026-11-01) and Moglin's Scavenger (RaceData, on
+			--     the same key): Coins only, never Crystals.
 			value = math.round(
 				value
 					* (1 + getRelicCoinBonus(player))
@@ -514,10 +518,15 @@ function DropService.Start(self: typeof(DropService))
 		elseif dropType == DropTypes.ArcaneCrystals then
 			-- Escrowed like coins: banked to the profile on clear
 			-- (RunEscrowService.BankAll), half kept on death. Chests and
-			-- veins; the dungeon's rewardScale is the ONLY multiplier -- no
-			-- relic or set bonus touches it, it is the spell currency
-			-- (Arcane Chests) rather than an economy stat.
-			RunEscrowService:AddArcaneCrystals(player, math.round(value * difficultyMultiplier("crystals")))
+			-- veins; the dungeon's rewardScale, plus the race-only Crystal
+			-- Find (Moglin's Scavenger, 2026-11-09) -- no relic or set bonus
+			-- touches it, it is the spell currency (Arcane Chests) rather
+			-- than an economy stat.
+			local crystalFind = 1 + PlayerStatsService:GetGearStat(player, "CrystalFind")
+			RunEscrowService:AddArcaneCrystals(
+				player,
+				math.round(value * difficultyMultiplier("crystals") * crystalFind)
+			)
 		elseif dropType == DropTypes.Mana then
 			-- Earth Protection Orb's bank may take the orb instead: it floats
 			-- into its slot, so no pickup flourish (2026-11-01).
