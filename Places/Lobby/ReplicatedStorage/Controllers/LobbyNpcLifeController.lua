@@ -16,6 +16,12 @@
 	         that, the head eases back to straight ahead; walk round to its
 	         other side and it picks the player up again. The head also
 	         tips up or down toward them, up to LOOK_MAX_PITCH.
+	  FACE   while the local player is TALKING to it (2026-11-11), the
+	         whole NPC turns on the spot to face them, eased (FACE_EASE),
+	         from any angle; when the conversation ends (closed, cancelled
+	         or walked away from) it eases back to the facing it was placed
+	         with. The head look above runs on top, so the face keeps
+	         tracking while the body swings round.
 
 	The hub rigs are authored with EVERY part anchored, and an anchored
 	part ignores its joints (no idle, no head turn); on this client the
@@ -29,8 +35,14 @@
 --[ Roblox Services ]--
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+
+--[ Imports ]--
+
+local DialogueBillboardInterface =
+	require(ReplicatedStorage.Submodules.Core.Source.Interfaces.DialogueBillboardInterface)
 
 --[ Constants ]--
 
@@ -58,6 +70,10 @@ local TORSO_SHARE = 0.3
 -- The torso's own, gentler ease (per second; LOOK_EASE is the head's), so
 -- the body swings round slowly while the head keeps up (2026-11-03).
 local TORSO_EASE = 2
+-- How fast the whole body turns to face the player in a conversation, and
+-- back to its placed facing after (per second; 4 is a smooth half-second
+-- swing).
+local FACE_EASE = 4
 
 -- A soft highlight while the player is near (2026-11-03): within
 -- HIGHLIGHT_STUDS (a little past the talk prompt's 8) a warm outline and
@@ -82,6 +98,9 @@ type NpcState = {
 	yaw: number,
 	pitch: number,
 	torsoYaw: number,
+	-- The root as placed, and the body's turn away from it (radians).
+	restRoot: CFrame,
+	bodyYaw: number,
 	highlight: Highlight,
 	highlighted: boolean,
 }
@@ -205,6 +224,8 @@ function LobbyNpcLifeController._addNpc(self: typeof(LobbyNpcLifeController), mo
 		yaw = 0,
 		pitch = 0,
 		torsoYaw = 0,
+		restRoot = root.CFrame,
+		bodyYaw = 0,
 		highlight = makeHighlight(model),
 		highlighted = false,
 	}
@@ -263,16 +284,45 @@ local function lookAngles(state: NpcState, target: Vector3?): (number, number)
 	return yaw, pitch
 end
 
+-- `angle` wrapped into (-pi, pi], so a turn always takes the short way.
+local function wrapAngle(angle: number): number
+	return (angle + math.pi) % (2 * math.pi) - math.pi
+end
+
+-- The turn (about the placed root) that faces `target`, flat; nil when it
+-- is on top of the NPC.
+local function faceYaw(state: NpcState, target: Vector3): number?
+	local direction = state.restRoot:VectorToObjectSpace(target - state.restRoot.Position)
+	if direction.X * direction.X + direction.Z * direction.Z < 0.01 then
+		return nil
+	end
+	return math.atan2(-direction.X, -direction.Z)
+end
+
 function LobbyNpcLifeController._step(self: typeof(LobbyNpcLifeController), dt: number)
 	local character = Players.LocalPlayer.Character
 	local head = character and character:FindFirstChild("Head")
 	local target = if head and head:IsA("BasePart") then head.Position else nil
 	local blend = 1 - math.exp(-LOOK_EASE * dt)
 	local torsoBlend = 1 - math.exp(-TORSO_EASE * dt)
+	local faceBlend = 1 - math.exp(-FACE_EASE * dt)
+	local talkingTo = DialogueBillboardInterface:GetActiveDialogueModel()
 	for model, state in self._npcs do
 		if not model.Parent or not state.neck.Parent then
 			self._npcs[model] = nil
 			continue
+		end
+		-- The whole body: toward the player in their conversation, back to
+		-- the placed facing otherwise. Only the anchored root is turned (on
+		-- this client); the loosened rig rides it.
+		local wanted = if model == talkingTo and target then faceYaw(state, target) or state.bodyYaw else 0
+		local bodyStep = wrapAngle(wanted - state.bodyYaw) * faceBlend
+		if math.abs(bodyStep) > 1e-4 or state.bodyYaw ~= 0 then
+			state.bodyYaw = wrapAngle(state.bodyYaw + bodyStep)
+			if math.abs(state.bodyYaw) < 1e-3 and wanted == 0 then
+				state.bodyYaw = 0
+			end
+			state.root.CFrame = state.restRoot * CFrame.Angles(0, state.bodyYaw, 0)
 		end
 		setHighlighted(state, target ~= nil and (target - state.root.Position).Magnitude <= HIGHLIGHT_STUDS)
 		local yaw, pitch = lookAngles(state, target)
