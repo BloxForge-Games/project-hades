@@ -194,7 +194,7 @@ return function(player: Player, preload: boolean?)
 	local angle = data.coneAngle or 80
 	local hits = data.flurryHits or 6
 	local flurrySeconds = data.flurrySeconds or 0.6
-	local flareSeconds = data.flareSeconds or 0.25
+	local flareSeconds = data.flareSeconds or 0.75
 	local dashSeconds = data.dashSeconds or 0.2
 	local start = flareSeconds + dashSeconds + AFTER_DASH
 	local isCaster = player == Players.LocalPlayer
@@ -203,11 +203,17 @@ return function(player: Player, preload: boolean?)
 	flare(root)
 
 	local claim = claimWalkSpeed(character, 0)
-	if isCaster then
-		GameClock.Delay(flareSeconds, function()
+	-- The charge ends with the gates bursting open again as the caster
+	-- launches (the 0.75 s charge would otherwise go quiet after the first).
+	GameClock.Delay(flareSeconds, function()
+		local liveRoot = character:FindFirstChild("HumanoidRootPart")
+		if liveRoot and liveRoot:IsA("BasePart") then
+			flare(liveRoot)
+		end
+		if isCaster then
 			DodgeController:SetDodgeCFrame(data.dashStuds or 10, dashSeconds, true)
-		end)
-	end
+		end
+	end)
 
 	-- The punch animation, replayed through the flurry.
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -239,7 +245,7 @@ return function(player: Player, preload: boolean?)
 		end
 	end)
 
-	GameClock.Delay(data.duration or 1.3, function()
+	GameClock.Delay(data.duration or 1.8, function()
 		restoreWalkSpeed(character, nil, claim)
 	end)
 
