@@ -294,9 +294,9 @@ function DomainExpansionExecutable:Play()
 
 	-- The title banner, over the first long move.
 	GameClock.Delay(BANNER_AT, function()
-		local character = Players.LocalPlayer.Character
-		if current() and character then
-			cancelBanner = DomainBanner.play(character, BANNER_AT)
+		local liveCharacter = Players.LocalPlayer.Character
+		if current() and liveCharacter then
+			cancelBanner = DomainBanner.play(liveCharacter, BANNER_AT)
 		end
 	end)
 
