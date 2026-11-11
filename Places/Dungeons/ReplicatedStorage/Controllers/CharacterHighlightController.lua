@@ -290,9 +290,27 @@ local function showPlayerLayer(
 	depthMode: Enum.HighlightDepthMode
 )
 	writeLayer(highlight, written, fillColor, fillTransparency, depthMode)
-	if written.enabled ~= true then
-		highlight.Parent = character
+	-- Read back, not only cached: CutsceneIsolationController switches
+	-- every Highlight off for a cutscene and restores what it found.
+	if written.enabled ~= true or not highlight.Enabled then
+		if highlight.Parent ~= character then
+			highlight.Parent = character
+		end
+		highlight.Enabled = true
 		written.enabled = true
+	end
+end
+
+-- Switches the local player's highlight off but KEEPS it on the character
+-- (2026-11-11). Unparenting it and parenting it back (walking out of one's
+-- domain and in again) re-added it to the scene, and a re-added Highlight
+-- overlapping another on screen (a mob's) flickered on and off. Disabled,
+-- it costs no render pass either. (A spell's HighlightOverride still takes
+-- it OFF the character: that is about the one slot per adornee.)
+local function hidePlayerLayer(highlight: Highlight, written: HighlightWritten)
+	if written.enabled ~= false or highlight.Enabled then
+		highlight.Enabled = false
+		written.enabled = false
 	end
 end
 
@@ -492,7 +510,7 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	deltaTime: number
 )
 	local highlight = self._playerHighlight
-	-- The highlight sits unparented while idle (showPlayerLayer), so the
+	-- The highlight can sit unparented (a HighlightOverride), so the
 	-- liveness test is the character's: a destroyed character takes the
 	-- slot with it, and a parent write onto it would throw.
 	if not highlight or not character.Parent then
@@ -504,10 +522,19 @@ function CharacterHighlightController._resolvePlayerHighlight(
 	-- Sand Armor): off the character, so the two never fight for the one
 	-- slot Roblox draws. The layers come back the tick it clears.
 	if character:GetAttribute(Attributes.HighlightOverride) == true then
-		if written.enabled ~= false then
+		if highlight.Parent ~= nil then
 			highlight.Parent = nil
-			written.enabled = false
 		end
+		written.enabled = false
+		return
+	end
+
+	-- Off for an arcane cutscene (2026-11-10): Highlights draw over
+	-- particles (which write no depth), so any layer here -- the occlusion
+	-- outline the close camera can trip, a damage flash -- drew over the
+	-- Susanoo cutscene's Sharingan held in front of the camera.
+	if character:GetAttribute(Attributes.ArcaneCutscenePlaying) == true then
+		hidePlayerLayer(highlight, written)
 		return
 	end
 
@@ -646,12 +673,9 @@ function CharacterHighlightController._resolvePlayerHighlight(
 		return
 	end
 
-	-- No layer: off the character (2026-11-05: was a fully transparent
-	-- fill, still rendered every frame). Written once, on the change.
-	if written.enabled ~= false then
-		highlight.Parent = nil
-		written.enabled = false
-	end
+	-- No layer: disabled (2026-11-05: was a fully transparent fill, still
+	-- rendered every frame). Written once, on the change.
+	hidePlayerLayer(highlight, written)
 end
 
 -- OTHER players: one small Highlight per character, created while their

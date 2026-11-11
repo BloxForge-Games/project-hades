@@ -62,6 +62,11 @@ local FALLBACK_WEAPON = WeaponNames["Steel Sword"]
 local FOLDER_NAME = "ShadowClones"
 -- The spots behind the caster, in the caster's frame (+Z is behind): the
 -- first three for one cast, rows behind them for stacked casts.
+-- The clones come out one at a time, this far apart (s), and each lives
+-- `lifetime` from its OWN arrival, so they leave one at a time at the
+-- same spacing (2026-11-09).
+local SPAWN_INTERVAL = 0.35
+
 local SLOT_OFFSETS = {
 	Vector3.new(-4, 0, 3.5),
 	Vector3.new(0, 0, 5.5),
@@ -165,6 +170,9 @@ local ShadowCloneService = {
 	_folder = nil :: Folder?,
 	-- Per caster: where their clones' slots hang from.
 	_formations = {} :: { [Player]: Formation },
+	-- Per caster: bumped per Summon, so a recast (or leaving) cancels the
+	-- previous cast's clones still waiting to come out.
+	_summonSerials = {} :: { [Player]: number },
 }
 
 --[ Helpers ]--
@@ -317,11 +325,25 @@ function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Pla
 		end
 	end
 
-	for _, slot in slots do
-		local spot = (castFrame * CFrame.new(SLOT_OFFSETS[slot])).Position
-		local floor = floorBelow(spot, standHeight)
-		local position = Vector3.new(spot.X, if floor then floor + standHeight else castFrame.Position.Y, spot.Z)
+	local serial = (self._summonSerials[player] or 0) + 1
+	self._summonSerials[player] = serial
+
+	local function spawnClone(slot: number, isFirst: boolean)
+		-- A later clone forms on the caster where they stand NOW (level),
+		-- so one arriving after a step is not left behind.
+		local frame = castFrame
 		local look = castLook
+		if not isFirst then
+			local liveRoot = player.Character and getRoot(player.Character)
+			if liveRoot then
+				local liveLook = flat(liveRoot.CFrame.LookVector)
+				look = if liveLook.Magnitude > 0.01 then liveLook.Unit else castLook
+				frame = CFrame.lookAt(liveRoot.Position, liveRoot.Position + look)
+			end
+		end
+		local spot = (frame * CFrame.new(SLOT_OFFSETS[slot])).Position
+		local floor = floorBelow(spot, standHeight)
+		local position = Vector3.new(spot.X, if floor then floor + standHeight else frame.Position.Y, spot.Z)
 
 		local model = Instance.new("Model")
 		model.Name = "ShadowClone"
@@ -372,8 +394,25 @@ function ShadowCloneService.Summon(self: typeof(ShadowCloneService), player: Pla
 		}
 		table.insert(self._clones, clone)
 		self._byModel[model] = clone
+		self:_ensureStepping()
 	end
-	self:_ensureStepping()
+
+	for index, slot in slots do
+		if index == 1 then
+			spawnClone(slot, true)
+		else
+			GameClock.Delay((index - 1) * SPAWN_INTERVAL, function()
+				if
+					self._summonSerials[player] ~= serial
+					or not player.Parent
+					or not (player.Character and getRoot(player.Character))
+				then
+					return
+				end
+				spawnClone(slot, false)
+			end)
+		end
+	end
 end
 
 -- The live clones (do not mutate).
@@ -860,6 +899,7 @@ function ShadowCloneService.Start(self: typeof(ShadowCloneService))
 	-- Made up front, so clients can wait on it.
 	self:_cloneFolder()
 	Players.PlayerRemoving:Connect(function(player: Player)
+		self._summonSerials[player] = nil
 		for index = #self._clones, 1, -1 do
 			local clone = self._clones[index]
 			if clone and clone.owner == player then

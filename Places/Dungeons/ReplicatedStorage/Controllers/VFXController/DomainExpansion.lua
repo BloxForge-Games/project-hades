@@ -1,6 +1,7 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 --[[
 	SCREEN EFFECTS ARE CLAIMED, NOT WRITTEN. The tint, Sukuna's theme and
@@ -31,6 +32,7 @@ local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
 
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 
 -- Both shakes go through the PRESET system (Shared/Data/CameraShakeData),
 -- where their feel is tuned. `DomainAmbient` is the sustained rumble held
@@ -38,7 +40,13 @@ local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enum
 -- breaks the ground. It fires mid-cutscene, on top of the cinematic bob
 -- (CameraShakeController's overlay composes after it).
 local DOMAIN_AMBIENT_SHAKE = CameraShakePresets.DomainAmbient
-local DOMAIN_RISE_SHAKE = CameraShakePresets.Medium
+-- The slow, eased cinematic rumble (2026-11-10; Medium before: too sharp
+-- for the rise).
+local SHRINE_SCALE = 1.1
+-- How far short of its end the cast animation freezes (a non-looped track
+-- that reaches its end stops and falls back to the idle): one frame.
+local CAST_ANIMATION_END_MARGIN = 1 / 60
+local DOMAIN_RISE_SHAKE = CameraShakePresets.CinematicImpact
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
@@ -72,12 +80,46 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		cframe = getRootPart(character).CFrame
 	end
 
+	-- The cast's GROUND burst (2026-11-11): GameAssets.VFX["Domain
+	-- Expansion"].Ground on the floor under the caster, the moment the cast
+	-- (and the cutscene) starts. Each emitter bursts its EmitCount, 1 when
+	-- it names none.
+	emitVFXPart("Domain Expansion/Ground", cframe, nil, {
+		GroundSnapDistance = 10,
+		GroundFallbackDrop = 3,
+		DefaultEmitCount = 1,
+	})
+
 	-- One ambience claim per cast (see the header): unique so two domains,
 	-- from the same caster or different ones, never collide.
 	local ambienceId = ("DomainExpansion_%d_%s"):format(player.UserId, tostring(GameClock.Now()))
 
 	local shrineModel = ReplicatedStorage.GameAssets.VFX:FindFirstChild("Domain Expansion").Shrine:Clone()
-	shrineModel:PivotTo(cframe * CFrame.Angles(0, math.rad(90), 0) + cframe.LookVector * -11 + Vector3.new(0, -15, 0))
+	-- The shrine's Camera folder (Eyes, Flames) is the caster's cutscene
+	-- screen effects (Cutscenes/DomainExpansion), not part of the shrine
+	-- in the world.
+	local screenEffects = shrineModel:FindFirstChild("Camera")
+	if screenEffects then
+		screenEffects:Destroy()
+	end
+	-- 10% bigger (2026-11-11; 20% briefly). It scales about its pivot (its main part,
+	-- mid-height), which would sink its base: it is lifted by what the base
+	-- dropped, so it stands on the same ground.
+	local primary = shrineModel.PrimaryPart
+	local baseDrop = if primary then (SHRINE_SCALE - 1) * primary.Size.Y / 2 else 0
+	shrineModel:ScaleTo(shrineModel:GetScale() * SHRINE_SCALE)
+	shrineModel:PivotTo(
+		cframe * CFrame.Angles(0, math.rad(90), 0) + cframe.LookVector * -11 + Vector3.new(0, -15 + baseDrop, 0)
+	)
+	-- The caster hears their own shrine through their cutscene's isolation,
+	-- which mutes the world's sounds (2026-11-10).
+	if player == Players.LocalPlayer then
+		for _, sound in shrineModel:GetDescendants() do
+			if sound:IsA("Sound") then
+				sound:SetAttribute(Attributes.CutsceneAudio, true)
+			end
+		end
+	end
 	shrineModel.Parent = workspace.IgnoreInstances.Map.ArcaneSpells
 
 	shrineModel.AppearPart.Position = getRootPart(character).Position + Vector3.new(0, -5, 0)
@@ -104,8 +146,27 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		return
 	end
 
-	GameClock.Delay(1, function()
-		GameClock.SetAnimationSpeed(domainExpansionAnimation, 0)
+	-- Frozen on its LAST frame, held for the domain (2026-11-11). It froze
+	-- at a flat 1 s before, which at 0.35x is under half of the 0.72 s
+	-- animation: the cast pose never finished.
+	-- Watched every frame and frozen on its very last frame (2026-11-11:
+	-- a timer froze it a little early). A track that runs past its end
+	-- stops and falls back to the idle, so the freeze lands one frame short.
+	local holdLastFrame: RBXScriptConnection
+	holdLastFrame = RunService.Heartbeat:Connect(function(deltaTime: number)
+		local length = domainExpansionAnimation.Length
+		if not domainExpansionAnimation.IsPlaying or length <= 0 then
+			if not domainExpansionAnimation.IsPlaying then
+				holdLastFrame:Disconnect()
+			end
+			return
+		end
+		local nextPosition = domainExpansionAnimation.TimePosition + deltaTime * domainExpansionAnimation.Speed
+		if nextPosition >= length then
+			GameClock.SetAnimationSpeed(domainExpansionAnimation, 0)
+			domainExpansionAnimation.TimePosition = length - CAST_ANIMATION_END_MARGIN
+			holdLastFrame:Disconnect()
+		end
 	end)
 
 	if not preload then
@@ -246,12 +307,25 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 				local slashes = ReplicatedStorage.GameAssets.Sounds.Slashes:Clone()
 				slashes.Name = "Slashes"
 				slashes.RollOffMaxDistance = 200
+				-- The caster's own domain is heard through their cutscene's
+				-- isolation (it mutes the world's sounds, 2026-11-10).
+				if player == Players.LocalPlayer then
+					slashes:SetAttribute(Attributes.CutsceneAudio, true)
+				end
 				slashes.Parent = shrineModel.PrimaryPart
 				slashes:Play()
 
-				for _, particle in pairs(shrineModel.SlashesPart:GetChildren()) do
-					if particle:IsA("ParticleEmitter") then
-						particle.Enabled = true
+				-- Both slash parts (SlashesPart2 added 2026-11-10), each
+				-- optional so a model without the second still plays.
+				for _, partName in { "SlashesPart", "SlashesPart2" } do
+					local slashesPart = shrineModel:FindFirstChild(partName)
+					if not slashesPart then
+						continue
+					end
+					for _, particle in slashesPart:GetChildren() do
+						if particle:IsA("ParticleEmitter") then
+							particle.Enabled = true
+						end
 					end
 				end
 			end)

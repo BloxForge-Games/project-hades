@@ -22,6 +22,8 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local AmbientGradientInterfaceController = require(ReplicatedStorage.Interfaces.AmbientGradientInterfaceController)
 local MobController = require(ReplicatedStorage.Controllers.MobController)
+local CutsceneIsolationController = require(ReplicatedStorage.Controllers.CutsceneIsolationController)
+local EncounterMistController = require(ReplicatedStorage.Controllers.EncounterMistController)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 local CutsceneController = {
@@ -292,12 +294,90 @@ function CutsceneController.PlayArcaneCutscene(self: typeof(CutsceneController),
 
 	character:SetAttribute(Attributes.ArcaneCutscenePlaying, true)
 	MobController:SetCutsceneDim(true)
-	self:_setArcaneExposure(true)
+	-- `naturalLighting` (2026-11-09, Susanoo): the frame keeps gameplay's
+	-- look -- no exposure drop -- and Lighting.Atmosphere.Density is SET
+	-- ONCE to `atmosphereDensity` (gameplay's zoomed-in haze by default)
+	-- and left alone: the camera stops easing it for the cutscene, so it
+	-- can be tuned live in Studio. The camera takes it back after.
+	local naturalLighting = config.naturalLighting == true
+	if naturalLighting then
+		IsometricCameraController:SetAtmosphereHeld(true)
+		local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+		if atmosphere then
+			local density = config.atmosphereDensity
+			-- In a boss fight's mist, its own value (`bossAtmosphereDensity`,
+			-- 2026-11-09): the plain one thinned the mist out up close and
+			-- its colour dropped away.
+			if EncounterMistController:IsOn() and typeof(config.bossAtmosphereDensity) == "number" then
+				density = config.bossAtmosphereDensity
+			end
+			if typeof(density) ~= "number" then
+				local range = (IsometricCameraController :: any)._atmosphereDensityRange
+					or IsometricCameraController:GetDefaultAtmosphereDensityRange()
+				density = range.zoomedIn
+			end
+			atmosphere.Density = density
+		end
+	else
+		self:_setArcaneExposure(true)
+	end
+	-- `colorCorrection` (2026-11-09, Susanoo): Lighting.ColorCorrection's
+	-- Brightness / Contrast / Saturation for the cutscene, put back to what
+	-- they were after it.
+	local gradeBefore: { [string]: number }? = nil
+	local grade = Lighting:FindFirstChild("ColorCorrection")
+	if typeof(config.colorCorrection) == "table" and grade and grade:IsA("ColorCorrectionEffect") then
+		local before: { [string]: number } = {}
+		for property, value in config.colorCorrection do
+			local target = grade :: any
+			before[property] = target[property]
+			target[property] = value
+		end
+		gradeBefore = before
+	end
+	local function restoreLighting()
+		if naturalLighting then
+			IsometricCameraController:SetAtmosphereHeld(false)
+		else
+			self:_setArcaneExposure(false)
+		end
+		local function restoreGrade()
+			if gradeBefore and grade and grade.Parent then
+				-- Only what still holds the cutscene's value: one moved since
+				-- by someone else is theirs. Near, not equal: the property is
+				-- a 32-bit float, so -0.1 never reads back as exactly -0.1.
+				for property, value in gradeBefore do
+					local target = grade :: any
+					if math.abs(target[property] - config.colorCorrection[property]) < 1e-4 then
+						target[property] = value
+					end
+				end
+			end
+		end
+		-- `gradeHoldSeconds` (2026-11-09, Susanoo): the grade stays on
+		-- this long after the camera hands back.
+		local hold = config.gradeHoldSeconds
+		if typeof(hold) == "number" and hold > 0 then
+			GameClock.Delay(hold, restoreGrade)
+		else
+			restoreGrade()
+		end
+	end
+	-- `isolate` (2026-11-09, Susanoo): only the caster on screen, the
+	-- world's sounds muted. Every arcane cutscene since 2026-11-10 (Domain
+	-- Expansion's too); `isolate = false` opts one out.
+	local isolate = config.isolate ~= false
+	if isolate then
+		CutsceneIsolationController:SetActive(true)
+	end
 	if typeof(config.path) == "string" then
 		-- PlayCutscene yields for the whole camera path.
 		self:PlayCutscene(config.path)
+		if isolate then
+			CutsceneIsolationController:SetActive(false)
+		end
 		MobController:SetCutsceneDim(false)
-		self:_setArcaneExposure(false)
+		restoreLighting()
 		character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 		return
 	end
@@ -322,8 +402,11 @@ function CutsceneController.PlayArcaneCutscene(self: typeof(CutsceneController),
 		character:SetAttribute(Attributes.CutscenePlaying, false)
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
 	end
+	if isolate then
+		CutsceneIsolationController:SetActive(false)
+	end
 	MobController:SetCutsceneDim(false)
-	self:_setArcaneExposure(false)
+	restoreLighting()
 	character:SetAttribute(Attributes.ArcaneCutscenePlaying, false)
 end
 

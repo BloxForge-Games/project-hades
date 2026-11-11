@@ -214,6 +214,13 @@ function EncounterMistController._mistOff(self: typeof(EncounterMistController))
 	end
 end
 
+--[ Public ]--
+
+-- The mist is in (a miniboss / boss fight; false once its fade out starts).
+function EncounterMistController.IsOn(self: typeof(EncounterMistController)): boolean
+	return self._on
+end
+
 --[ Lifecycle ]--
 
 function EncounterMistController.Start(self: typeof(EncounterMistController))

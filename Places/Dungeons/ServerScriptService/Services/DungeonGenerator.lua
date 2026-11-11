@@ -251,6 +251,39 @@ function DungeonGenerator._getRoomFloors(_self: typeof(DungeonGenerator), model:
 	return floors
 end
 
+-- A floor's world-space bounding box (min, max), its footprint shrunk by
+-- FLOOR_OVERLAP_SLACK on every side so rooms that only TOUCH at a doorway
+-- edge do not count.
+local FLOOR_OVERLAP_SLACK = 1.5
+-- Floors closer than this vertically are on the same level.
+local FLOOR_LEVEL_STUDS = 8
+
+local function floorBox(floor: BasePart): (Vector3, Vector3)
+	local cframe = floor.CFrame
+	local half = floor.Size / 2
+	local extent = Vector3.new(
+		math.abs(cframe.XVector.X) * half.X + math.abs(cframe.YVector.X) * half.Y + math.abs(cframe.ZVector.X) * half.Z,
+		math.abs(cframe.XVector.Y) * half.X + math.abs(cframe.YVector.Y) * half.Y + math.abs(cframe.ZVector.Y) * half.Z,
+		math.abs(cframe.XVector.Z) * half.X + math.abs(cframe.YVector.Z) * half.Y + math.abs(cframe.ZVector.Z) * half.Z
+	)
+	local shrink = Vector3.new(FLOOR_OVERLAP_SLACK, 0, FLOOR_OVERLAP_SLACK)
+	return cframe.Position - extent + shrink, cframe.Position + extent - shrink
+end
+
+local function boxesOverlap(aMin: Vector3, aMax: Vector3, bMin: Vector3, bMax: Vector3): boolean
+	if aMin.X >= bMax.X or bMin.X >= aMax.X or aMin.Z >= bMax.Z or bMin.Z >= aMax.Z then
+		return false
+	end
+	local aMid = (aMin.Y + aMax.Y) / 2
+	local bMid = (bMin.Y + bMax.Y) / 2
+	return math.abs(aMid - bMid) < FLOOR_LEVEL_STUDS
+end
+
+-- Any of `candidateFloors` overlapping any of `placedFloors`. By GEOMETRY
+-- first (2026-11-10: the physics query alone let combat rooms through onto
+-- the start room -- it never sees a floor with CanQuery off, or one the
+-- spatial index has not caught up with), then by the physics query, which
+-- catches non-box floor shapes.
 function DungeonGenerator._floorsOverlapAny(
 	_self: typeof(DungeonGenerator),
 	candidateFloors: { BasePart },
@@ -258,6 +291,15 @@ function DungeonGenerator._floorsOverlapAny(
 ): boolean
 	if #placedFloors == 0 then
 		return false
+	end
+	for _, candidate in candidateFloors do
+		local aMin, aMax = floorBox(candidate)
+		for _, placed in placedFloors do
+			local bMin, bMax = floorBox(placed)
+			if boxesOverlap(aMin, aMax, bMin, bMax) then
+				return true
+			end
+		end
 	end
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include

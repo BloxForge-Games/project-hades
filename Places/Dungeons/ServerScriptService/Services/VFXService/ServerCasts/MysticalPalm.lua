@@ -1,11 +1,11 @@
 --!strict
 --[[
-	Healing Tree, server side (2026-11-08): Runegrove's support Rare.
+	Mystical Palm, server side (2026-11-10; Healing Tree before): Runegrove's
+	support Rare.
 
-	The cast plants a tree `treeOffset` studs ahead of the cast CFrame, on
-	the floor under that spot (the client's VFXController/HealingTree
-	places its tree the same way from the same CFrame). For `treeSeconds`,
-	every `tickSeconds` each player within `treeRadius` of it (the caster
+	The caster channels for `channelSeconds` (rooted for the whole cast
+	`duration` by the client, VFXController/MysticalPalm). Every
+	`tickSeconds` each player within `healRadius` of the CASTER (the caster
 	too) who is alive and not downed heals `healFraction` of their OWN max
 	health through PlayerStatsService:ApplyHealing (so healing amps apply
 	inside), with a green "+N" for everyone
@@ -13,7 +13,7 @@
 
 	A share of max health like the Orbs, never scaled by damage dealt or
 	Arcane Rank (the GDD's healing rule); the long cooldown is the limit.
-	The tree stands its full time even if the caster dies.
+	The channel stops at once if the caster dies, is downed or leaves.
 ]]
 
 local Players = game:GetService("Players")
@@ -28,36 +28,20 @@ local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Chara
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local DamageIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.DamageIndicatorService)
 
-local SPELL = ArcaneNames["Healing Tree"]
--- How far below the cast point the floor is looked for.
-local FLOOR_SEARCH = 12
+local SPELL = ArcaneNames["Mystical Palm"]
 
--- The tree's base: `offset` studs ahead of `cframe` (flat), dropped to the
--- floor; the flat point itself when there is no floor under it.
-local function treeBase(cframe: CFrame, offset: number): Vector3
-	local look = Vector3.new(cframe.LookVector.X, 0, cframe.LookVector.Z)
-	look = if look.Magnitude > 1e-3 then look.Unit else Vector3.zAxis
-	local point = cframe.Position + look * offset
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	local ignore: { Instance } = {}
-	for _, player in Players:GetPlayers() do
-		if player.Character then
-			table.insert(ignore, player.Character)
-		end
+-- The caster can still channel: in the game, alive and not downed.
+local function channeling(caster: Player, character: Model): boolean
+	if not caster.Parent or caster.Character ~= character then
+		return false
 	end
-	local ignoreFolder = workspace:FindFirstChild("IgnoreInstances")
-	if ignoreFolder then
-		table.insert(ignore, ignoreFolder)
-	end
-	params.FilterDescendantsInstances = ignore
-	local hit = workspace:Raycast(point + Vector3.new(0, 2, 0), Vector3.new(0, -FLOOR_SEARCH, 0), params)
-	return if hit then hit.Position else point - Vector3.new(0, 3, 0)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	return humanoid ~= nil and humanoid.Health > 0 and character:GetAttribute(Attributes.Downed) ~= true
 end
 
--- One tick: heals every eligible player within `radius` of `base`
+-- One tick: heals every eligible player within `radius` of `center`
 -- (measured flat, so a jump does not leave the circle).
-local function pulse(base: Vector3, radius: number, fraction: number)
+local function pulse(center: Vector3, radius: number, fraction: number)
 	for _, player in Players:GetPlayers() do
 		local character = player.Character
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -71,8 +55,8 @@ local function pulse(base: Vector3, radius: number, fraction: number)
 		if character:GetAttribute(Attributes.Downed) == true then
 			continue
 		end
-		local flat = Vector3.new(root.Position.X - base.X, 0, root.Position.Z - base.Z)
-		if flat.Magnitude > radius or math.abs(root.Position.Y - base.Y) > 12 then
+		local flat = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z)
+		if flat.Magnitude > radius or math.abs(root.Position.Y - center.Y) > 12 then
 			continue
 		end
 		local healed = PlayerStatsService:ApplyHealing(player, humanoid.MaxHealth * fraction)
@@ -82,18 +66,30 @@ local function pulse(base: Vector3, radius: number, fraction: number)
 	end
 end
 
-return function(_vfxService: any, _player: Player, cframe: CFrame)
+return function(_vfxService: any, caster: Player, _cframe: CFrame)
+	local character = caster.Character
+	if not character then
+		return
+	end
 	local data = ArcaneData[SPELL]
-	local seconds = data.treeSeconds or 5
-	local radius = data.treeRadius or 14
+	local seconds = data.channelSeconds or 5
+	local radius = data.healRadius or 14
 	local tick = data.tickSeconds or 0.5
 	local fraction = data.healFraction or 0.02
-	local base = treeBase(cframe, data.treeOffset or 5)
 
 	local ticks = math.floor(seconds / tick + 0.5)
+	local stopped = false
 	for index = 1, ticks do
 		GameClock.Delay(tick * index, function()
-			pulse(base, radius, fraction)
+			if stopped then
+				return
+			end
+			local root = getRoot(character)
+			if not root or not channeling(caster, character) then
+				stopped = true
+				return
+			end
+			pulse(root.Position, radius, fraction)
 		end)
 	end
 end

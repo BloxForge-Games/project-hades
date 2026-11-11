@@ -2,25 +2,28 @@
 --[[
 	Eight Inner Gates, server side (2026-11-08): Runegrove's melee Epic.
 
-	One press. The whole cast (`duration`) takes `flurryDamageReduction`
-	less damage (DamageService:AddTimedReduction). After the gate flare and
-	the lunge (the caster's client dashes, VFXController/EightInnerGates),
-	`flurryHits` punches land over `flurrySeconds`: each hits every mob in a
-	cone `coneLength` long and `coneAngle` wide ahead of the caster's
-	CURRENT root for `damage` through VFXService's spell-hit path (Rank,
-	crits, Arcane, relic procs; no knockback). Then the finisher hits the
-	same cone for `finisherDamage` with the spell's knockback and camera
-	shake. Every punch and the finisher also break the breakables in the
-	cone's reach as spell hits (canBreakBuildings; Breakable.HitInRadius,
-	each one once per cast; 2026-11-08).
+	One press (2026-11-09; a lunge into a 6-punch flurry and a finisher
+	before). The caster is rooted (their client's walk speed claim) and
+	invulnerable (InvulnerabilityService "Combat" window, the white
+	highlight) for the whole cast (`duration`). After `chargeSeconds` the
+	caster's client dashes them `dashStuds` forward (VFXController/
+	EightInnerGates). Once the dash has landed and replicated, the first
+	kick hits every mob along the path the root actually travelled
+	(`pathWidth` wide, reaching `kickReach` past the end) for `damage`
+	through VFXService's spell-hit path (Rank, crits, Arcane, relic procs)
+	with a small push (`firstKickKnockbackStuds`), and breaks the breakables
+	along the path as spell hits (canBreakBuildings; Breakable.HitInRadius).
+	`secondKickDelay` later the second kick hits every mob within
+	`secondKickRadius` of the landing and `kickReach` ahead of it for
+	`damage` again, launched away from the dash's start with the camera
+	shake (2026-11-09: a double kick).
 
-	ON CAST (2026-11-08; after the finisher before) the gate opens: the
-	character's Attributes.InnerGatesOpen is set for `gateSeconds` (this
-	module is its one writer; RelicGimmickService/Blaze folds gateSwingSpeed
-	into MeleeSwingSpeed and getEffectiveBaseWalkSpeed adds gateMoveSpeed),
-	and the Enflamed aura is granted for the same `gateSeconds`
-	(AuraService:SetAura: its rig, +30% Weapon Damage, a smooth fade out).
-	A recast while open restarts both.
+	ON CAST the gate opens: the character's Attributes.InnerGatesOpen is
+	set for `gateSeconds` (this module is its one writer;
+	RelicGimmickService/Blaze folds gateSwingSpeed into MeleeSwingSpeed and
+	getEffectiveBaseWalkSpeed adds gateMoveSpeed), and the Enflamed aura is
+	granted for the same `gateSeconds` (AuraService:SetAura: its rig, a
+	smooth fade out). A recast while open restarts both.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35,26 +38,24 @@ local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 
 local SPELL = ArcaneNames["Eight Inner Gates"]
--- Mobs this close count as in the cone whatever the angle (point blank).
-local POINT_BLANK = 4
--- When the first punch lands after the lunge ends (lets the dash replicate).
+-- When the kick resolves after the dash ends (lets the dash replicate).
 local AFTER_DASH = 0.1
 
 -- [character] = the latest cast's token, so an older cast's timer never
 -- closes a newer gate.
 local gateTokens: { [Model]: number } = setmetatable({}, { __mode = "k" }) :: any
 
--- Every living mob in the cone ahead of `root` right now.
-local function mobsInCone(root: BasePart, length: number, angle: number): { Model }
+-- Every living mob within `halfWidth` (flat) of the segment `from`-`to`.
+local function mobsAlongPath(from: Vector3, to: Vector3, halfWidth: number): { Model }
 	local found: { Model } = {}
 	local ignore = workspace:FindFirstChild("IgnoreInstances")
 	local folder = ignore and ignore:FindFirstChild("Mobs")
 	if not folder then
 		return found
 	end
-	local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
-	look = if look.Magnitude > 1e-3 then look.Unit else Vector3.zAxis
-	local halfAngle = math.rad(angle / 2)
+	local a = Vector3.new(from.X, 0, from.Z)
+	local segment = Vector3.new(to.X, 0, to.Z) - a
+	local lengthSq = segment:Dot(segment)
 	for _, model in folder:GetChildren() do
 		if not model:IsA("Model") then
 			continue
@@ -64,18 +65,12 @@ local function mobsInCone(root: BasePart, length: number, angle: number): { Mode
 		if not humanoid or humanoid.Health <= 0 or not mobRoot or not mobRoot:IsA("BasePart") then
 			continue
 		end
-		local flat = (mobRoot.Position - root.Position) * Vector3.new(1, 0, 1)
-		local reach = flat.Magnitude - mobRoot.Size.X / 2
-		if reach > length then
-			continue
+		local p = Vector3.new(mobRoot.Position.X, 0, mobRoot.Position.Z)
+		local t = if lengthSq > 1e-6 then math.clamp((p - a):Dot(segment) / lengthSq, 0, 1) else 0
+		local gap = (p - (a + segment * t)).Magnitude - mobRoot.Size.X / 2
+		if gap <= halfWidth then
+			table.insert(found, model)
 		end
-		if flat.Magnitude > POINT_BLANK then
-			local cos = flat.Unit:Dot(look)
-			if math.acos(math.clamp(cos, -1, 1)) > halfAngle then
-				continue
-			end
-		end
-		table.insert(found, model)
 	end
 	return found
 end
@@ -97,38 +92,28 @@ return function(vfxService: any, player: Player, _cframe: CFrame)
 	if not character then
 		return
 	end
-	local damageService = Blitz.OptionalService("DamageService")
-	if damageService then
-		damageService:AddTimedReduction(player, SPELL, data.flurryDamageReduction or 0.5, data.duration or 1.8)
+	local invulnerability = Blitz.OptionalService("InvulnerabilityService")
+	if invulnerability then
+		invulnerability:ApplyTo(character, data.duration or 1.8, "Combat")
 	end
-	local gateSeconds = data.gateSeconds or 8
+	local gateSeconds = data.gateSeconds or 10
 	openGate(character, gateSeconds)
 	local auraService = Blitz.OptionalService("AuraService")
 	if auraService then
 		auraService:SetAura(player, AuraNames.Enflamed, character, gateSeconds)
 	end
 
-	local length = data.coneLength or 14
-	local angle = data.coneAngle or 80
-	local hits = data.flurryHits or 6
-	local flurrySeconds = data.flurrySeconds or 0.6
-	local start = (data.flareSeconds or 0.75) + (data.dashSeconds or 0.2) + AFTER_DASH
-	local spacing = flurrySeconds / hits
+	local chargeSeconds = data.chargeSeconds or 1
+	local halfWidth = (data.pathWidth or 10) / 2
+	local kickReach = data.kickReach or 5
+	-- Where the dash starts: the root when the charge ends.
+	local startPosition: Vector3? = nil
+	GameClock.Delay(chargeSeconds, function()
+		local root = getRoot(character)
+		startPosition = root and root.Position
+	end)
 
-	-- The flurry's own hit row: a small push (`punchKnockbackStuds`; a nil
-	-- push fell back to every spell's 3 studs, 18 over the flurry, until
-	-- 2026-11-08) and no per-punch shake.
-	local punch = table.clone(data)
-	punch.knockbackStuds = data.punchKnockbackStuds or 0.5
-	punch.knockbackSlideSpeed = nil
-	punch.cameraShake = false
-	-- The finisher: its own damage, with the spell's knockback and shake.
-	local finisher = table.clone(data)
-	finisher.damage = data.finisherDamage or 120
-	-- Breakables already broken by this cast.
-	local brokenThisCast: { [Instance]: boolean } = {}
-
-	local function strike(row: { [any]: any })
+	GameClock.Delay(chargeSeconds + (data.dashSeconds or 0.25) + AFTER_DASH, function()
 		if player.Character ~= character then
 			return
 		end
@@ -136,25 +121,43 @@ return function(vfxService: any, player: Player, _cframe: CFrame)
 		if not root then
 			return
 		end
-		local at = CFrame.new(root.Position)
-		for _, model in mobsInCone(root, length, angle) do
-			vfxService:_spellHit(model, at, player, SPELL, row)
+		local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+		look = if look.Magnitude > 1e-3 then look.Unit else Vector3.zAxis
+		local from = startPosition or root.Position
+		local to = root.Position + look * kickReach
+		-- Pushed away from the dash's start (along and out of the path).
+		local at = CFrame.new(from)
+		local firstKick = table.clone(data)
+		firstKick.knockbackStuds = data.firstKickKnockbackStuds or 1
+		firstKick.knockbackSlideSpeed = nil
+		firstKick.cameraShake = false
+		for _, model in mobsAlongPath(from, to, halfWidth) do
+			vfxService:_spellHit(model, at, player, SPELL, firstKick)
 		end
-		if data.canBreakBuildings then
-			-- A circle over the cone's reach, ahead of the caster.
-			local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
-			look = if look.Magnitude > 1e-3 then look.Unit else Vector3.zAxis
-			local Breakable = (require :: any)(ServerScriptService.Components.Breakable)
-			Breakable.HitInRadius(root.Position + look * (length / 2), length / 2, player, brokenThisCast, true)
-		end
-	end
 
-	for index = 0, hits - 1 do
-		GameClock.Delay(start + index * spacing, function()
-			strike(punch)
+		-- The second kick: around and ahead of the landing, the launch.
+		GameClock.Delay(data.secondKickDelay or 0.25, function()
+			if player.Character ~= character then
+				return
+			end
+			local liveRoot = getRoot(character)
+			if not liveRoot then
+				return
+			end
+			local landing = liveRoot.Position
+			for _, model in mobsAlongPath(landing, landing + look * kickReach, data.secondKickRadius or 9) do
+				vfxService:_spellHit(model, at, player, SPELL, data)
+			end
 		end)
-	end
-	GameClock.Delay(start + flurrySeconds, function()
-		strike(finisher)
+		if data.canBreakBuildings then
+			-- Circles strung along the path.
+			local Breakable = (require :: any)(ServerScriptService.Components.Breakable)
+			local seen: { [Instance]: boolean } = {}
+			local span = (to - from) * Vector3.new(1, 0, 1)
+			local steps = math.max(1, math.ceil(span.Magnitude / halfWidth))
+			for step = 0, steps do
+				Breakable.HitInRadius(from + span * (step / steps), halfWidth, player, seen, true)
+			end
+		end
 	end)
 end

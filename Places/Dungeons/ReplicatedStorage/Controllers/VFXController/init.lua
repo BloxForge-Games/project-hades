@@ -20,6 +20,8 @@ local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attrib
 local InterfaceManagerController =
 	require(ReplicatedStorage.Submodules.Core.Source.Controllers.InterfaceManagerController)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
+local isArcaneCutscenePlaying =
+	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Cutscene.isArcaneCutscenePlaying)
 
 -- Sub-registry: per-projectile modules for MOB ranged attacks. Keyed
 -- by projectileName (matches MobData[name].genericAttacks[i].projectileName).
@@ -162,6 +164,11 @@ function VFXController.RunMobProjectile(
 	castUuid: string,
 	attackConfig: { speed: number, lifetime: number, hitRadius: number }
 )
+	-- Purely visual (the server owns the hit): skipped through this
+	-- client's arcane cutscene (2026-11-09).
+	if isArcaneCutscenePlaying() then
+		return
+	end
 	MobProjectiles.Run(projectileName, mobModel, originCFrame, targetPosition, castUuid, attackConfig)
 end
 
@@ -191,6 +198,11 @@ function VFXController.Start(self: typeof(VFXController))
 		local vfxName = payload.ArcaneName
 		local cframe = payload.CFrame
 		if player == Players.LocalPlayer then
+			return
+		end
+		-- Nothing of anyone else's through this client's own arcane
+		-- cutscene (2026-11-09): no visuals, no sounds.
+		if isArcaneCutscenePlaying() then
 			return
 		end
 		self:_runVFXModule(player, vfxName, cframe)

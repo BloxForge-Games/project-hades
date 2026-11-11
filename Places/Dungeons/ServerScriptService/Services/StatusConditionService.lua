@@ -1231,6 +1231,11 @@ function StatusConditionService:ApplyStatus(
 		end
 	end
 	if applied ~= nil and status then
+		-- The apply gimmicks (Zombie Bomb's Rot Eye, 2026-11-10).
+		local gimmicks = sourcePlayer and Blitz.OptionalService("RelicGimmickService")
+		if gimmicks then
+			gimmicks:OnStatusApplied(sourcePlayer, targetModel, status)
+		end
 		self:_trySpiderExtraStatus(sourcePlayer, targetModel, status)
 		self:_refreshMelted(targetModel, sourcePlayer)
 		-- Medusa Head (duo, 2026-10-30): its owner's Poison, applied while

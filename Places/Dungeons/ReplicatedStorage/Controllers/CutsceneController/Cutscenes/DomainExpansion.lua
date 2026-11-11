@@ -3,7 +3,189 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local ScreenVfx = require(script.Parent.Parent.ScreenVfx)
+local DomainBanner = require(script.Parent.Parent.DomainBanner)
+local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
+local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
+
+-- Screen effects (2026-11-10): the shrine's Camera folder (GameAssets.VFX
+-- ["Domain Expansion"].Shrine.Camera), its Eyes and Flames held in front
+-- of the camera from the start of the FINAL waypoint tween (`at` is
+-- added to that start: both with it). The Eyes draw over the Flames
+-- (`layer`); the Flames stream until the camera is handed back, then
+-- taper off. See ScreenVfx for every field. (Eyes 1.3 / Flames 1.15
+-- studs back, 2026-11-10; 0.9 both at first.)
+local SCREEN_VFX_CUES: { ScreenVfx.Cue } = {
+	{
+		name = "Eyes",
+		at = 0,
+		-- 1.8 and 1.6x as bright since 2026-11-11 (1.3, as authored: hard to
+		-- make out).
+		distance = 1.8,
+		brightness = 1.6,
+		emitScale = 1,
+		sustain = false,
+		streamScale = 1,
+		delayShift = 0,
+		layer = 0.05,
+		warm = false,
+		-- They OPEN (2026-11-10): from 70% of their size, swelling just
+		-- past full.
+		openFrom = 0.7,
+		openSeconds = 0.3,
+	},
+	{
+		name = "Flames",
+		at = 0,
+		distance = 1.15,
+		emitScale = 1,
+		sustain = true,
+		streamScale = 0.25,
+		delayShift = 0,
+		layer = -0.05,
+		warm = true,
+	},
+}
+-- Played together EYES_SOUND_LEAD before the Eyes, heard through the
+-- cutscene's own isolation (Attributes.CutsceneAudio). (2026-11-10:
+-- 140511335933933, a laugh with 122468818914855, that one alone,
+-- 112891149928058 and 137442059115720 before this one.)
+local EYES_SOUNDS: { { id: string, volume: number } } = {
+	-- 0.6 (1 at first: a bit loud).
+	{ id = "rbxassetid://2184044761", volume = 0.6 },
+}
+local EYES_SOUND_LEAD = 0.5
+-- The Eyes (and everything on their beat: the slow-down, the grade, the
+-- Flames) come with the second dialogue line ("...Malevolent Shrine!",
+-- ArcaneData's dialogue[2].at), seconds into the cutscene (2026-11-10:
+-- 0.3 s into the final camera move before).
+local EYES_FALLBACK_AT = 3
+-- ...and this long after it (2026-11-10: on the line, too soon after the
+-- banner closed).
+local EYES_AFTER_LINE = 0.5
+-- The title banner (DomainBanner): from the cast, with the cast animation
+-- (1 s in at first), closed before the Eyes.
+local BANNER_AT = 0
+
+-- The Eyes' moment (2026-11-10). The camera move under way SLOWS to
+-- EYES_SLOW_RATE of its speed for EYES_SLOW_SECONDS as they open, then
+-- carries on (it stopped dead for 0.3 s at first): the path takes
+-- EYES_SLOW_SECONDS x (1 - EYES_SLOW_RATE) longer, which ArcaneData's
+-- cutscene.duration counts. The world drops into a dark red grade: in over
+-- GRADE_IN_SECONDS, held GRADE_HOLD_SECONDS, out over GRADE_OUT_SECONDS
+-- into the domain's own filter. Its own ColorCorrectionEffect, on top
+-- of the shared one, so it never fights the domain's claim.
+local EYES_SLOW_SECONDS = 0.4
+local EYES_SLOW_RATE = 0.25
+-- Softer since 2026-11-10 (-0.25 / 0.3 / -0.3, tint 255,120,120: too
+-- strong).
+local EYES_GRADE = {
+	TintColor = Color3.fromRGB(255, 170, 170),
+	Brightness = -0.12,
+	Contrast = 0.15,
+	Saturation = -0.15,
+}
+-- It starts GRADE_LEAD_SECONDS before the Eyes and is fully in a little
+-- after them; a short hold, then out (2026-11-10: 0.15 / 0.6 / 0.8 on the
+-- Eyes at first, then 3 / 0.6 / 1, which held too long).
+local GRADE_LEAD_SECONDS = 1
+local GRADE_IN_SECONDS = 1.5
+local GRADE_HOLD_SECONDS = 0.2
+local GRADE_OUT_SECONDS = 1
+local eyesGrade: ColorCorrectionEffect? = nil
+
+local function playEyesGrade()
+	if eyesGrade then
+		eyesGrade:Destroy()
+	end
+	local grade = Instance.new("ColorCorrectionEffect")
+	grade.Name = "DomainEyesGrade"
+	grade.TintColor = Color3.new(1, 1, 1)
+	grade.Parent = Lighting
+	eyesGrade = grade
+	TweenService:Create(grade, TweenInfo.new(GRADE_IN_SECONDS, Enum.EasingStyle.Quad), EYES_GRADE):Play()
+	GameClock.Delay(GRADE_IN_SECONDS + GRADE_HOLD_SECONDS, function()
+		if grade.Parent then
+			TweenService:Create(grade, TweenInfo.new(GRADE_OUT_SECONDS, Enum.EasingStyle.Quad), {
+				TintColor = Color3.new(1, 1, 1),
+				Brightness = 0,
+				Contrast = 0,
+				Saturation = 0,
+			}):Play()
+		end
+	end)
+	GameClock.Debris(grade, GRADE_IN_SECONDS + GRADE_HOLD_SECONDS + GRADE_OUT_SECONDS + 0.1)
+end
+local eyesSounds: { Sound } = {}
+local cancelBanner: (() -> ())? = nil
+
+-- When the Eyes come, seconds into the cutscene: the second line's time.
+local function eyesAt(): number
+	local data = ArcaneData[ArcaneNames["Domain Expansion"]]
+	local lines = data and data.dialogue
+	local second = type(lines) == "table" and lines[2]
+	return if type(second) == "table" and type(second.at) == "number" then second.at else EYES_FALLBACK_AT
+end
+
+local screenVfx = ScreenVfx.new("DomainExpansion")
+-- The Flames keep streaming this long past the hand-back, tapering off
+-- (2026-11-10: Susanoo's 0.5 s ended them too soon).
+local FLAMES_TAIL_SECONDS = 2
+-- Toward the end the Flames SWELL into a transition (2026-11-11, like
+-- Susanoo's): FLAMES_RAMP_LEAD before the hand-back their stream climbs to
+-- FLAMES_PEAK_SCALE x its authored Rate (0.25 x until then), with one more
+-- burst, then tapers over FLAMES_TAIL_SECONDS after it (1.5 before).
+local FLAMES_RAMP_LEAD = 1.2
+local FLAMES_PEAK_SCALE = 1
+-- Bumped per play, so a stopped play's pending cues stay off.
+local playToken = 0
+
+-- Where a standing character's root would be over the floor under `root`
+-- (2026-11-10): the path is placed from this, not the root's height at the
+-- cast, which a roll or a hop leaves lower or higher -- the whole shot came
+-- out from a lower angle after a roll.
+local function standingRootPosition(character: Model, root: BasePart): Vector3
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore: { Instance } = { character }
+	local ignoreFolder = workspace:FindFirstChild("IgnoreInstances")
+	if ignoreFolder then
+		for _, child in ignoreFolder:GetChildren() do
+			if child.Name ~= "Map" then
+				table.insert(ignore, child)
+			end
+		end
+	end
+	-- Nor the players' waiting platforms (no collision, but they stop a
+	-- ray: the path came out 1.5 studs high on one, 2026-11-11), and only
+	-- floors that can be stood on.
+	local baseplates = workspace:FindFirstChild("PlayerBaseplates")
+	if baseplates then
+		table.insert(ignore, baseplates)
+	end
+	params.FilterDescendantsInstances = ignore
+	params.RespectCanCollide = true
+	local hit = workspace:Raycast(root.Position + Vector3.new(0, 2, 0), Vector3.new(0, -20, 0), params)
+	if not hit or not humanoid then
+		return root.Position
+	end
+	-- R6 stands on its legs (HipHeight 0); R15 on HipHeight (2026-11-10:
+	-- HipHeight alone put an R6 path two studs low).
+	local leg = character:FindFirstChild("Left Leg")
+	local legHeight = if humanoid.RigType == Enum.HumanoidRigType.R6
+			and leg
+			and leg:IsA("BasePart")
+		then leg.Size.Y
+		else humanoid.HipHeight
+	local standHeight = legHeight + root.Size.Y / 2
+	return Vector3.new(root.Position.X, hit.Position.Y + standHeight, root.Position.Z)
+end
 
 local DomainExpansionExecutable = {}
 
@@ -44,7 +226,7 @@ DomainExpansionExecutable.CutsceneHashmap = {
 		["iteration"] = "3",
 		["easingStyle"] = "Cubic",
 		["tilt"] = "0",
-		["fov"] = "70",
+		["fov"] = "70", -- (88 for a day, 2026-11-10: no FOV change in the cutscene)
 		["instance"] = "-91.8989639, 3.70074248, -84.289711, 0, 0, 1, 0, 1, -0, -1, 0, 0",
 		["duration"] = "2.5",
 		["delay"] = "0",
@@ -56,7 +238,41 @@ DomainExpansionExecutable.CutsceneHashmap = {
 --- @param hashmap CutsceneIndex The target hashmap
 function DomainExpansionExecutable:Play()
 	local waypointModel = ReplicatedStorage.GameAssets.CutsceneWaypoints.DomainExpansionWaypoints:Clone()
-	waypointModel:PivotTo(Players.LocalPlayer.Character.HumanoidRootPart.CFrame)
+	-- Placed on the root's position and its FLAT facing (yaw only), and the
+	-- caster pinned there for the cutscene (2026-11-10, Susanoo's fix): a
+	-- roll pitches the root, which tilted the whole path, and its momentum
+	-- carried the caster away from the fixed waypoints.
+	local character = Players.LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not character or not root or not root:IsA("BasePart") then
+		waypointModel:Destroy()
+		return
+	end
+	local look = root.CFrame.LookVector
+	local flatLook = Vector3.new(look.X, 0, look.Z)
+	if flatLook.Magnitude < 1e-3 then
+		flatLook = Vector3.new(0, 0, -1)
+	end
+	local startPosition = standingRootPosition(character, root)
+	local placement = CFrame.lookAt(startPosition, startPosition + flatLook.Unit)
+	waypointModel:PivotTo(placement)
+	local facing = placement.Rotation
+	local function pinRoot()
+		root.CFrame = CFrame.new(startPosition.X, root.Position.Y, startPosition.Z) * facing
+		local velocity = root.AssemblyLinearVelocity
+		root.AssemblyLinearVelocity = Vector3.new(0, velocity.Y, 0)
+	end
+	pinRoot()
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local autoRotateBefore = humanoid and humanoid.AutoRotate
+	if humanoid then
+		humanoid.AutoRotate = false
+	end
+	local holdFacing = RunService.PreRender:Connect(function()
+		if root.Parent then
+			pinRoot()
+		end
+	end)
 	waypointModel.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 	DomainExpansionExecutable.Enabled = true
@@ -69,35 +285,118 @@ function DomainExpansionExecutable:Play()
 		waypointTotal += 1
 	end
 
+	playToken += 1
+	local token = playToken
+	local function current(): boolean
+		return playToken == token and DomainExpansionExecutable.Enabled
+	end
+	local eyesTime = eyesAt() + EYES_AFTER_LINE
+
+	-- The title banner, over the first long move.
+	GameClock.Delay(BANNER_AT, function()
+		local liveCharacter = Players.LocalPlayer.Character
+		if current() and liveCharacter then
+			cancelBanner = DomainBanner.play(liveCharacter, BANNER_AT)
+		end
+	end)
+
+	local domainAssets = ReplicatedStorage.GameAssets.VFX:FindFirstChild("Domain Expansion")
+	local shrine = domainAssets and domainAssets:FindFirstChild("Shrine")
+	local screenFolder = shrine and shrine:FindFirstChild("Camera")
+	if screenFolder then
+		local cues: { ScreenVfx.Cue } = {}
+		for _, cue in SCREEN_VFX_CUES do
+			local shifted = table.clone(cue)
+			shifted.at = eyesTime + cue.at
+			table.insert(cues, shifted)
+		end
+		screenVfx:Start(screenFolder, cues, current)
+		-- The swell, timed back from the cutscene's end (every move, plus
+		-- the time the Eyes' slow-down adds).
+		local cutsceneEnd = EYES_SLOW_SECONDS * (1 - EYES_SLOW_RATE)
+		for i = 1, waypointTotal do
+			local waypointData = hashmap["Waypoint" .. i]
+			cutsceneEnd += (tonumber(waypointData.duration) or 0) + (tonumber(waypointData.delay) or 0)
+		end
+		GameClock.Delay(math.max(cutsceneEnd - FLAMES_RAMP_LEAD, eyesTime), function()
+			if current() then
+				screenVfx:RampSustained(FLAMES_PEAK_SCALE, FLAMES_RAMP_LEAD, true)
+			end
+		end)
+	end
+	GameClock.Delay(math.max(eyesTime - GRADE_LEAD_SECONDS, 0), function()
+		if current() then
+			playEyesGrade()
+		end
+	end)
+	GameClock.Delay(math.max(eyesTime - EYES_SOUND_LEAD, 0), function()
+		if not current() then
+			return
+		end
+		for _, layer in EYES_SOUNDS do
+			local sound = Instance.new("Sound")
+			sound.Name = "DomainEyesSound"
+			sound.SoundId = layer.id
+			sound.Volume = layer.volume
+			sound:SetAttribute(Attributes.CutsceneAudio, true)
+			sound.Parent = workspace.CurrentCamera
+			sound:Play()
+			table.insert(eyesSounds, sound)
+			sound.Ended:Once(function()
+				local index = table.find(eyesSounds, sound)
+				if index then
+					table.remove(eyesSounds, index)
+				end
+				sound:Destroy()
+			end)
+			GameClock.Debris(sound, 15)
+		end
+	end)
+
 	local previousCameraType = workspace.CurrentCamera.CameraType
 	local previousCameraFieldOfView = workspace.CurrentCamera.FieldOfView
 
 	workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
 
+	-- Every move is driven here, frame by frame, on ONE clock from the
+	-- cutscene's start (`real`), so whichever move is under way when the
+	-- Eyes come SLOWS: its own clock runs at EYES_SLOW_RATE from eyesTime
+	-- for EYES_SLOW_SECONDS.
+	local camera = workspace.CurrentCamera
+	local real = 0
 	for i = 1, waypointTotal do
 		local waypointData = hashmap["Waypoint" .. i]
-		local tweenInfo = TweenInfo.new(
-			tonumber(waypointData.duration),
-			(Enum.EasingStyle :: any)[waypointData.easingStyle],
-			(Enum.EasingDirection :: any)[waypointData.easingDirection],
-			0,
-			false,
-			tonumber(waypointData.delay)
-		)
+		local style = (Enum.EasingStyle :: any)[waypointData.easingStyle] or Enum.EasingStyle.Linear
+		local direction = (Enum.EasingDirection :: any)[waypointData.easingDirection] or Enum.EasingDirection.In
 
 		local finalCameraTilt = if waypointData.tilt == 0
 			then 0
-			else math.rad(waypointData.tilt) - workspace.CurrentCamera.CFrame:ToOrientation()
-		print(finalCameraTilt)
+			else math.rad(waypointData.tilt) - camera.CFrame:ToOrientation()
 		local finalCameraCFrame = waypointModel[tostring(i)].CFrame * CFrame.Angles(0, 0, finalCameraTilt)
 
-		self.CutsceneConnection = GameClock.Tween(workspace.CurrentCamera, tweenInfo, {
-			CFrame = finalCameraCFrame,
-			FieldOfView = tonumber(waypointData.fov),
-		})
-
-		self.CutsceneConnection:Play()
-		self.CutsceneConnection.Completed:Wait()
+		local fromCFrame = camera.CFrame
+		local fromFieldOfView = camera.FieldOfView
+		local toFieldOfView = tonumber(waypointData.fov) or fromFieldOfView
+		local duration = tonumber(waypointData.duration) or 0
+		local delay = tonumber(waypointData.delay) or 0
+		if delay > 0 then
+			GameClock.Wait(delay)
+			real += delay
+		end
+		local moveClock = 0
+		while self.Enabled and moveClock < duration do
+			local deltaTime = GameClock.Dt(RunService.RenderStepped:Wait())
+			real += deltaTime
+			local slowing = real >= eyesTime and real < eyesTime + EYES_SLOW_SECONDS
+			moveClock = math.min(moveClock + deltaTime * (if slowing then EYES_SLOW_RATE else 1), duration)
+			local alpha = TweenService:GetValue(moveClock / duration, style, direction)
+			camera.CFrame = fromCFrame:Lerp(finalCameraCFrame, alpha)
+			camera.FieldOfView = fromFieldOfView + (toFieldOfView - fromFieldOfView) * alpha
+		end
+		if duration <= 0 then
+			camera.CFrame = finalCameraCFrame
+			camera.FieldOfView = toFieldOfView
+		end
 
 		if not self.Enabled then
 			break
@@ -106,10 +405,16 @@ function DomainExpansionExecutable:Play()
 
 	workspace.CurrentCamera.CameraType = previousCameraType
 	workspace.CurrentCamera.FieldOfView = previousCameraFieldOfView
+	screenVfx:EndSustained(FLAMES_TAIL_SECONDS)
 
 	-- The waypoint rig is only needed while the tweens read it; without this
 	-- every play left one more clone in ArcaneSpells.
 	waypointModel:Destroy()
+
+	holdFacing:Disconnect()
+	if humanoid and autoRotateBefore ~= nil then
+		humanoid.AutoRotate = autoRotateBefore
+	end
 end
 
 --- Stops any existing cutscenes that resembles the passed hashmap.
@@ -123,6 +428,19 @@ function DomainExpansionExecutable:Stop(hashmap: CutsceneIndex)
 
 	if DomainExpansionExecutable.CutsceneConnection then
 		DomainExpansionExecutable.CutsceneConnection:Cancel()
+	end
+	screenVfx:StopAll()
+	for _, sound in eyesSounds do
+		sound:Destroy()
+	end
+	table.clear(eyesSounds)
+	if eyesGrade then
+		eyesGrade:Destroy()
+		eyesGrade = nil
+	end
+	if cancelBanner then
+		cancelBanner()
+		cancelBanner = nil
 	end
 end
 

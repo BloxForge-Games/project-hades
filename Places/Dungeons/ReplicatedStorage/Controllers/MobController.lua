@@ -577,6 +577,9 @@ local function spawnHitboxFlash(
 	if not clonedHitbox then
 		return
 	end
+	-- Tagged so a cutscene can hide telegraphs among the spell effects
+	-- (CutsceneIsolationController).
+	clonedHitbox:SetAttribute(Attributes.MobTelegraph, true)
 	clonedHitbox.Parent = HITBOX_PARENT
 
 	-- Collect every BasePart upfront so the flash + death-fade loops
@@ -691,6 +694,15 @@ local function runMobFade(mob: Model, phase: "In" | "Out", duration: number)
 		tweenInfo = tweenInfo,
 		includeDecals = true,
 		disable = { "ParticleEmitter", "Trail", "Beam" },
+		-- Faded out during an arcane cutscene's dim: what comes back is
+		-- the part's real value, not the dim's 0.75 (2026-11-09: the Runic
+		-- Executioner reappeared from its ambush half see-through).
+		originalOf = function(instance: Instance, property: string): any
+			if property == "Transparency" then
+				return MobController._cutsceneDimOriginals[instance :: any]
+			end
+			return nil
+		end,
 	})
 end
 

@@ -1,21 +1,27 @@
 --!strict
--- Eight Inner Gates, client side (2026-11-08): the gates flare (a red-green
--- burst and steam at the caster), the caster lunges toward their aim (their
--- own client only), burning fists stream out in
--- the cone for the flurry, and the finisher throws a fiery shockwave
--- forward. The open gate's look is the Enflamed aura the server grants
--- for `gateSeconds` (AuraService). The hits, the damage reduction and the gate's speed are
+-- Eight Inner Gates, client side (2026-11-08): the gates flare on the
+-- press and keep charging around the rooted caster (a red-green column,
+-- rising sparks, a shrinking floor ring) for `chargeSeconds`, then the
+-- caster's own client dashes `dashStuds` forward in a flying kick: a
+-- burning crescent swept up at the launch, a fire trail along the path
+-- and a fiery shockwave where it lands, then `secondKickDelay` later a
+-- second crescent and a bigger shockwave (2026-11-09; a lunge into a
+-- punch flurry before). Rooted through the charge; from the dash to the
+-- end of the cast the caster walks at `kickWalkSpeed`. There is no kick animation yet, the fist one plays. The open
+-- gate's look is the Enflamed aura the server grants for `gateSeconds`
+-- (AuraService). The hit, the invulnerability and the gate's speed are
 -- the server's (VFXService/ServerCasts/EightInnerGates); the caster's
--- client re-applies its walk speed when the gate opens and closes.
+-- client roots itself for `duration` and re-applies its walk speed when
+-- the gate opens and closes.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
-local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local DodgeController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.DodgeController)
 local claimWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.claimWalkSpeed)
 local restoreWalkSpeed = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Movement.restoreWalkSpeed)
 local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.loadOneShotAnimation)
@@ -25,9 +31,6 @@ local GATE_RED = Color3.fromRGB(255, 70, 50)
 local GATE_GREEN = Color3.fromRGB(90, 255, 160)
 local FIRE = Color3.fromRGB(255, 150, 60)
 local SPARK_TEXTURE = "rbxasset://textures/particles/sparkles_main.dds"
-local AFTER_DASH = 0.1
--- Fists per punch, fanned across the cone.
-local FISTS_PER_PUNCH = 3
 
 local function effectsFolder(): Instance
 	local ignore = workspace:FindFirstChild("IgnoreInstances")
@@ -89,51 +92,105 @@ local function flare(root: BasePart)
 	GameClock.Debris(ring, 0.4)
 end
 
--- One punch: burning fists shooting out across the cone ahead of `root`.
-local function fists(root: BasePart, length: number, angle: number)
+-- The charge: a red-green column around the caster that brightens, sparks
+-- rising off it, and a floor ring closing in, all over `seconds`.
+local function charge(root: BasePart, seconds: number)
 	local folder = effectsFolder()
-	local origin = root.Position + Vector3.new(0, 0.6, 0)
+	local column = Instance.new("Part")
+	bare(column)
+	column.Shape = Enum.PartType.Cylinder
+	column.Material = Enum.Material.Neon
+	column.Color = GATE_GREEN
+	column.Transparency = 0.9
+	column.Size = Vector3.new(7, 6, 6)
+	column.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, 0, math.rad(90))
+	column.Parent = folder
+	TweenService:Create(
+		column,
+		TweenInfo.new(seconds, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+		{ Size = Vector3.new(9, 3.5, 3.5), Transparency = 0.45, Color = GATE_RED }
+	):Play()
+	GameClock.Debris(column, seconds + 0.05)
+
+	local ring = Instance.new("Part")
+	bare(ring)
+	ring.Shape = Enum.PartType.Cylinder
+	ring.Material = Enum.Material.Neon
+	ring.Color = GATE_RED
+	ring.Transparency = 0.4
+	ring.Size = Vector3.new(0.2, 16, 16)
+	ring.CFrame = CFrame.new(root.Position - Vector3.new(0, 2.8, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Parent = folder
+	TweenService:Create(
+		ring,
+		TweenInfo.new(seconds, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+		{ Size = Vector3.new(0.2, 3, 3), Transparency = 0, Color = FIRE }
+	):Play()
+	GameClock.Debris(ring, seconds + 0.05)
+
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Texture = SPARK_TEXTURE
+	sparks.Color = ColorSequence.new(GATE_GREEN, GATE_RED)
+	sparks.LightEmission = 1
+	sparks.Size = NumberSequence.new(0.5, 0)
+	sparks.Lifetime = NumberRange.new(0.4, 0.7)
+	sparks.Speed = NumberRange.new(6, 12)
+	sparks.SpreadAngle = Vector2.new(25, 25)
+	sparks.EmissionDirection = Enum.NormalId.Top
+	sparks.Rate = 60
+	sparks.Parent = root
+	GameClock.Delay(seconds, function()
+		sparks.Enabled = false
+	end)
+	GameClock.Debris(sparks, seconds + 1)
+end
+
+-- The kick: a burning crescent swept up from the floor to overhead in
+-- front of the caster, leaving a fire trail.
+local function kickArc(root: BasePart)
+	local folder = effectsFolder()
 	local look = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
 	look = if look.Magnitude > 1e-3 then look.Unit else Vector3.zAxis
-	for _ = 1, FISTS_PER_PUNCH do
-		local yaw = math.rad((math.random() - 0.5) * angle)
-		local direction = (CFrame.Angles(0, yaw, 0) * look)
-		local height = (math.random() - 0.5) * 2
-		local fist = Instance.new("Part")
-		bare(fist)
-		fist.Shape = Enum.PartType.Ball
-		fist.Material = Enum.Material.Neon
-		fist.Color = FIRE
-		fist.Transparency = 0.1
-		fist.Size = Vector3.new(1.6, 1.6, 1.6)
-		local from = origin + direction * 1.5 + Vector3.new(0, height, 0)
-		fist.CFrame = CFrame.lookAt(from, from + direction)
-		fist.Parent = folder
-
-		local trail = Instance.new("Trail")
-		local a0 = Instance.new("Attachment")
-		a0.Position = Vector3.new(0, 0.6, 0)
-		a0.Parent = fist
-		local a1 = Instance.new("Attachment")
-		a1.Position = Vector3.new(0, -0.6, 0)
-		a1.Parent = fist
-		trail.Attachment0 = a0
-		trail.Attachment1 = a1
-		trail.Color = ColorSequence.new(FIRE, GATE_RED)
-		trail.LightEmission = 1
-		trail.Transparency = NumberSequence.new(0.1, 1)
-		trail.Lifetime = 0.15
-		trail.FaceCamera = true
-		trail.Parent = fist
-
-		local travel = length * (0.7 + math.random() * 0.3)
-		TweenService:Create(
-			fist,
-			TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{ CFrame = fist.CFrame + direction * travel, Transparency = 1, Size = Vector3.new(2.4, 2.4, 2.4) }
-		):Play()
-		GameClock.Debris(fist, 0.35)
+	-- Pivot at the hip; the foot swings on a 4-stud arm in the caster's
+	-- vertical plane, from low-behind-front to high.
+	local pivot = CFrame.lookAt(root.Position, root.Position + look)
+	local foot = Instance.new("Part")
+	bare(foot)
+	foot.Shape = Enum.PartType.Ball
+	foot.Material = Enum.Material.Neon
+	foot.Color = FIRE
+	foot.Size = Vector3.one * 1.8
+	local a0 = Instance.new("Attachment")
+	a0.Position = Vector3.new(0, 0, 0.9)
+	a0.Parent = foot
+	local a1 = Instance.new("Attachment")
+	a1.Position = Vector3.new(0, 0, -0.9)
+	a1.Parent = foot
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = a0
+	trail.Attachment1 = a1
+	trail.Color = ColorSequence.new(FIRE, GATE_RED)
+	trail.LightEmission = 1
+	trail.Transparency = NumberSequence.new(0, 1)
+	trail.WidthScale = NumberSequence.new(1, 0.2)
+	trail.Lifetime = 0.25
+	trail.Parent = foot
+	local function at(angle: number): CFrame
+		-- angle 0 = straight down, 180 = straight up, swinging forward.
+		return pivot * CFrame.Angles(math.rad(angle), 0, 0) * CFrame.new(0, -4, 0)
 	end
+	foot.CFrame = at(-20)
+	foot.Parent = folder
+	local swing = Instance.new("NumberValue")
+	swing.Value = -20
+	swing.Changed:Connect(function(value: number)
+		foot.CFrame = at(value)
+	end)
+	TweenService:Create(swing, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = 160 })
+		:Play()
+	TweenService:Create(foot, TweenInfo.new(0.3, Enum.EasingStyle.Linear), { Transparency = 1 }):Play()
+	GameClock.Debris(foot, 0.5)
+	GameClock.Debris(swing, 0.5)
 end
 
 -- The finisher: a fiery wedge of shock thrown forward and a flash.
@@ -190,63 +247,81 @@ return function(player: Player, preload: boolean?)
 		return
 	end
 	local data = ArcaneData[SPELL]
-	local length = data.coneLength or 14
-	local angle = data.coneAngle or 80
-	local hits = data.flurryHits or 6
-	local flurrySeconds = data.flurrySeconds or 0.6
-	local flareSeconds = data.flareSeconds or 0.75
-	local dashSeconds = data.dashSeconds or 0.2
-	local start = flareSeconds + dashSeconds + AFTER_DASH
+	local chargeSeconds = data.chargeSeconds or 1
+	local dashSeconds = data.dashSeconds or 0.25
 	local isCaster = player == Players.LocalPlayer
 
 	playSound(data.castSound, root)
 	flare(root)
+	charge(root, chargeSeconds)
 
+	-- Rooted through the charge, then the cast walk speed until the end.
 	local claim = claimWalkSpeed(character, 0)
-	-- The charge ends with the gates bursting open again as the caster
-	-- launches (the 0.75 s charge would otherwise go quiet after the first).
-	GameClock.Delay(flareSeconds, function()
-		local liveRoot = character:FindFirstChild("HumanoidRootPart")
-		if liveRoot and liveRoot:IsA("BasePart") then
-			flare(liveRoot)
-		end
-		if isCaster then
-			DodgeController:SetDodgeCFrame(data.dashStuds or 10, dashSeconds, true)
-		end
+	local kickClaim: number? = nil
+	GameClock.Delay(chargeSeconds, function()
+		kickClaim = claimWalkSpeed(character, data.kickWalkSpeed or 2)
+		restoreWalkSpeed(character, nil, claim)
 	end)
 
-	-- The punch animation, replayed through the flurry.
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
 	local asset = ReplicatedStorage.GameAssets.Animations:FindFirstChild(data.castAnimation)
 	local track = if animator and asset and asset:IsA("Animation") then loadOneShotAnimation(animator, asset) else nil
 
-	local spacing = flurrySeconds / hits
-	for index = 0, hits - 1 do
-		GameClock.Delay(start + index * spacing, function()
-			local liveRoot = character:FindFirstChild("HumanoidRootPart")
-			if not liveRoot or not liveRoot:IsA("BasePart") then
+	GameClock.Delay(chargeSeconds, function()
+		local liveRoot = character:FindFirstChild("HumanoidRootPart")
+		if not liveRoot or not liveRoot:IsA("BasePart") then
+			return
+		end
+		if isCaster then
+			DodgeController:SetDodgeCFrame(data.dashStuds or 18, dashSeconds, true)
+		end
+		if track then
+			track:Play(0.05)
+		end
+		kickArc(liveRoot)
+		-- A fire trail behind the flying kick.
+		local a0 = Instance.new("Attachment")
+		a0.Position = Vector3.new(0, 1.5, 0)
+		a0.Parent = liveRoot
+		local a1 = Instance.new("Attachment")
+		a1.Position = Vector3.new(0, -2, 0)
+		a1.Parent = liveRoot
+		local trail = Instance.new("Trail")
+		trail.Attachment0 = a0
+		trail.Attachment1 = a1
+		trail.Color = ColorSequence.new(FIRE, GATE_RED)
+		trail.LightEmission = 1
+		trail.Transparency = NumberSequence.new(0.1, 1)
+		trail.Lifetime = 0.3
+		trail.Parent = liveRoot
+		GameClock.Delay(dashSeconds, function()
+			trail.Enabled = false
+			if liveRoot.Parent then
+				finisherBlast(liveRoot, 8)
+			end
+		end)
+		-- The second kick.
+		GameClock.Delay(dashSeconds + 0.1 + (data.secondKickDelay or 0.25), function()
+			if not liveRoot.Parent then
 				return
 			end
-			if track and index % 2 == 0 then
-				track:Play(0.05)
-			end
-			fists(liveRoot, length, angle)
-		end)
-	end
-
-	GameClock.Delay(start + flurrySeconds, function()
-		local liveRoot = character:FindFirstChild("HumanoidRootPart")
-		if liveRoot and liveRoot:IsA("BasePart") then
 			if track then
 				track:Play(0.05)
 			end
-			finisherBlast(liveRoot, length)
-		end
+			kickArc(liveRoot)
+			finisherBlast(liveRoot, (data.secondKickRadius or 9) * 1.6)
+		end)
+		GameClock.Debris(trail, dashSeconds + 0.4)
+		GameClock.Debris(a0, dashSeconds + 0.4)
+		GameClock.Debris(a1, dashSeconds + 0.4)
 	end)
 
 	GameClock.Delay(data.duration or 1.8, function()
 		restoreWalkSpeed(character, nil, claim)
+		if kickClaim then
+			restoreWalkSpeed(character, nil, kickClaim)
+		end
 	end)
 
 	-- The caster's walk speed picks up the gate when it opens and drops it
@@ -260,7 +335,7 @@ return function(player: Player, preload: boolean?)
 			end
 		end)
 		-- Never outlives the gate (a cast that never opened one).
-		GameClock.Delay(start + flurrySeconds + (data.gateSeconds or 8) + 2, function()
+		GameClock.Delay((data.duration or 1.8) + (data.gateSeconds or 10) + 2, function()
 			if connection and connection.Connected then
 				connection:Disconnect()
 			end

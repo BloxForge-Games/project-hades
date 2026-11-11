@@ -12,167 +12,219 @@ local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.V
 local getRoot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Character.getRoot)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
+-- The rig comes into being at the rise (2026-11-09; it was built at the
+-- cast and parked 15 studs under the floor until then): `appearSeconds`
+-- after the cast, it spawns under the caster and rises at once.
+-- SusanooEnabled (its swings, the client's held-button start,
+-- DamageService's reduction) flips on with it.
+local RISE_AFTER_SPAWN = 0.05
+
 return function(player: Player)
 	local character = player.Character or player.CharacterAdded:Wait()
 	local hrp = character:WaitForChild("HumanoidRootPart") :: BasePart
+	local data = ArcaneData[ArcaneNames["Susanoo Armor"]]
+	local appearSeconds = data.appearSeconds or 0.5
 
-	-- Clone the rig
-	local susanooRig = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].Armor:Clone()
+	-- Filled in by spawnRig; nil until the rise (and if the cast ended first).
+	local susanooRig: Model? = nil
+	local targetAttachment: Attachment? = nil
+	local attackAnimation: AnimationTrack? = nil
+	local animationConnection: RBXScriptConnection? = nil
+	local ended = false
 
-	-- Ensure PrimaryPart is set correctly in Studio
-	local primary = susanooRig.PrimaryPart
-	if not primary then
-		warn("Susanoo rig has no PrimaryPart!")
-		return
-	end
+	local function spawnRig()
+		if ended or player.Character ~= character or not hrp.Parent then
+			return
+		end
+		-- Clone the rig
+		local rig = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].Armor:Clone()
+		susanooRig = rig
 
-	-- Place it roughly where it should start
-	primary.CFrame = hrp.CFrame + Vector3.new(0, -15, 0)
+		-- Ensure PrimaryPart is set correctly in Studio
+		local primary = rig.PrimaryPart
+		if not primary then
+			warn("Susanoo rig has no PrimaryPart!")
+			return
+		end
 
-	-- Create attachment on the character (this is our target)
-	local targetAttachment = Instance.new("Attachment")
-	targetAttachment.Name = "SusanooFollowAttachment"
-	targetAttachment.Position = Vector3.new(0, -15, 0)
-	targetAttachment.Parent = hrp
+		-- Place it roughly where it should start
+		primary.CFrame = hrp.CFrame + Vector3.new(0, -15, 0)
 
-	-- Create attachment on the rig
-	local rigAttachment = Instance.new("Attachment")
-	rigAttachment.Name = "SusanooRootAttachment"
-	rigAttachment.Parent = primary
+		-- Create attachment on the character (this is our target)
+		local target = Instance.new("Attachment")
+		target.Name = "SusanooFollowAttachment"
+		target.Position = Vector3.new(0, -15, 0)
+		target.Parent = hrp
+		targetAttachment = target
 
-	-- AlignPosition (smooth follow)
-	local alignPosition = Instance.new("AlignPosition")
-	alignPosition.Attachment0 = rigAttachment
-	alignPosition.Attachment1 = targetAttachment
-	alignPosition.MaxForce = 100_000
-	alignPosition.MaxVelocity = 75
-	alignPosition.Responsiveness = 30
-	alignPosition.Parent = primary
+		-- Create attachment on the rig
+		local rigAttachment = Instance.new("Attachment")
+		rigAttachment.Name = "SusanooRootAttachment"
+		rigAttachment.Parent = primary
 
-	-- AlignOrientation (match player rotation)
-	local alignOrientation = Instance.new("AlignOrientation")
-	alignOrientation.Attachment0 = rigAttachment
-	alignOrientation.Attachment1 = targetAttachment
-	alignOrientation.MaxTorque = 100_000
-	alignOrientation.MaxAngularVelocity = math.rad(360)
-	alignOrientation.Responsiveness = 30
-	alignOrientation.Parent = primary
+		-- AlignPosition (smooth follow)
+		local alignPosition = Instance.new("AlignPosition")
+		alignPosition.Attachment0 = rigAttachment
+		alignPosition.Attachment1 = target
+		alignPosition.MaxForce = 100_000
+		alignPosition.MaxVelocity = 75
+		alignPosition.Responsiveness = 30
+		alignPosition.Parent = primary
 
-	-- Parent to a clean folder
-	susanooRig.Parent = workspace.IgnoreInstances.ArcaneSpells
+		-- AlignOrientation (match player rotation)
+		local alignOrientation = Instance.new("AlignOrientation")
+		alignOrientation.Attachment0 = rigAttachment
+		alignOrientation.Attachment1 = target
+		alignOrientation.MaxTorque = 100_000
+		alignOrientation.MaxAngularVelocity = math.rad(360)
+		alignOrientation.Responsiveness = 30
+		alignOrientation.Parent = primary
 
-	-- Important: assign physics ownership on the SERVER
-	susanooRig.PrimaryPart:SetNetworkOwner(player)
+		-- Its caster's: their cutscene keeps it on screen whatever its
+		-- distance (CutsceneIsolationController; 2026-11-10: it arrives 15
+		-- studs under them, past the near-the-caster check, and stayed hidden).
+		rig:SetAttribute(Attributes.OwnerId, player.UserId)
+		-- Parent to a clean folder
+		rig.Parent = workspace.IgnoreInstances.ArcaneSpells
 
-	-- Load & play animation
-	local animator = susanooRig:WaitForChild("AnimationController"):WaitForChild("Animator")
+		-- Important: assign physics ownership on the SERVER
+		primary:SetNetworkOwner(player)
 
-	GameClock.Delay(ArcaneData[ArcaneNames["Susanoo Armor"]].duration, function()
-		susanooRig.SusanooPart.SurfaceGui.Enabled = false
-	end)
+		-- Load & play animation
+		local animator = rig:WaitForChild("AnimationController"):WaitForChild("Animator")
 
-	GameClock.Delay(0.5, function()
-		targetAttachment.Position = Vector3.new(0, 5, 0)
+		GameClock.Delay(data.duration, function()
+			local gui = rig:FindFirstChild("SusanooPart")
+			gui = gui and gui:FindFirstChild("SurfaceGui")
+			if gui and gui:IsA("SurfaceGui") then
+				gui.Enabled = false
+			end
+		end)
 
-		GameClock.Delay(0.05, function()
-			local castVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].CastPart:Clone()
-			castVFX.CFrame = hrp.CFrame
-			castVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
+		-- The rise, a frame after the spawn so the rig starts under the floor.
+		GameClock.Delay(RISE_AFTER_SPAWN, function()
+			if ended then
+				return
+			end
+			target.Position = Vector3.new(0, 5, 0)
 
-			for _, particle in pairs(castVFX:GetDescendants()) do
+			GameClock.Delay(0.05, function()
+				local castVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].CastPart:Clone()
+				castVFX.CFrame = hrp.CFrame
+				castVFX:SetAttribute(Attributes.OwnerId, player.UserId)
+				castVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
+
+				for _, particle in pairs(castVFX:GetDescendants()) do
+					if particle:IsA("ParticleEmitter") then
+						particle:Emit(5)
+					end
+				end
+
+				GameClock.Debris(castVFX, 3)
+			end)
+
+			primary.SusanooActivate:Play()
+		end)
+
+		local idleTrack =
+			animator:LoadAnimation(ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooIdleAnimation"))
+		idleTrack:Play(0.25)
+
+		local attack =
+			animator:LoadAnimation(ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooAttackAnimation"))
+		attackAnimation = attack
+
+		attack:Play()
+		attack:Stop()
+
+		character:SetAttribute(Attributes.SusanooEnabled, true)
+
+		animationConnection = attack:GetMarkerReachedSignal("SusanooAttack"):Connect(function()
+			if not character:GetAttribute(Attributes.SusanooEnabled) then
+				return
+			end
+
+			local root = getRoot(character)
+			if not root then
+				return
+			end
+
+			local attackVFXPart = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].AttackPart:Clone()
+			local range = ArcaneData[ArcaneNames["Susanoo Armor"]].range
+			local hitboxCFrame = CFrame.new(
+				primary.CFrame.Position + root.CFrame.LookVector * range + Vector3.new(0, -7.5, 0)
+			) * CFrame.Angles(0, root.CFrame:ToEulerAnglesYXZ(), 0)
+
+			attackVFXPart.CFrame = hitboxCFrame
+			attackVFXPart:SetAttribute(Attributes.OwnerId, player.UserId)
+			attackVFXPart.Parent = workspace.IgnoreInstances.ArcaneSpells
+
+			for _, particle in pairs(attackVFXPart:GetDescendants()) do
 				if particle:IsA("ParticleEmitter") then
-					particle:Emit(5)
+					particle:Emit(10)
 				end
 			end
 
-			GameClock.Debris(castVFX, 3)
+			primary.SusanooAttack:Play()
+			primary.GroundSmash:Play()
+
+			GameClock.Debris(attackVFXPart, 3)
+
+			-- The combat pack's dust where the smash lands. Server-side like the
+			-- AttackPart burst above; the helper needs only ReplicatedStorage and
+			-- workspace, so it runs here exactly as it does on a client.
+			emitVFXPart("GroundDust", hitboxCFrame, nil, { GroundSnapDistance = 10 })
+
+			VFXService:CreateHitbox(
+				ArcaneNames["Susanoo Armor"],
+				player,
+				hitboxCFrame,
+				TagList.Zombie,
+				IgnoreListService:GetWeaponIgnoreList(),
+				function(model: Model)
+					-- Through VFXService's spell-hit path so Korblox Mage Staff's
+					-- refund sees the swing like any other cast hit.
+					VFXService:_spellHit(
+						model,
+						hitboxCFrame,
+						player,
+						ArcaneNames["Susanoo Armor"],
+						ArcaneData[ArcaneNames["Susanoo Armor"]]
+					)
+				end,
+				ArcaneData[ArcaneNames["Susanoo Armor"]].hitboxSize.X
+			)
 		end)
+	end
 
-		susanooRig.PrimaryPart.SusanooActivate:Play()
-	end)
+	GameClock.Delay(appearSeconds, spawnRig)
 
-	local idleTrack =
-		animator:LoadAnimation(ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooIdleAnimation"))
-	idleTrack:Play(0.25)
-
-	local attackAnimation =
-		animator:LoadAnimation(ReplicatedStorage.GameAssets.Animations:FindFirstChild("SusanooAttackAnimation"))
-
-	attackAnimation:Play()
-	attackAnimation:Stop()
-
-	character:SetAttribute(Attributes.SusanooEnabled, true)
-
-	local animationConnection
-
-	animationConnection = attackAnimation:GetMarkerReachedSignal("SusanooAttack"):Connect(function()
-		if not character:GetAttribute(Attributes.SusanooEnabled) then
-			return
+	GameClock.Delay(data.lifetime, function()
+		ended = true
+		if animationConnection then
+			animationConnection:Disconnect()
 		end
-
-		local root = getRoot(character)
-		if not root then
-			return
+		if attackAnimation then
+			attackAnimation:Stop(0.25)
 		end
-
-		local attackVFXPart = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].AttackPart:Clone()
-		local range = ArcaneData[ArcaneNames["Susanoo Armor"]].range
-		local hitboxCFrame = CFrame.new(
-			susanooRig.PrimaryPart.CFrame.Position + root.CFrame.LookVector * range + Vector3.new(0, -7.5, 0)
-		) * CFrame.Angles(0, root.CFrame:ToEulerAnglesYXZ(), 0)
-
-		attackVFXPart.CFrame = hitboxCFrame
-		attackVFXPart.Parent = workspace.IgnoreInstances.ArcaneSpells
-
-		for _, particle in pairs(attackVFXPart:GetDescendants()) do
-			if particle:IsA("ParticleEmitter") then
-				particle:Emit(10)
-			end
-		end
-
-		susanooRig.PrimaryPart.SusanooAttack:Play()
-		susanooRig.PrimaryPart.GroundSmash:Play()
-
-		GameClock.Debris(attackVFXPart, 3)
-
-		-- The combat pack's dust where the smash lands. Server-side like the
-		-- AttackPart burst above; the helper needs only ReplicatedStorage and
-		-- workspace, so it runs here exactly as it does on a client.
-		emitVFXPart("GroundDust", hitboxCFrame, nil, { GroundSnapDistance = 10 })
-
-		VFXService:CreateHitbox(
-			ArcaneNames["Susanoo Armor"],
-			player,
-			hitboxCFrame,
-			TagList.Zombie,
-			IgnoreListService:GetWeaponIgnoreList(),
-			function(model: Model)
-				-- Through VFXService's spell-hit path so Korblox Mage Staff's
-				-- refund sees the swing like any other cast hit.
-				VFXService:_spellHit(
-					model,
-					hitboxCFrame,
-					player,
-					ArcaneNames["Susanoo Armor"],
-					ArcaneData[ArcaneNames["Susanoo Armor"]]
-				)
-			end,
-			ArcaneData[ArcaneNames["Susanoo Armor"]].hitboxSize.X
-		)
-	end)
-
-	GameClock.Delay(ArcaneData[ArcaneNames["Susanoo Armor"]].lifetime, function()
-		animationConnection:Disconnect()
-		attackAnimation:Stop(0.25)
 
 		character:SetAttribute(Attributes.SusanooEnabled, false)
 
-		susanooRig.PrimaryPart.SusanooActivate:Play()
-
 		VFXService:_onAuraAttackStop(player)
+
+		local rig = susanooRig
+		local target = targetAttachment
+		if not rig then
+			-- The cast ended before the rise: nothing was built.
+			return
+		end
+		if rig.PrimaryPart then
+			(rig.PrimaryPart :: any).SusanooActivate:Play()
+		end
 
 		local castVFX = ReplicatedStorage.GameAssets.VFX[ArcaneNames["Susanoo Armor"]].CastPart:Clone()
 		castVFX.CFrame = hrp.CFrame
+		castVFX:SetAttribute(Attributes.OwnerId, player.UserId)
 		castVFX.Parent = workspace.IgnoreInstances.ArcaneSpells
 
 		for _, particle in pairs(castVFX:GetDescendants()) do
@@ -183,18 +235,22 @@ return function(player: Player)
 
 		GameClock.Debris(castVFX, 3)
 
-		targetAttachment.Position = Vector3.new(0, -15, 0)
+		if target then
+			target.Position = Vector3.new(0, -15, 0)
+		end
 
 		GameClock.Delay(1, function()
-			susanooRig:Destroy()
+			rig:Destroy()
 			-- The follow target lives on the CHARACTER, not the rig: every
 			-- cast left one more Attachment on the root part.
-			targetAttachment:Destroy()
+			if target then
+				target:Destroy()
+			end
 		end)
 	end)
 
 	return function()
-		if not character:GetAttribute(Attributes.SusanooEnabled) then
+		if not character:GetAttribute(Attributes.SusanooEnabled) or not attackAnimation then
 			return
 		end
 

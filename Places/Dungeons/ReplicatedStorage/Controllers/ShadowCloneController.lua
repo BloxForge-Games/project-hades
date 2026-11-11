@@ -39,6 +39,10 @@ local FOLLOW_RATE = 18
 -- A proxy this far from its visual is snapped to, not eased toward.
 local SNAP_STUDS = 25
 local SMOKE_TEXTURE = "rbxasset://textures/particles/smoke_main.dds"
+-- The poof's sound, played from it as each clone appears and vanishes
+-- (2026-11-09).
+local POOF_SOUND_ID = "rbxassetid://95916620132472"
+local POOF_SOUND_VOLUME = 0.7
 local FADE_IN = 0.25
 
 type Visual = {
@@ -87,9 +91,14 @@ local function smokePuff(position: Vector3)
 	emitter.SpreadAngle = Vector2.new(180, 180)
 	emitter.Rate = 0
 	emitter.Parent = part
+	local sound = Instance.new("Sound")
+	sound.SoundId = POOF_SOUND_ID
+	sound.Volume = POOF_SOUND_VOLUME
+	sound.Parent = part
 	part.Parent = effectsFolder()
 	emitter:Emit(24)
-	GameClock.Debris(part, 1.5)
+	sound:Play()
+	GameClock.Debris(part, 3)
 end
 
 local function stripTags(root: Instance)
