@@ -9,8 +9,10 @@
 	module (Blaze, ...), which this hands every trigger to.
 
 	TRIGGERS (who calls in):
-	  OnMeleeSwing(player, origin, look, swingDamage, connected, weaponType)
-	      MeleeWeapon, once per swing after its hitbox resolves.
+	  OnMeleeSwing(player, origin, look, swingDamage, connected, weaponType,
+	               startedAt)
+	      MeleeWeapon, once per swing after its hitbox resolves; startedAt
+	      is when the swing began, before its hitbox wait (2026-11-10).
 	  OnMeleeHit(player, model, damage)
 	      MeleeWeapon, once per mob a swing damages.
 	  OnSpellCast(player, vfxName)
@@ -19,6 +21,9 @@
 	      VFXService, for every mob a real spell hits.
 	  OnStatusTick(player, model, status)
 	      StatusConditionService, every DoT tick a player's status lands.
+	  OnStatusApplied(player, model, status)
+	      StatusConditionService, every status a player applies, fresh or
+	      refresh (2026-11-10; Zombie Bomb's Rot Eye).
 	  OnCrit(player, model, isMelee, dealt, isRanged)
 	      DamageService, every weapon or spell Critical Hit, with what it
 	      dealt.
@@ -78,7 +83,8 @@ type TreeModule = {
 		look: Vector3,
 		swingDamage: number,
 		connected: boolean,
-		weaponType: string?
+		weaponType: string?,
+		startedAt: number?
 	) -> ())?,
 	onMeleeHit: ((player: Player, model: Model, damage: number) -> ())?,
 	onDodge: ((player: Player, from: Vector3, to: Vector3) -> ())?,
@@ -86,6 +92,7 @@ type TreeModule = {
 	onSpellCast: ((player: Player, vfxName: string, castCFrame: CFrame?) -> ())?,
 	onSpellHit: ((player: Player, vfxName: string, model: Model) -> ())?,
 	onStatusTick: ((player: Player, model: Model, status: string) -> ())?,
+	onStatusApplied: ((player: Player, model: Model, status: string) -> ())?,
 	onCrit: ((player: Player, model: Model, isMelee: boolean, dealt: number, isRanged: boolean) -> ())?,
 	onRangedHit: ((player: Player, model: Model, dealt: number, wasCrit: boolean) -> ())?,
 	onRangedFire: ((player: Player, origin: Vector3, direction: Vector3, weaponName: string) -> ())?,
@@ -116,11 +123,12 @@ function RelicGimmickService.OnMeleeSwing(
 	look: Vector3,
 	swingDamage: number,
 	connected: boolean,
-	weaponType: string?
+	weaponType: string?,
+	startedAt: number?
 )
 	for _, tree in self._trees do
 		if tree.onMeleeSwing then
-			tree.onMeleeSwing(player, origin, look, swingDamage, connected, weaponType)
+			tree.onMeleeSwing(player, origin, look, swingDamage, connected, weaponType, startedAt)
 		end
 	end
 end
@@ -170,6 +178,19 @@ function RelicGimmickService.OnStatusTick(
 	for _, tree in self._trees do
 		if tree.onStatusTick then
 			tree.onStatusTick(player, model, status)
+		end
+	end
+end
+
+function RelicGimmickService.OnStatusApplied(
+	self: typeof(RelicGimmickService),
+	player: Player,
+	model: Model,
+	status: string
+)
+	for _, tree in self._trees do
+		if tree.onStatusApplied then
+			tree.onStatusApplied(player, model, status)
 		end
 	end
 end

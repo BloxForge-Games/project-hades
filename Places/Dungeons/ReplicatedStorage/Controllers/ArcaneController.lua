@@ -28,6 +28,9 @@ local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNam
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
+-- How fast the weapon's idle fades back in as a spell's cutscene ends.
+local WEAPON_IDLE_RESUME_FADE_SECONDS = 0.25
+
 -- AimController requires this module at load, so this side reaches it
 -- lazily: required on first use, once both modules exist.
 local aimControllerLazy: any = nil
@@ -234,11 +237,12 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 
 	local newCooldown = ArcaneData[vfxName].cooldown * cooldownMultiplier
 
-	if ArcaneData[vfxName].isAura then
-		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].lifetime, ArcaneData[vfxName].cooldown)
-	else
-		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].duration, ArcaneData[vfxName].cooldown)
-	end
+	-- Never below the spell's own run time (an aura's lifetime, else its
+	-- duration), unless the authored cooldown itself is shorter (a debug 0;
+	-- 2026-11-09: clamp threw with min > max).
+	local baseCooldown = ArcaneData[vfxName].cooldown
+	local floor = if ArcaneData[vfxName].isAura then ArcaneData[vfxName].lifetime else ArcaneData[vfxName].duration
+	newCooldown = math.clamp(newCooldown, math.min(floor or 0, baseCooldown), baseCooldown)
 
 	-- Korblox Mage Staff's free cast leaves no cooldown (the server mirrors
 	-- this in VFXService._onCastRequested).
@@ -278,6 +282,43 @@ function ArcaneController.CastArcane(self: typeof(ArcaneController), equipSlot: 
 	if getAimController() then
 		-- A spell with faceCursorOnCast = false keeps the caster's heading.
 		getAimController():BeginCastLock(ArcaneData[vfxName].duration, ArcaneData[vfxName].faceCursorOnCast == false)
+	end
+
+	-- A cutscene spell cuts whatever the character was playing (a swing, a
+	-- dodge, a run) the moment it is cast (2026-11-10), before its own cast
+	-- animation starts below. The default idle comes back by itself; the
+	-- WEAPON's idle (a looped Idle-priority track its component owns) is
+	-- played again as the cutscene ends (2026-11-11), if the same weapon is
+	-- still equipped and nothing has restarted it.
+	local cutscene = ArcaneData[vfxName].cutscene
+	if type(cutscene) == "table" and cutscene.enabled == true then
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+		if animator then
+			local weaponIdles: { AnimationTrack } = {}
+			for _, track in animator:GetPlayingAnimationTracks() do
+				if track.Looped and track.Priority == Enum.AnimationPriority.Idle then
+					table.insert(weaponIdles, track)
+				end
+				track:Stop(0)
+			end
+			local weaponAtCast = character:GetAttribute(Attributes.EquippedWeapon)
+			GameClock.Delay(tonumber(cutscene.duration) or 0, function()
+				if
+					Players.LocalPlayer.Character ~= character
+					or character:GetAttribute(Attributes.EquippedWeapon) ~= weaponAtCast
+					or not humanoid
+					or humanoid.Health <= 0
+				then
+					return
+				end
+				for _, track in weaponIdles do
+					if not track.IsPlaying then
+						track:Play(WEAPON_IDLE_RESUME_FADE_SECONDS)
+					end
+				end
+			end)
+		end
 	end
 
 	-- Runs the caster's OWN effect module immediately (cast animation, cast

@@ -120,8 +120,29 @@ function ArcaneAmbienceController._applyTint(self: typeof(ArcaneAmbienceControll
 		return
 	end
 	self._tintOwner = ownerId
-	local target = if ownerId then self._claims[ownerId].config.tint else AUTHORED_TINT_COLOR
-	TweenService:Create(Lighting.ColorCorrection, TINT_TWEEN_INFO, { TintColor = target }):Play()
+	local config = if ownerId then self._claims[ownerId].config else nil
+	-- An owner sets the tint and whichever of contrast / brightness /
+	-- saturation it names (2026-11-09); with no owner the WHOLE authored
+	-- grade comes back (ColorCorrectionDefaults).
+	local goals: { [string]: any } = {}
+	if config then
+		goals.TintColor = config.tint
+		if typeof(config.contrast) == "number" then
+			goals.Contrast = config.contrast
+		end
+		if typeof(config.brightness) == "number" then
+			goals.Brightness = config.brightness
+		end
+		if typeof(config.saturation) == "number" then
+			goals.Saturation = config.saturation
+		end
+	else
+		goals.TintColor = AUTHORED_TINT_COLOR
+		goals.Contrast = ColorCorrectionDefaults.Contrast
+		goals.Brightness = ColorCorrectionDefaults.Brightness
+		goals.Saturation = ColorCorrectionDefaults.Saturation
+	end
+	TweenService:Create(Lighting.ColorCorrection, TINT_TWEEN_INFO, goals):Play()
 end
 
 function ArcaneAmbienceController._applyMusic(self: typeof(ArcaneAmbienceController), ownerId: string?)
@@ -225,12 +246,19 @@ end
 
 -- Claims one or more channels under `id`. `config` may carry:
 --   tint  = Color3
+--   contrast / brightness / saturation = number (optional, with the tint;
+--     the whole authored grade returns when the last claim lets go)
 --   music = { soundName = string, volume = number?, startTime = number? }
 --   shake = a CameraShakePresets name, held while the claim holds
 -- Re-claiming a live id replaces its config.
 function ArcaneAmbienceController.Claim(self: typeof(ArcaneAmbienceController), id: string, config: { [string]: any })
 	if not self._claims[id] then
 		table.insert(self._order, id)
+	elseif self._tintOwner == id then
+		-- Re-claimed by its owner (a recast): the grade is applied again,
+		-- since something may have written over it meanwhile (a cutscene's
+		-- own grade, 2026-11-09).
+		self._tintOwner = nil
 	end
 	self._claims[id] = { config = config, inRange = true }
 	self:_refresh()

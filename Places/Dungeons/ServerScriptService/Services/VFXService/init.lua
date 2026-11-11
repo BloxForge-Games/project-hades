@@ -26,6 +26,15 @@ local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local NEXT_SPELL_FREE_ATTRIBUTE = "NextSpellFree"
 local ArcaneLoadoutService = require(ServerScriptService.Submodules.Core.Source.Services.ArcaneLoadoutService)
 local InvulnerabilityService = require(ServerScriptService.Services.InvulnerabilityService)
+
+-- How often the caster's place in their own domain is checked (its
+-- sanctuary: invulnerable inside it).
+local DOMAIN_SANCTUARY_CHECK_SECONDS = 0.1
+-- Its cap past the domain's slashing time (the shrine rises ~1.5 s after
+-- the cast), should the end of the domain never arrive.
+local DOMAIN_SANCTUARY_MAX_EXTRA_SECONDS = 3
+local DOMAIN_SANCTUARY_EDGE_STUDS = 2
+local DOMAIN_SANCTUARY_HOLD_SECONDS = 1
 local Arcane = require(ServerScriptService.Submodules.Core.Source.Network.Arcane)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -216,6 +225,16 @@ local RELIC_HITBOXES: { [string]: boolean } = {
 	[ArcaneNames["Big Pumpkin Explosion"]] = true,
 	[ArcaneNames["Fuse Bomb Explosion"]] = true,
 }
+-- The takedown BOMBS among them hit a Breakable as a SPELL does
+-- (2026-11-10): a crate / barricade / prop breaks outright and a loot
+-- breakable takes its ArcaneHits, where one weapon-equivalent hit only
+-- dented them. Buildings (Destructables) stay out of reach
+-- (canBreakBuildings false).
+local BOMB_HITBOXES: { [string]: boolean } = {
+	[ArcaneNames["Pumpkin Explosion"]] = true,
+	[ArcaneNames["Big Pumpkin Explosion"]] = true,
+	[ArcaneNames["Fuse Bomb Explosion"]] = true,
+}
 
 --[ Private Functions ]--
 
@@ -398,7 +417,7 @@ function VFXService.RegisterHitbox(
 			if breakable then
 				-- (isMagic, isMelee, origin, player) -- see MeleeWeapon for the
 				-- same slot fix. A relic hitbox lands one weapon-equivalent hit.
-				if RELIC_HITBOXES[vfxName] then
+				if RELIC_HITBOXES[vfxName] and not BOMB_HITBOXES[vfxName] then
 					breakable:Hit(false, true, cframe.Position, activePlayer)
 				else
 					breakable:Hit(true, false, cframe.Position, activePlayer)
@@ -806,11 +825,12 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 
 	local newCooldown = ArcaneData[vfxName].cooldown * cooldownMultiplier
 
-	if ArcaneData[vfxName].isAura then
-		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].lifetime, ArcaneData[vfxName].cooldown)
-	else
-		newCooldown = math.clamp(newCooldown, ArcaneData[vfxName].duration, ArcaneData[vfxName].cooldown)
-	end
+	-- Never below the spell's own run time (an aura's lifetime, else its
+	-- duration), unless the authored cooldown itself is shorter (a debug 0;
+	-- 2026-11-09: clamp threw with min > max).
+	local baseCooldown = ArcaneData[vfxName].cooldown
+	local floor = if ArcaneData[vfxName].isAura then ArcaneData[vfxName].lifetime else ArcaneData[vfxName].duration
+	newCooldown = math.clamp(newCooldown, math.min(floor or 0, baseCooldown), baseCooldown)
 
 	if freeCast then
 		newCooldown = 0
@@ -900,21 +920,42 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 		end)
 	end
 
+	-- The weapon stays hidden through the cast AND any cutscene it plays
+	-- (2026-11-09; the cast's `duration` alone before, so Susanoo's weapon
+	-- came back 2.25 s into a 9 s cutscene).
+	local weaponHiddenSeconds = duration
+	if cutscene and cutscene.enabled == true then
+		weaponHiddenSeconds = math.max(duration, cutscene.duration or DEFAULT_ARCANE_CUTSCENE_SECONDS)
+	end
+
 	GameClock.Delay(duration, function()
 		if self._castSerials[activePlayer.UserId] ~= castSerial then
 			return
 		end
 		if activePlayer.Character then
-			self:_toggleWeaponTransparency(activePlayer, 0)
+			if weaponHiddenSeconds <= duration then
+				self:_toggleWeaponTransparency(activePlayer, 0)
+			end
 
 			activePlayer.Character:SetAttribute(Attributes.ArcaneEnabled, false)
 		end
 	end)
+	if weaponHiddenSeconds > duration then
+		GameClock.Delay(weaponHiddenSeconds, function()
+			if self._castSerials[activePlayer.UserId] ~= castSerial then
+				return
+			end
+			if activePlayer.Character then
+				self:_toggleWeaponTransparency(activePlayer, 0)
+			end
+		end)
+	end
 
 	local modifiedVfxName = vfxName:gsub(" ", "")
 
 	if vfxName == ArcaneNames["Domain Expansion"] then
 		character:SetAttribute(Attributes.DomainExpansionActive, true)
+		self:_runDomainSanctuary(activePlayer, character, ArcaneData[vfxName])
 	end
 
 	if vfxServer:FindFirstChild(modifiedVfxName) then
@@ -925,8 +966,9 @@ function VFXService._onCastRequested(self: typeof(VFXService), player: Player, v
 			attack = vfxAttack,
 			lastAttacked = 0,
 			attackInterval = ArcaneData[vfxName].attackInterval,
-			-- The rig gets AURA_ACTIVATION_DELAY to arrive before it can swing.
-			readyAt = GameClock.Now() + AURA_ACTIVATION_DELAY,
+			-- The rig gets AURA_ACTIVATION_DELAY to arrive before it can swing,
+			-- or 1.5 s after a late rise (`appearSeconds`, Susanoo's 6 s).
+			readyAt = GameClock.Now() + math.max(AURA_ACTIVATION_DELAY, (ArcaneData[vfxName].appearSeconds or 0) + 1.5),
 		}
 	end
 
@@ -1203,6 +1245,64 @@ function VFXService._onPersistentHitboxRequested(
 				casterCharacter:SetAttribute(Attributes.DomainExpansionActive, false)
 			end
 		end
+	end)
+end
+
+-- SANCTUARY (2026-11-11): the caster is invulnerable, with the white
+-- highlight (a "Sanctuary" window), while they stand inside their own domain
+-- (the hitbox's radius about where they cast it), from the CAST (they
+-- start inside it; it waited ~1.5 s for the shrine's first slash before)
+-- until the domain stops slashing (DomainExpansionActive clears), at most
+-- DOMAIN_SANCTUARY_MAX_SECONDS. Checked every
+-- DOMAIN_SANCTUARY_CHECK_SECONDS; the window opens on entering and closes
+-- on leaving or when the domain ends.
+function VFXService._runDomainSanctuary(
+	_self: typeof(VFXService),
+	player: Player,
+	character: Model,
+	data: { [string]: any }
+)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not InvulnerabilityService or not root or not root:IsA("BasePart") then
+		return
+	end
+	local center = root.Position
+	local radius = data.hitboxSize.X
+	local maxSeconds = (data.hitboxDuration or 0) + DOMAIN_SANCTUARY_MAX_EXTRA_SECONDS
+	task.spawn(function()
+		local handle: InvulnerabilityService.WindowHandle? = InvulnerabilityService:OpenWindow(character, "Sanctuary")
+		local started = GameClock.Now()
+		-- A beat before the first check of the flag: it is set this frame.
+		GameClock.Wait(DOMAIN_SANCTUARY_CHECK_SECONDS)
+		while GameClock.Now() - started < maxSeconds do
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if
+				player.Character ~= character
+				or not humanoid
+				or humanoid.Health <= 0
+				or character:GetAttribute(Attributes.DomainExpansionActive) ~= true
+			then
+				break
+			end
+			-- In at the radius, out only DOMAIN_SANCTUARY_EDGE_STUDS past it:
+			-- standing on the edge never toggles it every check.
+			local distance = (root.Position - center).Magnitude
+			local inside = if handle then distance <= radius + DOMAIN_SANCTUARY_EDGE_STUDS else distance <= radius
+			if inside and not handle then
+				handle = InvulnerabilityService:OpenWindow(character, "Sanctuary")
+			elseif not inside and handle then
+				InvulnerabilityService:CloseWindow(handle)
+				handle = nil
+			end
+			GameClock.Wait(DOMAIN_SANCTUARY_CHECK_SECONDS)
+		end
+		-- Held DOMAIN_SANCTUARY_HOLD_SECONDS past the domain's end (2026-11-11),
+		-- not for a death or a fresh character.
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if handle and player.Character == character and humanoid and humanoid.Health > 0 then
+			GameClock.Wait(DOMAIN_SANCTUARY_HOLD_SECONDS)
+		end
+		InvulnerabilityService:CloseWindow(handle)
 	end)
 end
 

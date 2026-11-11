@@ -61,6 +61,8 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 local helpers = require(script.Parent.Lib.gimmickHelpers)
 local relicTriggers = require(script.Parent.Lib.relicTriggers)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
+local RelicSwingData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicSwingData)
 
 local GLOVES = RelicNames["Golden Steampunk Gloves"]
 local ORB_BANK = RelicNames["Earth Protection Orb"]
@@ -130,9 +132,6 @@ end
 --[ Golden Steampunk Gloves ]--
 
 local glovesSwings: { [Player]: number } = {}
--- The last enemy this swing struck (onMeleeHit runs per mob before the
--- swing hook): where the Nth swing's shockwave bursts. Cleared per swing.
-local glovesLastTarget: { [Player]: Model } = {}
 
 -- The shockwave out of `center`: every enemy in `radius` takes the
 -- Power-scaled damage and is Fractured. Drawn with the Horn's ring kind,
@@ -141,7 +140,7 @@ local function glovesShockwave(player: Player, center: Vector3)
 	local radius = helpers.data(GLOVES, "radius", 8)
 	helpers.fx("Shockwave", center - Vector3.new(0, 2.5, 0), nil, radius, 0.4, player)
 	helpers.hitBreakables(player, center, radius)
-	local damage = helpers.levelDamage(player, helpers.data(GLOVES, "damagePerLevel", 20))
+	local damage = helpers.levelDamage(player, helpers.data(GLOVES, "damagePerLevel", 30))
 	forEachEnemyInRadius(center, radius, function(other: Model, humanoid: Humanoid)
 		fractureHit(player, other, humanoid, damage)
 	end)
@@ -149,11 +148,9 @@ end
 
 -- Counts one melee SWING (2026-11-01; hits per mob before); the Nth (by
 -- weapon weight: swingsDaggers / swingsSword / swingsGreatsword) bursts
--- the shockwave at the enemy the swing struck, or just ahead of the
--- player when it struck nothing, and starts the count over.
-local function countGlovesSwing(player: Player, origin: Vector3, look: Vector3, weaponType: string?)
-	local target = glovesLastTarget[player]
-	glovesLastTarget[player] = nil
+-- the shockwave on the ground slam's impact, in front of the player, and
+-- starts the count over.
+local function countGlovesSwing(player: Player, origin: Vector3, look: Vector3, weaponType: string?, startedAt: number?)
 	if not helpers.owns(player, GLOVES) then
 		glovesSwings[player] = nil
 		relicTriggers.set(player, GLOVES, false)
@@ -163,9 +160,31 @@ local function countGlovesSwing(player: Player, origin: Vector3, look: Vector3, 
 	local count = (glovesSwings[player] or 0) + 1
 	if count >= needed then
 		count = 0
-		local targetRoot = if target and target.Parent then getRoot(target) else nil
-		local center = if targetRoot then targetRoot.Position else origin + look * 3
-		glovesShockwave(player, center)
+		-- On the ground slam's impact (2026-11-10: the swing plays the slam,
+		-- RelicSwingData), just in front of where the character stands
+		-- then (its lunge carries it on), else where the swing pointed.
+		local fallback = origin + look * 3
+		local character = player.Character
+		local swingSpeed = tonumber(character and character:GetAttribute(Attributes.MeleeSwingSpeed)) or 1
+		local slam = RelicSwingData.Swings[GLOVES]
+		-- Timed from the swing's START (2026-11-10): this hook runs after
+		-- the weapon's hitbox wait (0.2-0.65 s by weapon and combo step),
+		-- which used to be added on top, late and uneven.
+		local elapsed = if startedAt then GameClock.Now() - startedAt else 0
+		local wait = math.max(RelicSwingData.at(slam, "impactSeconds", weaponType, swingSpeed) - elapsed, 0)
+		GameClock.Delay(wait, function()
+			if not player.Parent then
+				return
+			end
+			local root = player.Character and getRoot(player.Character)
+			local center = fallback
+			if root then
+				local flat = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+				local forward = if flat.Magnitude > 1e-3 then flat.Unit else Vector3.zero
+				center = root.Position + forward * slam.impactForwardStuds
+			end
+			glovesShockwave(player, center)
+		end)
 	end
 	glovesSwings[player] = count
 	relicTriggers.set(player, GLOVES, count == needed - 1)
@@ -432,21 +451,16 @@ function Earth.onMeleeSwing(
 	look: Vector3,
 	_swingDamage: number,
 	_connected: boolean,
-	weaponType: string?
+	weaponType: string?,
+	startedAt: number?
 )
-	countGlovesSwing(player, origin, look, weaponType)
+	countGlovesSwing(player, origin, look, weaponType, startedAt)
 end
 
 -- The melee weapon was put away: the Gloves count starts over.
 function Earth.onWeaponStowed(player: Player, lane: string)
 	if lane == "Melee" then
 		glovesSwings[player] = nil
-	end
-end
-
-function Earth.onMeleeHit(player: Player, model: Model, _damage: number)
-	if helpers.owns(player, GLOVES) then
-		glovesLastTarget[player] = model
 	end
 end
 
@@ -496,7 +510,6 @@ end
 
 function Earth.onPlayerRemoved(player: Player)
 	glovesSwings[player] = nil
-	glovesLastTarget[player] = nil
 	banks[player] = nil
 	lastTntBlast[player] = nil
 	dropGolem(player)

@@ -12,7 +12,9 @@
 	    RelicUnlockData.ByLevel slot, 2026-11-08): "New Relic Unlocked!".
 	    Earlier relics this was the only unlock path, so it announces again.
 	The name stands out in colour: a relic in its rarity's (RarityColors), a
-	monster in gold (MONSTER_NAME_COLOR).
+	monster in gold (MONSTER_NAME_COLOR). The two "Discovered!" toasts are
+	System notifications (blue; 2026-11-09, Reward gold before); "Unlocked!"
+	stays a Reward.
 	The first snapshot is the baseline: nothing already known is announced.
 	RelicUnlockService pushes the first two at once when they happen;
 	ExperienceService writes Level on a level up.
@@ -78,11 +80,11 @@ local function relicColor(relicName: string): Color3
 	return if typeof(color) == "Color3" then color else MONSTER_NAME_COLOR
 end
 
-local function announce(title: string, text: string)
+local function announce(title: string, text: string, color: Color3)
 	UserNotificationSystem:ShowNotification({
 		titleText = title,
 		titleTextFont = Enum.Font.SourceSansBold :: any,
-		titleTextColor3 = NotificationColors.Reward,
+		titleTextColor3 = color,
 		titleTextTransparency = 0,
 		text = text,
 		textFont = Enum.Font.SourceSansBold :: any,
@@ -108,11 +110,10 @@ function RelicUnlockController._onProfile(self: typeof(RelicUnlockController), p
 	for _, relicName in relicUnlocks.unlockedBetween(knownLevel, level) do
 		announce(
 			"New Relic Unlocked!",
-			"Reaching level "
-				.. tostring(relicUnlocks.unlockLevel(relicName) or level)
-				.. " unlocked the Relic: "
+			"You've unlocked: "
 				.. colored(relicName, relicColor(relicName))
-				.. ". It can now appear in your runs!"
+				.. " relic. It can now appear in your runs!",
+			NotificationColors.Reward
 		)
 	end
 	for relicName in relics do
@@ -121,7 +122,8 @@ function RelicUnlockController._onProfile(self: typeof(RelicUnlockController), p
 				"New Relic Discovered!",
 				"You have discovered the Relic: "
 					.. colored(relicName, relicColor(relicName))
-					.. ", for the first time!"
+					.. ", for the first time!",
+				NotificationColors.System
 			)
 		end
 	end
@@ -129,7 +131,8 @@ function RelicUnlockController._onProfile(self: typeof(RelicUnlockController), p
 		if not knownMonsters[mobName] then
 			announce(
 				"New Monster Discovered!",
-				"You have discovered the Monster: " .. colored(mobName, MONSTER_NAME_COLOR) .. ", for the first time!"
+				"You have discovered the Monster: " .. colored(mobName, MONSTER_NAME_COLOR) .. ", for the first time!",
+				NotificationColors.System
 			)
 		end
 	end

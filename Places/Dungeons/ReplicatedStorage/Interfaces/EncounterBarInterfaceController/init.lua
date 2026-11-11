@@ -18,6 +18,7 @@ local Players = game:GetService("Players")
 
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local RemoteProperty = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.RemoteProperty)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 
@@ -50,6 +51,9 @@ function EncounterBarInterfaceController._render(_self: typeof(EncounterBarInter
 		-- True while a boss phase-change cutscene is playing. The Container
 		-- slides the bar up off-screen for the duration, then back down.
 		local phaseHidden, setPhaseHidden = React.useState(false)
+		-- True while the local player's arcane cutscene plays (Susanoo's,
+		-- 2026-11-09): the bar slides away the same way.
+		local cutsceneHidden, setCutsceneHidden = React.useState(false)
 
 		React.useEffect(function()
 			-- The wire payload is structural (`kind: string`); EncounterData narrows it.
@@ -69,10 +73,34 @@ function EncounterBarInterfaceController._render(_self: typeof(EncounterBarInter
 				setPhaseHidden(false)
 			end)
 
+			-- The cutscene flag lives on the character (CutsceneController).
+			local characterWatch: RBXScriptConnection? = nil
+			local function watchCharacter(character: Model?)
+				if characterWatch then
+					characterWatch:Disconnect()
+					characterWatch = nil
+				end
+				if not character then
+					setCutsceneHidden(false)
+					return
+				end
+				local function read()
+					setCutsceneHidden(character:GetAttribute(Attributes.ArcaneCutscenePlaying) == true)
+				end
+				characterWatch = character:GetAttributeChangedSignal(Attributes.ArcaneCutscenePlaying):Connect(read)
+				read()
+			end
+			watchCharacter(Players.LocalPlayer.Character)
+			local characterAdded = Players.LocalPlayer.CharacterAdded:Connect(watchCharacter)
+
 			return function()
 				disconnect()
 				phaseStart()
 				phaseEnd()
+				characterAdded:Disconnect()
+				if characterWatch then
+					characterWatch:Disconnect()
+				end
 			end
 		end, {})
 
@@ -87,7 +115,7 @@ function EncounterBarInterfaceController._render(_self: typeof(EncounterBarInter
 			-- so the same Container handles both miniboss and boss encounters.
 			Container = React.createElement(Container, {
 				data = encounterData,
-				phaseHidden = phaseHidden,
+				phaseHidden = phaseHidden or cutsceneHidden,
 			}),
 		})
 	end

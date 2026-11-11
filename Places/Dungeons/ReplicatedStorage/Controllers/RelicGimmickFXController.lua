@@ -11,7 +11,9 @@
 
 	The persistent ones are keyed by their caster and kept alive by the
 	server re-sending them:
-	  * the Ice Dragon Slayer's FROST WYRM, a neon ice cube that follows
+	  * the Ice Dragon Slayer's FROST WYRM, the Ice Dragon mesh
+	    (GameAssets.VFX["Ice Dragon"], 2026-11-10; a neon ice cube before
+	    and still the fallback when the asset is missing) that follows
 	    its caster like a larger Spirit Companion (the same spring follow,
 	    shoulder-to-shoulder drift and bob, on Heartbeat; 2026-10-30), fades
 	    in and out and turns to face each FrostOrb it fires. Its orbs home
@@ -61,6 +63,17 @@ local BLACK_FLAME_COLOR = Color3.fromRGB(70, 35, 80)
 local BAN_COLOR = Color3.fromRGB(255, 85, 85)
 local PLASMA_COLOR = Color3.fromRGB(255, 120, 200)
 local SHOCK_COLOR = Color3.fromRGB(185, 87, 255)
+-- Zombie Bomb's Rot Eye (2026-11-10, PROTOTYPE until the artist's eye is
+-- in): a purple ball with a green slit, and a purple / green laser.
+local ROT_EYE_COLOR = Color3.fromRGB(150, 60, 230)
+local ROT_PUPIL_COLOR = Color3.fromRGB(180, 255, 60)
+local ROT_EYE_SIZE = 2.2
+-- Above the enemy's top (RelicGimmickService/Venom ROT_EYE_HEIGHT).
+local ROT_EYE_HEIGHT = 2.5
+local ROT_EYE_OPEN_SECONDS = 0.4
+local ROT_EYE_CLOSE_SECONDS = 0.25
+local ROT_LASER_GLOW = 0.7
+local ROT_LASER_CORE = 0.25
 
 -- The caster's relics, for the procs whose colour follows them
 -- (relicProcColors: Death Venom's purple Poison, Coil Shocked's yellow
@@ -143,6 +156,12 @@ local ARC_HEIGHT = 6
 -- and bob), a touch lazier so it trails a run or a roll.
 local WYRM_SIZE = Vector3.new(3, 3, 3)
 local WYRM_TRANSPARENCY = 0.15
+-- The authored dragon (GameAssets.VFX["Ice Dragon"], its first part):
+-- faded in to this, and turned by this on top of the wyrm's facing in case
+-- the mesh's nose is not on its -Z (set it if the dragon flies sideways).
+local WYRM_MODEL_NAME = "Ice Dragon"
+local WYRM_MODEL_TRANSPARENCY = 0
+local WYRM_MODEL_ROTATION = CFrame.Angles(0, 0, 0)
 local WYRM_FADE_SECONDS = 0.35
 local WYRM_SCALE = 2
 local WYRM_SMOOTH_TIME = 0.45
@@ -225,6 +244,9 @@ type Payload = {
 
 type Wyrm = {
 	part: BasePart,
+	-- Its facing (turned toward each frame), and the mesh's own turn on top.
+	rotation: CFrame,
+	modelRotation: CFrame,
 	expiresAt: number,
 	facing: Vector3?,
 	faceUntil: number,
@@ -255,6 +277,8 @@ local orbitRandom = Random.new()
 local shields: { [Player]: Shield } = {}
 local shells: { [Player]: Shell } = {}
 local primes: { [Player]: Prime } = {}
+-- Open Rot Eyes, by the enemy they float over (a laser starts at its eye).
+local rotEyes: { [Model]: BasePart } = {}
 -- Melted mobs' green fire, by mob.
 local meltedFire: { [Model]: { ParticleEmitter } } = {}
 
@@ -628,20 +652,48 @@ local function summonWyrm(payload: Payload)
 		existing.expiresAt = expiresAt
 		return
 	end
-	local part = makePart("FrostWyrm", WYRM_SIZE, ICE_COLOR)
+	-- The authored dragon when it is there, else the prototype cube.
+	local vfxFolder = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
+	local template = vfxFolder and vfxFolder:FindFirstChild(WYRM_MODEL_NAME)
+	local templatePart = if template and template:IsA("BasePart")
+		then template
+		elseif template then template:FindFirstChildWhichIsA("BasePart", true)
+		else nil
+	local part: BasePart
+	local opaque: number
+	local modelRotation: CFrame
+	if templatePart then
+		part = templatePart:Clone()
+		part.Name = "FrostWyrm"
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.CastShadow = false
+		opaque = WYRM_MODEL_TRANSPARENCY
+		modelRotation = WYRM_MODEL_ROTATION
+	else
+		part = makePart("FrostWyrm", WYRM_SIZE, ICE_COLOR)
+		opaque = WYRM_TRANSPARENCY
+		modelRotation = CFrame.identity
+	end
 	part.Transparency = 1
 	local home = wyrmHome(wyrmFrame(character, root), 0)
-	part.CFrame = CFrame.lookAt(home, home + root.CFrame.LookVector)
+	local rotation =
+		CFrame.lookAt(Vector3.zero, root.CFrame.LookVector * Vector3.new(1, 0, 1) + Vector3.new(0, 0, 1e-4))
+	part.CFrame = CFrame.new(home) * rotation * modelRotation
 	local light = Instance.new("PointLight")
 	light.Color = ICE_COLOR
 	light.Brightness = 0
 	light.Range = 14
 	light.Parent = part
 	part.Parent = effectsFolder()
-	GameClock.Tween(part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = WYRM_TRANSPARENCY }):Play()
+	GameClock.Tween(part, TweenInfo.new(WYRM_FADE_SECONDS), { Transparency = opaque }):Play()
 	GameClock.Tween(light, TweenInfo.new(WYRM_FADE_SECONDS), { Brightness = 2 }):Play()
 	wyrms[caster] = {
 		part = part,
+		rotation = rotation,
+		modelRotation = modelRotation,
 		expiresAt = expiresAt,
 		facing = nil,
 		faceUntil = 0,
@@ -806,7 +858,8 @@ local function stepWyrms(deltaTime: number)
 
 		local look = if wyrm.facing and now < wyrm.faceUntil then wyrm.facing else frame.LookVector
 		local desired = CFrame.lookAt(Vector3.zero, look * Vector3.new(1, 0, 1) + Vector3.new(0, 0, 1e-4))
-		wyrm.part.CFrame = CFrame.new(position) * current.Rotation:Lerp(desired, turn)
+		wyrm.rotation = wyrm.rotation:Lerp(desired, turn)
+		wyrm.part.CFrame = CFrame.new(position) * wyrm.rotation * wyrm.modelRotation
 	end
 end
 
@@ -1296,6 +1349,95 @@ local function quake(payload: Payload)
 	end)
 end
 
+--[ Rot Eye ]--
+
+-- Where an eye floats over `model` (the server's eyePosition).
+local function rotEyePosition(model: Model): Vector3?
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
+		return nil
+	end
+	local box, size = model:GetBoundingBox()
+	return Vector3.new(root.Position.X, box.Position.Y + size.Y / 2 + ROT_EYE_HEIGHT, root.Position.Z)
+end
+
+-- The eye: opens over its Target, follows it facing the camera, closes
+-- when Duration is up or the Target dies.
+local function rotEye(payload: Payload)
+	local host = payload.Target
+	if not host then
+		return
+	end
+	local humanoid = host:FindFirstChildOfClass("Humanoid")
+	local ball = makePart("RotEye", Vector3.one * 0.1, ROT_EYE_COLOR)
+	ball.Shape = Enum.PartType.Ball
+	ball.Transparency = 0.15
+	ball.Position = payload.From
+	ball.Parent = effectsFolder()
+	local pupil = makePart("RotEyePupil", Vector3.new(0.05, 0.05, 0.05), ROT_PUPIL_COLOR)
+	pupil.Parent = ball
+	local light = Instance.new("PointLight")
+	light.Color = ROT_PUPIL_COLOR
+	light.Brightness = 2
+	light.Range = 10
+	light.Parent = ball
+	local emitters = statusEmitters("Poison", ball)
+	rotEyes[host] = ball
+	local opened = elapsedOf(payload)
+	local closing = false
+	local function close()
+		if closing then
+			return
+		end
+		closing = true
+		if rotEyes[host] == ball then
+			rotEyes[host] = nil
+		end
+		GameClock.Tween(ball, TweenInfo.new(ROT_EYE_CLOSE_SECONDS), { Size = Vector3.one * 0.1 }):Play()
+		GameClock.Tween(pupil, TweenInfo.new(ROT_EYE_CLOSE_SECONDS), { Transparency = 1 }):Play()
+		retire(ball, emitters, ROT_EYE_CLOSE_SECONDS, 1)
+	end
+	animate(payload.Duration, opened, function()
+		if closing then
+			return
+		end
+		if not host.Parent or (humanoid and humanoid.Health <= 0) then
+			close()
+			return
+		end
+		local open = math.clamp((GameClock.Now() - payload.StartTime) / ROT_EYE_OPEN_SECONDS, 0, 1)
+		local eased = 1 - (1 - open) ^ 3
+		local position = rotEyePosition(host) or ball.Position
+		local camera = workspace.CurrentCamera
+		local facing = if camera then CFrame.lookAt(position, camera.CFrame.Position) else CFrame.new(position)
+		ball.Size = Vector3.one * ROT_EYE_SIZE * eased
+		ball.CFrame = facing
+		-- The slit: a thin upright bar on the camera side, widening open.
+		pupil.Size = Vector3.new(0.3 * eased, ROT_EYE_SIZE * 0.75 * eased, 0.2)
+		pupil.CFrame = facing * CFrame.new(0, 0, -ROT_EYE_SIZE * 0.45 * eased)
+	end, close)
+end
+
+-- A laser from the eye at From to the Target.
+local function rotLaser(payload: Payload)
+	local from = payload.From
+	-- Start at the drawn eye nearest From (it follows its enemy smoothly).
+	local nearest = 4
+	for _, eye in rotEyes do
+		local gap = (eye.Position - payload.From).Magnitude
+		if gap < nearest then
+			nearest = gap
+			from = eye.Position
+		end
+	end
+	local target = payload.Target
+	local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+	local to = if targetRoot and targetRoot:IsA("BasePart") then targetRoot.Position else payload.To
+	drawLine({ from, to }, ROT_LASER_GLOW, ROT_EYE_COLOR, 0.35)
+	drawLine({ from, to }, ROT_LASER_CORE, ROT_PUPIL_COLOR, 0)
+	burst(to, 2, ROT_EYE_COLOR)
+end
+
 --[ Dispatch ]--
 
 local HANDLERS: { [string]: (Payload) -> () } = {
@@ -1363,6 +1505,9 @@ local HANDLERS: { [string]: (Payload) -> () } = {
 	Quake = quake,
 	-- Storm (2026-11-01): the Katana's primed sparks on Caster for Duration (0 ends it).
 	StormPrime = keepStormPrime,
+	-- Venom (2026-11-10): Zombie Bomb's Rot Eye.
+	RotEye = rotEye,
+	RotLaser = rotLaser,
 }
 
 function RelicGimmickFXController.Start(_self: typeof(RelicGimmickFXController))

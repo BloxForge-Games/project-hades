@@ -164,20 +164,20 @@ function LandingController._lockControls(self: typeof(LandingController), barsDe
 	end
 end
 
--- Everything comes back on ONE beat, a second after the landing ends,
--- when the cinematic bars slide out: movement used to return the instant
--- the server called the landing done, a second before the bars and the
--- CutscenePlaying gate, so the player was walking off under the bars.
+-- As the Lobby does (2026-11-09, LobbyLandingController): movement is
+-- locked through the landing animation and comes back the instant the
+-- landing ends; the bars, the CutscenePlaying gate, the relics and the HUD
+-- a second later. Movement used to wait for that second too.
 function LandingController._unlockControls(self: typeof(LandingController))
 	local character = Players.LocalPlayer.Character
 
+	local controls = self:_getPlayerControls()
+	if controls then
+		controls:Enable()
+	end
+
 	task.delay(1, function()
 		CinematicInterfaceController.Signals.OnCinematicEnd:Fire()
-
-		local controls = self:_getPlayerControls()
-		if controls then
-			controls:Enable()
-		end
 
 		if character then
 			character:SetAttribute(Attributes.CutscenePlaying, false)
