@@ -16,6 +16,32 @@ local loadOneShotAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Fu
 
 local CASTING_HUMANOID_WALK_SPEED = 2
 
+-- The cast sound shared by Fire Blast, Lighting Shatter and Shadow Clone
+-- Barrage (2026-11-11): a 3D sound on the caster, so only players nearby
+-- hear it.
+local CAST_SOUND_ID = "rbxassetid://147722098"
+local CAST_SOUND_VOLUME = 0.8
+local CAST_SOUND_MIN_DISTANCE = 15
+local CAST_SOUND_MAX_DISTANCE = 90
+local CAST_SOUND_LIFETIME = 5
+
+local function playCastSound(character: Model)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+	local sound = Instance.new("Sound")
+	sound.Name = "CastSound"
+	sound.SoundId = CAST_SOUND_ID
+	sound.Volume = CAST_SOUND_VOLUME
+	sound.RollOffMode = Enum.RollOffMode.InverseTapered
+	sound.RollOffMinDistance = CAST_SOUND_MIN_DISTANCE
+	sound.RollOffMaxDistance = CAST_SOUND_MAX_DISTANCE
+	sound.Parent = root
+	sound:Play()
+	GameClock.Debris(sound, CAST_SOUND_LIFETIME)
+end
+
 -- The Roblox type definitions no longer allow indexing the root part off
 -- the character; the cast keeps a missing one erroring where the old index did.
 local function getRootPart(character: Model): BasePart
@@ -34,6 +60,9 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 	)
 
 	fireBlastAnimation:Play(0.25)
+	if not preload then
+		playCastSound(character)
+	end
 
 	local animationConnection
 

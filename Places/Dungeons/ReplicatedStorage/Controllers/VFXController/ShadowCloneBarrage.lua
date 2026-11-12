@@ -23,6 +23,32 @@ local HAND_SEAL_ID = "rbxassetid://121360847047261"
 local HAND_SEAL_SECONDS = 0.73
 local CAST_WALK_SPEED = 1
 
+-- The cast sound shared by Fire Blast, Lighting Shatter and Shadow Clone
+-- Barrage (2026-11-11): a 3D sound on the caster, so only players nearby
+-- hear it.
+local CAST_SOUND_ID = "rbxassetid://147722098"
+local CAST_SOUND_VOLUME = 0.8
+local CAST_SOUND_MIN_DISTANCE = 15
+local CAST_SOUND_MAX_DISTANCE = 90
+local CAST_SOUND_LIFETIME = 5
+
+local function playCastSound(character: Model)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+	local sound = Instance.new("Sound")
+	sound.Name = "CastSound"
+	sound.SoundId = CAST_SOUND_ID
+	sound.Volume = CAST_SOUND_VOLUME
+	sound.RollOffMode = Enum.RollOffMode.InverseTapered
+	sound.RollOffMinDistance = CAST_SOUND_MIN_DISTANCE
+	sound.RollOffMaxDistance = CAST_SOUND_MAX_DISTANCE
+	sound.Parent = root
+	sound:Play()
+	GameClock.Debris(sound, CAST_SOUND_LIFETIME)
+end
+
 local handSeal = Instance.new("Animation")
 handSeal.AnimationId = HAND_SEAL_ID
 
@@ -63,6 +89,8 @@ return function(player: Player, preload: boolean?)
 			restoreWalkSpeed(character, CAST_WALK_SPEED, claim)
 		end)
 	end
+
+	playCastSound(character)
 
 	local sound = ReplicatedStorage.GameAssets.Sounds:FindFirstChild("Magic Spell Cast")
 	if root and sound and sound:IsA("Sound") then
