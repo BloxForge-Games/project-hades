@@ -33,6 +33,8 @@ local MARKER_SIZE = 0.04
 local SCREEN_INSET = 8
 -- How often the NPC list is checked for change (NPCs present at join).
 local REFRESH_SECONDS = 2
+-- Seconds between checks of which NPCs are on screen (_update).
+local UPDATE_SECONDS = 0.1
 
 type Marker = {
 	npc: Model,
@@ -136,7 +138,10 @@ end
 function NpcMarkerController._update(self: typeof(NpcMarkerController))
 	for npc, marker in self._markers do
 		local position = anchorPosition(npc)
-		marker.part.CFrame = CFrame.new(position)
+		-- Hub NPCs stand still: the part is only moved when its NPC has.
+		if marker.part.Position ~= position then
+			marker.part.CFrame = CFrame.new(position)
+		end
 		local fade = if onScreen(position) then 1 else 0
 		if marker.indicator:GetAttribute("Fade") ~= fade then
 			marker.indicator:SetAttribute("Fade", fade)
@@ -152,7 +157,16 @@ function NpcMarkerController.Start(self: typeof(NpcMarkerController))
 			task.wait(REFRESH_SECONDS)
 		end
 	end)
-	RunService.Heartbeat:Connect(function()
+	-- UPDATE_SECONDS apart, not every frame (2026-11-14): the marker
+	-- itself is drawn every frame by LocationMarkerSystem; this only
+	-- decides whether it shows, and its fade eases over the gap.
+	local elapsed = 0
+	RunService.Heartbeat:Connect(function(deltaTime: number)
+		elapsed += deltaTime
+		if elapsed < UPDATE_SECONDS then
+			return
+		end
+		elapsed = 0
 		self:_update()
 	end)
 end

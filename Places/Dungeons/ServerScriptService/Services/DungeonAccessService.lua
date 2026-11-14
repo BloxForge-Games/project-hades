@@ -65,7 +65,8 @@ function DungeonAccessService._onPlayerAdded(_self: typeof(DungeonAccessService)
 end
 
 function DungeonAccessService.Start(self: typeof(DungeonAccessService))
-	if RunService:IsStudio() then
+	-- 0 = open to everyone (Constants): nobody is checked or kicked.
+	if RunService:IsStudio() or Constants.QUEUE_MIN_GROUP_RANK <= 0 then
 		return
 	end
 	Players.PlayerAdded:Connect(function(player: Player)

@@ -175,6 +175,10 @@ end
 -- (GroupService:GetGroupsAsync, a web call). Nil when it could not be
 -- read; the caller refuses then (never grants).
 local function canQueue(player: Player): boolean?
+	-- 0 = open to everyone: no web call, so a failed read cannot refuse.
+	if Constants.QUEUE_MIN_GROUP_RANK <= 0 then
+		return true
+	end
 	local ok, groups = pcall(function()
 		return GroupService:GetGroupsAsync(player.UserId)
 	end)
