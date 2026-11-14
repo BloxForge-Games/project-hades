@@ -31,6 +31,15 @@
 	Buildings: camera:GetPartsObscuringTarget on the head, the root and
 	the legs, every CHECK_INTERVAL, the local character ignored. Parts
 	authored fully invisible (helpers, spots) never count.
+
+	Cost (2026-11-14): each tree's Leaves and trunk parts are listed once
+	(treeRecord) and dropped when the Tree folder changes. A canopy or
+	trunk whose bounding sphere the camera-to-player line misses is not
+	tested, and a canopy whose on-screen rectangle is under
+	LEAVES_SCREEN_SHARE is not outlined. Both skips are exact: they only
+	reject what the full test would reject. The check used to walk every
+	tree's descendants, cast three rays at every trunk and outline every
+	canopy through the engine's projection, 20 times a second.
 ]]
 
 --[ Roblox Services ]--
@@ -133,6 +142,16 @@ local fadedTrunks: { [Instance]: number } = {}
 
 local highlight: Highlight? = nil
 
+-- A tree's parts, listed once: every Leaves part, every trunk, and the
+-- Leaves part its screen outline is taken from. Emptied when anything
+-- under the Tree folder is added or removed.
+type TreeRecord = {
+	leaves: { BasePart },
+	trunks: { BasePart },
+	outline: BasePart?,
+}
+local treeRecords: { [Instance]: TreeRecord } = {}
+
 --[ Helpers ]--
 
 local function authoredTransparency(part: BasePart): number
@@ -208,25 +227,75 @@ local function segmentHitsTrunk(from: Vector3, to: Vector3, part: BasePart): boo
 	return hit ~= nil and (to - hit.Position).Magnitude > TRUNK_CLEARANCE
 end
 
--- Whether `tree`'s canopy, and whether its trunk, sits between `from`
--- (the camera) and any of `points`.
-local function treeCovers(tree: Instance, from: Vector3, points: { Vector3 }): (boolean, boolean)
-	local leavesCover, trunkCovers = false, false
+-- `tree`'s Leaves and trunk parts (see TreeRecord), listed on first use.
+local function treeRecord(tree: Instance): TreeRecord
+	local record = treeRecords[tree]
+	if record then
+		return record
+	end
+	local outline = tree:FindFirstChild(LEAVES_NAME, true)
+	local made: TreeRecord = {
+		leaves = {},
+		trunks = {},
+		outline = if outline and outline:IsA("BasePart") then outline else nil,
+	}
 	for _, part in tree:GetDescendants() do
 		if not part:IsA("BasePart") then
 			continue
 		end
-		local isLeaves = part.Name == LEAVES_NAME
-		local isTrunk = not isLeaves and string.find(string.lower(part.Name), "trunk", 1, true) ~= nil
-		if not isLeaves and not isTrunk then
-			continue
+		if part.Name == LEAVES_NAME then
+			table.insert(made.leaves, part)
+		elseif string.find(string.lower(part.Name), "trunk", 1, true) ~= nil then
+			table.insert(made.trunks, part)
 		end
+	end
+	treeRecords[tree] = made
+	return made
+end
+
+-- The distance from `point` to the segment `from`..`to`.
+local function distanceToSegment(point: Vector3, from: Vector3, to: Vector3): number
+	local d = to - from
+	local dd = d:Dot(d)
+	if dd < 1e-9 then
+		return (point - from).Magnitude
+	end
+	local t = math.clamp((point - from):Dot(d) / dd, 0, 1)
+	return (from + d * t - point).Magnitude
+end
+
+-- Whether `tree`'s canopy, and whether its trunk, sits between `from`
+-- (the camera) and any of `points`. A part whose bounding sphere the
+-- segment misses is skipped: neither test could hit it.
+local function treeCovers(tree: Instance, from: Vector3, points: { Vector3 }): (boolean, boolean)
+	local record = treeRecord(tree)
+	local leavesCover, trunkCovers = false, false
+	for _, part in record.leaves do
+		local cframe = part.CFrame
+		local centre = cframe.Position
+		local radii = part.Size / 2 * LEAVES_SHAPE_SCALE
+		local reach = math.max(radii.X, radii.Y, radii.Z)
 		for _, point in points do
-			if isLeaves and not leavesCover then
-				leavesCover = segmentHitsEllipsoid(from, point, part.CFrame, part.Size / 2 * LEAVES_SHAPE_SCALE)
-			elseif isTrunk and not trunkCovers then
-				trunkCovers = segmentHitsTrunk(from, point, part)
+			if distanceToSegment(centre, from, point) <= reach and segmentHitsEllipsoid(from, point, cframe, radii) then
+				leavesCover = true
+				break
 			end
+		end
+		if leavesCover then
+			break
+		end
+	end
+	for _, part in record.trunks do
+		local centre = part.Position
+		local reach = part.Size.Magnitude / 2
+		for _, point in points do
+			if distanceToSegment(centre, from, point) <= reach and segmentHitsTrunk(from, point, part) then
+				trunkCovers = true
+				break
+			end
+		end
+		if trunkCovers then
+			break
 		end
 	end
 	return leavesCover, trunkCovers
@@ -259,31 +328,33 @@ local function convexHull(points: { Vector2 }): { Vector2 }
 	return hull
 end
 
+-- The four sides of the rectangle 0..size: how far inside each `p` is.
+local RECT_EDGES: { (p: Vector2, size: Vector2) -> number } = {
+	function(p: Vector2, _size: Vector2): number
+		return p.X
+	end,
+	function(p: Vector2, size: Vector2): number
+		return size.X - p.X
+	end,
+	function(p: Vector2, _size: Vector2): number
+		return p.Y
+	end,
+	function(p: Vector2, size: Vector2): number
+		return size.Y - p.Y
+	end,
+}
+
 -- `polygon` clipped to the rectangle 0..size (Sutherland-Hodgman).
 local function clipToRect(polygon: { Vector2 }, size: Vector2): { Vector2 }
-	local edges = {
-		function(p: Vector2): number
-			return p.X
-		end,
-		function(p: Vector2): number
-			return size.X - p.X
-		end,
-		function(p: Vector2): number
-			return p.Y
-		end,
-		function(p: Vector2): number
-			return size.Y - p.Y
-		end,
-	}
 	local output = polygon
-	for _, inside in edges do
+	for _, inside in RECT_EDGES do
 		local input = output
 		output = {}
 		for index, current in input do
 			local previous = input[if index == 1 then #input else index - 1]
-			local currentIn, previousIn = inside(current) >= 0, inside(previous) >= 0
+			local a, b = inside(previous, size), inside(current, size)
+			local currentIn, previousIn = b >= 0, a >= 0
 			if currentIn ~= previousIn then
-				local a, b = inside(previous), inside(current)
 				table.insert(output, previous:Lerp(current, a / (a - b)))
 			end
 			if currentIn then
@@ -311,8 +382,8 @@ end
 -- the screen. The canopy mesh fills nearly all of its box (2026-11-11: an
 -- ellipsoid inside it read a canopy over half the view as 6%).
 local function leavesScreenShare(tree: Instance, camera: Camera): number
-	local leaves = tree:FindFirstChild(LEAVES_NAME, true)
-	if not leaves or not leaves:IsA("BasePart") then
+	local leaves = treeRecord(tree).outline
+	if not leaves then
 		return 0
 	end
 	local viewport = camera.ViewportSize
@@ -322,11 +393,16 @@ local function leavesScreenShare(tree: Instance, camera: Camera): number
 	local half = leaves.Size / 2
 	local cframe = leaves.CFrame
 	local cameraCFrame = camera.CFrame
+	-- The box in camera space. One wholly behind the camera draws nothing.
+	local inCamera = cameraCFrame:ToObjectSpace(cframe)
+	if -inCamera.Position.Z + half.Magnitude < NEAR_DEPTH then
+		return 0
+	end
 	-- Corners in camera space, depth = distance in front of the camera.
 	local points: { Vector3 } = {}
 	local depths: { number } = {}
 	for index, corner in BOX_CORNERS do
-		local local_ = cameraCFrame:PointToObjectSpace(cframe:PointToWorldSpace(corner * half))
+		local local_ = inCamera * (corner * half)
 		points[index] = local_
 		depths[index] = -local_.Z
 	end
@@ -348,10 +424,25 @@ local function leavesScreenShare(tree: Instance, camera: Camera): number
 	if #front == 0 then
 		return 0
 	end
+	-- Onto the screen, by the camera's own projection (the points are
+	-- already in its space; this is WorldToViewportPoint without the
+	-- trip back to world space and one engine call a point).
+	local focal = viewport.Y / 2 / math.tan(math.rad(camera.FieldOfView) / 2)
 	local projected: { Vector2 } = {}
+	local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
 	for _, point in front do
-		local screen = camera:WorldToViewportPoint(cameraCFrame:PointToWorldSpace(point))
-		table.insert(projected, Vector2.new(screen.X, screen.Y))
+		local scale = focal / -point.Z
+		local x = viewport.X / 2 + point.X * scale
+		local y = viewport.Y / 2 - point.Y * scale
+		table.insert(projected, Vector2.new(x, y))
+		minX, minY, maxX, maxY = math.min(minX, x), math.min(minY, y), math.max(maxX, x), math.max(maxY, y)
+	end
+	-- The outline lies inside the points' on-screen rectangle: one too
+	-- small to reach LEAVES_SCREEN_SHARE needs no outline.
+	local width = math.min(maxX, viewport.X) - math.max(minX, 0)
+	local height = math.min(maxY, viewport.Y) - math.max(minY, 0)
+	if width <= 0 or height <= 0 or width * height < LEAVES_SCREEN_SHARE * viewport.X * viewport.Y then
+		return 0
 	end
 	local outline = clipToRect(convexHull(projected), viewport)
 	if #outline < 3 then
@@ -456,7 +547,13 @@ function LobbyMapOcclusionController.Start(_self: typeof(LobbyMapOcclusionContro
 			for _, descendant in trees:GetDescendants() do
 				tagLeaves(descendant)
 			end
-			trees.DescendantAdded:Connect(tagLeaves)
+			trees.DescendantAdded:Connect(function(descendant: Instance)
+				tagLeaves(descendant)
+				table.clear(treeRecords)
+			end)
+			trees.DescendantRemoving:Connect(function()
+				table.clear(treeRecords)
+			end)
 		end
 
 		while true do
