@@ -125,6 +125,8 @@ DungeonGenerator._generatingDungeonId = nil :: string?
 -- Map.Buildings sits outside the runtime folder, so DestroyFloor destroys
 -- these explicitly or they pile up across floors.
 DungeonGenerator._floorBuildings = {} :: { Model }
+-- Debug Event rooms placed by /event this floor (SpawnDebugEventRoom).
+DungeonGenerator._debugRoomCount = 0
 
 --[ Private Functions ]--
 
@@ -1058,6 +1060,67 @@ function DungeonGenerator.Generate(self: typeof(DungeonGenerator), descriptor: G
 	return dungeon
 end
 
+-- DEBUG (the /event chat command): places a fresh copy of Event prefab
+-- `prefabName` (this floor's Event pool) in open air above the floor's
+-- Start, apart from the rooms and from each other, and registers it in
+-- `dungeon.roomsById` under an id no generated room uses. It joins no
+-- chain (nothing before or after it), so it is reached only by teleport;
+-- it lives in the runtime folder, so DestroyFloor clears it with the
+-- floor. Returns the room, or nil and why.
+-- The Event prefab names this floor's pool offers (sorted), for /event.
+function DungeonGenerator.GetEventPrefabNames(self: typeof(DungeonGenerator)): { string }
+	local folder = self:_getPrefabPool(EVENT_POOL_NAME)
+	local names = {}
+	if folder then
+		for _, child in folder:GetChildren() do
+			if child:IsA("Model") then
+				table.insert(names, child.Name)
+			end
+		end
+	end
+	table.sort(names)
+	return names
+end
+
+local DEBUG_ROOM_ID_BASE = 10000
+local DEBUG_ROOM_HEIGHT = 400
+local DEBUG_ROOM_SPACING = 160
+function DungeonGenerator.SpawnDebugEventRoom(
+	self: typeof(DungeonGenerator),
+	dungeon: Dungeon,
+	prefabName: string
+): (Room?, string?)
+	local prefab = self:_findPrefabByName(EVENT_POOL_NAME, prefabName)
+	if not prefab then
+		return nil, ("No Event prefab named %s on this floor"):format(prefabName)
+	end
+	self._debugRoomCount += 1
+	local id = DEBUG_ROOM_ID_BASE + self._debugRoomCount
+	local origin = if dungeon.startModel then dungeon.startModel:GetPivot().Position else Vector3.zero
+	local model = prefab:Clone()
+	model:PivotTo(CFrame.new(origin + Vector3.new(self._debugRoomCount * DEBUG_ROOM_SPACING, DEBUG_ROOM_HEIGHT, 0)))
+	model:SetAttribute("PrefabName", model.Name)
+	model.Name = ("Room_%d_%s"):format(id, RoomTypes.Event)
+	for _, anchorName in { ENTRY_ANCHOR_NAME, EXIT_ANCHOR_NAME, BRANCH_ANCHOR_NAME } do
+		local anchor = model:FindFirstChild(anchorName)
+		if anchor then
+			anchor:Destroy()
+		end
+	end
+	self:_atomizeComponentModels(model)
+	model.Parent = self:_ensureRuntimeFolder()
+	local node: any = {
+		id = id,
+		roomType = RoomTypes.Event,
+		segmentId = id,
+		chunkIndex = 1,
+		chunkCount = 1,
+	}
+	local room = self:_makeRoom(node, model)
+	dungeon.roomsById[id] = room
+	return room, nil
+end
+
 -- Un-places the floor: every room model in the runtime folder (Walls has its
 -- children cleared, Highlight is left alone -- see RUNTIME_FOLDER_KEEP) and
 -- the chunk buildings relocated to Map.Buildings.
@@ -1086,6 +1149,7 @@ function DungeonGenerator.DestroyFloor(self: typeof(DungeonGenerator))
 		end
 	end
 	table.clear(self._floorBuildings)
+	self._debugRoomCount = 0
 end
 
 return DungeonGenerator

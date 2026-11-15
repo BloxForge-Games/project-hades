@@ -280,14 +280,18 @@ end
 
 -- The gravity a shot flies under: an Ice Arrow from a caster holding a
 -- ballisticAim weapon follows that weapon's arc (its drop; relicShots
--- follow, 2026-11-05); everything else the relic shots' own.
-local function gravityFor(payload: Payload): number
+-- follow, 2026-11-05); everything else the relic shots' own. A followed
+-- shot flown slower than the weapon (relicShots followSpeedScale) falls
+-- by the square of that share, so it keeps the weapon's arc.
+local function gravityFor(payload: Payload, velocity: Vector3): number
 	if (payload.Kind == "IceArrowShot" or payload.Kind == "PaintballShot") and payload.Caster then
 		local character = payload.Caster.Character
 		local weaponName = character and character:GetAttribute(Attributes.EquippedWeapon)
 		local weapon = if type(weaponName) == "string" then WeaponData[weaponName] else nil
 		if weapon and weapon.ballisticAim == true and tonumber(weapon.drop) then
-			return tonumber(weapon.drop) :: number
+			local weaponSpeed = tonumber(weapon.velocity)
+			local scale = if weaponSpeed and weaponSpeed > 0 then velocity.Magnitude / weaponSpeed else 1
+			return (tonumber(weapon.drop) :: number) * scale * scale
 		end
 	end
 	return RelicTriggerData.Shot.Gravity
@@ -389,7 +393,7 @@ function RelicShotVFXController.Launch(_self: typeof(RelicShotVFXController), pa
 		place = place,
 		origin = origin,
 		velocity = velocity,
-		gravity = Vector3.new(0, -gravityFor(payload), 0),
+		gravity = Vector3.new(0, -gravityFor(payload, velocity), 0),
 		heading = if flat(velocity).Magnitude > 1e-3 then flat(velocity).Unit else Vector3.zero,
 		direction = velocity.Unit,
 		startedAt = GameClock.Now(),

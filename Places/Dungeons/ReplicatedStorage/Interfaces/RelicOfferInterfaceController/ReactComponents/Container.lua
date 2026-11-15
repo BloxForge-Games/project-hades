@@ -46,8 +46,10 @@
 	             player sees back, edge, back, edge, front. A light sweep
 	             crosses each as it lands (and again on the card's own
 	             timer, OfferCard)
-	  * hover:   the card comes toward the camera, leans toward the cursor
-	             and gains its stroke; the others go under their black veil
+	  * hover:   the card grows in place (toward the camera along the ray
+	             through its face centre, so its centre never moves on
+	             screen), leans toward the cursor and gains its stroke and
+	             a soft glow; the others go under their black veil
 	  * idle:    a slow sine bob per card (OfferCard's own looping tween)
 	  * taken:   the others flip back over and drop out of view; the
 	             chosen card flashes white, a ring in its tier colour
@@ -58,12 +60,8 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local GuiService = game:GetService("GuiService")
-local Lighting = game:GetService("Lighting")
-local Debris = game:GetService("Debris")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local InterfaceManagerController =
@@ -73,6 +71,9 @@ local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
 local OfferCard = require(script.Parent.OfferCard)
 local CardStage = require(script.Parent.CardStage)
+-- The world behind the hand (blur + dim) and the card sounds, shared with
+-- the Memory Shrine's board.
+local CardScene = require(script.Parent.CardScene)
 
 -- The HUD scope hold while the hand is up.
 local HUD_HIDE_SOURCE = "RelicOffer"
@@ -98,10 +99,10 @@ local COUNTDOWN_PULSE_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.Ea
 local COUNTDOWN_TICK_SOUND_ID = "rbxassetid://134410911353980"
 -- 2026-11-06, once per card (three in a hand): the slide as a card starts
 -- rising, and the flip the moment its face turns up (DEAL_REVEAL_AT).
-local CARD_SLIDE_SOUND_ID = "rbxassetid://9113578399"
-local CARD_SLIDE_VOLUME = 1
-local CARD_FLIP_SOUND_ID = "rbxassetid://3456145589"
-local CARD_FLIP_VOLUME = 1.1
+local CARD_SLIDE_SOUND_ID = CardScene.CARD_SLIDE_SOUND_ID
+local CARD_SLIDE_VOLUME = CardScene.CARD_SLIDE_VOLUME
+local CARD_FLIP_SOUND_ID = CardScene.CARD_FLIP_SOUND_ID
+local CARD_FLIP_VOLUME = CardScene.CARD_FLIP_VOLUME
 local COUNTDOWN_TICK_VOLUME = 0.6
 
 -- Card row: height as a fraction of the screen, by platform. The width
@@ -144,7 +145,7 @@ local COUNTDOWN_BAR_FILL_COLOR = Color3.fromRGB(255, 255, 255)
 local COUNTDOWN_BAR_FILL_TRANSPARENCY = 0.1
 -- The server's hand length, for the bar's full width; a hand that reads
 -- longer on its first tick stretches it (the max seen wins).
-local COUNTDOWN_BAR_FULL_SECONDS = 30
+local COUNTDOWN_BAR_FULL_SECONDS = 15
 local HEADER_RISE = 0.03
 local COUNTDOWN_ENTRY_DELAY = 0.08
 local HEADER_IN_MOVE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -196,14 +197,6 @@ local RISE_FADE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDir
 local PRESS_SCALE = 0.975
 local PRESS_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 
--- The world behind the hand: a depth of field focused on the card plane
--- (CardStage.STAGE_DISTANCE out, the cards sharp, the dungeon soft) and
--- the stage's dim plane behind the cards. Both ease over SCENE_TWEEN.
-local SCENE_DOF_NAME = "RelicOfferDepthOfField"
-local SCENE_DOF_IN_FOCUS_RADIUS = 6
-local SCENE_DOF_FAR_INTENSITY = 0.75
-local SCENE_TWEEN = TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
-
 local PICK_SOUND_NAME = "RelicPickup"
 -- The pick plays at this share of the asset's own volume (2026-11-08: too
 -- loud at full). The others hear it at the same share (init.lua).
@@ -213,31 +206,8 @@ local HOVER_SOUND_ID: string? = nil
 
 --[ Helpers ]--
 
-local function playUiSound(soundName: string, volumeScale: number?)
-	local sounds = ReplicatedStorage:FindFirstChild("GameAssets")
-	sounds = sounds and sounds:FindFirstChild("Sounds")
-	local template = sounds and sounds:FindFirstChild(soundName)
-	if not template or not template:IsA("Sound") then
-		return
-	end
-	local sound = template:Clone()
-	sound.Volume *= volumeScale or 1
-	sound.Parent = SoundService
-	sound:Play()
-	Debris:AddItem(sound, 5)
-end
-
-local function playSoundId(soundId: string?, volume: number)
-	if not soundId then
-		return
-	end
-	local sound = Instance.new("Sound")
-	sound.SoundId = soundId
-	sound.Volume = volume
-	sound.Parent = SoundService
-	sound:Play()
-	Debris:AddItem(sound, 3)
-end
+local playUiSound = CardScene.playUiSound
+local playSoundId = CardScene.playSoundId
 
 local function tween(instance: Instance?, info: TweenInfo, goal: { [string]: any }): Tween?
 	if not instance then
@@ -257,83 +227,9 @@ local function applyLabelAlpha(label: TextLabel?, a: number)
 	label.TextStrokeTransparency = 0.5 + 0.5 * a
 end
 
---[ Scene ]--
-
--- ONE scene state for this client. `token` is the owner of the current
--- transition: an out that has been overtaken by a new in (a hand dealt
--- while the last one is closing) finds its token stale and leaves the
--- effects alone, so nothing double-applies and nothing restores early.
--- The dim plane keeps its own generation the same way (CardStage.setDim).
-local scene = {
-	token = 0,
-	active = false,
-	dof = nil :: DepthOfFieldEffect?,
-}
-
-local function sceneDof(): DepthOfFieldEffect
-	local existing = scene.dof
-	if existing and existing.Parent == Lighting then
-		return existing
-	end
-	local found = Lighting:FindFirstChild(SCENE_DOF_NAME)
-	local dof: DepthOfFieldEffect
-	if found and found:IsA("DepthOfFieldEffect") then
-		dof = found
-	else
-		dof = Instance.new("DepthOfFieldEffect")
-		dof.Name = SCENE_DOF_NAME
-		dof.NearIntensity = 0
-		dof.FarIntensity = 0
-		dof.Parent = Lighting
-	end
-	dof.FocusDistance = CardStage.STAGE_DISTANCE
-	dof.InFocusRadius = SCENE_DOF_IN_FOCUS_RADIUS
-	scene.dof = dof
-	return dof
-end
-
-local function sceneIn()
-	scene.token += 1
-	scene.active = true
-	local dof = sceneDof()
-	dof.Enabled = true
-	tween(dof, SCENE_TWEEN, { FarIntensity = SCENE_DOF_FAR_INTENSITY })
-	CardStage.setDim(true, SCENE_TWEEN)
-end
-
--- `immediate` (unmount) restores on the spot instead of easing out.
-local function sceneOut(immediate: boolean?)
-	if not scene.active then
-		return
-	end
-	scene.token += 1
-	local token = scene.token
-	local dof = scene.dof
-
-	local function restore()
-		if scene.token ~= token then
-			return
-		end
-		scene.active = false
-		if dof then
-			dof.FarIntensity = 0
-			dof.Enabled = false
-		end
-	end
-
-	if immediate then
-		CardStage.destroyDim()
-		restore()
-		return
-	end
-	CardStage.setDim(false, SCENE_TWEEN)
-	local out = if dof then tween(dof, SCENE_TWEEN, { FarIntensity = 0 }) else nil
-	if out then
-		out.Completed:Once(restore)
-	else
-		restore()
-	end
-end
+-- The world behind the hand (CardScene: one scene state per client).
+local sceneIn = CardScene.sceneIn
+local sceneOut = CardScene.sceneOut
 
 --[ Component ]--
 
@@ -685,7 +581,10 @@ local function Container(props: any)
 			if offerRef.current ~= thisOffer then
 				return
 			end
-			local fly = handle.tweenPose({ depth = TAKEN_FLY_DEPTH, y = TAKEN_FLY_RISE }, RISE_TWEEN)
+			-- x back to the slot: a hovered card holds the in-place lift's
+			-- small offset (CardStage.liftedPose), and the flight ends
+			-- where it always has.
+			local fly = handle.tweenPose({ x = 0, depth = TAKEN_FLY_DEPTH, y = TAKEN_FLY_RISE }, RISE_TWEEN)
 			tween(handle.alpha, RISE_FADE_TWEEN, { Value = 1 })
 			-- The keyword column leaves with the card instead of lingering.
 			handle.hideTooltip()
@@ -804,8 +703,9 @@ local function Container(props: any)
 		end
 		local under = cursorOverRef.current
 		if not under then
-			local inset = GuiService:GetGuiInset()
-			local cursor = UserInputService:GetMouseLocation() - inset
+			-- Viewport space, like handle.containsPoint (WorldToViewportPoint):
+			-- the mouse location as it is, no top bar inset taken off.
+			local cursor = UserInputService:GetMouseLocation()
 			forEachHandle(function(relicName, handle)
 				if under == nil and handle.containsPoint(cursor) then
 					under = relicName
@@ -1043,6 +943,7 @@ local function Container(props: any)
 				count = #offer.Relics,
 				isPhone = isPhone,
 				tilt = not IS_TOUCH,
+				hoverGlow = true,
 				onRegister = function(name: string, handle)
 					handlesRef.current[name] = handle
 				end,

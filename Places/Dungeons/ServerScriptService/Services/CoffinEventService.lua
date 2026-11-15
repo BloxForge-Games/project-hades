@@ -72,8 +72,8 @@ local COFFIN_WIN_SLOW_HOLD_SECONDS = 1.0
 --[ Constants ]--
 
 -- Fallbacks when a difficulty has no coffinEvent block.
-local DEFAULT_CHALLENGE_SECONDS = 60
-local DEFAULT_WAVES = { 5, 6 }
+local DEFAULT_CHALLENGE_SECONDS = 30
+local DEFAULT_WAVES = { 1, 1 }
 -- The combat concurrency rule (mirrors MobSpawnService's defaults).
 local CONCURRENT_BASE = 4
 local CONCURRENT_PER_PLAYER = 2
@@ -109,7 +109,7 @@ local HOLD_TEXT_REWARDS = "Collect your rewards... (%d)"
 -- After a win: a beat before the chests fall, and how long the door
 -- waits for them to be opened before it opens anyway.
 local CHEST_DROP_DELAY_SECONDS = 1
-local REWARD_HOLD_SECONDS = 60
+local REWARD_HOLD_SECONDS = 25
 -- The prompt attribute the client's billboard honours as "never re-arm".
 local PROMPT_CONSUMED_ATTRIBUTE = "EventConsumed"
 local CHEST_MOB_NAME = "Laughing Coffin"

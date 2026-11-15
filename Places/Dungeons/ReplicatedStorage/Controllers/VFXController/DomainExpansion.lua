@@ -26,6 +26,8 @@ local SUKUNA_THEME_START_TIME = 96
 local SUKUNA_THEME_VOLUME = 0.075
 
 local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local MangaPanels = require(ReplicatedStorage.Controllers.CutsceneController.MangaPanels)
+local CasterSubtitles = require(ReplicatedStorage.Controllers.CutsceneController.CasterSubtitles)
 local ArcaneAmbienceController = require(ReplicatedStorage.Controllers.ArcaneAmbienceController)
 local CameraShakeController = require(ReplicatedStorage.Controllers.CameraShakeController)
 local Arcane = require(ReplicatedStorage.Submodules.Core.Source.Network.Arcane)
@@ -61,6 +63,99 @@ local function getRootPart(character: Model): BasePart
 	return character:FindFirstChild("HumanoidRootPart") :: BasePart
 end
 
+-- The TORSO PARTICLES (2026-11-11): GameAssets.VFX["Domain Expansion"]
+-- .TorsoParticles (from the Sukuna model), cloned onto the caster's torso
+-- when the Eyes open (the cutscene's second dialogue line plus
+-- EYES_AFTER_LINE, as Cutscenes/DomainExpansion times them; the cutscene
+-- starts with the cast):
+-- both BURST once (each emitter its EmitCount, 1 when it names none;
+-- never enabled; 2026-11-11: SukunaParticle was an aura held while the
+-- caster stood in the domain at first). GroundParticles sits
+-- GROUND_PARTICLES_LIFT above the floor (0.25 at first: not seen; 2 too high).
+local TORSO_PARTICLES_FOLDER = "TorsoParticles"
+local EYES_FALLBACK_AT = 3
+local EYES_AFTER_LINE = 0.5
+local GROUND_PARTICLES_NAME = "GroundParticles"
+local GROUND_PARTICLES_LIFT = 1
+-- GroundParticles burst this long after the Eyes (2026-11-11).
+local GROUND_PARTICLES_AFTER_EYES = 0.75
+-- SukunaParticle bursts with the Eyes (2026-11-11; 1 s after
+-- GroundParticles for a while: about 2 s late, the Eyes' slow-down
+-- stretching it further).
+-- SukunaParticle sits this much higher than authored (2026-11-11).
+local SUKUNA_PARTICLE_NAME = "SukunaParticle"
+local SUKUNA_PARTICLE_RAISE = 1
+-- SukunaParticle's EmitCounts are multiplied by this (2026-11-11).
+local SUKUNA_PARTICLE_EMIT_SCALE = 2
+
+local function eyesAt(): number
+	local data = ArcaneData[ArcaneNames["Domain Expansion"]]
+	local lines = data and data.dialogue
+	local second = type(lines) == "table" and lines[2]
+	local at = if type(second) == "table" and type(second.at) == "number" then second.at else EYES_FALLBACK_AT
+	return at + EYES_AFTER_LINE
+end
+
+local function torsoParticle(name: string): Instance?
+	local vfx = ReplicatedStorage.GameAssets:FindFirstChild("VFX")
+	local domain = vfx and vfx:FindFirstChild("Domain Expansion")
+	local folder = domain and domain:FindFirstChild(TORSO_PARTICLES_FOLDER)
+	return folder and folder:FindFirstChild(name)
+end
+
+local function getTorso(character: Model): BasePart?
+	local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+	return if torso and torso:IsA("BasePart") then torso else nil
+end
+
+-- Bursts TorsoParticles' `name` on the caster's torso (GroundParticles on
+-- the floor under them).
+local function burstTorsoParticles(character: Model, name: string)
+	local template = torsoParticle(name)
+	local torso = getTorso(character)
+	if not template or not torso or not character.Parent then
+		return
+	end
+	local copy = template:Clone()
+	copy.Parent = torso
+	if name == SUKUNA_PARTICLE_NAME and copy:IsA("Attachment") then
+		copy.Position += Vector3.new(0, SUKUNA_PARTICLE_RAISE, 0)
+	end
+	if name == GROUND_PARTICLES_NAME and copy:IsA("Attachment") then
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ignore: { Instance } = { character }
+		local ignoreFolder = workspace:FindFirstChild("IgnoreInstances")
+		if ignoreFolder then
+			for _, child in ignoreFolder:GetChildren() do
+				if child.Name ~= "Map" then
+					table.insert(ignore, child)
+				end
+			end
+		end
+		local baseplates = workspace:FindFirstChild("PlayerBaseplates")
+		if baseplates then
+			table.insert(ignore, baseplates)
+		end
+		params.FilterDescendantsInstances = ignore
+		params.RespectCanCollide = true
+		local hit = workspace:Raycast(torso.Position, Vector3.new(0, -20, 0), params)
+		if hit then
+			local at = copy.WorldPosition
+			copy.WorldPosition = Vector3.new(at.X, hit.Position.Y + GROUND_PARTICLES_LIFT, at.Z)
+		end
+	end
+	local longestLife = 0
+	local scale = if name == SUKUNA_PARTICLE_NAME then SUKUNA_PARTICLE_EMIT_SCALE else 1
+	for _, emitter in copy:GetDescendants() do
+		if emitter:IsA("ParticleEmitter") then
+			longestLife = math.max(longestLife, emitter.Lifetime.Max)
+			emitter:Emit(math.max(1, math.round((tonumber(emitter:GetAttribute("EmitCount")) or 1) * scale)))
+		end
+	end
+	GameClock.Debris(copy, longestLife + 0.2)
+end
+
 return function(player: Player, preload: boolean, cframe: CFrame)
 	local character = player.Character :: Model
 
@@ -80,15 +175,26 @@ return function(player: Player, preload: boolean, cframe: CFrame)
 		cframe = getRootPart(character).CFrame
 	end
 
-	-- The cast's GROUND burst (2026-11-11): GameAssets.VFX["Domain
-	-- Expansion"].Ground on the floor under the caster, the moment the cast
-	-- (and the cutscene) starts. Each emitter bursts its EmitCount, 1 when
-	-- it names none.
-	emitVFXPart("Domain Expansion/Ground", cframe, nil, {
-		GroundSnapDistance = 10,
-		GroundFallbackDrop = 3,
-		DefaultEmitCount = 1,
-	})
+	-- Sukuna's torso particles, when the Eyes open (see TORSO_PARTICLES_FOLDER).
+	GameClock.Delay(eyesAt() + GROUND_PARTICLES_AFTER_EYES, function()
+		if player.Character ~= character then
+			return
+		end
+		burstTorsoParticles(character, GROUND_PARTICLES_NAME)
+	end)
+	GameClock.Delay(eyesAt(), function()
+		if player.Character ~= character then
+			return
+		end
+		burstTorsoParticles(character, SUKUNA_PARTICLE_NAME)
+	end)
+
+	-- The manga panels beside the caster, for everyone else (MangaPanels);
+	-- the caster reads the lines as minimal subtitles (CasterSubtitles).
+	MangaPanels.play(character, ArcaneNames["Domain Expansion"])
+	if player == Players.LocalPlayer then
+		CasterSubtitles.play(ArcaneNames["Domain Expansion"])
+	end
 
 	-- One ambience claim per cast (see the header): unique so two domains,
 	-- from the same caster or different ones, never collide.

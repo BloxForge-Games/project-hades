@@ -11,7 +11,7 @@
 	  lowHealth       health dips under LOW_HEALTH_FRACTION, once per dip
 	  downed / revived
 	                  the character's Downed attribute flips
-	  relicPicked / bagFull
+	  relicPicked
 	                  the Player's RelicsGained count rises; full when the
 	                  owned count reaches the open slots
 	  minibossEnter / bossEnter
@@ -248,15 +248,13 @@ function SpiritCompanionBarkController.Start(_self: typeof(SpiritCompanionBarkCo
 	player.CharacterAdded:Connect(watchCharacter)
 	watchMachines()
 
-	-- Relics: the gained count rises on every pickup; full when the owned
-	-- count has reached the open slots.
+	-- Relics: the gained count rises on every pickup (no relic cap, so the
+	-- bag is never full; 2026-11-12).
 	lastRelicsGained = tonumber(player:GetAttribute(Attributes.RelicsGained))
 	player:GetAttributeChangedSignal(Attributes.RelicsGained):Connect(function()
 		local gained = tonumber(player:GetAttribute(Attributes.RelicsGained)) or 0
 		if lastRelicsGained ~= nil and gained > lastRelicsGained then
-			local owned = tonumber(player:GetAttribute(Attributes.OwnedRelicCount)) or 0
-			local slots = tonumber(player:GetAttribute(Attributes.RelicSlots))
-			sayLater(if slots and owned >= slots then "bagFull" else "relicPicked", RELIC_LINE_DELAY_SECONDS)
+			sayLater("relicPicked", RELIC_LINE_DELAY_SECONDS)
 		end
 		lastRelicsGained = gained
 	end)

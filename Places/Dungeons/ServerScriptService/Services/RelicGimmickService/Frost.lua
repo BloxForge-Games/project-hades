@@ -65,11 +65,14 @@ local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local WYRM = RelicNames["Ice Dragon Slayer"]
 local FOWL = RelicNames["Icy Arctic Fowl"]
 local CROSSBOW = RelicNames["Frozen Blue Ice Crossbow"]
--- The Ice Arrow's beat, the Magenta Paintball's (2026-11-08): the arrow
--- leaves ICE_ARROW_DELAY after the shot that sets it off, and the shooter's
--- draw starts ICE_ARROW_DRAW_AT after that shot, so its release meets it.
-local ICE_ARROW_DELAY = 0.5
-local ICE_ARROW_DRAW_AT = 0.1
+-- The Ice Arrow's beat, the Magenta Paintball's: the arrow leaves
+-- ICE_ARROW_DELAY after the shot that sets it off, with no draw animation
+-- of its own (2026-11-11; 0.5 s, with a second draw timed to it, from
+-- 2026-11-08).
+local ICE_ARROW_DELAY = 0.1
+-- Off a bow it flies this share of the bow's speed, along the bow's arc
+-- (as far, slower; 2026-11-11).
+local ICE_ARROW_SPEED_SCALE = 0.6
 local STAFF = RelicNames["Korblox Mage Staff"]
 local AZURE = RelicNames["Staff of Azure Ever Ice"]
 
@@ -337,13 +340,11 @@ function Frost.onRangedFire(player: Player, origin: Vector3, direction: Vector3,
 	local count = (crossbowHits[player] or 0) + 1
 	if count >= needed then
 		count = 0
-		-- The shooter's draw now (their client waits Duration from the
-		-- server's StartTime); the arrow ICE_ARROW_DELAY later, on the
-		-- bow's own arc off a bow (relicShots follow).
-		helpers.fx("IceArrowDraw", origin, origin, 0, ICE_ARROW_DRAW_AT, player)
+		-- The arrow ICE_ARROW_DELAY later, on the bow's own arc off a bow
+		-- (relicShots follow).
 		relicShots.fire(player, "IceArrowShot", origin, direction, weaponName, ARROW_SPEED, function(_, target)
 			iceArrowHit(player, target)
-		end, true, ICE_ARROW_DELAY)
+		end, true, ICE_ARROW_DELAY, ICE_ARROW_SPEED_SCALE)
 	end
 	crossbowHits[player] = count
 	relicTriggers.set(player, CROSSBOW, count == needed - 1)

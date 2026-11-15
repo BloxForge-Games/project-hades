@@ -115,6 +115,8 @@ local MobSpawnService = {
 	_roomQueues = {}, -- [roomId]: { remaining: number, concurrentCap: number } — see SpawnMobsInRoom
 	_activeMinibossWaves = {}, -- [roomId]: thread — running wave spawner per miniboss room
 	_minibossWavesPaused = {}, -- [roomId]: true — wave spawner frozen (boss phase cutscene),
+	-- One spawn asked for corruption (SpawnMobsAt); spent by RollCorruption.
+	_forceCorruption = false,
 }
 
 MobSpawnService.OnMobSpawn = Signal.new()
@@ -124,7 +126,13 @@ MobSpawnService.OnMobDespawn = Signal.new()
 -- run difficulty's `corruptChance`, every kind of mob alike -- regular
 -- mobs (MobSimService), minibosses and bosses (SpawnMinibossInRoom). The
 -- spawner stamps the Corrupted attribute before parenting.
-function MobSpawnService.RollCorruption(_self: typeof(MobSpawnService)): boolean
+function MobSpawnService.RollCorruption(self: typeof(MobSpawnService)): boolean
+	-- A spawn that asked for corruption (SpawnMobsAt's `corrupted`): the
+	-- spawn path rolls synchronously, so the flag is spent by that mob.
+	if self._forceCorruption then
+		self._forceCorruption = false
+		return true
+	end
 	local dungeonService = Blitz.OptionalService("DungeonService")
 	local chance = if dungeonService then dungeonService:GetDifficultyScale().corruptChance or 0 else 0
 	return chance > 0 and math.random() < chance
@@ -449,6 +457,53 @@ function MobSpawnService._spawnMobAt(
 	self._mobsByRoom[room.id] = self._mobsByRoom[room.id] or {}
 	table.insert(self._mobsByRoom[room.id], mob)
 	return mob
+end
+
+-- Spawns `count` mobs from the dungeon's own pool AT `position` (the Mimic
+-- Vault's mimic, 2026-11-13), registered to `room` like any room mob so
+-- :GetMobsInRoom and OnMobDespawn track them. `corrupted` forces the
+-- corruption roll for each. Returns the mobs that spawned.
+function MobSpawnService.SpawnMobsAt(
+	self: typeof(MobSpawnService),
+	room,
+	position: Vector3,
+	count: number,
+	corrupted: boolean?
+): { Model }
+	if not room or not room.model or not self._mobPlan then
+		warn("[MobSpawnService] SpawnMobsAt: no room or mob plan")
+		return {}
+	end
+	-- The spawn points live on Terrain: any world position, no room part
+	-- needed (a placed room model may carry no PrimaryPart).
+	local anchor = workspace.Terrain
+	local spawned = {}
+	for index = 1, math.max(math.floor(count), 0) do
+		-- A ring around the point, so the pack does not stack in one spot.
+		local angle = (index / math.max(count, 1)) * math.pi * 2
+		local attachment = Instance.new("Attachment")
+		attachment.Name = "SpawnAtPoint"
+		attachment.WorldPosition = position + Vector3.new(math.cos(angle) * 3, 0, math.sin(angle) * 3)
+		attachment.Parent = anchor
+		local mobName = self._mobPlan:GetRandomLoot(1)
+		local template = mobName and self:_mobTemplate(mobName)
+		if template then
+			self._forceCorruption = corrupted == true
+			local mob = self:_spawnMobAt(room, mobName, template, attachment)
+			if mob and corrupted and self._forceCorruption then
+				-- A cloned (non-sim) mob never rolled: stamp it directly.
+				mob:SetAttribute(Attributes.Corrupted, true)
+			end
+			self._forceCorruption = false
+			if mob then
+				table.insert(spawned, mob)
+			end
+		end
+		task.delay(2, function()
+			attachment:Destroy()
+		end)
+	end
+	return spawned
 end
 
 -- Spawns one queued mob at a random SpawnPoints attachment (pure

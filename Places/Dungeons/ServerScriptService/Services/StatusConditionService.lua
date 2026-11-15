@@ -78,7 +78,7 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 local AuraNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.AuraNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local ElementTrees = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ElementTrees)
-local EnchantmentData = require(ReplicatedStorage.Submodules.Core.Shared.Data.EnchantmentData)
+local enchantmentTier = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.enchantmentTier)
 local StatusConditionData = require(ReplicatedStorage.Submodules.Core.Shared.Data.StatusConditionData)
 local getRelicLevel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.getRelicLevel)
 local computePower = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Player.computePower)
@@ -1025,17 +1025,18 @@ function StatusConditionService:ApplyWeaponOnHitStatuses(
 
 	local chanceByStatus = self:_sumApplierChances(sourcePlayer, true, isRanged, procCoefficient)
 
-	-- The hitting weapon's enchantment opener (2026-11-01): its row's
-	-- chance per hit, the gun's proc coefficient and the relic's status
-	-- chance bonus on top, like a relic applier. Only the weapon that
-	-- lands the hit.
-	local enchantment = WeaponLoadoutService:GetEnchantmentForHit(sourcePlayer, not isRanged)
-	local row = if enchantment then EnchantmentData[enchantment] else nil
+	-- The hitting weapon's enchantment opener (2026-11-01): its tier's
+	-- chance per hit (15 / 20 / 25%, 2026-11-13), the gun's proc
+	-- coefficient and the relic's status chance bonus on top, like a relic
+	-- applier. Only the weapon that lands the hit.
+	local enchantment, tier = WeaponLoadoutService:GetEnchantmentForHit(sourcePlayer, not isRanged)
+	local row = enchantmentTier.WeaponRow(enchantment)
 	if row then
 		-- Committing to the status's tree raises it (2026-11-05): +10% per
 		-- relic owned from that tree, up to 50%.
 		local opener = math.min(
-			row.openerChance + ENCHANT_TREE_RELIC_BONUS * self:_ownedTreeRelics(sourcePlayer, row.openerStatus),
+			enchantmentTier.OpenerChance(tier)
+				+ ENCHANT_TREE_RELIC_BONUS * self:_ownedTreeRelics(sourcePlayer, row.openerStatus),
 			ENCHANT_MAX_OPENER_CHANCE
 		)
 		local chance = (opener + self:_getStatusChanceBonus(sourcePlayer)) * procCoefficient

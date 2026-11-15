@@ -114,12 +114,12 @@ local BARRICADE_RAYCAST_DEPTH = 50 -- studs downward search distance
 -- them (filter in MobBase's alive-players cache).
 local ACTION_HIGHLIGHT_NAME = "ActionHighlight"
 local GATE_BILLBOARD_ACTION_TEXT = "Waiting for Players...(%d)"
-local GATE_WAIT_SECONDS = 30
+local GATE_WAIT_SECONDS = 15
 -- Event rooms hold their exit door LONGER — players are shopping or
 -- bargaining, not just grabbing one relic. Countdown starts on the
 -- FIRST player entering the event room and ends early once every
 -- alive player has interacted with the event (EventService tracks).
-local EVENT_GATE_WAIT_SECONDS = 60
+local EVENT_GATE_WAIT_SECONDS = 25
 -- Beat between the LAST player completing an event and its exit door
 -- actually moving — an instant open on the final click reads glitchy.
 local EVENT_GATE_OPEN_DELAY_SECONDS = 1
@@ -607,7 +607,7 @@ end
 -- shows that text; isReleased true ends the hold at once.
 -- Nil = the classic relic-shopping hold. The event exit uses this so a
 -- shop between two combat rooms behaves EXACTLY like a combat gate
--- once its own 60s / all-interacted hold resolves.
+-- once its own 25s / all-interacted hold resolves.
 function GateService._startGateCycle(
 	self: typeof(GateService),
 	lastChunk: Room,
@@ -797,7 +797,7 @@ end
 
 -- The EVENT room's exit-door hold. Mirrors the gate cycle's shape (solid
 -- gate + ActionHighlight countdown billboard) but with different rules:
---   * EVENT_GATE_WAIT_SECONDS on the clock, not the relic gate's 30.
+--   * EVENT_GATE_WAIT_SECONDS on the clock, not the relic gate's 15.
 --   * Ends EARLY once every alive player has interacted with the event
 --     (EventService's per-room registry: finishing the Sword or Shrine
 --     conversation, or telling the Merchant "I'm ready to continue").
@@ -845,7 +845,7 @@ function GateService._startEventGateHold(self: typeof(GateService), eventRoom: R
 	-- Event —> COMBAT: the exit must be a REAL combat gate — crossing
 	-- watch, per-player one-way close, first-crossing wave spawn — so
 	-- delegate to the full gate cycle, swapping only the countdown rules
-	-- (60s, early-open once every alive player has interacted). This is
+	-- (25s, early-open once every alive player has interacted). This is
 	-- what makes a shop BETWEEN two combat rooms flow like any other
 	-- room transition.
 	if nextRoom and nextRoom.roomType == RoomTypes.Combat then
@@ -868,7 +868,7 @@ function GateService._startEventGateHold(self: typeof(GateService), eventRoom: R
 	end
 
 	-- Highlight + countdown billboard + countdown: the same driver as the
-	-- gate cycle, under the event's rules (60s; early once every alive
+	-- gate cycle, under the event's rules (25s; early once every alive
 	-- player has interacted; suspend / release from the Coffin challenge).
 	local held = self:_runGateHold(gate, dungeon, {
 		seconds = EVENT_GATE_WAIT_SECONDS,

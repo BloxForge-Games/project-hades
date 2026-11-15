@@ -57,6 +57,9 @@ local TRAP_DELAY = 0.1
 -- unmitigated path, because a trap that five steps kill for one build
 -- and ten for another is no longer a rule the player can learn.
 local TRAP_MAX_HEALTH_FRACTION = 0.20
+-- A BOSS (Attributes.IsBoss) takes only this share (2026-11-11: five steps
+-- killed one).
+local TRAP_BOSS_MAX_HEALTH_FRACTION = 0.03
 
 --[ Private Functions ]--
 
@@ -106,7 +109,10 @@ function Trap:_onEntityEntered()
 
 			-- Per victim, not per trap: the fraction is of THIS humanoid's
 			-- maximum health.
-			local damage = humanoid.MaxHealth * TRAP_MAX_HEALTH_FRACTION
+			local fraction = if model:GetAttribute(Attributes.IsBoss) == true
+				then TRAP_BOSS_MAX_HEALTH_FRACTION
+				else TRAP_MAX_HEALTH_FRACTION
+			local damage = humanoid.MaxHealth * fraction
 
 			local victimPlayer = Players:GetPlayerFromCharacter(model)
 

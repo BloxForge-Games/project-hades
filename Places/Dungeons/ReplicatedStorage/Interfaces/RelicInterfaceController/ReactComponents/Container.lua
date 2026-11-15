@@ -7,6 +7,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextService = game:GetService("TextService")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
@@ -14,7 +15,6 @@ local RelicListFragment = require(script.Parent.RelicListFragment)
 local RelicEntryContainer = require(script.Parent.RelicEntryContainer)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
-local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 local getRelicDescription = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Relic.getRelicDescription)
 local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.tweenGui)
 local ShineRing = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.ShineRing)
@@ -23,20 +23,11 @@ local localPlayer = Players.LocalPlayer
 
 --[ Selection ]--
 
--- The tray's selection is ONE of two shapes, and the description card
--- renders either through the same fade / slide:
---   { name = relicName, count = n }      an owned relic.
---   { locked = true, slotIndex = n }     a LOCKED slot (past the run's open
---                                        count). It has no name, so every
---                                        handler that acts on a relic must
---                                        check `locked` first -- Sell,
---                                        Reforge and Drop all refuse it.
+-- The tray's selection is an owned relic: { name = relicName, count = n }.
+-- There are no locked slots since the relic cap went (2026-11-12).
 -- The toggle plate's ring (see the effect in Container): the inventory
 -- tiles' animated shine outline in the tray's accent blue, at the plate
 -- stroke's own thickness, for as long as the toggle exists.
-local LOCKED_SLOT_NAME = "Relic Slot"
-local LOCKED_SLOT_RARITY = "Locked"
-local LOCKED_SLOT_RARITY_COLOR = Color3.fromRGB(141, 141, 141)
 -- Rich text, the relic-description blue for the two nouns.
 -- Every relic description renders at ONE size (2026-10-29): TextScaled
 -- shrank the longer ones to squeeze them in, so cards disagreed. The size
@@ -80,24 +71,6 @@ local function fitTextSize(text: string, box: Vector2): number
 	return low
 end
 
--- Slots follow the tier (RelicCapData.SlotsByDifficulty, 2026-10-31).
-local LOCKED_SLOT_DESCRIPTION = string.format(
-	"This <font color='rgb(108,196,255)'>Relic Slot</font> opens on harder difficulties: <font color='rgb(85,255,127)'>%d</font> slots on <font color='rgb(108,196,255)'>Normal</font>, <font color='rgb(85,255,127)'>%d</font> on <font color='rgb(108,196,255)'>Hard</font> and <font color='rgb(108,196,255)'>Nightmare</font>.",
-	RelicCapData.SlotsByDifficulty.Normal,
-	RelicCapData.SlotsByDifficulty.Hard
-)
--- The card's own copy of the locked box sits on a lighter panel than the
--- tray, so it carries its own tints, and drops the shadow.
-local LOCKED_CARD_LOOK = {
-	background = Color3.fromRGB(52, 80, 102),
-	icon = Color3.fromRGB(20, 31, 40),
-	shadowVisible = false,
-}
--- Drop on a locked slot masks itself like Sell / Reroll do ("???"), in a
--- dim red that reads as unavailable rather than refused.
-local DROP_MASKED_BACKGROUND = Color3.fromRGB(122, 47, 47)
-local DROP_MASKED_COLOR = Color3.fromRGB(61, 26, 23)
-
 --[ Layout ]--
 
 -- The description card slides RIGHT as it fades in. Authored positions --
@@ -105,8 +78,14 @@ local DROP_MASKED_COLOR = Color3.fromRGB(61, 26, 23)
 -- resting pose it is re-snapped to before each slide.
 -- The card rests just right of the slim panel (2026-10-31; it sat at
 -- 0.484 when the panel was a 3 x 5 grid) and slides in from 0.04 left.
-local DESCRIPTION_HIDDEN_POSITION = UDim2.fromScale(0.34, 0.372)
-local DESCRIPTION_SHOWN_POSITION = UDim2.fromScale(0.38, 0.372)
+-- Both take the panel's EXTRA width in pixels (every column past the
+-- first, 2026-11-12), so the card always clears the panel's edge.
+local function descriptionHiddenPosition(extra: number): UDim2
+	return UDim2.new(0.34, extra, 0.372, 0)
+end
+local function descriptionShownPosition(extra: number): UDim2
+	return UDim2.new(0.38, extra, 0.372, 0)
+end
 -- The appear: the slide keeps its quick-then-settle Quint, but the fade
 -- rides a Sine curve -- a Quint fade front-loads two thirds of the
 -- opacity into the first few frames and reads as a snap. The retract
@@ -118,8 +97,19 @@ local DESCRIPTION_APPEAR_FADE_SECONDS = 0.6
 -- off-screen, and the toggle button counter-shifts so it stays reachable.
 local CONTAINER_SHOWN_POSITION = UDim2.fromScale(0.5, 0.5)
 -- The panel is one slim column (2026-10-31), so the park shift is a
--- tenth of the screen.
-local CONTAINER_HIDDEN_POSITION = UDim2.fromScale(0.38, 0.5)
+-- tenth of the screen, plus the width of every extra column.
+local function containerHiddenPosition(extra: number): UDim2
+	return UDim2.new(0.38, -extra, 0.5, 0)
+end
+
+-- The relic list's share of the screen height, and one column's step
+-- (box 0.14 + gap 0.045) as a share of the list's height: an extra
+-- column is exactly as far from the last as the boxes are from each
+-- other down a column.
+local LIST_HEIGHT = 0.512406
+local COLUMN_STEP = 0.185
+-- How the panel widens (or narrows) when a column opens (or empties).
+local GROW_INFO = TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
 local taskConnection = nil
 
@@ -145,18 +135,14 @@ local function Container(props: any)
 		return color:Lerp(Color3.fromRGB(50, 50, 50), 0.55)
 	end
 
-	-- DROP is live whenever no event session owns the row, the selection is
-	-- a relic (not a locked slot) and that relic is not Cursed (a curse is
-	-- the price of its payoff, so it is the one thing you cannot shed).
-	-- Greyed like the others when it is not.
-	local selectedIsLocked = descriptionSelectedRelic ~= nil and descriptionSelectedRelic.locked == true
-	local selectedRelicName = if selectedIsLocked
-		then nil
-		else descriptionSelectedRelic and descriptionSelectedRelic.name
+	-- DROP is live whenever no event session owns the row and the selected
+	-- relic is not Cursed (a curse is the price of its payoff, so it is the
+	-- one thing you cannot shed). Greyed like the others when it is not.
+	local selectedRelicName = descriptionSelectedRelic and descriptionSelectedRelic.name
 	local selectedIsCursed = selectedRelicName ~= nil
 		and RelicData[selectedRelicName] ~= nil
 		and RelicData[selectedRelicName].rarity == ItemRarity.Cursed
-	local dropLive = not sellMode and not reforgeMode and not selectedIsCursed and not selectedIsLocked
+	local dropLive = not sellMode and not reforgeMode and not selectedIsCursed
 
 	-- A Cursed relic reads LOCKED rather than masked. The other unavailable
 	-- buttons say "???" in a dim tint, because they are waiting on an event
@@ -168,9 +154,18 @@ local function Container(props: any)
 	local DROP_LOCKED_COLOR = Color3.fromRGB(80, 7, 7)
 
 	local relicData = props.relicData
-	-- OPEN slots this run (the Player's RelicSlots attribute, read by the
-	-- controller). Boxes past it are locked.
-	local relicSlots = props.relicSlots or RelicCapData.DefaultSlots
+
+	-- THE COLUMNS (2026-11-12): one per six relics. A column's width is a
+	-- share of the screen HEIGHT (the boxes are squares sized off it), so
+	-- it is measured in pixels from the screen, and the panel, the list
+	-- and the card move by `extra`, the width of every column past the
+	-- first. `extraWidth` is the binding the panel and list are drawn
+	-- from; it tweens to `extra` so the panel widens smoothly.
+	local screenHeight, setScreenHeight = React.useState(0)
+	local columns = RelicListFragment.ColumnsFor(relicData)
+	local columnWidth = math.floor(screenHeight * LIST_HEIGHT * COLUMN_STEP + 0.5)
+	local extra = (columns - 1) * columnWidth
+	local extraWidth, setExtraWidth = React.useBinding(extra)
 
 	local containerRef = React.useRef(nil)
 	local backgroundFrameRef = React.useRef(nil)
@@ -182,14 +177,69 @@ local function Container(props: any)
 
 	local selectedRelicRef = React.useRef(selectedRelic)
 
-	-- A selected LOCKED slot that has since become open (a future unlock
-	-- raised the count) is no longer the thing the card describes: clear
-	-- it, and let the card retract as it does for any deselect.
+	local extraRef = React.useRef(extra)
+	extraRef.current = extra
+
+	-- The screen's height, for the column width. The Container fills the
+	-- screen (it slides, never resizes), so its own height is the screen's.
 	React.useEffect(function()
-		if selectedRelic and selectedRelic.locked and selectedRelic.slotIndex <= relicSlots then
-			setSelectedRelic(nil)
+		local frame = containerRef.current
+		if not frame then
+			return
 		end
-	end, { relicData, relicSlots })
+		local function measure()
+			setScreenHeight(frame.AbsoluteSize.Y)
+		end
+		measure()
+		local connection = frame:GetPropertyChangedSignal("AbsoluteSize"):Connect(measure)
+		return function()
+			connection:Disconnect()
+		end
+	end, {})
+
+	-- Widen (or narrow) the panel to `extra` over GROW_INFO, and carry the
+	-- card and the parked pose along. Snaps while the screen is unmeasured.
+	React.useEffect(function()
+		local from = extraWidth:getValue()
+		if screenHeight <= 0 or from == extra then
+			setExtraWidth(extra)
+		else
+			local started = os.clock()
+			local connection
+			connection = RunService.RenderStepped:Connect(function()
+				local alpha = math.clamp((os.clock() - started) / GROW_INFO.Time, 0, 1)
+				local eased = TweenService:GetValue(alpha, GROW_INFO.EasingStyle, GROW_INFO.EasingDirection)
+				setExtraWidth(from + (extra - from) * eased)
+				if alpha >= 1 then
+					connection:Disconnect()
+				end
+			end)
+			return function()
+				connection:Disconnect()
+			end
+		end
+		return nil
+	end, { extra })
+
+	-- The card and the parked tray follow a new column (the slide uses the
+	-- same Quint as the panel, so they move together).
+	React.useEffect(function()
+		local card = descriptionFrameRef.current
+		local container = containerRef.current
+		if not card or not container then
+			return
+		end
+		if visibleRef.current then
+			if selectedRelicRef.current then
+				TweenService:Create(card, GROW_INFO, { Position = descriptionShownPosition(extra) }):Play()
+			else
+				card.Position = descriptionHiddenPosition(extra)
+			end
+		else
+			container.Position = containerHiddenPosition(extra)
+			card.Position = descriptionHiddenPosition(extra)
+		end
+	end, { extra })
 
 	React.useEffect(function()
 		visibleRef.current = visible
@@ -283,11 +333,11 @@ local function Container(props: any)
 				setDescriptionSelectedRelic(selectedRelic)
 
 				if visibleRef.current and selectedRelicRef.current then
-					descriptionFrameRef.current.Position = DESCRIPTION_HIDDEN_POSITION
+					descriptionFrameRef.current.Position = descriptionHiddenPosition(extraRef.current)
 
 					tweenGui.position(
 						descriptionFrameRef.current,
-						DESCRIPTION_SHOWN_POSITION,
+						descriptionShownPosition(extraRef.current),
 						Enum.EasingDirection.Out,
 						Enum.EasingStyle.Quint,
 						DESCRIPTION_APPEAR_SLIDE_SECONDS,
@@ -320,7 +370,7 @@ local function Container(props: any)
 			):Play()
 			tweenGui.position(
 				descriptionFrameRef.current,
-				DESCRIPTION_HIDDEN_POSITION,
+				descriptionHiddenPosition(extraRef.current),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
 				0.5,
@@ -358,7 +408,7 @@ local function Container(props: any)
 		else
 			tweenGui.position(
 				containerRef.current,
-				CONTAINER_HIDDEN_POSITION,
+				containerHiddenPosition(extraRef.current),
 				Enum.EasingDirection.Out,
 				Enum.EasingStyle.Quint,
 				0.5,
@@ -387,9 +437,7 @@ local function Container(props: any)
 	-- "(N × PlayerLevel)" formula text. Static relics fall back to
 	-- RelicData[name].description unchanged.
 	local descriptionText = ""
-	if selectedIsLocked then
-		descriptionText = LOCKED_SLOT_DESCRIPTION
-	elseif descriptionSelectedRelic and RelicData[descriptionSelectedRelic.name] then
+	if descriptionSelectedRelic and RelicData[descriptionSelectedRelic.name] then
 		descriptionText = getRelicDescription(localPlayer, descriptionSelectedRelic.name) or ""
 	end
 
@@ -466,12 +514,13 @@ local function Container(props: any)
 			end,
 		}),
 
-		-- The card sits just right of the slim panel (2026-10-31).
+		-- The card sits just right of the panel (2026-10-31), past every
+		-- extra column (2026-11-12).
 		RelicDescriptionFrame = React.createElement("CanvasGroup", {
 			ref = descriptionFrameRef,
 
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.38, 0.372),
+			Position = descriptionShownPosition(extraRef.current),
 			Size = UDim2.fromScale(0.424019, 0.291),
 			BackgroundTransparency = 1,
 		}, {
@@ -551,18 +600,14 @@ local function Container(props: any)
 					AnchorPoint = Vector2.new(0.5, 0.5),
 					Position = UDim2.fromScale(0.348, 0.291),
 					Size = UDim2.fromScale(0.168, 0.09),
-					Text = if selectedIsLocked
-						then LOCKED_SLOT_RARITY
-						else descriptionSelectedRelic
-								and RelicData[descriptionSelectedRelic.name]
-								and RelicData[descriptionSelectedRelic.name].rarity
-							or "",
-					TextColor3 = if selectedIsLocked
-						then LOCKED_SLOT_RARITY_COLOR
-						else descriptionSelectedRelic
-								and RelicData[descriptionSelectedRelic.name]
-								and RelicData[descriptionSelectedRelic.name].color
-							or Color3.fromRGB(255, 255, 255),
+					Text = descriptionSelectedRelic
+							and RelicData[descriptionSelectedRelic.name]
+							and RelicData[descriptionSelectedRelic.name].rarity
+						or "",
+					TextColor3 = descriptionSelectedRelic
+							and RelicData[descriptionSelectedRelic.name]
+							and RelicData[descriptionSelectedRelic.name].color
+						or Color3.fromRGB(255, 255, 255),
 					TextScaled = true,
 					BackgroundTransparency = 1,
 					FontFace = Font.new(
@@ -595,9 +640,7 @@ local function Container(props: any)
 					AnchorPoint = Vector2.new(0.5, 0.5),
 					Position = UDim2.fromScale(0.587, 0.186),
 					Size = UDim2.fromScale(0.646, 0.1),
-					Text = if selectedIsLocked
-						then LOCKED_SLOT_NAME
-						else descriptionSelectedRelic and descriptionSelectedRelic.name or "",
+					Text = descriptionSelectedRelic and descriptionSelectedRelic.name or "",
 					TextColor3 = Color3.fromRGB(255, 255, 255),
 					TextScaled = true,
 					BackgroundTransparency = 1,
@@ -620,23 +663,17 @@ local function Container(props: any)
 					}),
 
 					RelicEntryContainer = React.createElement(RelicEntryContainer, {
-						relicName = if selectedIsLocked
-							then ""
-							else descriptionSelectedRelic and descriptionSelectedRelic.name or "",
-						count = if selectedIsLocked
-							then 0
-							else descriptionSelectedRelic and descriptionSelectedRelic.count or 0,
-						locked = selectedIsLocked,
-						lockedLook = LOCKED_CARD_LOOK,
+						relicName = descriptionSelectedRelic and descriptionSelectedRelic.name or "",
+						count = descriptionSelectedRelic and descriptionSelectedRelic.count or 0,
 					}),
 				}),
 
 				-- The action bar lives in the old Set Bonus slot (the mock keeps
 				-- the SetBonusFrame name). Drop leads the row and is always live
-				-- outside an event session (see dropLive). Sell and Reforge
-				-- always render: dim identity tint + "???" while their event is
-				-- absent, full color + real label inside it (Sell = the
-				-- Merchant's sell session; Reforge = the Forge's anvil).
+				-- outside an event session (see dropLive). Reforge always renders:
+				-- dim identity tint + "???" outside the Forge's anvil, full color +
+				-- real label inside it. (Sell left 2026-11-13: relics are never sold,
+				-- only dropped, and the two buttons share the row.)
 				SetBonusFrame = React.createElement("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
 					BackgroundColor3 = Color3.fromRGB(45, 70, 90),
@@ -664,14 +701,13 @@ local function Container(props: any)
 					-- FIRST in the row and live outside an event session: tosses
 					-- the selected relic onto the floor ahead of the player as a
 					-- PUBLIC drop anyone can pick up (RelicService.DropRelic). Greyed
-					-- and inert for a Cursed relic, matching the Sell/Reforge
-					-- masking language.
+					-- and inert for a Cursed relic, matching the Reforge masking
+					-- language.
 					Drop = React.createElement("TextButton", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
 						AutoButtonColor = dropLive,
 						BackgroundColor3 = if dropLive
 							then Color3.fromRGB(255, 99, 99)
-							elseif selectedIsLocked then DROP_MASKED_BACKGROUND
 							elseif selectedIsCursed then DROP_LOCKED_BACKGROUND
 							else greyed(Color3.fromRGB(255, 99, 99)),
 						FontFace = Font.new(
@@ -680,11 +716,10 @@ local function Container(props: any)
 							Enum.FontStyle.Normal
 						),
 						LayoutOrder = 1,
-						Size = UDim2.fromScale(0.332418, 0.739654),
-						Text = if selectedIsLocked then "???" elseif selectedIsCursed then "Cursed" else "Drop",
+						Size = UDim2.fromScale(0.46, 0.739654),
+						Text = if selectedIsCursed then "Cursed" else "Drop",
 						TextColor3 = if dropLive
 							then Color3.fromRGB(79, 34, 30)
-							elseif selectedIsLocked then DROP_MASKED_COLOR
 							elseif selectedIsCursed then DROP_LOCKED_COLOR
 							else greyed(Color3.fromRGB(79, 34, 30)),
 						TextScaled = true,
@@ -692,8 +727,8 @@ local function Container(props: any)
 						-- unavailable state meant to be READ rather than glossed over.
 						TextStrokeTransparency = if selectedIsCursed then 1 else 1,
 						[React.Event.Activated] = function()
-							if not dropLive or selectedIsLocked then
-								return -- greyed, or a locked slot; inert
+							if not dropLive then
+								return -- greyed; inert
 							end
 							local relicName = descriptionSelectedRelic and descriptionSelectedRelic.name
 							if relicName and props.onDropRelic then
@@ -720,51 +755,6 @@ local function Container(props: any)
 						}),
 					}),
 
-					Sell = React.createElement("TextButton", {
-						AnchorPoint = Vector2.new(0.5, 0.5),
-						AutoButtonColor = sellMode,
-						BackgroundColor3 = if sellMode
-							then Color3.fromRGB(255, 170, 0)
-							else greyed(Color3.fromRGB(255, 170, 0)),
-						FontFace = Font.new(
-							"rbxasset://fonts/families/GothamSSm.json",
-							Enum.FontWeight.Bold,
-							Enum.FontStyle.Normal
-						),
-						LayoutOrder = 2,
-						Size = UDim2.fromScale(0.291985, 0.739654),
-						Text = if sellMode then "Sell" else "???",
-						TextColor3 = if sellMode then Color3.fromRGB(79, 53, 0) else greyed(Color3.fromRGB(79, 53, 0)),
-						TextScaled = true,
-						[React.Event.Activated] = function()
-							if not sellMode or selectedIsLocked then
-								return -- greyed outside a sell session, or a locked slot; inert
-							end
-							local relicName = descriptionSelectedRelic and descriptionSelectedRelic.name
-							if relicName and props.onSellRelic then
-								task.spawn(function()
-									props.onSellRelic(relicName)
-								end)
-								-- Deselect only: the description effect retracts
-								-- the card and clears its content AFTER the fade.
-								setSelectedRelic(nil)
-							end
-						end,
-					}, {
-						UIPadding1 = React.createElement("UIPadding", {
-							PaddingBottom = UDim.new(0.2, 0),
-							PaddingTop = UDim.new(0.2, 0),
-						}),
-						UICorner1 = React.createElement("UICorner", {
-							CornerRadius = UDim.new(0.1, 0),
-						}),
-						UIStroke = React.createElement("UIStroke", {
-							ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-							-- Identity dark-red while live (sell session), black while greyed.
-							Color = if sellMode then Color3.fromRGB(59, 20, 20) else Color3.fromRGB(25, 25, 25),
-						}),
-					}),
-
 					Reroll = React.createElement("TextButton", {
 						AnchorPoint = Vector2.new(0.5, 0.5),
 						AutoButtonColor = reforgeMode,
@@ -776,16 +766,16 @@ local function Container(props: any)
 							Enum.FontWeight.Bold,
 							Enum.FontStyle.Normal
 						),
-						LayoutOrder = 3,
-						Size = UDim2.fromScale(0.299576, 0.739654),
+						LayoutOrder = 2,
+						Size = UDim2.fromScale(0.46, 0.739654),
 						Text = if reforgeMode then "Reforge" else "???",
 						TextColor3 = if reforgeMode
 							then Color3.fromRGB(24, 60, 79)
 							else greyed(Color3.fromRGB(24, 60, 79)),
 						TextScaled = true,
 						[React.Event.Activated] = function()
-							if not reforgeMode or selectedIsLocked then
-								return -- masked outside a Forge session, or a locked slot; inert
+							if not reforgeMode then
+								return -- masked outside a Forge session; inert
 							end
 							local relicName = descriptionSelectedRelic and descriptionSelectedRelic.name
 							if relicName and props.onReforgeRelic then
@@ -816,30 +806,32 @@ local function Container(props: any)
 			}),
 		}),
 
-		-- Sized for the slot ceiling (Shared/Data/RelicCapData.MaxSlots),
-		-- wrapped by the list layout. RelicListFragment draws exactly that
-		-- many boxes -- owned, empty, then locked past the run's open count.
-		-- The list shares the panel's rect, so the column of six centres on
-		-- it (box height 0.14 + padding 0.045 each, the 2026-10-31 export;
-		-- the box squares itself).
+		-- The columns, side by side (RelicListFragment: six boxes each, box
+		-- height 0.14 + gap 0.045 of the list, the 2026-10-31 export). The
+		-- list shares the panel's rect and its left edge; every extra column
+		-- widens both by one column (`extraWidth`), centred, so the first
+		-- column sits exactly where the single column always did.
 		RelicListFrame = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.058, 0.496712),
-			Size = UDim2.fromScale(0.095, 0.512406),
+			Position = extraWidth:map(function(width: number)
+				return UDim2.new(0.058, width / 2, 0.496712, 0)
+			end),
+			Size = extraWidth:map(function(width: number)
+				return UDim2.new(0.095, width, LIST_HEIGHT, 0)
+			end),
 			BackgroundTransparency = 1,
 			ZIndex = 1,
 		}, {
 			UIListLayout = React.createElement("UIListLayout", {
 				SortOrder = Enum.SortOrder.LayoutOrder,
-				FillDirection = Enum.FillDirection.Vertical,
+				FillDirection = Enum.FillDirection.Horizontal,
 				HorizontalAlignment = Enum.HorizontalAlignment.Center,
 				VerticalAlignment = Enum.VerticalAlignment.Center,
-				Padding = UDim.new(0.045, 0),
 			}),
 
-			RelicListFragment = React.createElement(RelicListFragment, {
+			RelicListFragment = React.createElement(RelicListFragment.Component, {
 				relicData = relicData,
-				relicSlots = relicSlots,
+				columnWidth = if screenHeight > 0 then columnWidth else 0,
 				selectedRelic = selectedRelic,
 
 				setSelectedRelic = function(selectedData: { [any]: any })
@@ -849,11 +841,15 @@ local function Container(props: any)
 		}),
 
 		-- One slim column for the six boxes (2026-10-31), hugging the
-		-- left edge; the description card keeps its place.
+		-- left edge, widened by every extra column (2026-11-12).
 		RelicBackgroundFrame = React.createElement("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.058, 0.499879),
-			Size = UDim2.fromScale(0.095, 0.6087),
+			Position = extraWidth:map(function(width: number)
+				return UDim2.new(0.058, width / 2, 0.499879, 0)
+			end),
+			Size = extraWidth:map(function(width: number)
+				return UDim2.new(0.095, width, 0.6087, 0)
+			end),
 			BackgroundColor3 = Color3.fromRGB(20, 31, 40),
 			BackgroundTransparency = 0,
 			ZIndex = 0,

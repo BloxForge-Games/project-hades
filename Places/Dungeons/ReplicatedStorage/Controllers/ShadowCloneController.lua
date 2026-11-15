@@ -31,6 +31,8 @@ local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local playOneShot = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Audio.playOneShot)
 local meleeSwingFeel = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.meleeSwingFeel)
 local resolveAnimation = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Weapon.resolveAnimation)
+local emitAttributeVFX = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitAttributeVFX)
+local emitVFXPart = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.emitVFXPart)
 
 local FOLDER_NAME = "ShadowClones"
 local FALLBACK_WEAPON = WeaponNames["Steel Sword"]
@@ -43,7 +45,12 @@ local SMOKE_TEXTURE = "rbxasset://textures/particles/smoke_main.dds"
 -- (2026-11-09).
 local POOF_SOUND_ID = "rbxassetid://95916620132472"
 local POOF_SOUND_VOLUME = 0.7
-local FADE_IN = 0.25
+-- THE CLONE'S FADE-IN (2026-11-14; a flat 0.25 s before): it stays clear
+-- for FADE_DELAY while the poof is at its thickest, then eases in over
+-- FADE_IN, quick at first and settling (ease-out), so it reads as stepping
+-- out of the smoke rather than popping in beside it.
+local FADE_DELAY = 0.1
+local FADE_IN = 0.5
 
 type Visual = {
 	proxy: Model,
@@ -81,6 +88,8 @@ local function smokePuff(position: Vector3)
 	part.Transparency = 1
 	part.Size = Vector3.one
 	part.CFrame = CFrame.new(position)
+	-- The original poof (a heavier, longer one was tried 2026-11-14 and
+	-- read as too strong, so it went back).
 	local emitter = Instance.new("ParticleEmitter")
 	emitter.Texture = SMOKE_TEXTURE
 	emitter.Color = ColorSequence.new(Color3.fromRGB(240, 240, 240))
@@ -99,6 +108,97 @@ local function smokePuff(position: Vector3)
 	emitter:Emit(24)
 	sound:Play()
 	GameClock.Debris(part, 3)
+end
+
+-- THE GROUND EFFECT (2026-11-14): the authored "ShadowcloneGround"
+-- prefab, played on the floor under a clone as it appears and again as it
+-- vanishes. Found once by name anywhere under GameAssets (either
+-- capitalisation). A Part directly under GameAssets.VFX plays through
+-- emitVFXPart (its emitters' own EmitCount / EmitDelay / EmitDuration);
+-- a Part elsewhere or a Model is cloned onto the floor and played through
+-- emitAttributeVFX, an emitter with no EmitCount bursting
+-- GROUND_DEFAULT_EMIT. Missing = no ground effect, one warn.
+local GROUND_NAMES = { "ShadowcloneGround", "ShadowCloneGround" }
+-- How far below a clone's root the floor is looked for, and where the
+-- effect sits when no floor is found (an R6 root is 3 studs up).
+local GROUND_SNAP_STUDS = 12
+local GROUND_ROOT_HEIGHT = 3
+local GROUND_DEFAULT_EMIT = 20
+local GROUND_LIFETIME_SECONDS = 6
+local groundTemplate: Instance? = nil
+local groundSearched = false
+
+local function findGroundTemplate(): Instance?
+	if groundSearched then
+		return groundTemplate
+	end
+	groundSearched = true
+	local assets = ReplicatedStorage:FindFirstChild("GameAssets")
+	if assets then
+		for _, name in GROUND_NAMES do
+			local found = assets:FindFirstChild(name, true)
+			if found and (found:IsA("BasePart") or found:IsA("Model")) then
+				groundTemplate = found
+				break
+			end
+		end
+	end
+	if not groundTemplate then
+		warn("[ShadowCloneController] No ShadowcloneGround Part or Model under GameAssets; ground effect skipped")
+	end
+	return groundTemplate
+end
+
+local function groundEffect(rootPosition: Vector3)
+	local template = findGroundTemplate()
+	if not template then
+		return
+	end
+	local assets = ReplicatedStorage:FindFirstChild("GameAssets")
+	local vfxFolder = assets and assets:FindFirstChild("VFX")
+	if template:IsA("BasePart") and template.Parent == vfxFolder then
+		emitVFXPart(template.Name, CFrame.new(rootPosition), effectsFolder(), {
+			GroundSnapDistance = GROUND_SNAP_STUDS,
+			GroundFallbackDrop = GROUND_ROOT_HEIGHT,
+		})
+		return
+	end
+
+	-- Elsewhere, or a Model: placed on the floor here.
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	local ignore = workspace:FindFirstChild("IgnoreInstances")
+	params.FilterDescendantsInstances = if ignore then { ignore } else {}
+	local hit = workspace:Raycast(rootPosition, Vector3.new(0, -GROUND_SNAP_STUDS, 0), params)
+	local floor = if hit then hit.Position else rootPosition - Vector3.new(0, GROUND_ROOT_HEIGHT, 0)
+
+	local clone: Instance = template:Clone()
+	for _, item in clone:GetDescendants() do
+		if item:IsA("BasePart") then
+			item.Anchored = true
+			item.CanCollide = false
+			item.CanQuery = false
+			item.CanTouch = false
+		elseif item:IsA("ParticleEmitter") then
+			item.Enabled = false
+			if item:GetAttribute("EmitCount") == nil then
+				item:SetAttribute("EmitCount", GROUND_DEFAULT_EMIT)
+			end
+		end
+	end
+	if clone:IsA("BasePart") then
+		local part = clone :: BasePart
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.CFrame = CFrame.new(floor)
+	elseif clone:IsA("Model") then
+		(clone :: Model):PivotTo(CFrame.new(floor))
+	end
+	clone.Parent = effectsFolder()
+	emitAttributeVFX(clone)
+	GameClock.Debris(clone, GROUND_LIFETIME_SECONDS)
 end
 
 local function stripTags(root: Instance)
@@ -407,6 +507,7 @@ function ShadowCloneController._add(self: typeof(ShadowCloneController), proxy: 
 	end
 	puppet.Parent = effectsFolder()
 	smokePuff(root.Position)
+	groundEffect(root.Position)
 
 	local humanoid = puppet:FindFirstChildOfClass("Humanoid") :: Humanoid
 	local foundAnimator = humanoid:FindFirstChildOfClass("Animator")
@@ -445,7 +546,9 @@ function ShadowCloneController._add(self: typeof(ShadowCloneController), proxy: 
 	local started = os.clock()
 	local fade: RBXScriptConnection? = nil
 	fade = RunService.RenderStepped:Connect(function()
-		local alpha = math.clamp((os.clock() - started) / FADE_IN, 0, 1)
+		local linear = math.clamp((os.clock() - started - FADE_DELAY) / FADE_IN, 0, 1)
+		-- Ease-out (quadratic).
+		local alpha = 1 - (1 - linear) * (1 - linear)
 		for _, part in parts do
 			if part.Parent then
 				part.Transparency = 1 - (1 - authored[part]) * alpha
@@ -497,6 +600,7 @@ function ShadowCloneController._remove(self: typeof(ShadowCloneController), prox
 	end
 	if visual.model.Parent then
 		smokePuff(visual.root.Position)
+		groundEffect(visual.root.Position)
 		visual.model:Destroy()
 	end
 end

@@ -155,6 +155,8 @@ local TEXT_OUTLINE = Color3.new(1, 1, 1)
 -- one, each cutting into its edge (2026-11-10: just inside them before).
 local WORD_OUTSET = 0.28
 local WORD_STROKE = 3
+-- Each word's box, as a share of the screen width (see wordSize).
+local WORD_BOX_WIDTH = 0.6
 -- Where each word sits along the band, as a share of the screen width
 -- from its centre (negative = left).
 local DOMAIN_ALONG = -0.24
@@ -413,6 +415,9 @@ function DomainBanner.play(character: Model, startedAt: number): () -> ()
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "DomainBanner"
 	gui.IgnoreGuiInset = true
+	-- The whole screen, past a phone's safe area too (2026-11-11: the band
+	-- stopped short of both sides on mobile).
+	gui.ScreenInsets = Enum.ScreenInsets.None
 	gui.ResetOnSpawn = false
 	gui.DisplayOrder = 40
 
@@ -648,7 +653,10 @@ function DomainBanner.play(character: Model, startedAt: number): () -> ()
 		end
 		-- The words ride the edges as they open: just inside each.
 		local wordHeight = fullHeight * 0.32
-		local wordSize = UDim2.fromOffset(screen.X * 0.2, wordHeight)
+		-- Wide enough that the HEIGHT always sets the scaled text, so both
+		-- words come out the same size (2026-11-11: at 0.2 of the screen the
+		-- longer EXPANSION hit the width and came out smaller).
+		local wordSize = UDim2.fromOffset(screen.X * WORD_BOX_WIDTH, wordHeight)
 		local edgeOffset = height / 2 + EDGE_THICKNESS / 2 + wordHeight * WORD_OUTSET
 		-- Side by side on the centre line, then split apart along the band.
 		local split = TweenService:GetValue(

@@ -52,6 +52,7 @@ local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data
 local TradeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.TradeData)
 local CurrencyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CurrencyTypes)
 local InventoryType = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InventoryType)
+local enchantmentTier = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.enchantmentTier)
 
 type Offer = { items: { string }, gold: number, crystals: number }
 type Session = {
@@ -198,6 +199,7 @@ local function itemView(item: { [string]: any }): any
 		Upgrades = math.clamp(math.floor(tonumber(item.upgrades) or 0), 0, 255),
 		Quality = tonumber(item.scalarMultiplier) or 1,
 		Enchantment = if type(item.enchantment) == "string" then item.enchantment else "",
+		EnchantmentTier = enchantmentTier.Tier(item),
 		Bonus = bonus,
 	}
 end

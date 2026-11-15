@@ -74,7 +74,7 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
 - A run is **one floor on every tier** (several floors made runs too long). Combat rooms by
   tier: Easy 3, Normal 4, Hard 5, Nightmare 5, with the miniboss after the middle one and the
   boss last. Every combat room is two waves, except that Nightmare's rooms past the miniboss are
-  three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door between the first combat room and the boss, and a
+  three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door before the boss (the very first door included), and a
   second rolls at 50% on another door, never back to back (for example C E C M E C B).
 - **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
   (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03). **A run pays 157 / 325 / 640 / 1274 coins** (150 / 300 /
@@ -87,7 +87,9 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   (125 / 250 / 500 / 1000, coins 52 / 125 / 270 / 589 plus gear sales); **gear drops only from the
   miniboss (1) and the boss chest (1 / 2 / 3 / 4), 2 / 3 / 4 / 5 pieces a run** (2026-11-04: treasure
   chests, the Coffin and corrupted grunts no longer drop gear, and the reward chests' coins rose
-  7 / 25 / 40 / 74 to cover the lost sales); expected gear sales are 73 / 125 / 230 / 411 Gold, so a run's
+  7 / 25 / 40 / 74 to cover the lost sales; 2026-11-14 play-test lever: a treasure chest pays one
+  piece 10% of the time per player, about +0.15 to +0.3 pieces a run, which the Gold ladder below
+  does not count); expected gear sales are 73 / 125 / 230 / 411 Gold, so a run's
   Gold take is 125 / 250 / 500 / 1000 and Blacksmith prices follow (Gold halved and Crystals
   doubled on 2026-11-01, then the take set to that clean ladder after the first play-test;
   prices are shares of the take, so they move with it).
@@ -107,16 +109,31 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   Chest (Lvl 10-15)"), for half that tier's run Gold (Easy a flat 100, since half a run sold back for more). The odds are exactly the dungeon's own drops at that tier (Easy 60 / 30 / 10 Common / Uncommon / Rare, Normal 45 / 30 / 20 / 5 with Epic, Hard 30 / 20 / 30 / 20 + a Legendary, Nightmare 15 / 50 / 35 Uncommon / Rare / Epic + a Legendary). The Luck line raises everything above Uncommon. Since 2026-11-02 the Gold chest rolls the dungeon's own drop odds at its tier (above), capped at 3 Gold rolls per player, all back half an hour after the last one is used (offline too); "Refresh!" refills them for 25 Robux. Pity: an Epic every 10 opens per chest. A run still pays about
   2 to 5 pieces plus its Gold, so running stays the way to gear up. The Imbue, gear-line rerolls and
   Artix's hourly shelves all left the same day.
-- **The event pool opens by tier:** Easy has the Healing Fountain and the Forge; Normal and Hard
-  add the Coffin and the Cursed Shrine; Nightmare adds the Sword in the Stone. The Merchant Shop
-  is out of the pool (its code stays).
+- **The event pool opens by tier:** Easy has the Healing Fountain, the Forge and the **Greater Shrine**
+  (an event room since 2026-11-13: one free Greater Blessing per player) and the **Mimic Vault**
+  (2026-11-13: three shared chests, any player opens any; two burst 5% of the run's coins and of its
+  chest crystals for every living player, one is a **mimic**, a punishment that pays nothing: a
+  corrupted pack of 4 + 1 per player, and the door stays shut until it is dead. The vault seals,
+  unopened chests going dead, once anyone steps past its exit) and the **Wheel of Fortune**
+  (2026-11-13; WheelOfFortuneData: one free spin per player, eight slices, about 23% of the weight bad:
+  Gold 5% of run coins, Crystals 10%, Heal 50%, a relic hand, a JACKPOT Epic+ hand with 15%
+  coins, and the bad -25% HP, Lose Relic (one random non-Cursed relic) and Ambush (a corrupted
+  pack of 3 + 1 per player, door held)) and the **Memory Shrine** (2026-11-13; MemoryShrineService,
+  Slay the Spire's Match and Keep: each player plays their own board once, 6 pairs (4 relics, Gold
+  for 8% of the run's coins, and one Cursed relic), every face shown for 2.5 s, then 3 misses
+  allowed; a found pair is kept at once, the Cursed pair included); Normal and Hard
+  add the Coffin, the Cursed Shrine and the **Merchant Shop**; Nightmare adds the Sword in the Stone.
+  The Merchant (2026-11-13) sells 5 relics for **Max HP or Max Mana for the rest of the run**
+  (each stand rolls one, HP 70% / Mana 30%): Rare 15%, Epic 20%, Legendary 25%, never past 75%
+  of either paid in total. He is **the Soul Broker**, a necromancer, and buys nothing: relics are
+  never sold, only dropped (anyone may pick a drop up; each player takes at most 3 Blessings, relics
+  someone else dropped, per run).
 - The exit portal rises after the boss. Chest rewards all land on that one floor.
 - **Relic picks** come from the vending machines and the Cursed Shrine; the pick count and a
   Legendary pity are open tuning after the first test.
-- **Relic cap gate (2026-11-01):** at the relic cap the Sword in the Stone and the Cursed Shrine
-  refuse to open ("Reached Maximum Relics!", the vending pickup's pop and sound) and stay
-  available; drop a relic and come back. The server refuses the pull or bargain too, so no cost
-  is ever paid for nothing.
+- **No relic cap (2026-11-12):** a player may hold any number of relics; the machines (one per
+  cleared combat room plus the starter) bound the count. A relic dropped from the tray can be picked
+  up by anyone, but each player takes at most **3 Blessings** (relics someone else dropped) per run.
 - **Death, wipe or leaving before the clear ends the run.** Nothing picked up is lost: gear banks
   at pickup and the run's Gold and Arcane Crystals bank in full. Dying only costs the chests not
   yet opened. Lives: 1 on every tier. Gems no longer drop (no sink without the Merchant); grunts
@@ -126,7 +143,8 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
 ## Statuses
 
 Five enemy statuses, one per tree, plus the player's Shield. Weapon enchantments open them (a
-20% chance per hit from the weapon that carries the enchantment) and each tree's relics apply
+15 / 20 / 25% chance per hit by tier, from the weapon that carries the enchantment, +10% per
+relic of that status's tree up to 50%) and each tree's relics apply
 their own. Same status refreshes duration, different statuses coexist. Burn and Poison stack per
 player (two players each keep their own tick on one enemy); within one player nothing stacks
 except Death Venom.
@@ -142,7 +160,7 @@ except Death Venom.
 
 - **DoTs scale off Power, never off the hit that applied them**, so a gun, a sword and a spell set
   the same Burn and a bigger weapon means a bigger Burn. Bosses take the same Burn as grunts.
-  The Corrosion enchantment multiplies every tick (+20% Status Damage per weapon).
+  The Corrosion enchantment multiplies every tick (+6 / 12 / 18% Status Damage per weapon by tier).
 - Every status lasts 5s; a reapply refreshes the timer. Melted (Burning + Poisoned) makes DoTs
   tick twice as fast. Petrified (Medusa, shelved) is a stun on the same 5s.
   Neither increases damage taken.
@@ -153,9 +171,8 @@ except Death Venom.
 
 ## Relics
 
-**Relic slots: 5 at most.** Easy opens 3, Normal 4, Hard and Nightmare 5. The tray always draws
-five boxes; a locked one shows a lock and says which tier opens it. The Merchant's slot stand is
-retired (slots come from the tier, not Gems).
+**No relic slots (2026-11-12).** The tray shows a column of six boxes and opens another column
+per six relics; each box wears its element tree's emblem.
 
 **45 live relics.** Five per element (Blaze, Frost, Venom, Storm, Earth: 2 Rare, 2 Epic,
 1 Legendary), 14 Neutral (8 Rare, 5 Epic, 1 Legendary) and 6 Cursed. Everything else in
@@ -178,7 +195,7 @@ for a later rotation. Duos are shelved too until the pool is tested.
   Shop and the vending machines use one eligibility check (`IsRelicRollEligible`). A vending
   machine hand always holds at least one plain Neutral card: if none rolled, one random slot
   (never a starter-guaranteed one) swaps its card for a Neutral pick, and Cursed does not count.
-- Statuses open from weapon enchantments (20% per hit from the weapon that carries one) and from
+- Statuses open from weapon enchantments (15 / 20 / 25% per hit by tier from the weapon that carries one) and from
   each tree's own relics. The 2026-10-31 "chance to apply" openers (Ye Olde Fire Breath Potion,
   Static Shock Sheep, Zombie Axe) are shelved; each tree's Rare enabler now does something on a
   rhythm or a trigger and applies the status for certain. Relic bursts (pumpkins, Shatter,
@@ -403,50 +420,108 @@ beats a Level 2 one of the same quality.
   - Melee handling, fixed per named weapon: Attack Speed, Melee Range, Mobility.
   - Ranged handling, fixed per named weapon: Fire Rate, Reload Speed, Mobility.
   - Light, Medium, Heavy archetypes; different weapons are sidegrades, not strict upgrades.
-- **Armor:** one stat, Health. Pieces belong to named **Armor Sets**; wearing all three pieces
-  activates the **Set Bonus**.
+- **Armor:** one stat, Health, plus an optional **armor enchantment** per piece (below). Pieces
+  belong to named armor sets, which only name the look: there are **no set bonuses** (removed
+  2026-11-13).
 - **Per-dungeon loot pool:** 6 melee, 6 ranged, 6 armor sets (18 pieces), 2 Legendary uniques.
   - Easy mostly Common; Normal better Rare; Hard makes Rare and Epic common and allows Legendary;
     Nightmare is the same pool with much better high-rarity odds. No Nightmare-exclusive gear.
+  - **Runegrove as built (2026-11-14):** 10 weapons (2 swords, 2 daggers, 2 greatswords, 4 bows) and
+    9 armor pieces; the starters (Steel Sword, Travelers Bow) do not drop here. **By tier:** Easy
+    drops Mithiril Sword, Bluesteel Quickblades, Bluesteel Greatsword, Hunters Bow and Spiked Iron
+    Bow; Normal adds Blacksteel Blade, Platinum Reavers, Gutrender Edge, Willowbark Bow and Feral
+    Greenwood Bow; Hard and Nightmare drop all ten plus the uniques. Weapons of one type share that
+    type's timings and step up in damage (2026-11-14): swords 30 Steel / 34 Mithiril / 38
+    Blacksteel, daggers 30 Quickblades / 34 Platinum, greatswords 40 Bluesteel / 44 Gutrender, bows
+    35 Travelers / 37 Hunters / 39 Spiked Iron / 41 Willowbark / 43 Feral; the uniques are 55
+    Runestorm (110 DPS), 47 Runeshade (100), 72 Runeforge (120). **The guns left the game the same day** (a saved gun
+    becomes a Travelers Bow; the bag's tab reads "Bows"). Every weapon a tier drops is equally likely: they share
+    the weight the first 4 had (`weaponPoolWeight` 80 against armor's 225), so a drop is a weapon
+    26% of the time and any one weapon 5.2% on Easy, 2.6% from Normal up. 3 Legendary uniques (Runeforge Greataxe, Runeshade
+    Reavers, Runestorm Claymore) split the Legendary roll evenly (Hard 0.5%, Nightmare 1% of a
+    drop). The Stormforge Breaker no longer drops (the Runeforge Greataxe is the same axe).
 - **No character stats**, ever. What a stat point would do, a gear line does.
+
+### Enchantment tiers
+
+Every enchantment, weapon or armor, has three **tiers: I, II, III** (2026-11-13). The UI prints the
+tier after the name ("Enflamed II") and the item panel, its hover tooltip, the gear chest card and
+the trade card show that tier's real numbers in one short line, numbers first, for example
+"+6% weapon damage. 20% chance to Burn." or "-5% damage taken." Whenever an enchantment is
+rolled, its tier is rolled too: **I 60%, II 30%, III 10%**. The tier is stored on the item
+(`enchantmentTier`); an item from before tiers reads as tier I, so no save was rewritten.
+
+**No particles for now** (2026-11-13): no enchantment, weapon or armor, shows a visual on the
+item. The weapon looks authored in Studio stay in GameAssets behind one switch
+(WeaponEnchantFXController ENCHANTMENT_PARTICLES_ENABLED) so they can come back.
+
+### Enchantment scrolls
+
+Gear **never drops enchanted** (2026-11-14). An enchantment arrives as a **scroll**: one of the ten
+enchantments (five weapon, five armor) at one tier, named like "Enflamed II Scroll". The roll is
+uniform over the ten, then the tier at 60 / 30 / 10. Sources, each rolled per player from that
+player's own chest: **Boss chest** always 1, **Miniboss chest** 35%, **Coffin chest** 25%,
+**treasure chest** 10% (a mimic pays none). In the world a scroll is a neon block in its
+enchantment's colour, owned and picked up like a gear drop, and it is kept the moment it is picked
+up (profile `EnchantmentScrolls`, a map of counts). The bag's **Enchants** tab shows owned scrolls as tiles, one per stack with its count and "Tier 1 / 2 / 3", in the tier's rarity colour (Rare, Epic, Legendary); selecting one shows its name, tier, effect, what it applies to and how many are owned on the detail pane. Picking one up shows no toast.
+**Applying a scroll to gear arrives with the enchanter NPC**; until then scrolls only accumulate.
+Gear that already carries an enchantment keeps it.
 
 ### Weapon enchantments
 
-One per weapon: a stat plus an opener, hidden from the weapon's Damage and from Power (the card
-says 50, the hit says 55). The **stat is always on** while the weapon is equipped in either hand
-slot, whichever weapon is drawn, and the two slots **add**: two Enflamed weapons are +20% Weapon
-Damage, no exception text anywhere. The **opener** fires only from the weapon that lands the hit:
-a 20% chance per hit (times the gun's proc coefficient, plus the Status Chance line). Spells have
-no enchantment opener; their statuses come from relics. The stored ids keep the 2026-10-31 names
-(Frostburst, Blight); the UI prints the new ones.
+One per weapon: a stat plus an opener, hidden from the weapon's Damage and from Power. The **stat
+is always on** while the weapon is equipped in either hand slot, whichever weapon is drawn, and
+the two slots **add**: two Enflamed III weapons are +18% Weapon Damage. The **opener** fires only
+from the weapon that lands the hit and does not stack: the tier's chance per hit, +10% per relic
+held from that status's tree (up to 50%), times the gun's proc coefficient, plus the Status Chance
+line. Spells have no enchantment opener; their statuses come from relics. The stored ids keep the
+2026-10-31 names (Frostburst, Blight); the UI prints the new ones.
 
-| Enchantment | Stat per weapon | Two of the same | Opener |
-|---|---|---|---|
-| Enflamed | +10% Weapon Damage | +20% | 20% Burn |
-| Frostbite (id Frostburst) | +15% Arcane Damage | +30% | 20% Chill |
-| Stormcharged | +10 Critical Chance | +20 | 20% Shock |
-| Corrosion (id Blight) | +20% Status Damage (every Burn, Poison, Black Flame and Death Venom tick) | +40% | 20% Poison |
-| Stonebound | +15% Damage Reduction | +30% | 20% Fracture |
+| Enchantment | Stat per weapon (I / II / III) | Opener (I / II / III) |
+|---|---|---|
+| Enflamed | +3 / 6 / 9% Weapon Damage | 15 / 20 / 25% Burn |
+| Frostbite (id Frostburst) | +5 / 9 / 13% Arcane Damage | 15 / 20 / 25% Chill |
+| Stormcharged | +3 / 6 / 9 Critical Chance | 15 / 20 / 25% Shock |
+| Corrosion (id Blight) | +6 / 12 / 18% Status Damage (every Burn, Poison, Black Flame and Death Venom tick) | 15 / 20 / 25% Poison |
+| Stonebound | 4 / 7 / 10% Damage Reduction | 15 / 20 / 25% Fracture |
 
-Why these sizes: two Frostbite is the strongest pure-mage pair at +30%, but Frostbite plus
-Stormcharged lands close behind through crit synergies in three trees, so it is a preference and
-not a lock. If a single pair becomes the rule, the fix is one number, not a new stacking rule.
-
-- **Roll on drop:** Rare, Epic and Legendary weapons each have a flat 5% chance (2026-11-02;
-  0 / 5 / 10 / 25 / 60% by rarity before); Common and Uncommon never. Which one is uniform over
-  the pool: Enflamed, Frostbite, Stormcharged, Corrosion, Stonebound.
+- **Roll on drop (removed 2026-11-14, see Enchantment scrolls):** Rare, Epic and Legendary weapons each had a flat 20% chance (2026-11-05);
+  Common and Uncommon never. Which one is uniform over the pool: Enflamed, Frostbite,
+  Stormcharged, Corrosion, Stonebound; then the tier.
 - An enchantment is what the weapon dropped with: the Blacksmith's Imbue left on 2026-11-02.
-- **Look:** weapon particles per enchantment are Studio work (the code-cloned status rigs were
-  taken off on 2026-11-01 to make room for authored ones). Hovering the Enchantment row in the
-  bag shows a tooltip with the enchantment's sentence, for example "Your weapon hits deal +10%
-  damage and have a 20% chance to Burn."
-- **Test commands:** `/enchant <name | roll | clear>` and `/bonusstat <StatKey percent | roll |
-  clear>` on the primary weapon, in the hub and the dungeon; `/gear` in the hub puts an always
-  enchanted weapon in the bag.
 - Looter is gone. Saved Looter weapons became unenchanted (profile v4).
 
-### Gear lines (bonus stats)
+### Armor enchantments
 
+Replaced the armor set bonuses (2026-11-13). Each armor piece (helmet, chestplate, greaves) carries
+its own. Until 2026-11-14 a piece rolled one when it dropped or came out of a gear chest (Rare and
+up, 20%); now they come from scrolls (Enchantment scrolls, above). Armor enchantments have **no status opener**. The
+same enchantment on several worn pieces **stacks**: three Protection III pieces are -21% damage
+taken. Weapons never roll an armor enchantment and armor never rolls a weapon one.
+
+| Enchantment | Per worn piece (I / II / III) |
+|---|---|
+| Explorer | +3 / 5 / 7% Coins and EXP |
+| Protection | -3 / 5 / 7% damage taken (inside the 75% total reduction cap) |
+| Weapon Mastery | +3 / 5 / 7% Weapon Damage |
+| Arcane Mastery | +3 / 5 / 7% Arcane (spell) Damage |
+| Fortune | relic rarity: +4 / 7 / 10 points Epic and +1 / 2 / 3 points Legendary, taken from Rare |
+
+Fortune applies to every relic rolled for the wearer (vending machines, chest and event offers,
+the Merchant's shelf, the Wheel), once, in the central relic roll. Its points are a share of the
+odds table, never past what Rare holds, so no weight goes negative; a forced-rarity roll (the
+Forge) is unchanged.
+
+- **Test commands:** `/enchant <name | random | clear> [1-3]` on the primary weapon (hub and
+  dungeon); `/armorenchant <name | random | clear> [1-3]` on every worn armor piece (dungeon);
+  `/bonusstat <StatKey percent | roll | clear>`; `/weapon <name | list>` adds any weapon to the bag (dungeon); `/allgear [player | all] [rarity] [level]` adds one of every weapon and armor piece to a bag (both places); `/allspells [player | all]` adds every castable spell not yet owned (both places); `/scroll <name | random> [1-3]` drops that
+  enchantment scroll at your feet (dungeon); `/gear` in the hub hands out an always enchanted
+  weapon or armor piece at a rolled tier. A named enchantment without a tier is tier I; `random`
+  rolls the tier unless one is given.
+
+### Gear traits (gear lines, bonus stats)
+
+Players see these as **Traits** (2026-11-14); "line" below and in the code is the same thing.
 Secondary stats rolled into a weapon or armor piece. Like enchantments they never touch the shown
 Damage / Health or Power; they change the hit, the heal or the cooldown. Spells roll none. Relics
 never add a percentage to the player, so lines are the only flat stats in the game.
@@ -456,14 +531,21 @@ never add a percentage to the player, so lines are the only flat stats in the ga
   before).
 - **Count by rarity:** Common 0, Uncommon 1, Rare 1, Epic 2, Legendary 3. A full Legendary set is
   15 lines over 5 pieces; mid-game is 5 to 8.
-- **Roll:** uniform inside the range, independent of Quality. Never two of the same stat on one
-  item; the same stat on different items sums, up to its cap.
+- **Levels (2026-11-14):** every trait has three levels with fixed values: I is the range's low
+  end, II its midpoint (whole percent), III its high end, shown as "+14% Critical Damage II".
+  A roll is I 60% / II 30% / III 10%, the enchantments' odds, independent of Quality. Never two
+  of the same stat on one item; the same stat on different items sums, up to its cap. Items
+  saved before levels read, show and count as their nearest level (no data rewrite).
+- **Reroll:** the Blacksmith rerolls ONE trait at a time into a new random stat and level for
+  Gold: 5% of a run's Gold at the item's level, times 1 / 1.25 / 1.5 / 2 for Uncommon / Rare /
+  Epic / Legendary (a Level 10 Rare 31, a Level 15 Legendary 100), flat however often. The other
+  traits stay; the new stat is never one the item already has. Untested balance lever.
 - **Caps are about four top rolls.** Five pieces are worn, so a stat can sit on five items; the
   fifth copy is wasted, so a set that chases one stat on every piece is no better than one that
   spreads. At the caps a pure-offence set is about +80% damage on grunts and +150% on bosses, a
   pure-defence set about +60% effective health: a little under one tier, so lines decide how
-  comfortable a tier feels while Power still gates it. Lines are what a piece dropped with (the
-  Blacksmith's line reroll left on 2026-11-02).
+  comfortable a tier feels while Power still gates it. (The Blacksmith's line reroll left on
+  2026-11-02 and returned as the trait reroll above on 2026-11-14.)
 
 | Line | Range | Cap | Reads |
 |---|---|---|---|
@@ -480,9 +562,9 @@ never add a percentage to the player, so lines are the only flat stats in the ga
 | Luck | +5 to 15% | 60% | every rarity above Common is that much more likely on gear drops |
 | Fortune | +5 to 15% | 60% | run Gold (Coins), never Crystals |
 
-Every reduction together (Slateskin, Stonebound, lines, set bonus, shrine) caps at 75% of a hit.
+Every reduction together (Slateskin, Stonebound, lines, Protection armor, shrine) caps at 75% of a hit.
 Status Chance, Mana Cost Reduction, Orb Potency, Gold Find and Dodge Recovery left the pool
-(2026-11-01 and 11-02); saved lines with those keys are ignored and reroll away.
+(2026-11-01 and 11-02); saved lines with those keys are ignored.
 
 - **Post-launch, after the first test:**
   - **A Staff weapon type** whose mana-free bolt deals Arcane Damage, so a mage's Power is their

@@ -8,6 +8,8 @@ local tweenGui = require(ReplicatedStorage.Submodules.Core.Shared.Functions.UI.t
 local uiSound = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.uiSound)
 local shineStroke = require(ReplicatedStorage.Submodules.Core.Shared.Functions.VFX.shineStroke)
 local RarityColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.RarityColors)
+local ElementTreeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ElementTreeData)
+local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 
 -- A FILLED slot's ring (2026-10-22): the inventory tiles' animated shine
 -- outline in the relic's RARITY colour, at the resting stroke's own
@@ -28,6 +30,13 @@ local LOCK_ICON = "rbxassetid://4830959937"
 local SLOT_ICON_SIZE = 0.85
 local SLOT_ICON_MAX = 1
 -- The padlock keeps its own size.
+-- The element-tree badge (2026-11-12): the tree's emblem
+-- (ElementTreeData.icon) tucked into a filled box's top-left corner, so a
+-- build's trees read at a glance. Neutral relics wear the Neutral star;
+-- Cursed relics (also Neutral in RelicData) wear none, their rarity is
+-- their identity.
+local TREE_BADGE_SIZE = 0.36
+local TREE_BADGE_POSITION = UDim2.fromScale(0.16, 0.16)
 local LOCK_ICON_SIZE = 0.75
 -- A FILLED slot (2026-11-04): the tile is the rarity colour taken most of
 -- the way to near-black, so the art reads on it (a gold sword on a solid
@@ -81,6 +90,12 @@ local function RelicEntryContainer(props: any)
 	local filled = not locked and relicInfo ~= nil
 	local rarityColor: Color3? = if filled and relicInfo then relicInfo.color else nil
 	local iconImage = if locked then LOCK_ICON else relicInfo and relicInfo.icon or "rbxassetid://72334652371090"
+	local treeData = filled
+		and relicInfo
+		and relicInfo.rarity ~= ItemRarity.Cursed
+		and relicInfo.tree
+		and ElementTreeData[relicInfo.tree]
+	local treeIcon: string? = if treeData then treeData.icon else nil
 	local containerRef = React.useRef(nil)
 	local selectionAnchorRef = React.useRef(nil)
 
@@ -290,6 +305,19 @@ local function RelicEntryContainer(props: any)
 			Visible = locked or relicInfo ~= nil,
 			ZIndex = 5,
 		}),
+
+		-- The tree's emblem in the corner (see TREE_BADGE_*), over the art.
+		TreeBadge = if treeIcon
+			then React.createElement("ImageLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = TREE_BADGE_POSITION,
+				Size = UDim2.fromScale(TREE_BADGE_SIZE, TREE_BADGE_SIZE),
+				Image = treeIcon,
+				BackgroundTransparency = 1,
+				ScaleType = Enum.ScaleType.Fit,
+				ZIndex = 6,
+			})
+			else nil,
 
 		-- Count badge ("1/1") kept in the tree but hidden — toggle Visible back
 		-- on if stacking ever returns. With max stack = 1 the number is noise.

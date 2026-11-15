@@ -307,6 +307,9 @@ function RunSummaryService._build(self: typeof(RunSummaryService), player: Playe
 		damageDealt = math.floor(dealt),
 		damageTaken = math.floor(taken),
 		corruptedKills = record.corruptedKills,
+		-- The floor's treasure chests (Components/Chest publishes them).
+		chestsFound = tonumber(workspace:GetAttribute(Attributes.TreasureChestsFound)) or 0,
+		chestsTotal = tonumber(workspace:GetAttribute(Attributes.TreasureChestsTotal)) or 0,
 		relicCount = #relics,
 		gearCount = record.gearCount,
 		gold = gold,

@@ -116,6 +116,13 @@ local STAGE_DISTANCE = 8
 local TILT_MAX_DEGREES = 7
 local TILT_FOLLOW_RATE = 12
 
+-- The hover lift, shared by the relic offer's hand and the Memory
+-- Shrine's board: the hovered card grows IN PLACE. It comes HOVER_LIFT
+-- studs toward the camera along the ray through its own face centre
+-- (CardStage.liftedPose), so its centre never moves on screen.
+local HOVER_LIFT = 0.55
+local HOVER_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
 -- The RenderStep bind runs AFTER the camera controller has moved the
 -- camera for the frame (sizing, tilt, the fallback placement). Anything
 -- that writes the camera LATER in the frame -- the screen shake, a
@@ -168,6 +175,8 @@ export type Card = {
 	setPose: (self: Card, pose: Pose) -> (),
 	tweenPose: (self: Card, pose: Pose, info: TweenInfo) -> Tween?,
 	setTilt: (self: Card, on: boolean) -> (),
+	-- CardStage.liftedPose for this card's own slot.
+	liftedPose: (self: Card, x: number, y: number, depth: number) -> Pose,
 	faceCenter: (self: Card) -> Vector2,
 	containsPoint: (self: Card, point: Vector2) -> boolean,
 	destroy: (self: Card) -> (),
@@ -426,11 +435,46 @@ CardStage.PART_HEIGHT = PART_HEIGHT
 CardStage.FACE_LEFT = FACE_LEFT
 CardStage.FACE_TOP = FACE_TOP
 CardStage.STAGE_DISTANCE = STAGE_DISTANCE
+CardStage.HOVER_LIFT = HOVER_LIFT
+CardStage.HOVER_TWEEN = HOVER_TWEEN
 
 -- The hand's layout (the Container's platform card height, row y, gap).
 -- Applies to every live card on the next frame.
 function CardStage.setLayout(newLayout: Layout)
 	layout = newLayout
+end
+
+-- The layout in force, so a borrower of the stage (the Memory Shrine's
+-- board, which lays its own grid out) can put the hand's back.
+function CardStage.getLayout(): Layout
+	return layout
+end
+
+-- The pose of a card of slot `index` of `count` that rests at pose
+-- offset (x, y), brought `depth` studs toward the camera ALONG THE RAY
+-- THROUGH ITS FACE CENTRE, so the centre stays put on screen and the card
+-- only looks larger (a bare depth change would slide every card that is
+-- off the view's centre outward). Depth and offset are linear in each
+-- other, so a tween of all three fields on one TweenInfo keeps the centre
+-- fixed the whole way. In the layout in force now.
+function CardStage.liftedPose(index: number, count: number, x: number, y: number, depth: number): Pose
+	local keep = (STAGE_DISTANCE - depth) / STAGE_DISTANCE
+	-- The slot's offset from the view centre, in face heights and widths
+	-- (slotCenterFraction, in pose units).
+	local rowOffset = (0.5 - layout.rowY) / layout.cardHeight
+	local columnOffset = index - (math.max(count, 1) + 1) / 2
+	if columnOffset ~= 0 then
+		local camera = workspace.CurrentCamera
+		local viewport = if camera then camera.ViewportSize else metrics.viewport
+		if viewport.Y > 0 then
+			columnOffset *= 1 + layout.gap * viewport.X / (viewport.Y * layout.cardHeight * FACE_ASPECT)
+		end
+	end
+	return {
+		x = (columnOffset + x) * keep - columnOffset,
+		y = rowOffset - (rowOffset - y) * keep,
+		depth = depth,
+	}
 end
 
 -- A new part + its two guis. `index` / `count` place it in the hand; the
@@ -515,6 +559,10 @@ function CardStage.create(name: string, index: number, count: number): Card
 
 	function card.setTilt(self, on: boolean)
 		self.tilt = on
+	end
+
+	function card.liftedPose(self, x: number, y: number, depth: number): Pose
+		return CardStage.liftedPose(self.index, self.count, x, y, depth)
 	end
 
 	-- The face centre on screen (viewport space, inset excluded), tilt

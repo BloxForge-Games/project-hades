@@ -23,7 +23,6 @@ local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.
 local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicNames)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local RelicRollConfig = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicRollConfig)
-local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local RelicStackData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicStackData)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
@@ -110,11 +109,10 @@ local RelicService = {
 	-- costs one table read per relic instead of a registry walk plus a
 	-- callback call each.
 	_relicSnapshots = {} :: { [number]: RelicSnapshot },
-	-- [userId] = OPEN relic slots this run. Starts at RelicCapData's
-	-- StartingSlots with the registry and is never saved; a future shop
-	-- unlock raises it through SetRelicSlots. Mirrored onto the Player as
-	-- Attributes.RelicSlots so clients draw the locked boxes from it.
-	_relicSlots = {} :: { [number]: number },
+	-- [userId] = relics this player picked up this run that SOMEONE ELSE
+	-- dropped (a gift). Capped at GIFT_LIMIT so a party cannot feed one
+	-- carry every relic; reset with the registry, never saved.
+	_giftsReceived = {} :: { [number]: number },
 	_activeRegistry = {},
 	_relicsList = {},
 }
@@ -128,9 +126,14 @@ local RelicService = {
 -- weights table to RollRandomRelic for custom distributions:
 --   GDD Greater Shrine: { Rare=65, Epic=30, Legendary=5 }
 
--- The relic cap is the player's OPEN slot count (GetRelicSlots), not a
--- constant: Shared/Data/RelicCapData only supplies the starting value and
--- the bounds, so the relic interface can size itself off the same numbers.
+-- NO RELIC CAP (2026-11-12): a player may hold any number of distinct
+-- relics; the vending machines (one per cleared combat room plus the
+-- starter) already bound how many a run deals. The tray grows a column
+-- per six (RelicInterfaceController).
+
+-- Relics a player may pick up from someone else's tray drop per run (the
+-- co-op gift limit, 2026-11-12). A player's own drop never counts.
+local GIFT_LIMIT = 3
 
 -- PURE RANDOM SELECTION -- rarity is rolled from the run-stage table in
 -- Shared/Data/RelicRollConfig (tree first since 2026-10-31), then uniformly from that
@@ -497,13 +500,6 @@ function RelicService.AddRelicsRegistry(
 		return false
 	end
 
-	-- Relic cap backstop. Pickup paths (Relic component) check
-	-- CanAcceptRelic FIRST and show the indicator without consuming
-	-- anything; this guard only catches grant paths that skipped it.
-	if not self:CanAcceptRelic(player, relic) then
-		return false
-	end
-
 	if table.find(self._relicsList[player.UserId], relic) == nil then
 		table.insert(self._relicsList[player.UserId], relic)
 	end
@@ -522,7 +518,7 @@ function RelicService.AddRelicsRegistry(
 	self:_publishOwnedRelicCount(player)
 	-- Ticks on EVERY successful pickup, including one that only deepens a
 	-- stack. OwnedRelicCount cannot serve this: it is the number of
-	-- DISTINCT relics held (it also gates the relic cap), so a stacking
+	-- DISTINCT relics held, so a stacking
 	-- pickup leaves it unchanged and a listener watching it for "I gained
 	-- something" silently misses those.
 	player:SetAttribute(Attributes.RelicsGained, ((player:GetAttribute(Attributes.RelicsGained) :: number?) or 0) + 1)
@@ -781,60 +777,24 @@ function RelicService.GetOwnedRelicCount(self: typeof(RelicService), player: Pla
 	return #(self._relicsList[player.UserId] or {})
 end
 
--- Mirrors the open slot count onto the Player so every client can draw
--- the tray's locked boxes from it without a remote. On the PLAYER rather
--- than the character so it survives a respawn.
-function RelicService._publishRelicSlots(self: typeof(RelicService), player: Player)
-	player:SetAttribute(Attributes.RelicSlots, self:GetRelicSlots(player))
+-- The co-op gift limit: how many relics `player` has picked up from
+-- someone else's tray drop this run, and the most they may.
+function RelicService.GetGiftsReceived(self: typeof(RelicService), player: Player): (number, number)
+	return self._giftsReceived[player.UserId] or 0, GIFT_LIMIT
 end
 
--- The open count the run's tier grants (RelicCapData.SlotsFor: Easy 3,
--- Normal 4, Hard and Nightmare 5). DungeonService is reached at call
--- time, never required (see the top of this file).
-function RelicService._difficultySlots(_self: typeof(RelicService)): number
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	local run = dungeonService and dungeonService:GetRun()
-	return RelicCapData.SlotsFor(run and run.difficulty)
+-- False once `player` has taken GIFT_LIMIT gifts this run. The Relic
+-- component checks it BEFORE consuming a public drop dropped by someone
+-- else, so a refused grab leaves the relic on the floor for another.
+function RelicService.CanReceiveGift(self: typeof(RelicService), player: Player): boolean
+	return (self._giftsReceived[player.UserId] or 0) < GIFT_LIMIT
 end
 
--- How many relic slots are OPEN for this player this run: the number of
--- DISTINCT relics they may hold. The tier's count unless something set
--- an explicit one (SetRelicSlots: the chat command), so a grant that
--- races the join is judged by the same rule as everyone else.
-function RelicService.GetRelicSlots(self: typeof(RelicService), player: Player): number
-	return self._relicSlots[player.UserId] or self:_difficultySlots()
-end
-
--- Sets the OPEN slot count for this run, clamped to [the tier's count,
--- MaxSlots]: a run can never fall below its tier nor open a box the tray
--- does not draw. The chat command's lever. Per run only; nothing here
--- touches the profile.
-function RelicService.SetRelicSlots(self: typeof(RelicService), player: Player, count: number): number
-	local clamped = math.clamp(math.floor(count), self:_difficultySlots(), RelicCapData.MaxSlots)
-	self._relicSlots[player.UserId] = clamped
-	self:_publishRelicSlots(player)
-	return clamped
-end
-
--- True once the player holds as many DISTINCT relics as they have open
--- slots. The vending machine refuses a capped owner outright (red pop,
--- machine kept whole, choice marked made for the gate); the offer hand
--- reads it to decide whether to dispense the Skip for the pulls that
--- can still reach a capped player (the Forge's fan).
-function RelicService.IsAtRelicCap(self: typeof(RelicService), player: Player): boolean
-	return self:GetOwnedRelicCount(player) >= self:GetRelicSlots(player)
-end
-
--- False when granting `relic` would exceed the player's open slots: every
--- open slot is filled and they don't already own this one (owned relics
--- re-trigger the per-relic stack guard instead). Pickup paths check this
--- BEFORE consuming anything so a refused grab wastes nothing.
-function RelicService.CanAcceptRelic(self: typeof(RelicService), player: Player, relic: string): boolean
-	local registry = self._relicRegistry[player.UserId]
-	if registry and (registry[relic] or 0) > 0 then
-		return true
-	end
-	return self:GetOwnedRelicCount(player) < self:GetRelicSlots(player)
+-- Counts one accepted gift; returns the new count.
+function RelicService.RecordGiftReceived(self: typeof(RelicService), player: Player): number
+	local count = (self._giftsReceived[player.UserId] or 0) + 1
+	self._giftsReceived[player.UserId] = count
+	return count
 end
 
 -- Mechanics the player can currently PRODUCE: the union of every owned
@@ -997,6 +957,55 @@ function RelicService.RollRelicRarity(
 	return plan:GetRandomLoot(luck or 1)
 end
 
+-- Fortune (2026-11-13): the worn Fortune armor enchantments move relic
+-- rarity weight from Rare to Epic and Legendary for the rolling player
+-- (ArmorEnchantmentService.GetRelicFortune: percentage points of the
+-- table's total, per piece +4 / 7 / 10 Epic and +1 / 2 / 3 Legendary).
+-- Only into a rarity the table already offers, and never more than Rare
+-- holds (scaled down together), so no weight goes negative. A table with
+-- no Rare (a forced rarity) is returned unchanged. Applied ONCE, inside
+-- RollRandomRelicFromPool, so every relic source gets it; a source that
+-- rolls its own rarity first (the Merchant's shelf) calls this on its
+-- table instead.
+function RelicService.ApplyRelicFortune(
+	_self: typeof(RelicService),
+	weights: { [string]: number },
+	player: Player?
+): { [string]: number }
+	if not player then
+		return weights
+	end
+	local armorEnchantments = Blitz.OptionalService("ArmorEnchantmentService")
+	if not armorEnchantments then
+		return weights
+	end
+	local epicPoints, legendaryPoints = armorEnchantments:GetRelicFortune(player)
+	local rare = weights[ItemRarity.Rare] or 0
+	if rare <= 0 or (epicPoints <= 0 and legendaryPoints <= 0) then
+		return weights
+	end
+	local total = 0
+	for _, weight in weights do
+		total += weight
+	end
+	local epicAdd = if (weights[ItemRarity.Epic] or 0) > 0 then total * epicPoints / 100 else 0
+	local legendaryAdd = if (weights[ItemRarity.Legendary] or 0) > 0 then total * legendaryPoints / 100 else 0
+	local wanted = epicAdd + legendaryAdd
+	if wanted <= 0 then
+		return weights
+	end
+	if wanted > rare then
+		local scale = rare / wanted
+		epicAdd *= scale
+		legendaryAdd *= scale
+	end
+	local shifted = table.clone(weights)
+	shifted[ItemRarity.Rare] = math.max(rare - epicAdd - legendaryAdd, 0)
+	shifted[ItemRarity.Epic] = (shifted[ItemRarity.Epic] or 0) + epicAdd
+	shifted[ItemRarity.Legendary] = (shifted[ItemRarity.Legendary] or 0) + legendaryAdd
+	return shifted
+end
+
 -- Rolls ONE relic for an offer slot (2026-10-31, GDD.md "Relics"):
 --   1. Drop candidates the player cannot be offered (IsRelicRollEligible:
 --      retired, or a C relic of a tree they hold nothing of).
@@ -1004,7 +1013,8 @@ end
 --      ticket each, so Neutral's larger pool never crowds the elements).
 --      No lean toward what the owner holds (2026-11-08; TreeAffinity
 --      before).
---   3. Roll a RARITY from the run-stage table within that tree.
+--   3. Roll a RARITY from the run-stage table within that tree, shifted by
+--      the owner's Fortune armor (ApplyRelicFortune).
 --   4. Pick UNIFORMLY from that bucket.
 -- No pity, keystone or combo weighting: every offerable card of a rarity
 -- in the drawn tree is equally likely.
@@ -1059,20 +1069,19 @@ function RelicService.RollRandomRelicFromPool(
 	local chosenTree = trees[math.random(1, #trees)]
 	local poolByRarity = byTree[chosenTree]
 
-	local rolledRarity
-	if weights then
-		local plan = LootPlan.new("single")
-		local any = false
-		for rarity, weight in weights do
-			if weight > 0 and poolByRarity[rarity] and #poolByRarity[rarity] > 0 then
-				plan:AddLoot(rarity, weight)
-				any = true
-			end
+	-- The rarity: the caller's table or the run-stage one
+	-- (RelicRollConfig), shifted by the owner's Fortune armor.
+	local stageWeights = RelicRollConfig.RarityWeights[self:GetRunStage()] or RelicRollConfig.RarityWeights.Early
+	local rollWeights = self:ApplyRelicFortune(weights or stageWeights, ownerPlayer)
+	local plan = LootPlan.new("single")
+	local any = false
+	for rarity, weight in rollWeights do
+		if weight > 0 and poolByRarity[rarity] and #poolByRarity[rarity] > 0 then
+			plan:AddLoot(rarity, weight)
+			any = true
 		end
-		rolledRarity = if any then plan:GetRandomLoot(luck or 1) else nil
-	else
-		rolledRarity = self:RollRelicRarity(poolByRarity, self:GetRunStage(), luck)
 	end
+	local rolledRarity = if any then plan:GetRandomLoot(luck or 1) else nil
 	if not rolledRarity then
 		return nil, nil
 	end
@@ -1158,18 +1167,6 @@ function RelicService.Start(self: typeof(RelicService))
 		return self:_onDropRelic(player, relicName)
 	end)
 
-	-- The open slot count follows the run's tier (RelicCapData.SlotsFor):
-	-- re-stamp everyone's once a floor is up, for a player who joined
-	-- before the run existed.
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	if dungeonService then
-		dungeonService.Signals.OnFloorReady:Connect(function()
-			for _, player in Players:GetPlayers() do
-				self:_publishRelicSlots(player)
-			end
-		end)
-	end
-
 	-- Super Stomp Boots — constructed per dodge-land event for owners.
 	-- Mirrors the Fireworks pattern (`SuperStompBoots.new(...):InvokeStomp()`)
 	-- rather than the old singleton .Start() style; one short-lived
@@ -1228,11 +1225,8 @@ function RelicService.Start(self: typeof(RelicService))
 		self._incrementalOwners[player.UserId] = nil
 		self:_invalidateRelicSnapshot(player.UserId)
 		self._relicsList[player.UserId] = {}
-		-- The open slot count starts over with the registry: it is a
-		-- per-run number, so it must never outlive the relics it caps.
-		-- Nil = the tier's count (GetRelicSlots).
-		self._relicSlots[player.UserId] = nil
-		self:_publishRelicSlots(player)
+		-- The gift count starts over with the registry: it is per run.
+		self._giftsReceived[player.UserId] = nil
 
 		-- The joiner gets everyone's relics once; everyone else learns the
 		-- joiner's (empty) entry as an ordinary delta.
@@ -1264,7 +1258,7 @@ function RelicService.Start(self: typeof(RelicService))
 		self:_invalidateRelicSnapshot(player.UserId)
 		self._relicsList[player.UserId] = nil
 		self._relicOrigins[player.UserId] = nil
-		self._relicSlots[player.UserId] = nil
+		self._giftsReceived[player.UserId] = nil
 
 		self:_replicateRelicsRemoved(player)
 

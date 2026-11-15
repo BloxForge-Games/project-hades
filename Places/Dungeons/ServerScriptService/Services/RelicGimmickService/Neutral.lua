@@ -46,12 +46,13 @@ local VOLLEYBALL = RelicNames["Volleyball"]
 local VOLLEYBALL_SPEED = 70
 -- A Paintball's speed when its weapon has no arc of its own to follow.
 local PAINTBALL_SPEED = 90
--- The Paintball leaves this long after the shot that sets it off, and the
--- shooter's draw animation starts PAINTBALL_DRAW_AT after that shot, so the
--- draw's release lines up with the Paintball (2026-11-08; 0.15 s from a
--- bow, at once from a gun, with the draw played on launch, before).
-local PAINTBALL_DELAY = 0.5
-local PAINTBALL_DRAW_AT = 0.1
+-- The Paintball leaves this long after the shot that sets it off, with no
+-- draw animation of its own (2026-11-11; 0.5 s, with a second draw timed
+-- to it, from 2026-11-08; 0.15 s from a bow, at once from a gun, before).
+local PAINTBALL_DELAY = 0.1
+-- Off a bow it flies this share of the bow's speed, along the bow's arc
+-- (as far, slower; 2026-11-11).
+local PAINTBALL_SPEED_SCALE = 0.6
 
 local Neutral = {}
 
@@ -135,12 +136,10 @@ local function countPaintball(player: Player, origin: Vector3, direction: Vector
 	local count = (paintballShots[player] or 0) + 1
 	if count >= needed then
 		count = 0
-		-- The shooter's draw now (their client waits Duration from the
-		-- server's StartTime); the Paintball itself PAINTBALL_DELAY later.
-		helpers.fx("PaintballDraw", origin, origin, 0, PAINTBALL_DRAW_AT, player)
+		-- The Paintball PAINTBALL_DELAY after the shot.
 		relicShots.fire(player, "PaintballShot", origin, direction, weaponName, PAINTBALL_SPEED, function(_, target)
 			paintballHit(player, target, weaponName)
-		end, true, PAINTBALL_DELAY)
+		end, true, PAINTBALL_DELAY, PAINTBALL_SPEED_SCALE)
 	end
 	paintballShots[player] = count
 	relicTriggers.set(player, PAINTBALL, count == needed - 1)

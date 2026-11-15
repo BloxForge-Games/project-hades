@@ -82,10 +82,20 @@ local COLLECT_RELIC_CHARACTER_VFX_NAME = "CollectRelicVFXCharacter"
 -- Same lingering as the vending collect (Client/Components/Relic).
 local COLLECT_RELIC_VFX_LIFETIME_SCALE = 1.5
 local COLLECT_RELIC_CHARACTER_VFX_LIFETIME_SCALE = 2
--- The merchant's price, in Gems (the run currency), on the stall
--- nameplate's owner line, in the reward green the HUD uses for gains.
-local STALL_PRICE_COLOR = Color3.fromRGB(85, 255, 127)
-local STALL_PRICE_FORMAT = "(%d Gems)"
+-- The merchant's price, a share of Max HP or Max Mana for the run
+-- (2026-11-13; Gems before), on the stall nameplate's owner line: HP in
+-- the danger red, Mana in the mechanics blue.
+local STALL_PRICE = {
+	Health = { format = "(-%d%% Max HP)", color = Color3.fromRGB(255, 92, 92) },
+	Mana = { format = "(-%d%% Max Mana)", color = Color3.fromRGB(108, 196, 255) },
+}
+
+-- A stand's price label and colour: `price` percent of `currency`
+-- ("Health" when absent).
+local function stallPrice(price: number?, currency: string?): (string, Color3)
+	local style = STALL_PRICE[currency or "Health"] or STALL_PRICE.Health
+	return style.format:format(price or 0), style.color
+end
 
 -- Stall-display particle tints — the RelicParticleAttachment set ONLY
 -- (nameplate text and the RarityGlow PointLight keep the standard
@@ -284,8 +294,8 @@ function MerchantStallRenderController._renderStallSlot(
 		name = slot.relicName,
 		rarity = rarity,
 		rarityColor = rarityColor,
-		priceText = STALL_PRICE_FORMAT:format(slot.price or 0),
-		priceColor = STALL_PRICE_COLOR,
+		priceText = (stallPrice(slot.price, slot.currency)),
+		priceColor = select(2, stallPrice(slot.price, slot.currency)),
 		glowColor = RarityColors:GetGlow(rarity),
 		particleColor = STALL_PARTICLE_COLORS[rarity] or rarityColor,
 	})
@@ -422,8 +432,8 @@ function MerchantStallRenderController._renderSlotUpgrade(
 			name = RelicSlotShopData.Name,
 			rarity = rung.rarity,
 			rarityColor = rarityColor,
-			priceText = STALL_PRICE_FORMAT:format(upgrade.price),
-			priceColor = STALL_PRICE_COLOR,
+			priceText = (stallPrice(upgrade.price)),
+			priceColor = select(2, stallPrice(upgrade.price)),
 			glowColor = RarityColors:GetGlow(rung.rarity),
 			particleColor = STALL_PARTICLE_COLORS[rung.rarity] or rarityColor,
 		})
@@ -483,8 +493,8 @@ function MerchantStallRenderController._wirePedestal(self: typeof(MerchantStallR
 		name = slot.relicName,
 		description = description,
 		rarity = RelicData[slot.relicName] and RelicData[slot.relicName].rarity,
-		userText = STALL_PRICE_FORMAT:format(slot.price),
-		userTextColor = STALL_PRICE_COLOR,
+		userText = (stallPrice(slot.price, slot.currency)),
+		userTextColor = select(2, stallPrice(slot.price, slot.currency)),
 	})
 	self._pedestalsByPrompt[prompt] = {
 		pedestal = pedestal,
@@ -582,8 +592,8 @@ function MerchantStallRenderController._armSlotPrompt(
 		name = RelicSlotShopData.Name,
 		description = RelicSlotShopData.Description,
 		rarity = rung.rarity,
-		userText = STALL_PRICE_FORMAT:format(upgrade.price),
-		userTextColor = STALL_PRICE_COLOR,
+		userText = (stallPrice(upgrade.price)),
+		userTextColor = select(2, stallPrice(upgrade.price)),
 	})
 	self._pedestalsByPrompt[prompt] = {
 		pedestal = pedestal,

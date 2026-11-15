@@ -38,16 +38,15 @@ local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Networ
 local InstanceRouter = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Network.InstanceRouter)
 local GearTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.GearTypes)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
-local rollWeaponEnchantment =
-	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
 local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollBonusStats)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local LifeService = require(ServerScriptService.Services.LifeService)
 local withinPickupReach = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Drop.withinPickupReach)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
--- Weapon-drop enchantment roll: rollWeaponEnchantment (by rarity, then a
--- uniform pick of the five). Armor never rolls one.
+-- NO enchantment roll (2026-11-14): a dropped weapon or armor piece is
+-- never enchanted. Enchantments drop as scrolls (EnchantmentScrollData,
+-- EnchantmentScrollService); the entry is stamped None.
 
 --[ Constants ]--
 
@@ -136,10 +135,11 @@ function GearDrop:_buildInventoryEntry(
 	) / 100
 
 	if gearType == GearTypes.Weapon then
+		-- Never enchanted (2026-11-14): enchantments come from scrolls.
 		return {
 			uuid = uuid,
 			name = gearName,
-			enchantment = rollWeaponEnchantment.roll(rarity),
+			enchantment = EnchantmentNames.None,
 			rarity = rarity,
 			level = level,
 			upgrades = 0,
@@ -157,6 +157,7 @@ function GearDrop:_buildInventoryEntry(
 		-- `equipped = false` on pickup so we don't silently displace
 		-- whatever piece the player already has equipped; they choose
 		-- to equip via the inventory UI.
+		-- Never enchanted either (2026-11-14).
 		return {
 			uuid = uuid,
 			name = gearName,
@@ -210,7 +211,7 @@ function GearDrop:_grantInventory(
 
 	-- An item a PLAYER dropped already exists, so it is restored rather
 	-- than rebuilt: _buildInventoryEntry rolls a fresh quality and
-	-- enchantment every call, which would re-roll the item's stats each
+	-- fresh gear lines every call, which would re-roll the item's stats each
 	-- time it changed hands. Released only once the bank accepts it, so
 	-- a pickup refused by the bag cap leaves the drop intact.
 	local preserved = GearDropService and GearDropService:GetPreservedEntry(uuid)

@@ -10,6 +10,7 @@ local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local ScreenVfx = require(script.Parent.Parent.ScreenVfx)
 local DomainBanner = require(script.Parent.Parent.DomainBanner)
+local ImpactFrame = require(script.Parent.Parent.ImpactFrame)
 local ArcaneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArcaneData)
 local ArcaneNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ArcaneNames)
 
@@ -81,6 +82,8 @@ local BANNER_AT = 0
 -- into the domain's own filter. Its own ColorCorrectionEffect, on top
 -- of the shared one, so it never fights the domain's claim.
 local EYES_SLOW_SECONDS = 0.4
+-- The impact frame lands this long after the Eyes start opening.
+local EYES_IMPACT_DELAY = 0
 local EYES_SLOW_RATE = 0.25
 -- Softer since 2026-11-10 (-0.25 / 0.3 / -0.3, tint 255,120,120: too
 -- strong).
@@ -327,6 +330,13 @@ function DomainExpansionExecutable:Play()
 	GameClock.Delay(math.max(eyesTime - GRADE_LEAD_SECONDS, 0), function()
 		if current() then
 			playEyesGrade()
+		end
+	end)
+	-- The impact frame as the Eyes open (2026-11-13; this cutscene runs on
+	-- the caster's screen only).
+	GameClock.Delay(eyesTime + EYES_IMPACT_DELAY, function()
+		if current() then
+			ImpactFrame.play()
 		end
 	end)
 	GameClock.Delay(math.max(eyesTime - EYES_SOUND_LEAD, 0), function()
