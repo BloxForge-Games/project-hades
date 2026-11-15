@@ -72,7 +72,7 @@ function Relic:Construct()
 	self._claimed = false
 	-- Server -> owner ACCEPT. The client consumes (fades the pull, kills the
 	-- prompts, plays the burst) ONLY when this fires, so a refused grab --
-	-- relic cap, wrong owner, already claimed -- leaves every relic in the
+	-- gift limit, wrong owner, already claimed -- leaves every relic in the
 	-- pull untouched and re-claimable. The client never predicts the outcome.
 end
 
@@ -108,7 +108,7 @@ function Relic:Start()
 
 		-- Already owned (2026-11-02): every relic is one per player
 		-- (RelicStackData), so a second copy would be consumed for nothing.
-		-- Refused like the cap below, the relic stays claimable, a quiet pop.
+		-- Refused like the gift limit below, the relic stays claimable, a quiet pop.
 		if not isSkip and RelicService:GetSpecificRelicRegistry(player, self.Instance.Name) > 0 then
 			local character = player.Character
 			local indicatorPart = character
@@ -125,23 +125,23 @@ function Relic:Start()
 			return
 		end
 
-		-- Relic cap: refuse BEFORE consuming anything -- the relic (and, at
-		-- a vending machine, the pull's other offers) stays claimable, so a
-		-- capped player wastes nothing by bumping into it.
-		-- Skipping is ALWAYS allowed: it grants nothing, so the relic cap
-		-- cannot be exceeded by it -- and a capped player still needs a way to
-		-- clear the pull and open the gate.
-		if not isSkip and not RelicService:CanAcceptRelic(player, self.Instance.Name) then
+		-- A GIFT: a public drop someone ELSE dropped (DroppedById is the
+		-- original dropper, carried across re-drops). Capped per run
+		-- (RelicService GIFT_LIMIT, 2026-11-12) so a party cannot feed one
+		-- carry every relic. Refused BEFORE consuming anything: the relic
+		-- stays on the floor for someone else.
+		local droppedById = self.Instance:GetAttribute(Attributes.DroppedById)
+		local isGift = isPublic and typeof(droppedById) == "number" and droppedById ~= player.UserId
+		if isGift and not RelicService:CanReceiveGift(player) then
 			local character = player.Character
 			local indicatorPart = character
 				and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
 			if TextIndicatorService and indicatorPart then
+				local _received, limit = RelicService:GetGiftsReceived(player)
 				TextIndicatorService:ShowIndicator(
 					player,
 					indicatorPart,
-					-- The number is the player's OPEN slot count, which a shop
-					-- unlock can raise mid-run, so it is read rather than typed.
-					string.format("Reached Maximum Relics! (%d)", RelicService:GetRelicSlots(player)),
+					string.format("Blessing limit reached! (%d/%d)", limit, limit),
 					Color3.fromRGB(250, 70, 70),
 					true
 				)
@@ -185,13 +185,14 @@ function Relic:Start()
 			pickupSound:Play()
 			GameClock.Debris(pickupSound, 3)
 		end
+		local pickupText = if isSkip then SkipRelicData.PickupText else "Picked up " .. self.Instance.Name .. "!"
+		if isGift then
+			local received = RelicService:RecordGiftReceived(player)
+			local _count, limit = RelicService:GetGiftsReceived(player)
+			pickupText = string.format("%s (Blessings %d/%d)", pickupText, received, limit)
+		end
 		if indicatorPart then
-			TextIndicatorService:ShowIndicator(
-				player,
-				indicatorPart,
-				if isSkip then SkipRelicData.PickupText else "Picked up " .. self.Instance.Name .. "!",
-				Color3.fromRGB(255, 255, 255)
-			)
+			TextIndicatorService:ShowIndicator(player, indicatorPart, pickupText, Color3.fromRGB(255, 255, 255))
 		end
 
 		-- Grant BEFORE the destroy: the branch below reads the relic's name

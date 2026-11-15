@@ -36,7 +36,6 @@
 --[ Roblox Services ]--
 
 local CollectionService = game:GetService("CollectionService")
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -56,7 +55,6 @@ local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicDat
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
-local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 local RelicSlotShopData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicSlotShopData)
 local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTypes)
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
@@ -83,6 +81,33 @@ local function getCoffinEventService(): any
 	return coffinEventServiceLazy
 end
 
+-- MimicVaultService requires this module too: reached the same lazy way.
+local mimicVaultServiceLazy: any = nil
+local function getMimicVaultService(): any
+	if mimicVaultServiceLazy == nil then
+		mimicVaultServiceLazy = (require :: any)(ServerScriptService.Services.MimicVaultService)
+	end
+	return mimicVaultServiceLazy
+end
+
+-- MemoryShrineService requires this module too: reached the same lazy way.
+local memoryShrineServiceLazy: any = nil
+local function getMemoryShrineService(): any
+	if memoryShrineServiceLazy == nil then
+		memoryShrineServiceLazy = (require :: any)(ServerScriptService.Services.MemoryShrineService)
+	end
+	return memoryShrineServiceLazy
+end
+
+-- WheelOfFortuneService requires this module too: reached the same lazy way.
+local wheelOfFortuneServiceLazy: any = nil
+local function getWheelOfFortuneService(): any
+	if wheelOfFortuneServiceLazy == nil then
+		wheelOfFortuneServiceLazy = (require :: any)(ServerScriptService.Services.WheelOfFortuneService)
+	end
+	return wheelOfFortuneServiceLazy
+end
+
 --[ Constants ]--
 
 -- Sword in the Stone.
@@ -102,17 +127,16 @@ local GREATER_BLESSING_HIGHLIGHT_R = 126
 local GREATER_BLESSING_HIGHLIGHT_G = 251
 local GREATER_BLESSING_HIGHLIGHT_B = 69
 
--- Greater Shrine. The PrayingStatue in every Start chunk after the first
--- floor: pick ONE Greater Blessing per player, free, granted on the spot
+-- Greater Shrine. An EVENT ROOM in the pool since 2026-11-13 (the
+-- GreaterShrine prefab, its "Blessing Shrine" statue under
+-- Interactables; it lived in the later floors' Start chunks while runs had
+-- floors): pick ONE Greater Blessing per player, free, granted on the spot
 -- and lasting the rest of the run. Spirit joins the fountain's Max-HP
 -- pool; Power and Fortune have their own run-scoped pools in
 -- PlayerStatsService. All three stack across floors.
 --
--- Healing Orbs land when the CONVERSATION ENDS (the close path calls
--- DropGreaterShrineOrbs), not at the choice: ORB_TOTAL split by party
--- size, free-for-all, so the team total is always ORB_TOTAL
--- (12 x 5% = 60% of healing however it divides). floor(), min 1, so a
--- big party never rounds to nothing.
+-- No Healing or Mana Orbs (2026-11-13; they used to land when the
+-- conversation ended): the blessing is the whole reward.
 
 -- Healing Fountain. The benign event: both options are FREE, pick ONE per
 -- player per fountain (Leave preserves the choice for a return visit).
@@ -152,29 +176,60 @@ local MERCHANT_RARITY_WEIGHTS: { [string]: number } = {
 	[ItemRarity.Legendary] = 5,
 	[ItemRarity.Duo] = 5,
 }
--- RELIC PRICES ARE FIXED, IN GEMS (design call, 2026-10). Gems are the
--- run currency, and a run's take is authored per tier (DifficultyData
--- `gems`: 350 / 650 / 950 / 950 solo, before relic bonuses), so a price
--- means the same thing wherever the shop appears: an Easy run buys two
--- Rares, a Nightmare run six. Each pedestal rolls its tag
--- within -PRICE_MARKUP_MAX..+PRICE_MARKUP_MAX of the base, once per
--- player, so a stall can be a bargain or a rip-off (design call, 2026-10).
+-- RELICS COST MAX HP OR MAX MANA (design call, 2026-11-13; Gems before,
+-- retired with them): a share of the buyer's Max HP or Max Mana for the
+-- rest of the run, by rarity, fixed so the stand reads the same
+-- everywhere. Each stand rolls its stat (MERCHANT_CURRENCY_WEIGHTS: HP
+-- more often). PlayerStatsService owns the pools (PayMaxStat) and never
+-- lets a run pay past three quarters of either, so a buy that would is
+-- refused.
 local BUY_PRICES = {
-	[ItemRarity.Rare] = 150,
-	[ItemRarity.Epic] = 200,
-	[ItemRarity.Legendary] = 300,
-	[ItemRarity.Duo] = 300,
+	[ItemRarity.Rare] = 0.15,
+	[ItemRarity.Epic] = 0.20,
+	[ItemRarity.Legendary] = 0.25,
+	[ItemRarity.Duo] = 0.25,
 	-- No Cursed row: the shop never stocks or buys them.
 }
--- The random swing on a stocked relic's tag: -this..+this, uniform.
-local PRICE_MARKUP_MAX = 0.1
--- Selling a relic back pays this share of its BASE buy price (no swing)
--- -- always below the cheapest tag, so buy-then-sell can never profit.
-local SELL_BACK_FRACTION = 0.5
+local TOO_WEAK_COLOR = Color3.fromRGB(255, 92, 92)
+-- Which max stat a stand's relic costs, rolled per stand.
+local MERCHANT_CURRENCY_WEIGHTS: { { stat: string, weight: number } } = {
+	{ stat = "Health", weight = 70 },
+	{ stat = "Mana", weight = 30 },
+}
+-- The refusal when a price would take the stat past the cap.
+local CANNOT_PAY_TEXT: { [string]: string } = {
+	Health = "Too weak to pay!",
+	Mana = "Not enough Mana to pay!",
+}
+-- The stat's name on receipts.
+local STAT_LABEL: { [string]: string } = {
+	Health = "Max HP",
+	Mana = "Max Mana",
+}
 
--- A relic's buy price, in Gems, before the pedestal's markup.
+local function rollMerchantCurrency(): string
+	local total = 0
+	for _, entry in MERCHANT_CURRENCY_WEIGHTS do
+		total += entry.weight
+	end
+	local roll = math.random() * total
+	for _, entry in MERCHANT_CURRENCY_WEIGHTS do
+		roll -= entry.weight
+		if roll <= 0 then
+			return entry.stat
+		end
+	end
+	return "Health"
+end
+
+-- A relic's price, as a share of Max HP.
 local function relicBuyPrice(rarity: string): number?
 	return BUY_PRICES[rarity]
+end
+
+-- "15%" for 0.15.
+local function percentText(fraction: number): string
+	return string.format("%d%%", math.round(fraction * 100))
 end
 
 -- How far from the event model a client request is still honoured. Loose
@@ -222,9 +277,8 @@ local DROP_POP_SOUND_PATH = { "VendingMachines", "Default" }
 local DROP_POP_SOUND_NAME = "Pop"
 
 local NOT_ENOUGH_COINS_COLOR = Color3.fromRGB(255, 92, 92)
--- The relic-cap refusal, the same red the vending pickup's pop uses.
-local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
-local SOLD_COLOR = Color3.fromRGB(85, 255, 127)
+-- A refusal pop (the stone with nothing to give), the vending red.
+local REFUSAL_COLOR = Color3.fromRGB(250, 70, 70)
 
 --[ Service ]--
 
@@ -362,36 +416,13 @@ end
 -- never reaches 0 directly — LifeService:LoseLife decides whether the
 -- player has a life to burn or enters the death state. Returns "dead"
 -- when the cost was lethal, "ok" otherwise.
--- The relic-cap refusal (2026-11-01) for an event that would hand over a
--- relic: the vending pickup's red pop and Error sound. The client already
--- refuses to open these conversations (graph CanStart); this is the
--- server's backstop, so a capped player never pays a cost for nothing.
-local function atRelicCap(player: Player): boolean
-	return RelicService:GetOwnedRelicCount(player) >= RelicService:GetRelicSlots(player)
-end
-
 -- The Sword with no Legendary to give this player (none unlocked and
 -- unheld, 2026-11-06): nothing paid, the stone stays for later.
 local function refuseNoLegendary(player: Player)
 	local character = player.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
 	if TextIndicatorService and hrp and hrp:IsA("BasePart") then
-		TextIndicatorService:ShowIndicator(player, hrp, "The stone holds nothing for you yet", RELIC_CAP_COLOR, true)
-	end
-	playFeedbackSound(if hrp and hrp:IsA("BasePart") then hrp else nil, "Error")
-end
-
-local function refuseAtRelicCap(player: Player)
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	if TextIndicatorService and hrp and hrp:IsA("BasePart") then
-		TextIndicatorService:ShowIndicator(
-			player,
-			hrp,
-			("Reached Maximum Relics! (%d)"):format(RelicService:GetRelicSlots(player)),
-			RELIC_CAP_COLOR,
-			true
-		)
+		TextIndicatorService:ShowIndicator(player, hrp, "The stone holds nothing for you yet", REFUSAL_COLOR, true)
 	end
 	playFeedbackSound(if hrp and hrp:IsA("BasePart") then hrp else nil, "Error")
 end
@@ -590,158 +621,188 @@ function EventService._spawnRelicFan(
 	end)
 end
 
--- Runtime wiring for one generated dungeon: every Event room's
--- interactable gets its NPC tag + DialogueGraph, and lands in the
--- validation registry. Prefab NAME is the event identity.
+-- Wires ONE Event room: its interactable gets its NPC tag + DialogueGraph
+-- and lands in the validation registry; the rooms with their own service
+-- register there. Prefab NAME is the event identity. Returns how many
+-- interactables it wired (0 for a room that is not an Event). Public for
+-- the /event debug command, which wires a room it places mid-floor.
+function EventService.WireEventRoom(self: typeof(EventService), room: any): number
+	if room.roomType ~= RoomTypes.Event or not room.model then
+		return 0
+	end
+	local wired = 0
+
+	-- Placed rooms are RENAMED (Room_<id>_Event), so the prefab
+	-- identity rides the PrefabName attribute DungeonService stamps at
+	-- placement. The raw name is only a fallback for hand-placed rooms.
+	local eventKind = room.model:GetAttribute("PrefabName") or room.model.Name
+	local interactablesFolder = room.model:FindFirstChild("Interactables")
+
+	if eventKind == "SwordStone" then
+		local sword = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
+		if sword then
+			sword:SetAttribute("DialogueGraph", "SwordStone")
+			CollectionService:AddTag(sword, TagList.NPC)
+			self._eventModels[sword] = { kind = "SwordStone", room = room }
+			wired += 1
+		else
+			warn("[EventService] SwordStone room has no Interactables model — event not wired")
+		end
+	elseif eventKind == "CursedShrine" then
+		local shrine = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
+		if shrine then
+			shrine:SetAttribute("DialogueGraph", "CursedShrine")
+			CollectionService:AddTag(shrine, TagList.NPC)
+			self._eventModels[shrine] = { kind = "CursedShrine", room = room }
+			wired += 1
+		else
+			warn("[EventService] CursedShrine room has no Interactables model — event not wired")
+		end
+	elseif eventKind == "HealingFountain" then
+		-- Accepts the singular folder name too — the fountain prefab
+		-- was authored with "Interactable" before the convention
+		-- settled on "Interactables".
+		local folder = interactablesFolder or room.model:FindFirstChild("Interactable")
+		local fountain = folder and folder:FindFirstChildWhichIsA("Model")
+		if fountain then
+			fountain:SetAttribute("DialogueGraph", "HealingFountain")
+			local dungeonService = Blitz.OptionalService("DungeonService")
+			local goldScale = if dungeonService then dungeonService:GetRewardScale("gold") else 1
+			fountain:SetAttribute(FOUNTAIN_PRAY_COINS_ATTRIBUTE, math.round(self:_fountainPrayCoins() * goldScale))
+			CollectionService:AddTag(fountain, TagList.NPC)
+			self._eventModels[fountain] = { kind = "HealingFountain", room = room }
+			wired += 1
+		else
+			warn("[EventService] HealingFountain room has no Interactables model — event not wired")
+		end
+	elseif eventKind == "GreaterShrine" then
+		-- The Greater Shrine's statue, a prop under Interactables like the
+		-- Cursed Shrine's. The dialogue billboard adorns its PrimaryPart.
+		local statue = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
+		if statue then
+			if not statue.PrimaryPart then
+				warn("[EventService] Greater Shrine statue has no PrimaryPart; the dialogue box will not sit on it")
+			end
+			statue:SetAttribute("DialogueGraph", "GreaterShrine")
+			CollectionService:AddTag(statue, TagList.NPC)
+			self._eventModels[statue] = { kind = "GreaterShrine", room = room }
+			wired += 1
+		else
+			warn("[EventService] GreaterShrine room has no Interactables model — event not wired")
+		end
+	elseif eventKind == "MimicVault" then
+		-- Three shared chests, one a mimic: MimicVaultService runs the
+		-- room (its own prompts, no dialogue).
+		if getMimicVaultService() then
+			getMimicVaultService():RegisterRoom(room)
+			wired += 1
+		end
+	elseif eventKind == "MemoryShrine" then
+		-- A board of pairs each: MemoryShrineService runs the room.
+		if getMemoryShrineService() then
+			getMemoryShrineService():RegisterRoom(room)
+			wired += 1
+		end
+	elseif eventKind == "WheelOfFortune" then
+		-- One free spin each: WheelOfFortuneService runs the room.
+		if getWheelOfFortuneService() then
+			getWheelOfFortuneService():RegisterRoom(room)
+			wired += 1
+		end
+	elseif eventKind == "CoffinEvent" then
+		-- The Laughing Coffin: a prop under Interactables, like the
+		-- shrine. CoffinEventService runs the challenge itself; this only
+		-- makes the coffin a dialogue target and a validated event model.
+		local coffin = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
+		if coffin then
+			coffin:SetAttribute("DialogueGraph", "CoffinEvent")
+			CollectionService:AddTag(coffin, TagList.NPC)
+			self._eventModels[coffin] = { kind = "CoffinEvent", room = room }
+			if getCoffinEventService() then
+				getCoffinEventService():RegisterRoom(room, coffin)
+			end
+			wired += 1
+		else
+			warn("[EventService] CoffinEvent room has no Interactables model — coffin not wired")
+		end
+	elseif eventKind == "Forge" then
+		-- The Mechaforger lives under NPCs (merchant-shaped prefab), not
+		-- Interactables — it is a character, not a prop.
+		local npcFolder = room.model:FindFirstChild("NPCs")
+		local forge = npcFolder and npcFolder:FindFirstChildWhichIsA("Model")
+		if forge then
+			forge:SetAttribute("DialogueGraph", "Forge")
+			CollectionService:AddTag(forge, TagList.NPC)
+			self._eventModels[forge] = { kind = "Forge", room = room }
+			wired += 1
+		else
+			warn("[EventService] Forge room has no NPCs model — blacksmith not wired")
+		end
+	elseif eventKind == "MerchantShop" then
+		local npcFolder = room.model:FindFirstChild("NPCs")
+		local merchant = npcFolder and npcFolder:FindFirstChildWhichIsA("Model")
+		if merchant then
+			merchant:SetAttribute("DialogueGraph", "SpiresMerchant")
+			CollectionService:AddTag(merchant, TagList.NPC)
+			self._eventModels[merchant] = { kind = "MerchantShop", room = room }
+			wired += 1
+		else
+			warn("[EventService] MerchantShop room has no NPCs model — merchant not wired")
+		end
+		-- Stalls are a GENERATION product: capture each pedestal's world
+		-- CFrame (attachment if authored, else above the part) HERE, on
+		-- the server, where streaming can't hide anything. The tag still
+		-- goes on for the client's PROMPT wiring; the display no longer
+		-- waits on it. Stock itself stays lazy per player (cached roll).
+		-- The un-numbered RelicSlot pedestal is the Relic SLOT stand
+		-- (RelicSlotShopData): its own tag, its own CFrame, no stock.
+		local slotCFrames = {}
+		local slotUpgradeCFrame: CFrame? = nil
+		if interactablesFolder then
+			for _, pedestal in interactablesFolder:GetChildren() do
+				if not (pedestal:IsA("Model") or pedestal:IsA("BasePart")) then
+					continue
+				end
+				local slotIndex = tonumber(string.match(pedestal.Name, "%d+$"))
+				if slotIndex then
+					CollectionService:AddTag(pedestal, TagList.MerchantPedestal)
+					slotCFrames[slotIndex] = standCFrame(pedestal)
+				elseif pedestal.Name == RelicSlotShopData.PedestalName then
+					-- The Relic Slot stand retired (2026-10-31; there is
+					-- no relic cap since 2026-11-12), so the stand is
+					-- removed from the room rather than tagged.
+					pedestal:Destroy()
+				end
+			end
+		end
+		self._merchantRooms[room.id] = {
+			merchant = merchant,
+			room = room,
+			slotCFrames = slotCFrames,
+			slotUpgradeCFrame = slotUpgradeCFrame,
+		}
+	end
+	return wired
+end
+
+-- Runtime wiring for one generated dungeon: every Event room
+-- (WireEventRoom).
 function EventService._wireDungeon(self: typeof(EventService), dungeon)
 	local wired = 0
 	for _, room in dungeon.roomsById do
-		if room.roomType ~= RoomTypes.Event or not room.model then
-			continue
-		end
-
-		-- Placed rooms are RENAMED (Room_<id>_Event), so the prefab
-		-- identity rides the PrefabName attribute DungeonService stamps at
-		-- placement. The raw name is only a fallback for hand-placed rooms.
-		local eventKind = room.model:GetAttribute("PrefabName") or room.model.Name
-		local interactablesFolder = room.model:FindFirstChild("Interactables")
-
-		if eventKind == "SwordStone" then
-			local sword = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
-			if sword then
-				sword:SetAttribute("DialogueGraph", "SwordStone")
-				CollectionService:AddTag(sword, TagList.NPC)
-				self._eventModels[sword] = { kind = "SwordStone", room = room }
-				wired += 1
-			else
-				warn("[EventService] SwordStone room has no Interactables model — event not wired")
-			end
-		elseif eventKind == "CursedShrine" then
-			local shrine = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
-			if shrine then
-				shrine:SetAttribute("DialogueGraph", "CursedShrine")
-				CollectionService:AddTag(shrine, TagList.NPC)
-				self._eventModels[shrine] = { kind = "CursedShrine", room = room }
-				wired += 1
-			else
-				warn("[EventService] CursedShrine room has no Interactables model — event not wired")
-			end
-		elseif eventKind == "HealingFountain" then
-			-- Accepts the singular folder name too — the fountain prefab
-			-- was authored with "Interactable" before the convention
-			-- settled on "Interactables".
-			local folder = interactablesFolder or room.model:FindFirstChild("Interactable")
-			local fountain = folder and folder:FindFirstChildWhichIsA("Model")
-			if fountain then
-				fountain:SetAttribute("DialogueGraph", "HealingFountain")
-				local dungeonService = Blitz.OptionalService("DungeonService")
-				local goldScale = if dungeonService then dungeonService:GetRewardScale("gold") else 1
-				fountain:SetAttribute(FOUNTAIN_PRAY_COINS_ATTRIBUTE, math.round(self:_fountainPrayCoins() * goldScale))
-				CollectionService:AddTag(fountain, TagList.NPC)
-				self._eventModels[fountain] = { kind = "HealingFountain", room = room }
-				wired += 1
-			else
-				warn("[EventService] HealingFountain room has no Interactables model — event not wired")
-			end
-		elseif eventKind == "CoffinEvent" then
-			-- The Laughing Coffin: a prop under Interactables, like the
-			-- shrine. CoffinEventService runs the challenge itself; this only
-			-- makes the coffin a dialogue target and a validated event model.
-			local coffin = interactablesFolder and interactablesFolder:FindFirstChildWhichIsA("Model")
-			if coffin then
-				coffin:SetAttribute("DialogueGraph", "CoffinEvent")
-				CollectionService:AddTag(coffin, TagList.NPC)
-				self._eventModels[coffin] = { kind = "CoffinEvent", room = room }
-				if getCoffinEventService() then
-					getCoffinEventService():RegisterRoom(room, coffin)
-				end
-				wired += 1
-			else
-				warn("[EventService] CoffinEvent room has no Interactables model — coffin not wired")
-			end
-		elseif eventKind == "Forge" then
-			-- The Mechaforger lives under NPCs (merchant-shaped prefab), not
-			-- Interactables — it is a character, not a prop.
-			local npcFolder = room.model:FindFirstChild("NPCs")
-			local forge = npcFolder and npcFolder:FindFirstChildWhichIsA("Model")
-			if forge then
-				forge:SetAttribute("DialogueGraph", "Forge")
-				CollectionService:AddTag(forge, TagList.NPC)
-				self._eventModels[forge] = { kind = "Forge", room = room }
-				wired += 1
-			else
-				warn("[EventService] Forge room has no NPCs model — blacksmith not wired")
-			end
-		elseif eventKind == "MerchantShop" then
-			local npcFolder = room.model:FindFirstChild("NPCs")
-			local merchant = npcFolder and npcFolder:FindFirstChildWhichIsA("Model")
-			if merchant then
-				merchant:SetAttribute("DialogueGraph", "SpiresMerchant")
-				CollectionService:AddTag(merchant, TagList.NPC)
-				self._eventModels[merchant] = { kind = "MerchantShop", room = room }
-				wired += 1
-			else
-				warn("[EventService] MerchantShop room has no NPCs model — merchant not wired")
-			end
-			-- Stalls are a GENERATION product: capture each pedestal's world
-			-- CFrame (attachment if authored, else above the part) HERE, on
-			-- the server, where streaming can't hide anything. The tag still
-			-- goes on for the client's PROMPT wiring; the display no longer
-			-- waits on it. Stock itself stays lazy per player (cached roll).
-			-- The un-numbered RelicSlot pedestal is the Relic SLOT stand
-			-- (RelicSlotShopData): its own tag, its own CFrame, no stock.
-			local slotCFrames = {}
-			local slotUpgradeCFrame: CFrame? = nil
-			if interactablesFolder then
-				for _, pedestal in interactablesFolder:GetChildren() do
-					if not (pedestal:IsA("Model") or pedestal:IsA("BasePart")) then
-						continue
-					end
-					local slotIndex = tonumber(string.match(pedestal.Name, "%d+$"))
-					if slotIndex then
-						CollectionService:AddTag(pedestal, TagList.MerchantPedestal)
-						slotCFrames[slotIndex] = standCFrame(pedestal)
-					elseif pedestal.Name == RelicSlotShopData.PedestalName then
-						-- The Relic Slot stand retired 2026-10-31: the open
-						-- count follows the run's tier (RelicCapData), so the
-						-- stand is removed from the room rather than tagged.
-						pedestal:Destroy()
-					end
-				end
-			end
-			self._merchantRooms[room.id] = {
-				merchant = merchant,
-				room = room,
-				slotCFrames = slotCFrames,
-				slotUpgradeCFrame = slotUpgradeCFrame,
-			}
-		end
+		wired += self:WireEventRoom(room)
 	end
 	-- Loud on purpose: if this reads 0 on a floor that placed Event
 	-- rooms, the wiring is what broke — check the prefab structure
 	-- (Interactables / NPCs folders) against the warns above.
-	-- The Greater Shrine lives in the START chunk, not an Event room, so
-	-- the loop above never sees it. Wired by PRESENCE: a Start chunk that
-	-- holds a PrayingStatue gets the event; the first floor's simply does
-	-- not have one. No room entry -- the Start area has no event door to
-	-- open, and nothing that reads _eventModels iterates it.
-	local startModel = dungeon.startModel
-	local startInteractables = startModel and startModel:FindFirstChild("Interactables")
-	local statue = startInteractables and startInteractables:FindFirstChild("Blessing Shrine")
-	if statue and statue:IsA("Model") then
-		-- The dialogue billboard adorns the PrimaryPart; without one the
-		-- client falls back to an arbitrary part and warns. Say so here
-		-- too, on the server, where a prefab problem is easier to spot.
-		if not statue.PrimaryPart then
-			warn("[EventService] PrayingStatue has no PrimaryPart; set one so the dialogue box sits on the statue")
-		end
-		statue:SetAttribute("DialogueGraph", "GreaterShrine")
-		CollectionService:AddTag(statue, TagList.NPC)
-		self._eventModels[statue] = { kind = "GreaterShrine", room = nil }
-		wired += 1
-	end
-
 	Log.debug(("[EventService] Wired %d event interactable(s) this floor"):format(wired))
+end
+
+-- Registers a model a room's own service wires (the Wheel of Fortune's
+-- clown, 2026-11-13) as an event model of `kind`, so its dialogue's
+-- MarkEventInteracted counts for the room like any event's.
+function EventService.RegisterEventModel(self: typeof(EventService), model: Instance, kind: string, room: any)
+	self._eventModels[model] = { kind = kind, room = room }
 end
 
 -- DungeonService polls this during the event exit-door hold.
@@ -836,17 +897,10 @@ function EventService._onAttemptSwordPull(_self: typeof(EventService), player: P
 		return "done"
 	end
 
-	-- No pull at the relic cap: nothing paid, nothing rolled, the stone
-	-- stays available for after a drop.
-	if atRelicCap(player) then
-		refuseAtRelicCap(player)
-		return "full"
-	end
-
 	-- The hand scales with the player's unlocks (2026-11-06): only
 	-- Legendaries they have unlocked and do not hold, up to
 	-- SWORD_OFFER_COUNT -- never Epics, never locked ones. With none,
-	-- nothing is paid (answered like the relic cap).
+	-- nothing is paid and the stone stays.
 	if #EventService:_rollUsableRelics(player, ItemRarity.Legendary, 1) == 0 then
 		refuseNoLegendary(player)
 		return "full"
@@ -892,12 +946,6 @@ function EventService._onAcceptCurse(_self: typeof(EventService), player: Player
 	local done = EventService._shrineDone[player.UserId]
 	if done and done[shrineModel] then
 		return "done"
-	end
-	-- No bargain at the relic cap: no cost, no curses, the shrine is not
-	-- spent for this player.
-	if atRelicCap(player) then
-		refuseAtRelicCap(player)
-		return "full"
 	end
 	EventService._shrineDone[player.UserId] = EventService._shrineDone[player.UserId] or {}
 	EventService._shrineDone[player.UserId][shrineModel] = true
@@ -1167,8 +1215,6 @@ function EventService._onChooseGreaterBlessing(
 	end
 	EventService._greaterShrineDone[player.UserId] = EventService._greaterShrineDone[player.UserId] or {}
 	EventService._greaterShrineDone[player.UserId][statueModel] = true
-	EventService._greaterShrinePending[player.UserId] = EventService._greaterShrinePending[player.UserId] or {}
-	EventService._greaterShrinePending[player.UserId][statueModel] = true
 
 	EventService._greaterShrineTaken[player.UserId] = EventService._greaterShrineTaken[player.UserId] or {}
 	EventService._greaterShrineTaken[player.UserId][blessing] = true
@@ -1212,37 +1258,12 @@ end
 -- DungeonNetwork.DropGreaterShrineOrbs handler (was a client-callable method).
 function EventService._onDropGreaterShrineOrbs(
 	_self: typeof(EventService),
-	player: Player,
-	statueModel: Instance?
+	_player: Player,
+	_statueModel: Instance?
 ): string
-	if typeof(statueModel) ~= "Instance" then
-		return "invalid"
-	end
-	local entry = EventService._eventModels[statueModel]
-	if not entry or entry.kind ~= "GreaterShrine" then
-		return "invalid"
-	end
-	local pending = EventService._greaterShrinePending[player.UserId]
-	if not pending or not pending[statueModel] then
-		return "none"
-	end
-	pending[statueModel] = nil
-
-	local anchor = if statueModel:IsA("Model")
-		then (statueModel.PrimaryPart or statueModel:FindFirstChildWhichIsA("BasePart", true))
-		else nil
-	if not anchor or not DropService then
-		return "invalid"
-	end
-
-	local partySize = math.max(1, #Players:GetPlayers())
-	local orbs = math.max(1, math.floor(GreaterShrineData.OrbTotal / partySize))
-	-- (basePart, dropType, minCount, maxCount, minValue, maxValue,
-	-- isBoss, ownerId) -- no owner: anyone may collect. The same count of
-	-- EACH kind, so OrbTotal describes one type, not the sum.
-	DropService.OnDropRequested:Fire(anchor, DropTypes.Health, orbs, orbs, 1, 1, false)
-	DropService.OnDropRequested:Fire(anchor, DropTypes.Mana, orbs, orbs, 1, 1, false)
-	return "ok"
+	-- The Greater Shrine drops no Healing or Mana Orbs any more
+	-- (2026-11-13): a blessing is its whole reward.
+	return "none"
 end
 
 -- THE FORGE. Sacrifice one owned relic and the anvil fans out
@@ -1401,9 +1422,12 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 		if not relicName then
 			return false
 		end
+		-- `price` is the share in whole percent (the stand's label);
+		-- `currency` the max stat it costs.
 		table.insert(stock, {
 			relicName = relicName,
-			price = math.round((relicBuyPrice(rarity) or 0) * (1 + (math.random() * 2 - 1) * PRICE_MARKUP_MAX)),
+			price = math.round((relicBuyPrice(rarity) or 0) * 100),
+			currency = rollMerchantCurrency(),
 			sold = false,
 		})
 		return true
@@ -1423,6 +1447,9 @@ function EventService._stockForRoom(self: typeof(EventService), player: Player, 
 				anyLeft = true
 			end
 		end
+		-- The buyer's Fortune armor shifts the shelf's odds like any relic
+		-- roll (RelicService.ApplyRelicFortune).
+		available = RelicService:ApplyRelicFortune(available, player)
 		if not anyLeft or not stockOne(rollItemRarity(available, ItemRarity.Rare)) then
 			break
 		end
@@ -1507,6 +1534,7 @@ function EventService._onGetMerchantStalls(_self: typeof(EventService), player: 
 			slots[index] = {
 				relicName = slot.relicName,
 				price = slot.price,
+				currency = slot.currency,
 				sold = slot.sold,
 				cframe = entry.slotCFrames[index],
 			}
@@ -1514,16 +1542,8 @@ function EventService._onGetMerchantStalls(_self: typeof(EventService), player: 
 		-- roomModel rides along so the client can gate rendering on the
 		-- room's FogRevealed attribute — floating relics inside an
 		-- unrevealed shop would announce the shop through its doorway.
-		-- The Relic Slot stand, as this player sees it (their own rung).
-		local slotUpgrade = nil
-		if entry.slotUpgradeCFrame then
-			local tier, price, soldOut = EventService:_slotUpgradeFor(player)
-			slotUpgrade = { tier = tier, price = price, soldOut = soldOut, cframe = entry.slotUpgradeCFrame }
-		end
-		table.insert(
-			stalls,
-			{ roomId = roomId, slots = slots, roomModel = entry.room.model, slotUpgrade = slotUpgrade }
-		)
+		-- No Relic Slot stand: there is no relic cap (2026-11-12).
+		table.insert(stalls, { roomId = roomId, slots = slots, roomModel = entry.room.model })
 	end
 	return stalls
 end
@@ -1571,28 +1591,15 @@ function EventService._onBuyMerchantRelic(
 		return "sold"
 	end
 
-	-- Relic cap: the shop sells only unowned relics, so any buy fills a
-	-- slot. Refused BEFORE the coins move, with the vending pickup's own
-	-- refusal pop, so a capped player wastes nothing by trying.
-	if not RelicService:CanAcceptRelic(player, slot.relicName) then
+	-- Paid in Max HP or Max Mana (2026-11-13). Refused, nothing paid, when
+	-- it would take the stat past the floor (PlayerStatsService
+	-- MAX_STAT_PAID_CAP); server-side feedback so the pop can't be
+	-- suppressed client-side.
+	local fraction = slot.price / 100
+	local stat = slot.currency or "Health"
+	if not PlayerStatsService:PayMaxStat(player, stat, fraction) then
 		if TextIndicatorService and hrp then
-			TextIndicatorService:ShowIndicator(
-				player,
-				hrp,
-				("Reached Maximum Relics! (%d)"):format(RelicService:GetRelicSlots(player)),
-				RELIC_CAP_COLOR,
-				true
-			)
-		end
-		playFeedbackSound(hrp, "Error")
-		return "full"
-	end
-
-	if not RunEscrowService:SpendGems(player, slot.price) then
-		-- Server-side feedback so the "Not enough Gems" pop can't be
-		-- suppressed or spoofed client-side.
-		if TextIndicatorService and hrp then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough Gems", NOT_ENOUGH_COINS_COLOR, true)
+			TextIndicatorService:ShowIndicator(player, hrp, CANNOT_PAY_TEXT[stat], TOO_WEAK_COLOR, true)
 		end
 		playFeedbackSound(hrp, "Error")
 		return "poor"
@@ -1606,68 +1613,7 @@ function EventService._onBuyMerchantRelic(
 		TextIndicatorService:ShowIndicator(
 			player,
 			hrp,
-			("You bought %s!"):format(slot.relicName),
-			Color3.fromRGB(255, 255, 255),
-			true
-		)
-	end
-	return "bought"
-end
-
--- The Relic Slot stand's state for one player: the rung on sale (1-based
--- index into RelicSlotShopData.Tiers), its price, and sold-out. DERIVED,
--- never stored: the rung is how many slots the player has opened past
--- the default, so it carries across every shop on the floor and survives
--- a rejoin with the open count. Sold out reports the last rung (the
--- greyed display still shows a tier) at price 0.
-function EventService._slotUpgradeFor(_self: typeof(EventService), player: Player): (number, number, boolean)
-	local tiers = RelicSlotShopData.Tiers
-	local bought = math.max(0, RelicService:GetRelicSlots(player) - RelicCapData.DefaultSlots)
-	local rung = tiers[bought + 1]
-	if not rung then
-		return #tiers, 0, true
-	end
-	return bought + 1, rung.price, false
-end
-
--- Buys the Relic Slot rung on sale in merchant room `roomId`: one more
--- OPEN relic slot (RelicService.SetRelicSlots, which replicates it to
--- the tray), and the next rung goes on sale at once. Same gates as a
--- relic buy: the room unlocked for this player, and in range of the
--- stand. Returns "bought" | "poor" | "sold" | "invalid".
--- DungeonNetwork.BuyRelicSlot handler.
-function EventService._onBuyRelicSlot(_self: typeof(EventService), player: Player, roomId: number): string
-	if typeof(roomId) ~= "number" then
-		return "invalid"
-	end
-	local entry = EventService._merchantRooms[roomId]
-	if not entry or not entry.slotUpgradeCFrame or not EventService:_isMerchantUnlockedFor(player, roomId) then
-		return "invalid"
-	end
-	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if not hrp or (hrp.Position - entry.slotUpgradeCFrame.Position).Magnitude > INTERACT_RANGE then
-		return "invalid"
-	end
-
-	local _tier, price, soldOut = EventService:_slotUpgradeFor(player)
-	if soldOut then
-		return "sold"
-	end
-	if not RunEscrowService:SpendGems(player, price) then
-		if TextIndicatorService then
-			TextIndicatorService:ShowIndicator(player, hrp, "Not enough Gems", NOT_ENOUGH_COINS_COLOR, true)
-		end
-		playFeedbackSound(hrp, "Error")
-		return "poor"
-	end
-
-	local openSlots = RelicService:SetRelicSlots(player, RelicService:GetRelicSlots(player) + 1)
-	-- Same voice as "You bought X!" — white, over the buyer, server-issued.
-	if TextIndicatorService then
-		TextIndicatorService:ShowIndicator(
-			player,
-			hrp,
-			("Relic Slot unlocked! (%d/%d)"):format(openSlots, RelicCapData.MaxSlots),
+			("You bought %s! (-%s %s)"):format(slot.relicName, percentText(fraction), STAT_LABEL[stat]),
 			Color3.fromRGB(255, 255, 255),
 			true
 		)
@@ -1695,57 +1641,6 @@ function EventService._isAtUnlockedMerchant(self: typeof(EventService), player: 
 		end
 	end
 	return false
-end
-
--- DungeonNetwork.SellRelic handler (was a client-callable method).
--- Gated like the buys: an unlocked merchant room, in range of its
--- merchant. A Cursed relic is refused outright -- its drawback is the
--- price of its payoff (the tray refuses to drop one for the same
--- reason), so the shop is not a way to shed it for coins.
-function EventService._onSellRelic(self: typeof(EventService), player: Player, relicName: string): number
-	if typeof(relicName) ~= "string" or not RelicData[relicName] then
-		return 0
-	end
-	if not self:_isAtUnlockedMerchant(player) then
-		return 0
-	end
-	if RelicService:GetSpecificRelicRegistry(player, relicName) <= 0 then
-		return 0
-	end
-
-	local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if RelicData[relicName].rarity == ItemRarity.Cursed then
-		if TextIndicatorService and hrp then
-			TextIndicatorService:ShowIndicator(
-				player,
-				hrp,
-				"Cursed relics cannot be sold",
-				NOT_ENOUGH_COINS_COLOR,
-				true
-			)
-		end
-		playFeedbackSound(hrp, "Error")
-		return 0
-	end
-
-	local buyPrice = relicBuyPrice(RelicData[relicName].rarity)
-	if not buyPrice then
-		return 0
-	end
-	local price = math.round(buyPrice * SELL_BACK_FRACTION)
-
-	RelicService:RemoveRelicsRegistry(player, relicName, 1)
-	RunEscrowService:AddGems(player, price)
-
-	-- Full sale presentation: green receipt over the head, the Buy
-	-- chime, and the everyone-visible removed-relic shockwave.
-	local sellerHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if TextIndicatorService and sellerHrp then
-		TextIndicatorService:ShowIndicator(player, sellerHrp, ("You sold %s!"):format(relicName), SOLD_COLOR, true)
-	end
-	playFeedbackSound(sellerHrp, "Buy")
-	RelicService:PlayRelicRemovedFX(player)
-	return price
 end
 
 -- Drops everything keyed on this floor's rooms and models: the old room
@@ -1817,11 +1712,15 @@ function EventService.Start(self: typeof(EventService))
 	DungeonNetwork.BuyMerchantRelic.On(function(player: Player, payload)
 		return self:_onBuyMerchantRelic(player, payload.RoomId, payload.Index)
 	end)
-	DungeonNetwork.BuyRelicSlot.On(function(player: Player, roomId: number)
-		return self:_onBuyRelicSlot(player, roomId)
+	-- The Relic Slot stand retired with the relic cap (2026-11-12): nothing
+	-- is on sale, so every request is refused.
+	DungeonNetwork.BuyRelicSlot.On(function(_player: Player, _roomId: number)
+		return "invalid"
 	end)
-	DungeonNetwork.SellRelic.On(function(player: Player, relicName: string)
-		return self:_onSellRelic(player, relicName)
+	-- Relics are never sold (2026-11-13): players drop them instead, and
+	-- the Soul Broker only sells. Every request is refused.
+	DungeonNetwork.SellRelic.On(function(_player: Player, _relicName: string)
+		return 0
 	end)
 
 	-- Floor lifecycle. Every generation after the first is preceded by a

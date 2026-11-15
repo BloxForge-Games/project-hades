@@ -19,7 +19,8 @@
 	  base     computeWeaponDamage (the caller's, the same number a dungeon
 	           hit starts from)
 	  variance rollDamageVariance (+/-10%)
-	  additive + ArmorSetBonusService weapon amp (the Ruinseeker set)
+	  additive + the Weapon Mastery armor enchantments
+	           (ArmorEnchantmentService)
 	           + the WeaponDamage enchantment and gear lines
 	  crit     BonusStatData.Base chance and multiplier + the CritChance /
 	           CritDamage gear lines + the CritChance enchantment; chance
@@ -37,7 +38,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
-local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
+local ArmorEnchantmentService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorEnchantmentService)
 local DamageIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.DamageIndicatorService)
 local BonusStatData = require(ReplicatedStorage.Submodules.Core.Shared.Data.BonusStatData)
 local TrainingDummyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.TrainingDummyData)
@@ -85,7 +86,7 @@ type DummyState = {
 
 local TrainingDummyService = {
 	Name = "TrainingDummyService",
-	Dependencies = { PlayerStatsService, ArmorSetBonusService, DamageIndicatorService } :: { any },
+	Dependencies = { PlayerStatsService, ArmorEnchantmentService, DamageIndicatorService } :: { any },
 }
 
 -- Every dummy in the place, keyed by its model.
@@ -100,10 +101,12 @@ function TrainingDummyService.RollHit(
 	baseDamage: number
 ): (number, boolean)
 	local damage = rollDamageVariance(baseDamage)
-	-- The WeaponDamage enchantment and gear lines, as one fraction.
+	-- The WeaponDamage enchantment, Weapon Mastery armor and gear lines,
+	-- as one fraction.
 	local weaponDamage = PlayerStatsService:GetEnchantmentStat(player, "WeaponDamage")
 		+ PlayerStatsService:GetGearStat(player, "WeaponDamage")
-	local total = damage + ArmorSetBonusService:GetWeaponDamageAmplifier(player, damage, false) + damage * weaponDamage
+		+ ArmorEnchantmentService:GetDamageBonus(player, false)
+	local total = damage + damage * weaponDamage
 
 	local critChance = BonusStatData.Base.CritChance * 100
 		+ PlayerStatsService:GetGearStat(player, "CritChance") * 100

@@ -116,6 +116,10 @@ local BonusStatData = require(ReplicatedStorage.Submodules.Core.Shared.Data.Bonu
 local rollBonusStats = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollBonusStats)
 local rollWeaponEnchantment =
 	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollWeaponEnchantment)
+local rollArmorEnchantment = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.rollArmorEnchantment)
+local enchantmentTier = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.enchantmentTier)
+local enchantmentDisplayName =
+	require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.enchantmentDisplayName)
 local ArmorPieceData = require(ReplicatedStorage.Submodules.Core.Shared.Data.ArmorPieceData)
 local MeleeWeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.MeleeWeaponData)
 local RangedWeaponData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RangedWeaponData)
@@ -123,6 +127,8 @@ local MeleeWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.
 local RangedWeaponTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RangedWeaponTypes)
 local EnchantmentNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnchantmentNames)
 local ItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Enums.ItemRarity)
+local addAllGear = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Inventory.addAllGear)
+local addAllSpells = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Arcane.addAllSpells)
 
 -- /gear: the rarities it draws from when none is named (Common rolls no
 -- gear lines, so it only comes when asked), and the scalar range a drop
@@ -142,17 +148,13 @@ local GEAR_SCALAR_MAX = 1
 local GEAR_KINDS: { [string]: { string } } = {
 	weapon = {},
 	melee = { MeleeWeaponTypes.Sword, MeleeWeaponTypes.Greatsword, MeleeWeaponTypes.Daggers },
-	gun = { RangedWeaponTypes.SubmachineGun, RangedWeaponTypes.AssaultRifle, RangedWeaponTypes.LightMachineGun },
+	bow = { RangedWeaponTypes.Bow },
 	sword = { MeleeWeaponTypes.Sword },
 	greatsword = { MeleeWeaponTypes.Greatsword },
 	daggers = { MeleeWeaponTypes.Daggers },
-	smg = { RangedWeaponTypes.SubmachineGun },
-	ar = { RangedWeaponTypes.AssaultRifle },
-	lmg = { RangedWeaponTypes.LightMachineGun },
 }
-GEAR_KINDS.ranged = GEAR_KINDS.gun
+GEAR_KINDS.ranged = GEAR_KINDS.bow
 GEAR_KINDS.dagger = GEAR_KINDS.daggers
-GEAR_KINDS.rifle = GEAR_KINDS.ar
 
 -- /guide: what an NPC does -> a word in its model name (the same words
 -- LobbyNPCService wires its dialogue by).
@@ -240,10 +242,9 @@ local function findPrimaryWeapon(player: Player): ({ [string]: any }?, { [string
 	return target, inventory, nil
 end
 
--- Saves an edited weapon and brings the live state in line with it, the
--- way BlacksmithService._commit does after an Imbue: the enchantment and
--- gear-line sums, the stat attributes, then the held model (its
--- Enchantment attribute is what the aura particles follow).
+-- Saves an edited weapon and brings the live state in line with it: the
+-- enchantment and gear-line sums, the stat attributes, then the held
+-- model (its Enchantment attribute rides along to the hit paths).
 local function commitWeaponEdit(player: Player, inventory: { [string]: any })
 	DataService:SetProfileValue(player, "Inventory", inventory)
 	PlayerStatsService:RecomputeGearStats(player)
@@ -648,7 +649,7 @@ COMMANDS = {
 		end,
 	},
 	gear = {
-		usage = "/gear [weapon|melee|gun|sword|greatsword|daggers|smg|ar|lmg|armor] [rarity] [level]",
+		usage = "/gear [weapon|melee|bow|sword|greatsword|daggers|armor] [rarity] [level]",
 		description = "Puts one random piece of gear in YOUR bag, built like a dungeon drop: a weapon always enchanted, gear lines rolled for its rarity (Uncommon to Legendary unless named), at the level given or yours. Any word order: /gear sword rare 1.",
 		handler = function(player: Player, args: { string }): string?
 			local profile = DataService:GetProfileData(player)
@@ -717,7 +718,9 @@ COMMANDS = {
 			local item: { [string]: any } = {
 				uuid = HttpService:GenerateGUID(false),
 				name = name,
-				enchantment = if wantArmor then EnchantmentNames.None else rollWeaponEnchantment.pick(nil),
+				-- Always enchanted, at a tier rolled 60 / 30 / 10 (2026-11-13).
+				enchantment = if wantArmor then rollArmorEnchantment.pick(nil) else rollWeaponEnchantment.pick(nil),
+				enchantmentTier = enchantmentTier.Roll(),
 				rarity = rarity,
 				level = askedLevel or math.max(ExperienceService:GetLevel(player), 1),
 				upgrades = 0,
@@ -761,10 +764,137 @@ COMMANDS = {
 			return ("Gave %s %s%s (Lv %d): %s."):format(
 				rarity,
 				name,
-				if item.enchantment ~= EnchantmentNames.None then " [" .. tostring(item.enchantment) .. "]" else "",
+				if enchantmentTier.IsEnchanted(item.enchantment)
+					then " [" .. enchantmentDisplayName(item.enchantment, enchantmentTier.Tier(item)) .. "]"
+					else "",
 				item.level,
 				if #lines > 0 then table.concat(lines, ", ") else "no gear lines"
 			)
+		end,
+	},
+	allspells = {
+		usage = "/allspells [player | all]",
+		description = "Puts every castable spell a player does not own yet in their spell collection at Rank 1, unequipped: yours, a named player's (the start of their name is enough) or everyone's (all). Owned spells and their Ranks are untouched.",
+		handler = function(player: Player, args: { string }): string?
+			local targets: { Player } = {}
+			for _, arg in args do
+				local word = string.lower(arg)
+				if word == "all" then
+					targets = Players:GetPlayers()
+				else
+					-- A player, by the start of their name or display name.
+					local found: Player? = nil
+					for _, other in Players:GetPlayers() do
+						if
+							string.sub(string.lower(other.Name), 1, #word) == word
+							or string.sub(string.lower(other.DisplayName), 1, #word) == word
+						then
+							found = other
+							break
+						end
+					end
+					if not found then
+						return ("No player matches %q."):format(arg)
+					end
+					table.insert(targets, found)
+				end
+			end
+			if #targets == 0 then
+				targets = { player }
+			end
+
+			local replies: { string } = {}
+			for _, target in targets do
+				local profile = DataService:GetProfileData(target)
+				if next(profile) == nil or type(profile.Inventory) ~= "table" then
+					table.insert(replies, ("%s: profile not loaded"):format(target.Name))
+					continue
+				end
+				local added = addAllSpells(profile)
+				if #added > 0 then
+					DataService:SetProfileValue(target, "Arcane", profile.Arcane)
+					DataService:SetProfileValue(target, "Inventory", profile.Inventory)
+				end
+				table.insert(
+					replies,
+					if #added > 0
+						then ("%s: +%d (%s)"):format(target.Name, #added, table.concat(added, ", "))
+						else ("%s: already owns them all"):format(target.Name)
+				)
+			end
+			return "Gave all spells. " .. table.concat(replies, "; ")
+		end,
+	},
+
+	allgear = {
+		usage = "/allgear [player | all] [rarity] [level]",
+		description = "Puts ONE of every weapon and armor piece in a bag: yours, a named player's (the start of their name is enough) or everyone's (all). Epic at Level 1 unless a rarity and a level are named; a Legendary unique stays Legendary. Any word order: /allgear bob rare 10.",
+		handler = function(player: Player, args: { string }): string?
+			local rarity: string = ItemRarity.Epic
+			local level = 1
+			local targets: { Player } = {}
+			for _, arg in args do
+				local word = string.lower(arg)
+				local asLevel = tonumber(word)
+				local asRarity: string? = nil
+				for _, candidate in
+					{ ItemRarity.Common, ItemRarity.Uncommon, ItemRarity.Rare, ItemRarity.Epic, ItemRarity.Legendary }
+				do
+					if string.lower(candidate) == word then
+						asRarity = candidate
+					end
+				end
+				if asLevel then
+					if asLevel ~= math.floor(asLevel) or asLevel < 1 or asLevel > MAX_SET_LEVEL then
+						return ("Level must be a whole number from 1 to %d."):format(MAX_SET_LEVEL)
+					end
+					level = asLevel
+				elseif asRarity then
+					rarity = asRarity
+				elseif word == "all" then
+					targets = Players:GetPlayers()
+				else
+					-- A player, by the start of their name or display name.
+					local found: Player? = nil
+					for _, other in Players:GetPlayers() do
+						if
+							string.sub(string.lower(other.Name), 1, #word) == word
+							or string.sub(string.lower(other.DisplayName), 1, #word) == word
+						then
+							found = other
+							break
+						end
+					end
+					if not found then
+						return ("No player, rarity or level matches %q."):format(arg)
+					end
+					table.insert(targets, found)
+				end
+			end
+			if #targets == 0 then
+				targets = { player }
+			end
+
+			local replies: { string } = {}
+			for _, target in targets do
+				local profile = DataService:GetProfileData(target)
+				local inventory = if next(profile) ~= nil then profile.Inventory else nil
+				if type(inventory) ~= "table" then
+					table.insert(replies, ("%s: profile not loaded"):format(target.Name))
+					continue
+				end
+				local added, skipped = addAllGear(inventory, level, rarity)
+				DataService:SetProfileValue(target, "Inventory", inventory)
+				table.insert(
+					replies,
+					("%s: %d pieces%s"):format(
+						target.Name,
+						added,
+						if #skipped > 0 then " (no model: " .. table.concat(skipped, ", ") .. ")" else ""
+					)
+				)
+			end
+			return ("Gave all gear (%s, Lv %d). %s"):format(rarity, level, table.concat(replies, "; "))
 		end,
 	},
 	bonusstat = {
@@ -820,22 +950,27 @@ COMMANDS = {
 		end,
 	},
 	enchant = {
-		usage = "/enchant <name | roll | clear>",
-		description = "Puts an enchantment on YOUR primary weapon by name (Enflamed, Frostbite, Stormcharged, Corrosion, Stonebound), rolls one from the drop pool (roll), or removes it (clear).",
+		usage = "/enchant <name | random | clear> [1-3]",
+		description = "Puts an enchantment on YOUR primary weapon by name (Enflamed, Frostbite, Stormcharged, Corrosion, Stonebound) at tier 1-3 (default 1), rolls one from the drop pool (random; the tier rolled 60/30/10 unless given), or removes it (clear).",
 		handler = function(player: Player, args: { string }): string?
 			local target, inventory, reason = findPrimaryWeapon(player)
 			if not target or not inventory then
 				return reason
 			end
-			local first = args[1] or ""
+			local first = string.lower(args[1] or "")
 			if first == "" then
-				return "Usage: /enchant <name | roll | clear>"
+				return "Usage: /enchant <name | random | clear> [1-3]"
+			end
+			local tier = if args[2] then tonumber(args[2]) else nil
+			if args[2] and (tier == nil or tier ~= enchantmentTier.Clamp(tier)) then
+				return "The tier must be 1, 2 or 3."
 			end
 			local enchantment: string
 			if first == "clear" then
 				enchantment = EnchantmentNames.None
-			elseif first == "roll" then
+			elseif first == "random" or first == "roll" then
 				enchantment = rollWeaponEnchantment.pick(nil)
+				tier = tier or enchantmentTier.Roll()
 			else
 				local matched = matchEnchantment(first)
 				if not matched then
@@ -843,14 +978,17 @@ COMMANDS = {
 				end
 				enchantment = matched
 			end
-			-- The same field the drop roll and the Blacksmith's Imbue write;
-			-- the commit re-instances the held weapon so its aura follows.
-			target.enchantment = enchantment
+			-- The same fields the drop roll writes; the commit re-instances
+			-- the held weapon so its Enchantment attribute follows.
+			enchantmentTier.Stamp(target, enchantment, tier or 1)
 			commitWeaponEdit(player, inventory)
 			if enchantment == EnchantmentNames.None then
 				return ("%s: enchantment cleared."):format(tostring(target.name))
 			end
-			return ("%s: now %s."):format(tostring(target.name), EnchantmentData[enchantment].displayName)
+			return ("%s: now %s."):format(
+				tostring(target.name),
+				enchantmentDisplayName(enchantment, enchantmentTier.Tier(target))
+			)
 		end,
 	},
 	wipedata = {

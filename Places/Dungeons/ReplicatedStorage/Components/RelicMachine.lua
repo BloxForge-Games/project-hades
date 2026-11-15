@@ -227,21 +227,13 @@ function RelicMachine:Start()
 			return
 		end
 		lastTap = now
-		-- At the relic cap the server refuses (its red pop and Error sound)
-		-- and the machine stays whole: no bounce. Both counts are
-		-- server-stamped Player attributes (RelicService).
-		local owned = tonumber(player:GetAttribute(Attributes.OwnedRelicCount)) or 0
-		local slots = tonumber(player:GetAttribute(Attributes.RelicSlots))
-		local capped = slots ~= nil and owned >= slots
-		if not capped then
-			self._numberValue.Value = 1.25
-			GameClock.Tween(
-				self._numberValue,
-				TweenInfo.new(1, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
-				{ Value = 1 }
-			)
-				:Play()
-		end
+		self._numberValue.Value = 1.25
+		GameClock.Tween(
+			self._numberValue,
+			TweenInfo.new(1, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
+			{ Value = 1 }
+		)
+			:Play()
 		DungeonNetwork.RelicMachinePromptTriggered.Fire({
 			Machine = self.Instance,
 			CFrame = self.Instance.PrimaryPart.CFrame,

@@ -116,7 +116,8 @@ function relicShots.fire(
 	speed: number,
 	onHit: (position: Vector3, target: Model?) -> (),
 	follow: boolean?,
-	delayOverride: number?
+	delayOverride: number?,
+	followSpeedScale: number?
 )
 	nextId = nextId % MAX_ID + 1
 	local id = nextId
@@ -127,10 +128,15 @@ function relicShots.fire(
 	local delaySeconds = 0
 	local followed = follow == true and weapon ~= nil and weapon.ballisticAim == true
 	if followed then
-		-- The weapon's own flight, a beat behind it.
-		speed = tonumber(weapon.velocity) or speed
+		-- The weapon's own flight, a beat behind it. `followSpeedScale`
+		-- slows it along the SAME arc (2026-11-11): gravity scales by its
+		-- square, so it lands as far as the weapon's own shot, only later.
+		-- (RelicShotVFXController's gravityFor reads the scale back off
+		-- the speed.)
+		local scale = followSpeedScale or 1
+		speed = (tonumber(weapon.velocity) or speed) * scale
 		velocity = direction.Unit * speed
-		gravity = tonumber(weapon.drop) or RelicTriggerData.Shot.Gravity
+		gravity = (tonumber(weapon.drop) or RelicTriggerData.Shot.Gravity) * scale * scale
 		delaySeconds = FOLLOW_DELAY_SECONDS
 	else
 		-- The aim lifted LiftDegrees toward straight up (a level aim leaves

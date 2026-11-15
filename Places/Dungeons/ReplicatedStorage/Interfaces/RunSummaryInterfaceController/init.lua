@@ -7,7 +7,7 @@
 	(CLEARED) or after a wipe (DEFEATED, over the game-over screen):
 
 	  header      result, dungeon, difficulty, run time
-	  stats       kills, damage dealt
+	  stats       kills, damage dealt, treasure chests found / placed
 	  party       in co-op, every player's kills and damage, the top
 	              damage dealer marked MVP
 	  rewards     Gold, Crystals, EXP (the friend bonus noted), and the gear
@@ -302,11 +302,19 @@ local function Panel(props: { summary: Summary, onContinue: () -> () })
 	end
 	subtitle ..= "  •  " .. formatTime(tonumber(summary.seconds) or 0)
 
-	-- Stats row (2026-11-08: kills and damage dealt).
-	local stats = {
+	-- Stats row (2026-11-08: kills and damage dealt; 2026-11-14: the
+	-- floor's treasure chests, found / placed, when it had any). A third
+	-- entry is the tile's ready-made text.
+	local stats: { { any } } = {
 		{ "Kills", summary.kills },
 		{ "Damage Dealt", summary.damageDealt },
 	}
+	local chestsTotal = tonumber(summary.chestsTotal) or 0
+	if chestsTotal > 0 then
+		local chestsFound = math.min(tonumber(summary.chestsFound) or 0, chestsTotal)
+		local chestRow: { any } = { "Chests", chestsFound, string.format("%d / %d", chestsFound, chestsTotal) }
+		table.insert(stats, chestRow)
+	end
 	local tileWidth = (WIDTH - PAD * 2 - (#stats - 1) * 12) / #stats
 
 	-- The party strip, co-op only; it pushes the columns down.
@@ -347,7 +355,7 @@ local function Panel(props: { summary: Summary, onContinue: () -> () })
 	for index, stat in stats do
 		statTiles["Stat" .. index] = React.createElement(StatTile, {
 			title = stat[1],
-			value = withCommas(tonumber(stat[2]) or 0),
+			value = if stat[3] then stat[3] else withCommas(tonumber(stat[2]) or 0),
 			x = (index - 1) * (tileWidth + 12),
 			width = tileWidth,
 		})

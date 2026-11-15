@@ -40,7 +40,7 @@ local RagdollService = require(ServerScriptService.Services.RagdollService)
 local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local TextIndicatorService = require(ServerScriptService.Submodules.Core.Source.Services.TextIndicatorService)
 local LifeService = require(ServerScriptService.Services.LifeService)
-local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
+local ArmorEnchantmentService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorEnchantmentService)
 local AuraService = require(ServerScriptService.Services.AuraService)
 local ArcaneService = require(ServerScriptService.Services.ArcaneService)
 local RelicNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Relic)
@@ -148,7 +148,7 @@ local DamageService = {
 		DamageIndicatorService,
 		TextIndicatorService,
 		RagdollService,
-		ArmorSetBonusService,
+		ArmorEnchantmentService,
 	} :: { any },
 
 	_onDamageModules = {} :: { [string]: any },
@@ -221,7 +221,7 @@ local STATUS_ATTRIBUTE_PREFIX = "Status"
 -- damage immunity should never be reachable from a free pickup.
 local GREATER_SHRINE_MAX_REDUCTION = 0.60
 -- The most ALL reductions together may take off a mob hit (2026-10-31):
--- Slateskin, Stonebound, the gear lines, the set bonus and the shrine
+-- Slateskin, Stonebound, the gear lines, the armor enchantments and the shrine
 -- multiply freely up to here, never to immunity.
 local MAX_TOTAL_DAMAGE_REDUCTION = 0.75
 
@@ -477,8 +477,9 @@ function DamageService.PlayerTakeDamage(
 	-- TeddyTrap.lua; its heal block is DropService's health-orb branch.
 	damage = damage * (RelicService:GetRelicEffect(player, RelicNames["Teddy Trap"]) or 1)
 
-	-- Protection set bonus (all 3 Enforcer pieces): −10% damage taken.
-	damage = damage * ArmorSetBonusService:GetDamageTakenMultiplier(player)
+	-- Protection armor enchantments: -3 / 5 / 7% damage taken per worn
+	-- piece, stacking (ArmorEnchantmentService). Inside the total cap below.
+	damage = damage * ArmorEnchantmentService:GetDamageTakenMultiplier(player)
 
 	-- Poison weaken: additive per poison/noxious STACK on the attacking mob,
 	-- capped — per-player state the attribute can't express, so this reads
@@ -1577,6 +1578,8 @@ end
 --   Weapon lane: Enflamed and the Weapon Damage lines on any worn piece
 --   (one pool since 2026-11-02; they used to belong to the hitting weapon).
 --   Arcane lane: Frostburst and the Arcane Damage lines while equipped.
+--   Armor enchantments (2026-11-13): Weapon Mastery joins the weapon
+--   lane, Arcane Mastery the arcane lane (ArmorEnchantmentService).
 -- A spell Sword of the Epicredness made Weapon Damage is neither weapon's
 -- hit; a shot Orinthian made Arcane reads as a spell here (isMagic already
 -- flipped). Returns BONUS damage, like the modules.
@@ -1594,9 +1597,11 @@ function DamageService._gearDamageBonus(
 	if isMagic then
 		fraction += PlayerStatsService:GetEnchantmentStat(player, "ArcaneDamage")
 		fraction += PlayerStatsService:GetGearStat(player, "ArcaneDamage")
+		fraction += ArmorEnchantmentService:GetDamageBonus(player, true)
 	elseif not isConvertedSpell then
 		fraction += PlayerStatsService:GetEnchantmentStat(player, "WeaponDamage")
 		fraction += PlayerStatsService:GetGearStat(player, "WeaponDamage")
+		fraction += ArmorEnchantmentService:GetDamageBonus(player, false)
 		-- A race's melee / ranged weapon bonus (RaceData: Dwarf, Elf).
 		fraction += PlayerStatsService:GetGearStat(player, if isMelee then "MeleeDamage" else "RangedDamage")
 	end
@@ -1782,15 +1787,9 @@ function DamageService.TakeDamage(
 				else self._onDamageModules["RangedRelics"](player, snapshot, damage, isGunShot, statuses)
 		)
 
-	-- Weapon Mastery set bonus (all 3 Ruinseeker pieces): +10% weapon
-	-- damage, additive with the relic sum. Typed — skipped on the
-	-- untyped lane.
-	if not untypedOnly then
-		totalDamage += ArmorSetBonusService:GetWeaponDamageAmplifier(player, damage, isMagic)
-	end
-
-	-- Gear: the weapon enchantments (Enflamed / Frostburst) and the damage
-	-- lines, additive like the set bonus and typed the same way.
+	-- Gear: the weapon enchantments (Enflamed / Frostburst), the Weapon /
+	-- Arcane Mastery armor enchantments and the damage lines, additive
+	-- with the relic sum. Typed: skipped on the untyped lane.
 	if not untypedOnly then
 		totalDamage += self:_gearDamageBonus(player, damage, isMagic == true, isConvertedSpell == true, isMelee == true)
 		totalDamage += self:_bossDamageBonus(player, damage, targetModel)

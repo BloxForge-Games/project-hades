@@ -21,7 +21,6 @@ local InterfaceManagerController =
 local React = require(ReplicatedStorage.Submodules.Core.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Submodules.Core.Packages["React-Roblox"])
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
-local RelicCapData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicCapData)
 local RelicData = require(ReplicatedStorage.Submodules.Core.Shared.Data.RelicData)
 local InterfaceScopes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.InterfaceScopes)
 
@@ -111,7 +110,6 @@ function RelicTrayPreviewInterface.Start(_self: typeof(RelicTrayPreviewInterface
 		Container = React.createElement(Container, {
 			Visible = true,
 			relicData = relics,
-			relicSlots = RelicCapData.MaxSlots,
 			toggleY = TOGGLE_Y,
 			setVisibleSignal = setVisible,
 			toggleVisibleSignal = toggleVisible,

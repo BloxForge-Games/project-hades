@@ -52,6 +52,18 @@ local RelicController = require(ReplicatedStorage.Controllers.RelicController)
 local RelicInterfaceController = require(ReplicatedStorage.Interfaces.RelicInterfaceController)
 local DungeonNetwork = require(ReplicatedStorage.Submodules.Core.Source.Network.Dungeon)
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
+local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
+local WheelOfFortuneData = require(ReplicatedStorage.Submodules.Core.Shared.Data.WheelOfFortuneData)
+
+-- The Wheel of Fortune's cutscene (SpinWheel): the camera's glide onto
+-- the wheel and back to the clown (seconds, and the focus zoom on each:
+-- the clown's matches the dialogue's own 0.78), and how long the clown's call
+-- of the result holds before the conversation closes (the prize lands
+-- half a second into it, server-side).
+local WHEEL_CAMERA_SECONDS = 0.9
+local WHEEL_CAMERA_ZOOM = 0.85
+local CLOWN_CAMERA_ZOOM = 0.78
+local WHEEL_RESULT_HOLD = 1.8
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local GreaterShrineData = require(ReplicatedStorage.Submodules.Core.Shared.Data.GreaterShrineData)
 local UserNotificationSystem = require(ReplicatedStorage.Submodules.Core.Libraries.UserNotificationSystem).Controller
@@ -95,6 +107,10 @@ local EventController = {
 	-- normally refuses the conversation before any pull) | nil (no pull
 	-- yet this conversation).
 	LastSwordResult = nil :: string?,
+	-- The Wheel clown's graph (WheelClown): "spin" / "leave", and the
+	-- landed slice id ("Refused" when the server refused the spin).
+	WheelChoice = nil :: string?,
+	WheelResult = nil :: string?,
 	-- true once this conversation accepted the shrine's bargain — gates
 	-- the leave-path twin of the "Bargain is struck" node.
 	ShrineAccepted = false,
@@ -600,6 +616,101 @@ function EventController.EndSellFlowFromDialogue(self: typeof(EventController))
 	end
 end
 
+-- The Wheel of Fortune clown's "Spin the wheel!" (2026-11-13), a CUTSCENE
+-- beat run from his spin node's PreAction: asks the server to spin
+-- (WheelOfFortuneService judges it). Refused (one spin each): the node is
+-- passed at once and his "had your spin" line plays. Accepted: the bars
+-- come up (no zoom, 2026-11-13) and hold the player while it turns;
+-- when it lands WheelResult is set and the conversation advances to his
+-- call of the slice (the prize lands from the server WHEEL_PRIZE_DELAY
+-- later); WHEEL_RESULT_HOLD after that the conversation closes, which
+-- ends the cutscene (EndEventCutscene).
+function EventController.SpinWheel(self: typeof(EventController))
+	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
+	if not model then
+		return
+	end
+	local ok, status = pcall(function()
+		return DungeonNetwork.SpinWheel.Invoke(model)
+	end)
+	local wheel = model.Parent
+	if not ok or status ~= "ok" or not wheel or not wheel:IsA("Model") then
+		self.WheelResult = "Refused"
+		task.delay(0.1, function()
+			if DialogueBillboardInterface then
+				DialogueBillboardInterface:OnAdvanceRequested(true)
+			end
+		end)
+		return
+	end
+	self:BeginEventCutscene()
+	-- The isometric camera glides onto the wheel while it turns, and back
+	-- to the clown (the dialogue's own framing) once it lands.
+	local face = wheel:FindFirstChild("WheelFace")
+	local isoCamera = Blitz.OptionalController("IsometricCameraController")
+	if isoCamera and face and face:IsA("BasePart") then
+		isoCamera:FocusOnPart(face, WHEEL_CAMERA_SECONDS, WHEEL_CAMERA_ZOOM)
+	end
+	local startedAt = wheel:GetAttribute("SpinStartedAt")
+	local sliceIndex = wheel:GetAttribute("SpinSlice")
+	local slice = if typeof(sliceIndex) == "number" then WheelOfFortuneData.Slices[sliceIndex] else nil
+	local remaining = WheelOfFortuneData.SpinSeconds
+	if typeof(startedAt) == "number" then
+		remaining = math.max(0, WheelOfFortuneData.SpinSeconds - (workspace:GetServerTimeNow() - startedAt))
+	end
+	task.delay(remaining, function()
+		local clownPart = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+		if isoCamera and clownPart and clownPart:IsA("BasePart") then
+			isoCamera:FocusOnPart(clownPart, WHEEL_CAMERA_SECONDS, CLOWN_CAMERA_ZOOM)
+		end
+		self.WheelResult = if slice then slice.id else nil
+		if DialogueBillboardInterface then
+			DialogueBillboardInterface:OnAdvanceRequested(true)
+		end
+		task.delay(WHEEL_RESULT_HOLD, function()
+			if DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel() == model then
+				DialogueBillboardInterface:OnAdvanceRequested(true)
+			end
+		end)
+	end)
+end
+
+-- Whether this player already spun the wheel the clown being talked to
+-- stands in (WheelOfFortuneService sets Spun_<UserId> on the wheel).
+function EventController.HasSpunWheel(_self: typeof(EventController)): boolean
+	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
+	local wheel = model and model.Parent
+	return wheel ~= nil and wheel:GetAttribute("Spun_" .. Players.LocalPlayer.UserId) == true
+end
+
+-- The Memory Shrine's "Begin the trial" (2026-11-13): opens this
+-- player's board once the conversation has closed (MemoryShrineController).
+function EventController.StartMemoryShrine(_self: typeof(EventController))
+	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
+	if not model then
+		return
+	end
+	task.delay(0.3, function()
+		local board = Blitz.OptionalController("MemoryShrineController")
+		if board then
+			board:Open(model)
+		end
+	end)
+end
+
+-- An event NPC's plain way out (the clown's "Not today", 2026-11-13):
+-- counts this player toward the event door's early open.
+function EventController.LeaveEvent(_self: typeof(EventController))
+	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
+	if model then
+		task.spawn(function()
+			pcall(function()
+				DungeonNetwork.MarkEventInteracted.Fire(model)
+			end)
+		end)
+	end
+end
+
 -- Merchant's "I'm ready to continue": counts this player toward the
 -- event door's early-open. Called from the graph's PostAction, which
 -- runs BEFORE the close — the active model is still resolvable.
@@ -802,15 +913,23 @@ function EventController.Start(self: typeof(EventController))
 		-- "I'm ready to continue" option marks readiness.
 		local graph = model and model:GetAttribute("DialogueGraph")
 
-		-- The Greater Shrine sits in the Start chunk, which has no event
-		-- door, so it never marks a room interacted. Once a blessing was
-		-- taken (or the statue was already spent) this client's prompt goes
+		-- The Greater Shrine is an event room (2026-11-13): any finished
+		-- conversation counts this player toward its door's early open. Once
+		-- a blessing was taken (or the statue was already spent) this client's
+		-- prompt goes
 		-- dark and the statue dims -- HERE, when the conversation has fully
 		-- ended, not at the choice, so the statue stays lit through its own
 		-- farewell. A walk-away can come back and choose later.
 		--
 		-- A choice THIS conversation also drops this player's Healing Orbs
 		-- now, with the conversation over. Server-gated, once.
+		if graph == "GreaterShrine" and model then
+			task.spawn(function()
+				pcall(function()
+					DungeonNetwork.MarkEventInteracted.Fire(model)
+				end)
+			end)
+		end
 		if graph == "GreaterShrine" and model and (greaterShrineChoice ~= nil or greaterShrineSpent) then
 			for _, descendant in model:GetDescendants() do
 				if descendant:IsA("ProximityPrompt") then

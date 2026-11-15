@@ -32,6 +32,11 @@
 	  * EVENT CHEST  the Coffin's: its Gem row plus half a Boss chest's
 	          Coins for the tier and floor (EVENT_CHEST_COIN_SHARE_OF_BOSS),
 	          an unbalanced bonus by design.
+	  * ENCHANTMENT SCROLL  (2026-11-14) each chest rolls ONE scroll for its
+	          owner at its tier's chance (EnchantmentScrollData
+	          .ChanceByEnemyType: Boss always, Miniboss 35%, the Coffin's
+	          25%), dropped by EnchantmentScrollService. Gear itself never
+	          drops enchanted any more.
 
 	PER PLAYER, OWNER-LOCKED: a chest carries its owner's UserId and only
 	that player can open it, so nobody can take a teammate's reward. This
@@ -51,6 +56,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DungeonService = require(ServerScriptService.Services.DungeonService)
 local DropService = require(ServerScriptService.Services.DropService)
 local GearDropService = require(ServerScriptService.Services.GearDropService)
+local EnchantmentScrollService = require(ServerScriptService.Services.EnchantmentScrollService)
 local RelicMachineService = require(ServerScriptService.Services.RelicMachineService)
 local TagList = require(ReplicatedStorage.Submodules.Core.Shared.Enums.TagList)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
@@ -152,7 +158,13 @@ type ChestBatch = {
 
 local EncounterChestService = {
 	Name = "EncounterChestService",
-	Dependencies = { DungeonService, DropService, GearDropService, RelicMachineService } :: { any },
+	Dependencies = {
+		DungeonService,
+		DropService,
+		GearDropService,
+		EnchantmentScrollService,
+		RelicMachineService,
+	} :: { any },
 	_batchByChest = {} :: { [Model]: ChestBatch },
 	_activeBatch = nil :: ChestBatch?,
 }
@@ -438,6 +450,11 @@ function EncounterChestService._openChest(self: typeof(EncounterChestService), c
 		-- `true`: chest gear pops out with the same blip its coins use.
 		GearDropService:DropGear(player, origin.Position, enemyType, true)
 	end
+
+	-- ENCHANTMENT SCROLL: this player's own roll at the chest tier's
+	-- chance (EnchantmentScrollData.ChanceByEnemyType; a tier with no row
+	-- pays none).
+	EnchantmentScrollService:RollChestScroll(player, origin.Position, enemyType)
 
 	-- CURRENCY (design call, 2026-10). An ENCOUNTER chest pays its share
 	-- of the tier's permanent take -- Coins and Arcane Crystals, run totals

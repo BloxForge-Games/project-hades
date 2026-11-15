@@ -8,7 +8,7 @@ local RunEscrowService = require(ServerScriptService.Services.RunEscrowService)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local RelicService = require(ServerScriptService.Services.RelicService)
 local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
-local ArmorSetBonusService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorSetBonusService)
+local ArmorEnchantmentService = require(ServerScriptService.Submodules.Core.Source.Services.ArmorEnchantmentService)
 local DataService = require(ServerScriptService.Submodules.Core.Source.Services.DataService)
 local PlayerStatsService = require(ServerScriptService.Submodules.Core.Source.Services.PlayerStatsService)
 local Signal = require(ReplicatedStorage.Submodules.Core.Shared.Types.Signal)
@@ -187,7 +187,7 @@ local DropService = {
 		ArcaneService,
 		RunEscrowService,
 		RelicService,
-		ArmorSetBonusService,
+		ArmorEnchantmentService,
 		DataService,
 		PlayerStatsService,
 	} :: { any },
@@ -494,7 +494,7 @@ function DropService.Start(self: typeof(DropService))
 			-- already scaled to `mobCoins` at spawn). Bonuses:
 			--   * Pot Of Gold (+25% Coins and Gems, getRelicCoinBonus).
 			--   * Dragon Lantern (x3 Coins and Gems, taxed on hit).
-			--   * Explorer set bonus (all 3 Adventurers pieces): x1.10.
+			--   * Explorer armor enchantments: +3 / 5 / 7% per worn piece.
 			--   * The dungeon's rewardScale (DungeonService.GetRewardScale:
 			--     +50% per dungeon tier; the difficulty's take is already in
 			--     the chest row).
@@ -505,7 +505,7 @@ function DropService.Start(self: typeof(DropService))
 				value
 					* (1 + getRelicCoinBonus(player))
 					* getDragonLanternMultiplier(player)
-					* ArmorSetBonusService:GetCoinMultiplier(player)
+					* ArmorEnchantmentService:GetCoinMultiplier(player)
 					* (1 + PlayerStatsService:GetGearStat(player, "Fortune"))
 					* difficultyMultiplier("gold")
 			)
@@ -519,7 +519,7 @@ function DropService.Start(self: typeof(DropService))
 			-- Escrowed like coins: banked to the profile on clear
 			-- (RunEscrowService.BankAll), half kept on death. Chests and
 			-- veins; the dungeon's rewardScale, plus the race-only Crystal
-			-- Find (Moglin's Scavenger, 2026-11-09) -- no relic or set bonus
+			-- Find (Moglin's Scavenger, 2026-11-09) -- no relic or armor enchantment
 			-- touches it, it is the spell currency (Arcane Chests) rather
 			-- than an economy stat.
 			local crystalFind = 1 + PlayerStatsService:GetGearStat(player, "CrystalFind")

@@ -41,7 +41,7 @@ local WAYPOINT_OFFSETS: { [number]: Vector3 } = {
 local SOUND_CUES: { { name: string, id: number, at: number, volume: number, endVolume: number?, fadeAfter: number?, fadeSeconds: number? } } =
 	{
 		{ name = "Cue 1", id = 74475345511331, at = 0.15, volume = 0.6 },
-		-- The "cut you down" line: 0.45, down to 0.3 from 2.75 s into it over
+		-- The "cut you down" line: 0.45, down to 0.25 from 2.65 s into it over
 		-- 1.2 s (2026-11-11; a flat 0.6, then 0.35). Its voice runs ~1-5 s of
 		-- the 6 s clip, loudest 3.6-4.7 s (measured): a fade to the clip's end
 		-- landed in the quiet tail and was barely heard.
@@ -50,8 +50,8 @@ local SOUND_CUES: { { name: string, id: number, at: number, volume: number, endV
 			id = 130723176825812,
 			at = 1,
 			volume = 0.45,
-			endVolume = 0.3,
-			fadeAfter = 2.75,
+			endVolume = 0.25,
+			fadeAfter = 2.65,
 			fadeSeconds = 1.2,
 		},
 		{ name = "Cue 4 (eye, 0.05 s before waypoint 5 starts)", id = 88674994331303, at = 4.7, volume = 3 },

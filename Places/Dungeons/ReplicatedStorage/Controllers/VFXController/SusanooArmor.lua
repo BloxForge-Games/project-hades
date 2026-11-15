@@ -6,6 +6,8 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local CutsceneController = require(ReplicatedStorage.Controllers.CutsceneController)
+local MangaPanels = require(ReplicatedStorage.Controllers.CutsceneController.MangaPanels)
+local CasterSubtitles = require(ReplicatedStorage.Controllers.CutsceneController.CasterSubtitles)
 local ArcaneAmbienceController = require(ReplicatedStorage.Controllers.ArcaneAmbienceController)
 
 -- The screen tint is CLAIMED through ArcaneAmbienceController, not written
@@ -104,8 +106,14 @@ local SPAWN_VFX_FALLBACK_SECONDS = (ArcaneData[ArcaneNames["Susanoo Armor"]].app
 local TORSO_PARTICLES_FOLDER = "TorsoParticles"
 local WAYPOINT_3_AT = 1.75
 local GROUND_PARTICLES_AT = WAYPOINT_3_AT + 1
-local SUSANOO_PARTICLE_AT = WAYPOINT_3_AT + 1
+-- The purple aura starts with the cast (2026-11-12; with GroundParticles,
+-- 1 s into waypoint 3, before).
+local SUSANOO_PARTICLE_AT = 0
 local TORSO_PARTICLES_FADE_IN_SECONDS = 0.5
+-- The purple aura (SusanooParticle, with its Wind and StrongWind) fades in
+-- slower, from the cast (2026-11-12: over 0.5 s it popped in).
+local SUSANOO_PARTICLE_NAME = "SusanooParticle"
+local SUSANOO_PARTICLE_FADE_IN_SECONDS = 1.6
 local TORSO_PARTICLES_FADE_OUT_SECONDS = 0.6
 -- GroundParticles sits this far above the floor under the caster, found
 -- by a ray (2026-11-11: its authored 3.18 studs under the torso came out
@@ -201,6 +209,9 @@ local function playTorsoParticles(player: Player, character: Model, name: string
 			end
 		end
 		local elapsed = startAt
+		local fadeInSeconds = if name == SUSANOO_PARTICLE_NAME
+			then SUSANOO_PARTICLE_FADE_IN_SECONDS
+			else TORSO_PARTICLES_FADE_IN_SECONDS
 		local fadeOutEnd = stopAt + TORSO_PARTICLES_FADE_OUT_SECONDS
 		local driver: RBXScriptConnection
 		driver = RunService.Heartbeat:Connect(function(dt: number)
@@ -224,7 +235,7 @@ local function playTorsoParticles(player: Player, character: Model, name: string
 				GameClock.Debris(copy, longestLife + 0.1)
 				return
 			end
-			local fadeIn = math.clamp((elapsed - startAt) / TORSO_PARTICLES_FADE_IN_SECONDS, 0, 1)
+			local fadeIn = math.clamp((elapsed - startAt) / fadeInSeconds, 0, 1)
 			local fadeOut = 1 - math.clamp((elapsed - stopAt) / TORSO_PARTICLES_FADE_OUT_SECONDS, 0, 1)
 			local strength = math.min(fadeIn, fadeOut)
 			local eased = strength * strength * (3 - 2 * strength)
@@ -359,6 +370,13 @@ return function(player: Player, preload: boolean?)
 	-- Claimed, so only THIS cast's restore below can undo it (see claimWalkSpeed).
 	local walkSpeedClaim = claimWalkSpeed(character, 0)
 
+	-- The manga panels beside the caster, for everyone else (MangaPanels);
+	-- the caster reads the lines as minimal subtitles (CasterSubtitles).
+	MangaPanels.play(character, ArcaneNames["Susanoo Armor"])
+	if player == Players.LocalPlayer then
+		CasterSubtitles.play(ArcaneNames["Susanoo Armor"])
+	end
+
 	-- No character animation since 2026-11-09 (SusanooArmorAnimation at 0.3x
 	-- before; a replacement is coming). ArcaneData keeps castAnimation set:
 	-- arcaneIndex.isCastable needs it. No cast line or voice line either:
@@ -369,7 +387,7 @@ return function(player: Player, preload: boolean?)
 		local armorData = ArcaneData[ArcaneNames["Susanoo Armor"]]
 		local riseAt = armorData.appearSeconds or 0.5
 		playTorsoParticles(player, character, GROUND_PARTICLES_NAME, GROUND_PARTICLES_AT, riseAt)
-		playTorsoParticles(player, character, "SusanooParticle", SUSANOO_PARTICLE_AT, armorData.lifetime)
+		playTorsoParticles(player, character, SUSANOO_PARTICLE_NAME, SUSANOO_PARTICLE_AT, armorData.lifetime)
 
 		-- Spawn burst, on the CastPart's own frame (see SPAWN_VFX_PATH).
 		local ignoreInstances = workspace:FindFirstChild("IgnoreInstances")

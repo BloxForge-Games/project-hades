@@ -98,6 +98,8 @@ type Anchor = { part: BasePart, offset: CFrame }
 local BLADE_FRACTION = 0.55
 local BLADE_FRACTION_BY_WEAPON: { [string]: number } = {
 	["Stormforge Breaker"] = 0.85,
+	["Runeforge Greataxe"] = 0.85,
+	["Gutrender Edge"] = 0.85,
 }
 
 -- The grip point on a melee Handle, in the Handle's space: its

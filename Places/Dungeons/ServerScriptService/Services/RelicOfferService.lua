@@ -16,11 +16,12 @@
 	  * The client answers with RelicOfferChosen (a name, or nil = Skip);
 	    every answer is validated here exactly as the old pickup was:
 	    the offer must be theirs and open, the relic must be in the hand,
-	    a dead player takes nothing, and the relic cap refuses a pick
-	    (RelicService.CanAcceptRelic) WITHOUT closing the offer.
+	    and a dead player takes nothing (the hand stays open for a
+	    revive). There is no relic cap (2026-11-12).
 	  * OFFER_SECONDS after the deal the server auto-picks a random
-	    acceptable relic from the hand -- or Skips when none is (the cap,
-	    a dead player) -- so a walked-away offer can never hold the gate.
+	    acceptable relic from the hand -- or Skips when none is (a dead
+	    player, or every card already owned) -- so a walked-away offer can
+	    never hold the gate.
 	  * Taking a relic grants it (RelicService.AddRelicsRegistry) and
 	    Skipping fires RelicService.MarkRelicChoiceMade, so everything
 	    keyed off "this player chose" (chiefly GateService's early open)
@@ -56,12 +57,10 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 -- How long a dealt hand stays open before the server picks for the
 -- player. Counted from the DEAL, not from when the cards are on screen:
 -- hiding the cards does not pause it.
-local OFFER_SECONDS = 30
+local OFFER_SECONDS = 15
 -- How long after a hand is dealt its relics are marked seen (see _deal).
 local SEEN_AFTER_DEAL_SECONDS = 1
 
--- The relic-cap refusal, the same red the old floor pickup used.
-local RELIC_CAP_COLOR = Color3.fromRGB(250, 70, 70)
 local PICKUP_TEXT_COLOR = Color3.fromRGB(255, 255, 255)
 
 --[ Types ]--
@@ -98,23 +97,6 @@ local RelicOfferService = {
 
 --[ Private ]--
 
--- The relic-cap refusal (indicator + Error sting), the recipe the floor
--- pickup used, so a refused card feels like a refused relic did.
-function RelicOfferService._refuseAtCap(_self: typeof(RelicOfferService), player: Player)
-	local character = player.Character
-	local indicatorPart = character
-		and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")) :: BasePart?
-	if indicatorPart then
-		TextIndicatorService:ShowIndicator(
-			player,
-			indicatorPart,
-			string.format("Reached Maximum Relics! (%d)", RelicService:GetRelicSlots(player)),
-			RELIC_CAP_COLOR,
-			true
-		)
-	end
-end
-
 function RelicOfferService._showPickupText(_self: typeof(RelicOfferService), player: Player, text: string)
 	local character = player.Character
 	local indicatorPart = character
@@ -129,7 +111,9 @@ end
 function RelicOfferService._deal(self: typeof(RelicOfferService), offer: Offer)
 	local player = offer.player
 	offer.expiresAt = workspace:GetServerTimeNow() + OFFER_SECONDS
-	offer.canSkip = RelicService:IsAtRelicCap(player)
+	-- No relic cap, so no hand needs the Skip card (it was the capped
+	-- player's way out, 2026-11-12).
+	offer.canSkip = false
 	self._pending[player.UserId] = offer
 
 	RelicNetwork.RelicOffered.Fire(player, {
@@ -174,7 +158,7 @@ function RelicOfferService._autoPick(self: typeof(RelicOfferService), offer: Off
 	local acceptable = {}
 	if not LifeService:IsDeathState(player) then
 		for _, relicName in offer.relics do
-			if RelicService:CanAcceptRelic(player, relicName) then
+			if RelicService:GetSpecificRelicRegistry(player, relicName) == 0 then
 				table.insert(acceptable, relicName)
 			end
 		end
@@ -253,9 +237,7 @@ function RelicOfferService._onChosen(
 
 	local relicName = payload.RelicName
 	if relicName == nil then
-		-- Skip is ALWAYS allowed: it grants nothing, so the cap cannot be
-		-- exceeded by it -- and a capped player needs a way to clear the
-		-- hand and open the gate.
+		-- Skip grants nothing; the hand closes and the gate proceeds.
 		self:_resolve(offer, nil, "Skipped")
 		return
 	end
@@ -267,14 +249,6 @@ function RelicOfferService._onChosen(
 	-- A dead player collects nothing; the hand stays open (their revive
 	-- may land before the deadline).
 	if LifeService:IsDeathState(player) then
-		RelicNetwork.RelicOfferResolved.Fire(player, { OfferId = offer.id, RelicName = nil, Outcome = "Refused" })
-		return
-	end
-
-	-- Relic cap: refuse WITHOUT closing the hand, so a capped player can
-	-- still Skip (or open a slot and come back before the deadline).
-	if not RelicService:CanAcceptRelic(player, relicName) then
-		self:_refuseAtCap(player)
 		RelicNetwork.RelicOfferResolved.Fire(player, { OfferId = offer.id, RelicName = nil, Outcome = "Refused" })
 		return
 	end

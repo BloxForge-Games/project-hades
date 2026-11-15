@@ -23,10 +23,13 @@
 	                            camera, yaw / pitch / roll in degrees): the
 	                            deal-in flight and spin, the taken fly-in,
 	                            the dismissed flip and drop.
-	  handle.setHover(on)       the selected look: the part moves toward the
-	                            camera and tilts toward the cursor, the
-	                            SelectionUIStroke lights, and the keyword
-	                            tooltips slide out past the card's right edge.
+	  handle.setHover(on)       the selected look: the card grows in place
+	                            (the part comes toward the camera along
+	                            the ray through its face centre) and tilts
+	                            toward the cursor, the SelectionUIStroke
+	                            lights, the hover glow fades in (prop
+	                            hoverGlow) and the keyword tooltips slide
+	                            out past the card's right edge.
 	  handle.setDim(on)         a black veil over the card (the unfocused
 	                            look while another card is hovered).
 	  handle.brightenStroke()   the chosen card's stroke goes fully opaque.
@@ -195,11 +198,11 @@ local ICON_GRADIENT_TRANSPARENCY = NumberSequence.new({
 	NumberSequenceKeypoint.new(1, 1),
 })
 
--- Hover: the part comes this far toward the camera (studs; the stage
--- rests STAGE_DISTANCE out) and the stroke lights. The tilt toward the
--- cursor is the stage's (CardStage.setTilt).
-local HOVER_DEPTH = 0.45
-local HOVER_TWEEN = TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- Hover: the card grows IN PLACE and the stroke lights. The lift is the
+-- stage's, shared with the Memory Shrine's board (CardStage.HOVER_LIFT
+-- studs toward the camera on CardStage.HOVER_TWEEN, along the ray
+-- through the face centre: CardStage.liftedPose), and so is the tilt
+-- toward the cursor (CardStage.setTilt).
 -- The veil and the chosen stroke ease on a gentler curve than the lift.
 local DIM_TWEEN = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
 local STROKE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
@@ -416,6 +419,22 @@ local BACK_TILE_TRANSPARENCY = 0.82
 local BACK_TILE_LABEL = 2.6
 local BACK_TILE_SIZE = UDim2.fromScale(0.09, 0.09)
 
+-- The HOVER GLOW: a soft light shadow around the card, faded in while
+-- the card is hovered. One look in two places:
+--   * on the card BACK (prop backGlow, the Memory Shrine's board, whose
+--     hovered cards are face down), asked for with handle.setBackGlow;
+--   * on the FRONT (prop hoverGlow, the relic offer's hand), under the
+--     card group, driven by handle.setHover and faded with the card's
+--     own alpha so it leaves with a chosen card's fly-out.
+local HOVER_GLOW_COLOR = Color3.fromRGB(235, 215, 255)
+local HOVER_GLOW_BLUR = UDim.new(0, 28)
+local HOVER_GLOW_SPREAD = UDim2.fromOffset(4, 4)
+local HOVER_GLOW_TRANSPARENCY = 0.35
+local HOVER_GLOW_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+-- The front glow sits under the Legendary halo (-1), the back embers (0)
+-- and the card group (1).
+local HOVER_GLOW_ZINDEX = -2
+
 -- The keyword name is drawn in the same blue the card writes it in, so a
 -- player maps the plate to the word that opened it.
 local KEYWORD_TITLE_COLOR = string.format(
@@ -482,31 +501,56 @@ local localPlayer = Players.LocalPlayer
 --   isPhone        true on a phone: fixed title / description sizes
 --   tilt           true to lean the card toward the cursor while hovered
 --                  (off on touch, where there is no cursor)
---   onRegister     (relicName, handle | nil)
---   onHover        (relicName, on: boolean)
---   onActivated    (relicName)
+--   onRegister     (cardKey, handle | nil)
+--   onHover        (cardKey, on: boolean)
+--   onActivated    (cardKey)
+--
+-- Optional (the Memory Shrine's board, 2026-11-13; the relic offer passes
+-- none of these and draws exactly as before):
+--   cardKey        the card's key for the callbacks and its part's name
+--                  (default relicName): two cards of the same relic need
+--                  two keys
+--   face           a card that is NOT a relic: { title, description
+--                  (rich text), icon, rarity (the palette row the card
+--                  wears), pill (the pill's text) }. relicName is ignored.
+--   backTint       a uniform card back: the neutral frame art in this tint
+--                  on the back and the cover, whatever the card's tier (a
+--                  face-down card must not give its tier away)
+--   bobIndex       the idle bob's phase slot (default index)
+--   backGlow       true: the card back carries the hover glow
+--                  (handle.setBackGlow)
+--
+-- Optional (the relic offer's hand):
+--   hoverGlow      true: the card front carries the hover glow, on while
+--                  the card is hovered (handle.setHover)
 local function OfferCard(props: any)
-	local relicName: string = props.relicName
+	local face = props.face
+	local relicName: string = if face then face.title else props.relicName
+	local cardKey: string = props.cardKey or relicName
 	local index: number = props.index or 1
 	local count: number = props.count or 1
+	local bobIndex: number = props.bobIndex or index
 	local isPhone: boolean = props.isPhone == true
 	local tiltEnabled: boolean = props.tilt == true
-	local relicInfo = RelicData[relicName]
-	local rarity: string = relicInfo and relicInfo.rarity or ItemRarity.Common
+	local relicInfo = if face then nil else RelicData[relicName]
+	local rarity: string = if face then face.rarity else relicInfo and relicInfo.rarity or ItemRarity.Common
 	local colors = RarityColors:GetCard(rarity)
-	local iconImage = relicInfo and relicInfo.icon or DEFAULT_ICON
+	local iconImage = if face then face.icon else relicInfo and relicInfo.icon or DEFAULT_ICON
 	-- RelicData.iconScale: thin art drawn larger (default 1).
 	local iconScale: number = relicInfo and relicInfo.icon and relicInfo.iconScale or 1
 	local cardImage = relicInfo and CARD_IMAGES[relicInfo.tree] or DEFAULT_CARD_IMAGE
 	-- One colour for the whole card -- frame tint, strokes, ring, embers --
 	-- and it is the TIER's (Cursed is authored pure red in the palette).
 	local cardTint = colors.tint
-	local isLegendary = rarity == ItemRarity.Legendary
+	-- The back's art and tint (see backTint).
+	local backTint: Color3? = props.backTint
+	local backImage = if backTint then DEFAULT_CARD_IMAGE else cardImage
+	local isLegendary = rarity == ItemRarity.Legendary and face == nil
 
 	-- The stage part and its guis, rented for this card's life. A lazy
 	-- initialiser, so the part exists for the first render's portal.
 	local card: CardStage.Card = React.useState(function()
-		return CardStage.create(relicName, index, count)
+		return CardStage.create(cardKey, index, count)
 	end)
 	local tooltipRef = React.useRef(nil)
 	local descriptionRef = React.useRef(nil)
@@ -526,14 +570,17 @@ local function OfferCard(props: any)
 	local embersFrontRef = React.useRef(nil)
 	local haloShadowRef = React.useRef(nil)
 	local gleamRef = React.useRef(nil)
+	local backGlowRef = React.useRef(nil)
+	local hoverGlowRef = React.useRef(nil)
 
-	local description = getRelicDescription(localPlayer, relicName) or ""
+	local description = if face then face.description else getRelicDescription(localPlayer, relicName) or ""
 	-- The card's hoverable keywords, read off the DESCRIPTION so the
 	-- runtime-callback relics (Super Stomp Boots and friends) are covered
 	-- too. Max 2 on any card today, but nothing here assumes a count.
 	local keywords = getRelicKeywords(description)
 	local twoLineTitle = #relicName > TITLE_ONE_LINE_MAX_LENGTH
-	local pillWidth = PILL_WIDTHS[rarity] or (PILL_WIDTH_BASE + PILL_WIDTH_PER_CHARACTER * #rarity)
+	local pillText: string = if face then face.pill else rarity
+	local pillWidth = (not face and PILL_WIDTHS[rarity]) or (PILL_WIDTH_BASE + PILL_WIDTH_PER_CHARACTER * #pillText)
 
 	-- The part follows its slot in the hand, and is destroyed with the card.
 	React.useEffect(function()
@@ -622,6 +669,19 @@ local function OfferCard(props: any)
 			settle:Play()
 		end
 
+		-- The front hover glow (prop hoverGlow; a no-op without it): how
+		-- far in it is (0 off, 1 on), under the card's own alpha so a
+		-- hovered card that fades (the chosen card's fly-out) takes its
+		-- glow with it.
+		local hoverGlow = Instance.new("NumberValue")
+		hoverGlow.Value = 0
+		local function applyHoverGlow()
+			local glow = hoverGlowRef.current
+			if glow then
+				glow.Transparency = 1 - (1 - HOVER_GLOW_TRANSPARENCY) * hoverGlow.Value * (1 - alpha.Value)
+			end
+		end
+
 		local function applyAlpha(a: number)
 			group.GroupTransparency = a
 			local shadow = shadowRef.current
@@ -640,9 +700,11 @@ local function OfferCard(props: any)
 				end
 			end
 			applyEmberAlpha()
+			applyHoverGlow()
 		end
 		applyAlpha(1)
 		local alphaConnection = alpha.Changed:Connect(applyAlpha)
+		local hoverGlowConnection = hoverGlow.Changed:Connect(applyHoverGlow)
 		local embersDimConnection = embersDim.Changed:Connect(applyEmberAlpha)
 
 		local function setScale(scale: number)
@@ -768,10 +830,12 @@ local function OfferCard(props: any)
 			end
 			local stroke = strokeRef.current
 			-- The part comes toward the camera (which also sorts its gui,
-			-- tooltip column included, in front of the neighbour's) and
-			-- leans toward the cursor.
-			card:tweenPose({ depth = if on then HOVER_DEPTH else 0 }, HOVER_TWEEN)
+			-- tooltip column included, in front of the neighbour's) along
+			-- the ray through its face centre, so the card grows where it
+			-- stands, and leans toward the cursor.
+			card:tweenPose(card:liftedPose(0, 0, if on then CardStage.HOVER_LIFT else 0), CardStage.HOVER_TWEEN)
 			card:setTilt(on and tiltEnabled)
+			TweenService:Create(hoverGlow, HOVER_GLOW_TWEEN, { Value = if on then 1 else 0 }):Play()
 			if stroke then
 				TweenService:Create(stroke, STROKE_TWEEN, {
 					Transparency = if on then LIT_STROKE_TRANSPARENCY else 1,
@@ -927,6 +991,16 @@ local function OfferCard(props: any)
 			fade:Play()
 		end
 
+		-- The back glow in or out (a no-op without the backGlow prop).
+		local function setBackGlow(on: boolean)
+			local glow = backGlowRef.current
+			if glow then
+				TweenService:Create(glow, HOVER_GLOW_TWEEN, {
+					Transparency = if on then HOVER_GLOW_TRANSPARENCY else 1,
+				}):Play()
+			end
+		end
+
 		-- The Legendary reveal as the card lands: one soft chime, one faint
 		-- ring. Exposed on Legendary handles only.
 		local function legendaryReveal()
@@ -1021,7 +1095,7 @@ local function OfferCard(props: any)
 				{ Position = UDim2.fromScale(0, BOB_AMPLITUDE) }
 			)
 			bobTween = created
-			task.delay((index - 1) * BOB_PHASE_PER_CARD, function()
+			task.delay((bobIndex - 1) * BOB_PHASE_PER_CARD, function()
 				if alive then
 					created:Play()
 				end
@@ -1084,7 +1158,7 @@ local function OfferCard(props: any)
 			end
 		end)
 
-		props.onRegister(relicName, {
+		props.onRegister(cardKey, {
 			alpha = alpha,
 			setScale = setScale,
 			tweenScale = tweenScale,
@@ -1104,6 +1178,7 @@ local function OfferCard(props: any)
 			shockwave = shockwave,
 			-- nil on every tier but Legendary (the Container checks it).
 			legendaryReveal = if isLegendary then legendaryReveal else nil,
+			setBackGlow = setBackGlow,
 			wobble = wobble,
 			slotCenter = slotCenter,
 			containsPoint = containsPoint,
@@ -1113,7 +1188,7 @@ local function OfferCard(props: any)
 
 		return function()
 			alive = false
-			props.onRegister(relicName, nil)
+			props.onRegister(cardKey, nil)
 			if revealConnection then
 				revealConnection:Disconnect()
 				revealConnection = nil
@@ -1121,6 +1196,8 @@ local function OfferCard(props: any)
 			unregisterEmberField(embers)
 			embersDimConnection:Disconnect()
 			embersDim:Destroy()
+			hoverGlowConnection:Disconnect()
+			hoverGlow:Destroy()
 			for _, ember in embers do
 				ember.frame:Destroy()
 			end
@@ -1158,8 +1235,8 @@ local function OfferCard(props: any)
 			Art = React.createElement("ImageLabel", {
 				Size = UDim2.fromScale(1, 1),
 				BackgroundTransparency = 1,
-				Image = cardImage,
-				ImageColor3 = cardTint,
+				Image = backImage,
+				ImageColor3 = backTint or cardTint,
 				ScaleType = Enum.ScaleType.Stretch,
 			}, {
 				UICorner = React.createElement("UICorner", {
@@ -1267,7 +1344,7 @@ local function OfferCard(props: any)
 		-- under the deal cover.
 		tooltip = React.createElement("Frame", {
 			ref = tooltipRef,
-			Name = "Tooltip_" .. relicName,
+			Name = "Tooltip_" .. cardKey,
 			AnchorPoint = Vector2.new(0, 0.5),
 			Position = UDim2.fromScale(1 + TOOLTIP_GAP, 0.5),
 			Size = UDim2.fromScale(TOOLTIP_WIDTH, columnHeight),
@@ -1277,12 +1354,45 @@ local function OfferCard(props: any)
 		}, rows)
 	end
 
-	return React.createElement(CardStage.CardSurface, { card = card, back = cardBack(nil) }, {
+	-- The hover glow (see the HOVER GLOW constants): a frame the card's
+	-- art size whose light UIShadow glows past the card's edge. Clear
+	-- until asked for.
+	local function hoverGlowFrame(ref, zIndex: number)
+		return React.createElement("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(ART_INSET, ART_INSET),
+			BackgroundTransparency = 1,
+			ZIndex = zIndex,
+		}, {
+			UICorner = React.createElement("UICorner", {
+				CornerRadius = UDim.new(0.07, 0),
+			}),
+			UIShadow = React.createElement("UIShadow", {
+				ref = ref,
+				Color = HOVER_GLOW_COLOR,
+				BlurRadius = HOVER_GLOW_BLUR,
+				Spread = HOVER_GLOW_SPREAD,
+				Transparency = 1,
+			}),
+		})
+	end
+
+	-- The back, with the hover glow under it when asked for (backGlow).
+	local back = cardBack(nil)
+	if props.backGlow then
+		back = React.createElement(React.Fragment, nil, {
+			Glow = hoverGlowFrame(backGlowRef, COVER_ZINDEX - 1),
+			Card = back,
+		})
+	end
+
+	return React.createElement(CardStage.CardSurface, { card = card, back = back }, {
 		Face = React.createElement("Frame", {
 			-- The card's rectangle in the part's gui (the gui is the whole
 			-- part; the part is sized to the face by the stage, so this
 			-- keeps the 0.68 aspect without a constraint).
-			Name = relicName,
+			Name = cardKey,
 			Position = UDim2.fromScale(
 				CardStage.FACE_LEFT / CardStage.PART_WIDTH,
 				CardStage.FACE_TOP / CardStage.PART_HEIGHT
@@ -1338,6 +1448,10 @@ local function OfferCard(props: any)
 							}),
 						})
 						else nil,
+
+					-- The hover glow on the front (prop hoverGlow), under
+					-- everything else on the face.
+					HoverGlow = if props.hoverGlow then hoverGlowFrame(hoverGlowRef, HOVER_GLOW_ZINDEX) else nil,
 
 					-- The few that pass IN FRONT of the card. Above the card
 					-- and its ring, so they read as nearest to the camera.
@@ -1414,13 +1528,13 @@ local function OfferCard(props: any)
 							AutoButtonColor = false,
 
 							[React.Event.MouseEnter] = function()
-								props.onHover(relicName, true)
+								props.onHover(cardKey, true)
 							end,
 							[React.Event.MouseLeave] = function()
-								props.onHover(relicName, false)
+								props.onHover(cardKey, false)
 							end,
 							[React.Event.Activated] = function()
-								props.onActivated(relicName)
+								props.onActivated(cardKey)
 							end,
 						}, {
 							UICorner = React.createElement("UICorner", {
@@ -1529,7 +1643,7 @@ local function OfferCard(props: any)
 								Size = UDim2.fromScale(pillWidth, 0.0634),
 								BackgroundColor3 = colors.pill,
 								BorderSizePixel = 0,
-								Text = rarity,
+								Text = pillText,
 								TextColor3 = PILL_TEXT_COLOR,
 								TextStrokeColor3 = TEXT_STROKE_COLOR,
 								FontFace = FONT_BOLD,
