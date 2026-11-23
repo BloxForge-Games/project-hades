@@ -110,8 +110,12 @@ local function difficultyDamageMultiplier(): number
 	if not dungeonService then
 		return 1
 	end
-	-- The tier's multiplier x the floor's (DifficultyData's damage growth).
-	return dungeonService:GetDifficultyScale().enemyDamage * dungeonService:GetFloorMultiplier("damage")
+	-- The tier's multiplier x the floor's (DifficultyData's damage growth)
+	-- x a share of the Endurance the players' character stats are worth at
+	-- this tier (DifficultyData.StatPointScale, 2026-11-19).
+	local scale = dungeonService:GetDifficultyScale()
+	local _statHealth, statDamage = DifficultyData.StatPointScale(scale)
+	return scale.enemyDamage * dungeonService:GetFloorMultiplier("damage") * statDamage
 end
 
 -- The attacker's owned relics for ONE hit, from RelicService (re-exported

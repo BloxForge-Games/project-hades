@@ -218,7 +218,18 @@ function LobbyLandingService._runPlayerLanding(self: typeof(LobbyLandingService)
 	local animator = humanoid:FindFirstChildOfClass("Animator")
 	local animationsFolder = ReplicatedStorage.GameAssets:FindFirstChild("Animations")
 	local landAnimation = animationsFolder and animationsFolder:FindFirstChild("LandingAnimation")
-	local landAnimationTrack = animator and landAnimation and animator:LoadAnimation(landAnimation)
+	-- Guarded: a load that throws (the engine has reported a valid id as
+	-- empty on a cold start) must not abort the landing with the Landing
+	-- attribute still set. The landing then runs without the pose.
+	local landAnimationTrack: AnimationTrack? = nil
+	if animator and landAnimation and landAnimation:IsA("Animation") then
+		local loaded, track = pcall(animator.LoadAnimation, animator, landAnimation)
+		if loaded then
+			landAnimationTrack = track
+		else
+			warn("[LobbyLandingService] Landing animation did not load: " .. tostring(track))
+		end
+	end
 
 	-- Top priority so the pose overrides whatever else is on the Animator
 	-- (default idle, the owner's weapon idle) instead of stopping it; the
