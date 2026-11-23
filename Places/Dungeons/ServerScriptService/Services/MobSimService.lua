@@ -120,7 +120,7 @@ local UNSTICK_CHECK_SECONDS = 1
 local DESPAWN_SECONDS = 5
 
 -- Knockback: a pushed mob holds where it lands for this many seconds
--- per stud of push (melee 2 studs = 0.2 s), capped, before it walks on,
+-- per stud of push (melee 3 studs = 0.3 s), capped, before it walks on,
 -- so a chasing mob visibly gives ground instead of walking straight
 -- back through the push. A push the walk checks refuse is tried at
 -- half length once, then dropped.

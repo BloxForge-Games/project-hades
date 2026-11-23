@@ -32,6 +32,9 @@
 	  dependence, so PC and mobile read the same. Phases are randomized per
 	  shake so repeats don't look stamped.
 
+	It also answers the local player's own weapon takedowns with a small
+	jolt (2026-11-19, see Start).
+
 	Off entirely while the Settings window's Camera Shake is off
 	(ClientSettingsController, 2026-11-06): Shake drops every request, and
 	turning it off mid-shake stops the shake at once.
@@ -41,6 +44,7 @@
 
 --[ Roblox Services ]--
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -48,7 +52,9 @@ local RunService = game:GetService("RunService")
 
 local ClientSettingsController = require(ReplicatedStorage.Submodules.Core.Source.Controllers.ClientSettingsController)
 local Combat = require(ReplicatedStorage.Submodules.Core.Source.Network.Combat)
+local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local CameraShakeData = require(ReplicatedStorage.Submodules.Core.Shared.Data.CameraShakeData)
+local CameraShakePresets = require(ReplicatedStorage.Submodules.Core.Shared.Enums.CameraShakePresets)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 
 --[ Types ]--
@@ -195,6 +201,18 @@ function CameraShakeController.Start(self: typeof(CameraShakeController))
 
 	Combat.CameraShake.On(function(preset: string)
 		self:Shake(preset)
+	end)
+
+	-- THE KILL JOLT (2026-11-19): the local player's own weapon takedown
+	-- (Attributes.KillPunch, "<count>|<size>", written by MobDeath).
+	local player = Players.LocalPlayer
+	player:GetAttributeChangedSignal(Attributes.KillPunch):Connect(function()
+		local value = player:GetAttribute(Attributes.KillPunch)
+		if typeof(value) ~= "string" then
+			return
+		end
+		local big = string.match(value, "|Big$") ~= nil
+		self:Shake(if big then CameraShakePresets.KillPunchBig else CameraShakePresets.KillPunch)
 	end)
 end
 

@@ -91,14 +91,19 @@ local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
 -- 2026-10-30: melee 2.5 -> 1.5, arcane 4 -> 3, relic 2 -> 1.
 -- Melee pushes by the weapon's weight (2026-11-01; one 1.5 for all before):
 -- light / medium / heavy = Daggers / Sword / Greatsword.
+-- 2026-11-19: 1.5 / 2 / 2.5 -> 2.5 / 3 / 4 (and the swing's own lunge 4 ->
+-- 2 studs, meleeSwingFeel), so a hit pushes the mob further than the
+-- swing carries the player.
 local KNOCKBACK_MELEE_STUDS_BY_TYPE: { [string]: number } = {
-	Daggers = 1.5,
-	Sword = 2,
-	Greatsword = 2.5,
+	Daggers = 2.5,
+	Sword = 3,
+	Greatsword = 4,
 }
-local KNOCKBACK_MELEE_STUDS = 2
--- Bullets do not push (2026-10-25); below MobSimService's minimum.
-local KNOCKBACK_BULLET_STUDS = 0
+local KNOCKBACK_MELEE_STUDS = 3
+-- Arrows push a little (2026-11-19: 1.5, under the lightest melee's 2.5,
+-- so a bow hit lands without shoving a pack out of range). 0 from
+-- 2026-10-25, when bullets did not push.
+local KNOCKBACK_BULLET_STUDS = 1.5
 local KNOCKBACK_ARCANE_STUDS = 3
 -- 1 -> 0 (2026-11-01): relic bursts and gimmick hits no longer push.
 local KNOCKBACK_RELIC_STUDS = 0
@@ -632,7 +637,11 @@ function DamageService.PlayerTakeDamage(
 			GameClock.Debris(bodyVelocity, 0.15)
 
 			GameClock.Delay(1.5, function()
-				RagdollService:Unragdoll(character)
+				-- A downed or dead body stays a ragdoll (LifeService
+				-- owns it from the downing until a revive).
+				if character:GetAttribute(Attributes.Death) ~= true then
+					RagdollService:Unragdoll(character)
+				end
 			end)
 		end
 	end
@@ -646,7 +655,7 @@ function DamageService.PlayerTakeDamage(
 	self:_recordDamageTaken(player, appliedDamage)
 	if LifeService and humanoid.Health - appliedDamage < 1 then
 		humanoid.Health = 1
-		LifeService:LoseLife(player)
+		LifeService:LoseLife(player, if attackerRoot then attackerRoot.Position else nil)
 		return
 	end
 

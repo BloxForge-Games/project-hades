@@ -11,9 +11,11 @@
      Death is TWO phases, both server-authoritative and both replicated
      through the DeathState snapshot:
 
-       DOWNED  Out of lives. Death attribute on, controls locked, the death
-               animation plays and freezes on its last frame, the body
-               stays where it fell. The revive DECISION WINDOW
+       DOWNED  Out of lives. Death attribute on, controls locked, the body
+               RAGDOLLS and is knocked a little way from whatever killed
+               it (2026-11-20; a death animation frozen on its last frame
+               before), then lies where it comes to rest. It stays a
+               ragdoll until a revive. The revive DECISION WINDOW
                (DeathCinematicData.GameOverDuration) is open: the client's
                "Eternal Damnation" screen counts down to
                `windowEndsAtServerTime` and offers the paid revive. The run
@@ -145,17 +147,13 @@ local DEFAULT_LIVES = 1
 local VOID_CATCH_MARGIN = 60
 local VOID_SCAN_SECONDS = 0.25
 local VOID_RETURN_LIFT = Vector3.new(0, 3, 0)
-local DEATH_ANIMATION_ID = "rbxassetid://73249560309673"
-local DEATH_ANIMATION_SPEED = 0.35
--- How close to the track's end (seconds of track time) the hold engages.
--- At 0.35x speed one Heartbeat advances the track ~6ms, so this is ~8
--- frames of margin: comfortably before Roblox stops a non-looped track
--- at its end, and visually still the final pose.
-local DEATH_ANIMATION_HOLD_EPSILON = 0.05
--- The client fades the body over CHARACTER_FADE_DURATION (1s) once fully
--- dead. The held track is released only after that fade, so the humanoid
--- never visibly pops back to standing under a still-visible body.
-local DEATH_ANIMATION_RELEASE_DELAY = 2
+-- The downed body's push away from its killer: studs a second along the
+-- ground and upwards, held for DOWNED_PUSH_SECONDS. A light version of
+-- DamageService's hit knockback (25 and 25 over the same time).
+local DOWNED_PUSH_SPEED = 16
+local DOWNED_PUSH_LIFT = 10
+local DOWNED_PUSH_SECONDS = 0.15
+local HORIZONTAL = Vector3.new(1, 0, 1)
 -- 6 -> 35 (2026-11-08): the DEFEATED summary (RunSummaryService) rises
 -- 3.5 s in and lets each player read it for up to 30 s; its Continue
 -- teleports that player at once, this takes anyone still here.
@@ -184,9 +182,6 @@ local REVIVE_PRODUCT_ID = 3598188186
 
 LifeService._lives = {} :: { [number]: { current: number, max: number } }
 LifeService._deathState = {} :: { [number]: DeathEntry }
-LifeService._deathAnimationTracks = {} :: { [number]: AnimationTrack }
--- The Heartbeat poll that freezes each death track on its last frame.
-LifeService._deathAnimationHolds = {} :: { [number]: RBXScriptConnection }
 -- Token per open revive window; the expiry callback aborts if a revive
 -- (or a leave) replaced or cleared it.
 LifeService._deathWindowTokens = {} :: { [number]: any }
@@ -289,79 +284,39 @@ function LifeService._publishDeathState(self: typeof(LifeService))
 	self._deathStateProperty:Set(snapshot)
 end
 
--- Plays the death animation and FREEZES IT ON ITS FINAL FRAME. A
--- non-looped track stops itself at its end and the humanoid snaps back to
--- its idle pose, so the track is polled each Heartbeat and its speed set
--- to 0 just before the end is reached. The hold lasts until
--- _stopDeathAnimation: a revive while downed, the post-fade release after
--- full death, or the player leaving. The track is never stopped while the
--- body is still on show.
-function LifeService._playDeathAnimation(self: typeof(LifeService), player: Player)
-	local userId = player.UserId
-
-	self:_stopDeathAnimation(userId)
-
-	local character = player.Character
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
-	if not animator then
+-- The downed body, already a ragdoll, is knocked a little way along the
+-- ground from `fromPosition` (where the killer stood); with none, or one
+-- right on top of the body, backwards from where the body faces. Replaces
+-- the push the killing hit itself may have just added (DamageService's hit
+-- knockback), so the two never stack.
+function LifeService._pushDownedBody(_self: typeof(LifeService), character: Model, fromPosition: Vector3?)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root or not root:IsA("BasePart") then
 		return
 	end
 
-	local animation = Instance.new("Animation")
-	animation.AnimationId = DEATH_ANIMATION_ID
+	local away = if fromPosition then (root.Position - fromPosition) * HORIZONTAL else Vector3.zero
+	if away.Magnitude < 0.1 then
+		away = -root.CFrame.LookVector * HORIZONTAL
+	end
+	if away.Magnitude < 0.1 then
+		away = Vector3.zAxis
+	end
 
-	local track = animator:LoadAnimation(animation)
-	track.Priority = Enum.AnimationPriority.Action4
-	track.Looped = false
+	for _, child in root:GetChildren() do
+		if child:IsA("BodyVelocity") then
+			child:Destroy()
+		end
+	end
 
-	track:Play()
-	track:AdjustSpeed(DEATH_ANIMATION_SPEED)
-	self._deathAnimationTracks[userId] = track
-
-	-- Length reads 0 until the asset has loaded; the poll simply waits
-	-- for a real value. If the track somehow stops before the hold
-	-- engages (asset failed to load), the poll ends with it.
-	self._deathAnimationHolds[userId] = RunService.Heartbeat:Connect(function()
-		if self._deathAnimationTracks[userId] ~= track then
-			self:_releaseDeathAnimationHold(userId)
-			return
-		end
-		if not track.IsPlaying then
-			self:_releaseDeathAnimationHold(userId)
-			return
-		end
-		local length = track.Length
-		if length <= 0 then
-			return
-		end
-		if track.TimePosition >= length - DEATH_ANIMATION_HOLD_EPSILON then
-			track:AdjustSpeed(0)
-			self:_releaseDeathAnimationHold(userId)
-		end
+	local push = Instance.new("BodyVelocity")
+	push.Name = "DownedPush"
+	push.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+	push.Velocity = away.Unit * DOWNED_PUSH_SPEED + Vector3.new(0, DOWNED_PUSH_LIFT, 0)
+	push.Parent = root
+	task.delay(DOWNED_PUSH_SECONDS, function()
+		push:Destroy()
 	end)
-end
-
--- Disconnects the last-frame poll only; the track keeps whatever speed it
--- has (0 once the hold engaged).
-function LifeService._releaseDeathAnimationHold(self: typeof(LifeService), userId: number)
-	local hold = self._deathAnimationHolds[userId]
-	if hold then
-		hold:Disconnect()
-		self._deathAnimationHolds[userId] = nil
-	end
-end
-
--- Stops the death animation for `userId` if one is active. Idempotent.
-function LifeService._stopDeathAnimation(self: typeof(LifeService), userId: number)
-	self:_releaseDeathAnimationHold(userId)
-	local track = self._deathAnimationTracks[userId]
-	if not track then
-		return
-	end
-	track:Stop(0)
-	track:Destroy()
-	self._deathAnimationTracks[userId] = nil
 end
 
 -- True iff every connected player is FULLY dead (phase "dead"). A downed
@@ -519,17 +474,16 @@ function LifeService._finalizeDeath(self: typeof(LifeService), player: Player)
 	local deadCharacter = player.Character
 	if deadCharacter then
 		deadCharacter:SetAttribute(Attributes.Downed, false)
-	end
-	self:_setDeathState(player, entry)
-
-	-- The client fades the body now; the frozen pose is released only once
-	-- that fade has hidden it. Stamped against the entry so a revive-then-
-	-- die-again inside the delay cannot stop the NEW death's track.
-	task.delay(DEATH_ANIMATION_RELEASE_DELAY, function()
-		if self._deathState[userId] == entry then
-			self:_stopDeathAnimation(userId)
+		-- The ragdoll was pushed and may have slid since the downing: the
+		-- gear spills, and the gravestone rises, where the body lies now.
+		local deadRoot = deadCharacter:FindFirstChild("HumanoidRootPart")
+		if deadRoot and deadRoot:IsA("BasePart") then
+			entry.deathPosition = deadRoot.Position
 		end
-	end)
+	end
+	-- The client fades the body now. It stays a ragdoll under the fade; a
+	-- revive is what stands it back up.
+	self:_setDeathState(player, entry)
 
 	local isWipe = self:_areAllPlayersDead()
 	if isWipe then
@@ -604,8 +558,8 @@ end
 
 -- Where the player's HumanoidRootPart was when they went down, for
 -- callers that need the corpse's spot after the character is gone
--- (RunEscrowService spills run gear there). The body never moves between
--- downed and dead, so the one position serves both phases. nil when not
+-- (RunEscrowService spills run gear there). While downed it is where
+-- the player fell; once fully dead, where the ragdoll came to rest. nil when not
 -- in the death state, or when no root part could be read at the time.
 function LifeService.GetDeathPosition(self: typeof(LifeService), player: Player): Vector3?
 	local state = self._deathState[player.UserId]
@@ -642,9 +596,18 @@ function LifeService._watchCharacter(self: typeof(LifeService), player: Player, 
 		local voidY = workspace.FallenPartsDestroyHeight + VOID_CATCH_MARGIN
 		while not handled and character.Parent and humanoid.Parent and root.Parent do
 			if root.Position.Y < voidY then
-				handled = true
-				self:_onNativeDeath(player, character, "void", lastGround)
-				break
+				if self:IsDeathState(player) then
+					-- A downed ragdoll that slid off the map: back onto
+					-- the last ground it stood on, and keep watching.
+					root.AssemblyLinearVelocity = Vector3.zero
+					if lastGround then
+						character:PivotTo(lastGround + VOID_RETURN_LIFT)
+					end
+				else
+					handled = true
+					self:_onNativeDeath(player, character, "void", lastGround)
+					break
+				end
 			end
 			if humanoid.Health > 0 and humanoid.FloorMaterial ~= Enum.Material.Air then
 				lastGround = root.CFrame
@@ -690,7 +653,9 @@ function LifeService._onNativeDeath(
 	self:LoseLife(player)
 end
 
-function LifeService.LoseLife(self: typeof(LifeService), player: Player)
+-- `fromPosition`: where the killer stood, for the downed body's push
+-- (see _pushDownedBody). Optional.
+function LifeService.LoseLife(self: typeof(LifeService), player: Player, fromPosition: Vector3?)
 	local userId = player.UserId
 	local entry = self._lives[userId]
 	if not entry then
@@ -735,8 +700,8 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 		return
 	end
 
-	-- Out of lives: DOWNED. Attributes.Death=true and the frozen death pose
-	-- happen now; the body stays where it fell, fully visible, and nothing
+	-- Out of lives: DOWNED. Attributes.Death=true and the ragdoll
+	-- happen now; the body lies where it lands, fully visible, and nothing
 	-- is spilled or discarded until the window closes without a revive.
 	if character then
 		character:SetAttribute(Attributes.Death, true)
@@ -763,7 +728,10 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 	PlayerNetwork.PlayerDied.FireAll(userId)
 
 	if character then
-		RagdollService:Unragdoll(character)
+		-- Ragdoll (a no-op if the killing hit already did) and the push.
+		-- DamageService's timed stand-up skips a character with Death set.
+		RagdollService:Ragdoll(character)
+		self:_pushDownedBody(character, fromPosition)
 
 		-- The party learns of the fall at once: the teammate is on the
 		-- floor either way, and a revive gets its own notification.
@@ -784,8 +752,6 @@ function LifeService.LoseLife(self: typeof(LifeService), player: Player)
 				textTransparency = 0,
 			})
 		end
-
-		self:_playDeathAnimation(player)
 
 		local head = character:FindFirstChild("Head") :: BasePart?
 		if TextIndicatorService and head then
@@ -823,8 +789,8 @@ function LifeService.AddLife(self: typeof(LifeService), player: Player)
 	self:_setLives(player, math.min(entry.current + 1, entry.max), entry.max)
 end
 
--- Revive, in EITHER phase. Sequence: fade to black, release the death
--- pose, un-ragdoll, (fully dead only) teleport to the spectated party's
+-- Revive, in EITHER phase. Sequence: fade to black, un-ragdoll (the
+-- body gets up), (fully dead only) teleport to the spectated party's
 -- current room, restore health, fade back, invuln windows, clear death
 -- state, lives back to 1. A DOWNED player stands up IN PLACE: the body is
 -- right there and nothing spilled, so there is nothing to teleport to or
@@ -882,8 +848,6 @@ function LifeService.Revive(self: typeof(LifeService), player: Player)
 
 	local character = player.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-	self:_stopDeathAnimation(userId)
 
 	if RagdollService and character then
 		RagdollService:Unragdoll(character)
@@ -999,7 +963,6 @@ function LifeService.Start(self: typeof(LifeService))
 		self:_setDeathState(player, nil)
 		self._deathWindowTokens[userId] = nil
 		self._reviving[userId] = nil
-		self:_stopDeathAnimation(userId)
 
 		-- The leaver may have been the last player not fully dead (alive,
 		-- or downed with a window that will now never close): if everyone

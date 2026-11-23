@@ -157,7 +157,10 @@ local ENCOUNTER_PHASE_CAMERA_TWEEN_DURATION = ENCOUNTER_OUTRO_CAMERA_TWEEN_DURAT
 -- Pre-fight lobby tuning. Two parallel timers: normal always ticks; fast only
 -- ticks while every alive player is on the pad and resets the moment anyone
 -- steps off. Lobby expires when the smaller of the two hits 0.
-local ENCOUNTER_LOBBY_TIMER_DURATION = 60
+-- The normal timer: 25 s before a Miniboss or Boss (2026-11-16; 60 before),
+-- still 60 for the next-dungeon vote, which shares this lobby.
+local ENCOUNTER_LOBBY_TIMER_DURATION = 25
+local NEXT_DUNGEON_VOTE_TIMER_DURATION = 60
 local ENCOUNTER_LOBBY_FAST_DURATION = 3
 local ENCOUNTER_LOBBY_PAD_DISTANCE = 15 -- studs back from the gate, on the player-approach side
 local ENCOUNTER_LOBBY_PAD_RADIUS = 5
@@ -537,6 +540,10 @@ function EncounterService._startLobby(
 		return
 	end
 
+	local timerDuration = if kind == NEXT_DUNGEON_KIND
+		then NEXT_DUNGEON_VOTE_TIMER_DURATION
+		else ENCOUNTER_LOBBY_TIMER_DURATION
+
 	local padInstance, padReference = self:_createLobbyPad(gateCFrame)
 	local marker = self:_createLobbyMarker(padReference)
 
@@ -577,8 +584,8 @@ function EncounterService._startLobby(
 		local initialData: EncounterLobbyData = {
 			kind = kind,
 			label = self:_lobbyLabel(kind),
-			remainingSeconds = ENCOUNTER_LOBBY_TIMER_DURATION,
-			totalSeconds = ENCOUNTER_LOBBY_TIMER_DURATION,
+			remainingSeconds = timerDuration,
+			totalSeconds = timerDuration,
 			playersOnPad = 0,
 			totalPlayers = initialTotalPlayers,
 			accelerated = false,
@@ -598,7 +605,7 @@ function EncounterService._startLobby(
 				end
 
 				local now = workspace:GetServerTimeNow()
-				local normalRemaining = math.max(0, ENCOUNTER_LOBBY_TIMER_DURATION - (now - lobby.startedAt))
+				local normalRemaining = math.max(0, timerDuration - (now - lobby.startedAt))
 
 				local onPad, totalAlive = self:_countPlayersOnLobbyPad(padReference)
 				local everyoneOnPad = totalAlive > 0 and onPad >= totalAlive
@@ -622,7 +629,7 @@ function EncounterService._startLobby(
 					accelerated = true
 				else
 					displayedRemaining = normalRemaining
-					displayedTotal = ENCOUNTER_LOBBY_TIMER_DURATION
+					displayedTotal = timerDuration
 					accelerated = false
 				end
 

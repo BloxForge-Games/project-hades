@@ -14,7 +14,7 @@
 	      (EnchantmentScrollData.ChanceByEnemyType). Called by
 	      EncounterChestService (Boss / Miniboss / Coffin chests, one chest
 	      per player) and Components/Chest (the treasure chest, once per
-	      living player, never from a mimic).
+	      living player).
 	  DropScroll(player, origin, enchantment?, tier?)
 	      Spawns the drop for `player`; a nil enchantment or tier is
 	      rolled. Also the `/scroll` test command's entry point.

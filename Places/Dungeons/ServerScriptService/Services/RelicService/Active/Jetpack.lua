@@ -124,12 +124,20 @@ function Jetpack.Invoke(self: Jetpack)
 		-- automatically by InvulnerabilityService's expiry timer (matched
 		-- duration above) — don't double-clear here.
 
-		GameClock.Tween(jetpackClone.Handle.Thrusting, TweenInfo.new(0.5), { Volume = 0 }):Play()
+		-- The pack is gone with the character when the player died or
+		-- respawned mid-flight (2026-11-19: indexing its Handle threw
+		-- "Handle is not a valid member" here). Nothing left to fade.
+		local handle = jetpackClone:FindFirstChild("Handle")
+		if not handle then
+			return
+		end
 
-		jetpackClone.Handle.ThrusterAttachment1.Fire.Enabled = false
-		jetpackClone.Handle.ThrusterAttachment2.Fire.Enabled = false
+		GameClock.Tween(handle.Thrusting, TweenInfo.new(0.5), { Volume = 0 }):Play()
 
-		GameClock.Tween(jetpackClone.Handle, TweenInfo.new(1), { Transparency = 1 }):Play()
+		handle.ThrusterAttachment1.Fire.Enabled = false
+		handle.ThrusterAttachment2.Fire.Enabled = false
+
+		GameClock.Tween(handle, TweenInfo.new(1), { Transparency = 1 }):Play()
 
 		GameClock.Debris(jetpackClone, 2)
 	end)

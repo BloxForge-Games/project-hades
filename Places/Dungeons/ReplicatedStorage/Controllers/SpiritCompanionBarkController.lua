@@ -17,6 +17,14 @@
 	  minibossEnter / bossEnter
 	                  EncounterIntroEnd, with the kind from EncounterDataChanged
 	  encounterBeaten EncounterOutroEnd
+	  event<Kind> / eventDone
+	                  the Player's EventRoomState attribute (2026-11-19,
+	                  EventGuideService): what to do in the Event room the
+	                  player just entered ("eventForge", ...; eventGeneric
+	                  when the event has no pool), then that it is done.
+	                  These explain the room, so a blocked line (the gap,
+	                  a conversation) is retried for a while instead of
+	                  dropped.
 
 	Rules: never the same line twice in a row from one pool; at least
 	MinGapSeconds between any two lines; a beat line resets the idle
@@ -59,6 +67,12 @@ local RELIC_LINE_DELAY_SECONDS = 0.8
 local ENCOUNTER_ENTER_DELAY_SECONDS = 0.6
 local ENCOUNTER_BEATEN_DELAY_SECONDS = 1.0
 local IDLE_POLL_SECONDS = 1
+-- An event line that could not be said (the gap, a conversation, no
+-- companion yet) is tried again this often, this many times.
+local EVENT_LINE_DELAY_SECONDS = 1.2
+local EVENT_LINE_RETRY_SECONDS = 2
+local EVENT_LINE_RETRIES = 8
+local EVENT_DONE_SUFFIX = "|done"
 -- Her name on the bubble, the title after it in italic brackets.
 local SPEAKER_NAME = "Navi"
 local SPEAKER_TITLE = "Spirit Companion"
@@ -183,6 +197,41 @@ local function sayLater(pool: string, seconds: number)
 	end)
 end
 
+-- The pool for the Player's EventRoomState, or nil outside an Event room.
+local function eventPool(state: any): string?
+	if typeof(state) ~= "string" or state == "" then
+		return nil
+	end
+	if string.sub(state, -#EVENT_DONE_SUFFIX) == EVENT_DONE_SUFFIX then
+		return "eventDone"
+	end
+	local pool = "event" .. state
+	return if SpiritCompanionLines.Pools[pool] then pool else "eventGeneric"
+end
+
+-- Says the line for the current EventRoomState, retrying while that state
+-- still stands.
+local function sayEventLine()
+	local player = Players.LocalPlayer
+	local state = player:GetAttribute(Attributes.EventRoomState)
+	local pool = eventPool(state)
+	if not pool then
+		return
+	end
+	task.spawn(function()
+		task.wait(EVENT_LINE_DELAY_SECONDS)
+		for _ = 1, EVENT_LINE_RETRIES do
+			if player:GetAttribute(Attributes.EventRoomState) ~= state then
+				return
+			end
+			if say(pool, true) then
+				return
+			end
+			task.wait(EVENT_LINE_RETRY_SECONDS)
+		end
+	end)
+end
+
 local function watchCharacter(character: Model)
 	local humanoid = character:WaitForChild("Humanoid", 10) :: Humanoid?
 	if not humanoid then
@@ -258,6 +307,9 @@ function SpiritCompanionBarkController.Start(_self: typeof(SpiritCompanionBarkCo
 		end
 		lastRelicsGained = gained
 	end)
+
+	-- Event rooms: what to do on the way in, the door on the way out.
+	player:GetAttributeChangedSignal(Attributes.EventRoomState):Connect(sayEventLine)
 
 	-- Encounters: the HUD payload names the kind; the intro's end is the
 	-- fight starting, the outro's end is it won.

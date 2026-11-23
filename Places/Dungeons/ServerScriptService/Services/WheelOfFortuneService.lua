@@ -4,8 +4,10 @@
 	Description:
 	The Wheel of Fortune (prefab WheelOfFortune, 2026-11-13): a wheel on a
 	stand under the room's Interactables ("Wheel", its face part
-	"WheelFace"). Every player gets ONE free spin; one spin turns at a
-	time (a player who asks while it turns is told to wait).
+	"WheelFace"). THE PARTY GETS ONE SPIN (2026-11-19, like the Coffin;
+	one spin per player before): whoever asks the clown first spins, and
+	what the wheel lands on goes to EVERY living player. Anyone who asks
+	after that is told it has been spun.
 
 	A spin is rolled HERE (WheelOfFortuneData.Roll), then published on the
 	wheel model as attributes every client animates from
@@ -14,18 +16,19 @@
 	time) and SpinnerName. The outcome lands once the spin has turned
 	(SpinSeconds), so the result never shows before the wheel stops.
 
-	Outcomes (WheelOfFortuneData.Slices): Gold / Crystals burst
-	as the spinner's own pickups, Heal heals, Relic and JACKPOT deal a card
-	hand (RelicOfferService), and the three bad slices bite: -25% HP takes
-	that share of current health (never lethal), Ambush springs a
-	corrupted pack around the wheel while the door is held shut, and Lose
-	Relic takes one random non-Cursed relic the spinner holds.
+	Outcomes (WheelOfFortuneData.Slices), each for every living player:
+	Gold / Crystals burst as that player's own pickups, Heal heals, Relic
+	deals each a card hand (RelicOfferService), JACKPOT bursts coins and
+	crystals, and the two bad slices bite: -25% HP takes that share of
+	each player's current health (never lethal) and Ambush springs ONE
+	corrupted pack around the wheel while the door is held shut.
 
 	THE CLOWN (2026-11-13): Giggles, the NPC inside the Wheel model,
 	is how a player spins: his dialogue (WheelClown) asks the server
-	(DungeonNetwork.SpinWheel) and walking away counts toward the door. A
-	spin counts the spinner toward the door's early open
-	(EventService:MarkInteracted) once its outcome has landed.
+	(DungeonNetwork.SpinWheel) and walking away counts toward the door. The
+	spin counts EVERY player toward the door's early open
+	(EventService:MarkInteracted) once its outcome has landed, so the door
+	opens for the party.
 ]]
 
 local CollectionService = game:GetService("CollectionService")
@@ -73,7 +76,8 @@ type Room = DungeonService.Room
 type WheelState = {
 	room: Room,
 	wheel: Model,
-	spun: { [number]: boolean },
+	-- The party's one spin has been used.
+	spun: boolean,
 	spinning: boolean,
 	spinId: number,
 	generation: number,
@@ -221,9 +225,10 @@ function WheelOfFortuneService._ambush(_self: typeof(WheelOfFortuneService), sta
 	Log.debug(("[WheelOfFortuneService] Ambush: %d corrupted mobs"):format(#spawned))
 end
 
--- Pays slice `index` to `player`.
+-- Pays slice `index` to `player`. The Ambush is the room's, not a
+-- player's: _land springs it once.
 function WheelOfFortuneService._apply(
-	self: typeof(WheelOfFortuneService),
+	_self: typeof(WheelOfFortuneService),
 	state: WheelState,
 	player: Player,
 	index: number
@@ -261,33 +266,57 @@ function WheelOfFortuneService._apply(
 			-- Raw and never lethal, like the events' other health costs.
 			humanoid.Health = math.max(1, humanoid.Health - humanoid.Health * (slice.share or 0))
 		end
-	elseif id == "Ambush" then
+	end
+end
+
+-- The wheel has stopped on slice `index`: every living player takes it,
+-- an Ambush springs once, and everyone is counted toward the door.
+function WheelOfFortuneService._land(
+	self: typeof(WheelOfFortuneService),
+	state: WheelState,
+	spinnerName: string,
+	index: number
+)
+	local slice = WheelOfFortuneData.Slices[index]
+	for _, player in Players:GetPlayers() do
+		if not LifeService:IsDeathState(player) then
+			self:_apply(state, player, index)
+		end
+	end
+	if slice.id == "Ambush" then
 		self:_ambush(state)
 	end
 
 	-- No text indicator for the result: the clown calls it (2026-11-13).
 	notifyAll(
 		"Wheel of Fortune",
-		("%s spun %s!"):format(player.Name, slice.label),
+		("%s spun %s for the party!"):format(spinnerName, slice.label),
 		if slice.bad then NotificationColors.Error else NotificationColors.Success
 	)
+
+	-- Counted toward the door's early open only once the outcome has
+	-- landed: an Ambush has held the door by then, so the room cannot
+	-- open under a fight that is about to start.
+	for _, player in Players:GetPlayers() do
+		EventService:MarkInteracted(player, state.room.id)
+	end
 end
 
 function WheelOfFortuneService._onSpin(self: typeof(WheelOfFortuneService), state: WheelState, player: Player): string
 	if LifeService:IsDeathState(player) then
 		return "invalid"
 	end
-	if state.spun[player.UserId] then
-		return "spun"
-	end
 	if state.spinning then
 		indicate(player, "Wait for the wheel...", WAIT_COLOR)
 		return "busy"
 	end
-	state.spun[player.UserId] = true
-	-- Read by his dialogue (WheelClown): a second talk goes straight to
-	-- "one spin each".
-	state.wheel:SetAttribute("Spun_" .. player.UserId, true)
+	if state.spun then
+		return "spun"
+	end
+	state.spun = true
+	-- Read by his dialogue (WheelClown) on every client: a talk after the
+	-- party's spin goes straight to "already spun".
+	state.wheel:SetAttribute("Spun", true)
 	state.spinning = true
 	state.spinId += 1
 
@@ -304,18 +333,14 @@ function WheelOfFortuneService._onSpin(self: typeof(WheelOfFortuneService), stat
 	wheel:SetAttribute("SpinId", state.spinId)
 
 	local generation = state.generation
+	local spinnerName = player.Name
 	task.delay(WheelOfFortuneData.SpinSeconds + LAND_BEAT_SECONDS, function()
 		if state.generation ~= generation then
 			return
 		end
 		state.spinning = false
-		if player.Parent then
-			self:_apply(state, player, index)
-			-- Counted toward the door's early open only once the outcome
-			-- has landed: an Ambush has held the door by then, so the room
-			-- cannot open under a fight that is about to start.
-			EventService:MarkInteracted(player, state.room.id)
-		end
+		-- The party's spin lands whether or not the spinner is still here.
+		self:_land(state, spinnerName, index)
 	end)
 	return "ok"
 end
@@ -352,7 +377,7 @@ function WheelOfFortuneService.RegisterRoom(self: typeof(WheelOfFortuneService),
 	local state: WheelState = {
 		room = room,
 		wheel = wheel,
-		spun = {},
+		spun = false,
 		spinning = false,
 		spinId = 0,
 		generation = 0,
