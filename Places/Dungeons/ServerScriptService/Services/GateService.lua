@@ -39,9 +39,12 @@ local UserNotificationService = require(ServerScriptService.Submodules.Core.Sour
 local DungeonNetwork = require(ServerScriptService.Submodules.Core.Source.Network.Dungeon)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
--- The room-clear slow motion (TimeScaleService): a quarter speed for 0.8 s.
+-- The room-clear slow motion (TimeScaleService): a quarter speed for
+-- 0.35 s, then 0.25 s back to normal, about 0.65 s in all (2026-11-19:
+-- it ran too long; 0.8 s held and 0.35 s back before, about 1.2 s).
 local ROOM_CLEAR_SLOW_SCALE = 0.25
-local ROOM_CLEAR_SLOW_HOLD_SECONDS = 0.8
+local ROOM_CLEAR_SLOW_HOLD_SECONDS = 0.35
+local ROOM_CLEAR_SLOW_OUT_SECONDS = 0.25
 local RoomTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RoomTypes)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
@@ -119,7 +122,9 @@ local GATE_WAIT_SECONDS = 15
 -- bargaining, not just grabbing one relic. Countdown starts on the
 -- FIRST player entering the event room and ends early once every
 -- alive player has interacted with the event (EventService tracks).
-local EVENT_GATE_WAIT_SECONDS = 25
+-- 30 s (2026-11-19; 25 before): play-testers needed longer to work out
+-- what the room wanted.
+local EVENT_GATE_WAIT_SECONDS = 30
 -- Beat between the LAST player completing an event and its exit door
 -- actually moving — an instant open on the final click reads glitchy.
 local EVENT_GATE_OPEN_DELAY_SECONDS = 1
@@ -845,7 +850,7 @@ function GateService._startEventGateHold(self: typeof(GateService), eventRoom: R
 	-- Event —> COMBAT: the exit must be a REAL combat gate — crossing
 	-- watch, per-player one-way close, first-crossing wave spawn — so
 	-- delegate to the full gate cycle, swapping only the countdown rules
-	-- (25s, early-open once every alive player has interacted). This is
+	-- (30s, early-open once every alive player has interacted). This is
 	-- what makes a shop BETWEEN two combat rooms flow like any other
 	-- room transition.
 	if nextRoom and nextRoom.roomType == RoomTypes.Combat then
@@ -868,7 +873,7 @@ function GateService._startEventGateHold(self: typeof(GateService), eventRoom: R
 	end
 
 	-- Highlight + countdown billboard + countdown: the same driver as the
-	-- gate cycle, under the event's rules (25s; early once every alive
+	-- gate cycle, under the event's rules (30s; early once every alive
 	-- player has interacted; suspend / release from the Coffin challenge).
 	local held = self:_runGateHold(gate, dungeon, {
 		seconds = EVENT_GATE_WAIT_SECONDS,
@@ -1207,7 +1212,7 @@ function GateService.Start(self: typeof(GateService))
 			-- comes back (RelicMachineService waits on the real clock).
 			local timeScale = Blitz.OptionalService("TimeScaleService")
 			if timeScale then
-				timeScale:Slow(ROOM_CLEAR_SLOW_SCALE, ROOM_CLEAR_SLOW_HOLD_SECONDS)
+				timeScale:Slow(ROOM_CLEAR_SLOW_SCALE, ROOM_CLEAR_SLOW_HOLD_SECONDS, ROOM_CLEAR_SLOW_OUT_SECONDS)
 			end
 			self:OpenSegmentGate(room.segmentId)
 		end

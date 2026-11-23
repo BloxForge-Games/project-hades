@@ -45,6 +45,33 @@ local ROOM_BOUND_TYPES: { [string]: boolean } = {
 -- Gems are off) is room-bound too; the spawner stamps this.
 local ROOM_BOUND_ATTRIBUTE = "RoomBound"
 
+-- THE ROOM-CLEAR VACUUM (2026-11-19). When a Combat room is cleared
+-- (DungeonService.Signals.OnSegmentCleared), every currency drop on the
+-- floor is stamped VACUUM_ATTRIBUTE: each client then pulls its own share
+-- in from any distance (Client/Components/Drop), and the reach check below
+-- is waived for it. Currency only: an orb left on the floor is still worth
+-- walking back for. The clearing kill's own coins spawn a moment AFTER the
+-- signal, so a drop that appears within VACUUM_LATE_SECONDS of a clear is
+-- stamped as well.
+local VACUUM_ATTRIBUTE = "Vacuum"
+local VACUUM_LATE_SECONDS = 3
+local VACUUM_TYPES: { [string]: boolean } = {
+	[DropTypes.Coins] = true,
+	[DropTypes.Gems] = true,
+	[DropTypes.ArcaneCrystals] = true,
+}
+local lastClearAt = -math.huge
+local clearsWatched = false
+local function watchClears(dungeonService: any)
+	if clearsWatched then
+		return
+	end
+	clearsWatched = true
+	dungeonService.Signals.OnSegmentCleared:Connect(function()
+		lastClearAt = os.clock()
+	end)
+end
+
 -- The one emitter DropData `particleScale` resizes (Base.Attachment.Shine);
 -- the drop sparkle and the Collected burst keep their authored size.
 local SHINE_EMITTER_NAME = "Shine"
@@ -155,13 +182,32 @@ function Drop:Start()
 		armFade(DESTROY_DELAY)
 	end
 
+	local vacuumService = if VACUUM_TYPES[self._dropType] then Blitz.OptionalService("DungeonService") else nil
+	if vacuumService then
+		watchClears(vacuumService)
+		if os.clock() - lastClearAt <= VACUUM_LATE_SECONDS then
+			self.Instance:SetAttribute(VACUUM_ATTRIBUTE, true)
+		else
+			table.insert(
+				self._connections,
+				vacuumService.Signals.OnSegmentCleared:Connect(function()
+					self.Instance:SetAttribute(VACUUM_ATTRIBUTE, true)
+				end)
+			)
+		end
+	end
+
 	collectedRouter:Bind(self.Instance, function(player: Player)
 		-- A dead player collects nothing: the run gear that spilled out of the
 		-- corpse is for the living (or for this player after a revive).
 		if LifeService:IsDeathState(player) then
 			return
 		end
-		if not withinPickupReach(player, self.Instance, PICKUP_REACH) then
+		-- A vacuumed drop (the room was cleared) is taken from anywhere.
+		if
+			self.Instance:GetAttribute(VACUUM_ATTRIBUTE) ~= true
+			and not withinPickupReach(player, self.Instance, PICKUP_REACH)
+		then
 			return
 		end
 		-- PRIVATE drop (chest loot): only its owner banks it. The client

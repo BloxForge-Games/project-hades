@@ -16,8 +16,6 @@ local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyT
 local LifeService = require(ServerScriptService.Services.LifeService)
 local GearDropService = require(ServerScriptService.Services.GearDropService)
 local EnchantmentScrollService = require(ServerScriptService.Services.EnchantmentScrollService)
-local UserNotificationService = require(ServerScriptService.Submodules.Core.Source.Services.UserNotificationService)
-local NotificationColors = require(ReplicatedStorage.Submodules.Core.Shared.Data.NotificationColors)
 
 local INTERACT_PROXIMITY_PROMPT_DURATION = 0
 
@@ -29,18 +27,7 @@ local INTERACT_PROXIMITY_PROMPT_DURATION = 0
 -- for the rest of the floor (a fade-out was tried and removed).
 local OPENED_ATTRIBUTE = "Opened"
 
--- THE MIMIC (2026-11-13; replaces the shelved Mimic Vault event): any
--- treasure chest has MIMIC_CHANCE to be one. It pays NOTHING: it shakes,
--- bursts (no gear, no enchantment scroll), and a corrupted pack of the
--- dungeon's own mobs pours out
--- (MIMIC_BASE_MOBS + MIMIC_MOBS_PER_PLAYER per living player, at most
--- MIMIC_MAX_MOBS). Rolled when the chest is opened.
-local MIMIC_CHANCE = 0.1
-local MIMIC_BASE_MOBS = 2
-local MIMIC_MOBS_PER_PLAYER = 1
-local MIMIC_MAX_MOBS = 6
-local MIMIC_SHAKE_SECONDS = 0.8
-local MIMIC_SHAKE_DEGREES = 8
+-- (Mimics are gone, 2026-11-19: a treasure chest always pays.)
 
 -- A treasure chest is Gold first and a few Gems second. The Gold is the
 -- TIER's: DifficultyData.TreasureChestPayout, the treasure slice of the
@@ -60,57 +47,6 @@ local function treasurePayout(): number
 		else DifficultyData.Resolve(DifficultyData.Order[1])
 	local floor = if dungeonService then dungeonService:GetFloor() else 1
 	return DifficultyData.TreasureChestPayout(tier, floor)
-end
-
-local function livingCount(): number
-	local count = 0
-	for _, player in Players:GetPlayers() do
-		if not LifeService:IsDeathState(player) then
-			count += 1
-		end
-	end
-	return count
-end
-
--- The mimic: shake, burst, the pack. Nothing drops.
-local function springMimic(chest: Model, opener: Player)
-	UserNotificationService:RequestAllNotification({
-		titleText = "It's a Mimic!",
-		titleTextFont = Enum.Font.SourceSansBold,
-		titleTextColor3 = NotificationColors.Error,
-		titleTextTransparency = 0,
-		text = opener.Name .. " woke something hungry...",
-		textFont = Enum.Font.SourceSansBold,
-		textColor3 = Color3.fromRGB(255, 255, 255),
-		textTransparency = 0,
-	})
-	local pivot = chest:GetPivot()
-	local shakes = 6
-	for index = 1, shakes do
-		local sign = if index % 2 == 0 then 1 else -1
-		chest:PivotTo(pivot * CFrame.Angles(0, 0, math.rad(MIMIC_SHAKE_DEGREES * sign)))
-		task.wait(MIMIC_SHAKE_SECONDS / shakes)
-	end
-	chest:PivotTo(pivot)
-	if not chest.Parent then
-		return
-	end
-	local position = if chest.PrimaryPart then chest.PrimaryPart.Position else pivot.Position
-	local explosion = Instance.new("Explosion")
-	explosion.BlastPressure = 0
-	explosion.BlastRadius = 0
-	explosion.DestroyJointRadiusPercent = 0
-	explosion.Position = position
-	explosion.Parent = workspace
-	chest:SetAttribute(OPENED_ATTRIBUTE, true)
-
-	local dungeonService = Blitz.OptionalService("DungeonService")
-	local mobSpawnService = Blitz.OptionalService("MobSpawnService")
-	local room = dungeonService and dungeonService:GetPlayerRoom(opener)
-	if room and mobSpawnService then
-		local count = math.min(MIMIC_BASE_MOBS + MIMIC_MOBS_PER_PLAYER * livingCount(), MIMIC_MAX_MOBS)
-		mobSpawnService:SpawnMobsAt(room, position, count, true)
-	end
 end
 
 -- THE FLOOR'S CHEST COUNT (2026-11-14): how many treasure chests stand on
@@ -183,16 +119,11 @@ function Chest:Start()
 
 		self.Instance.ProximityPrompt.Enabled = false
 
-		-- Found, mimic or not: the first opening counts it once.
+		-- Found: the first opening counts it once.
 		if not self._found then
 			self._found = true
 			chestsFound += 1
 			publishChestCount()
-		end
-
-		if math.random() < MIMIC_CHANCE then
-			springMimic(self.Instance, playerWhoTriggered)
-			return
 		end
 
 		-- Every client's Chest component swings the lid off this edge.
@@ -248,7 +179,7 @@ function Chest:Start()
 				task.spawn(GearDropService.DropGear, GearDropService, player, origin, EnemyTypes.Treasure, true)
 				-- An enchantment scroll: the same personal roll, at the
 				-- treasure chest's chance (EnchantmentScrollData
-				-- .ChanceByEnemyType, 10%). A mimic returned above.
+				-- .ChanceByEnemyType, 10%).
 				EnchantmentScrollService:RollChestScroll(player, origin, EnemyTypes.Treasure)
 			end
 		end

@@ -35,15 +35,18 @@ local SPAWN_DELAY = 0.5
 --
 --     The ordinal counts SEGMENTS, not chunks. DungeonData's
 --     chunksPerRoom explodes each Combat segment into 2-3 physical rooms,
---     and every chunk of one segment fields the SAME queue — solo, the
---     authored floor (2026-10-30) is 4, 5 | miniboss | 7, 9 per chunk, 2
---     chunks before the miniboss and 3 after: 66 mobs on a run's last
---     floor; the floors before it have no miniboss and 2 chunks a room:
---     50 mobs.
+--     and the ladder is what each chunk of a TWO-chunk room fields —
+--     solo, the authored ladder (2026-11-19, +35%) is 5, 7, 10, 12.
+--     A room's TOTAL is always that two-chunk amount (2026-11-19): a
+--     room that rolled 3 chunks splits the same total over them (10 ->
+--     4 + 3 + 3, 24 -> 8 + 8 + 8), the odd mobs going to the first
+--     chunks. 44 / 68 / 92 / 92 mobs a run Easy -> Nightmare
+--     (DifficultyData has the sums).
 --   * a CONCURRENT cap of how many can be alive in the chunk at once:
 --         CONCURRENT_BASE + (players × CONCURRENT_PER_PLAYER)
---     clamped at CONCURRENT_MAX (5 base, +1/player → 6 solo, 9 at 4
---     players; design call 2026-10) — the anti-swarm clamp.
+--     clamped at CONCURRENT_MAX (5 base, +5/player → 10 / 15 / 20 / 25
+--     for 1-4 players since 2026-11-19, for hordes; 8 / 10 / 12 / 14
+--     earlier that day, 6 / 7 / 8 / 9 before) — the anti-swarm clamp.
 -- Both are FROZEN at activation: a player dying or leaving mid-room
 -- never shrinks the room's budget. A per-room thread tops the room back
 -- up to the concurrent cap from the queue as mobs die, until the
@@ -54,11 +57,11 @@ local SPAWN_DELAY = 0.5
 -- (perRoom / perPlayer, optional concurrent*), read at chunk activation
 -- via _queueTuning. Rooms with no active dungeon (hand-placed test rooms)
 -- fall back to these.
-local QUEUE_PER_ROOM = { 4, 5, 7, 9 }
-local QUEUE_PER_PLAYER = 2
+local QUEUE_PER_ROOM = { 5, 7, 10, 12 }
+local QUEUE_PER_PLAYER = 3
 local CONCURRENT_BASE = 5
-local CONCURRENT_PER_PLAYER = 1
-local CONCURRENT_MAX = 12
+local CONCURRENT_PER_PLAYER = 5
+local CONCURRENT_MAX = 25
 local QUEUE_POLL_SECONDS = 0.5
 local QUEUE_START_DELAY = 1 -- matches the old pre-spawn beat after gate crossing
 
@@ -105,6 +108,21 @@ local MINIBOSS_WAVE_INTERVAL = 45
 -- branches skipped the trailing interval wait, so a paused or capped room
 -- scanned the whole Mobs folder and warned once per Heartbeat.
 local MINIBOSS_WAVE_POLL_SECONDS = 1
+
+-- A Combat room's mob total is what TWO chunks of `perChunk` field,
+-- however many chunks it rolled (QUEUE_REFERENCE_CHUNKS). This is chunk
+-- `chunkIndex`'s share of that total: an even split, the remainder going
+-- to the first chunks. A room with no chunk stamp (a hand-placed test
+-- room) fields `perChunk`.
+local QUEUE_REFERENCE_CHUNKS = 2
+local function chunkShare(perChunk: number, chunkIndex: number?, chunkCount: number?): number
+	if not chunkIndex or not chunkCount or chunkCount < 1 or chunkIndex < 1 then
+		return perChunk
+	end
+	local total = perChunk * QUEUE_REFERENCE_CHUNKS
+	local share = total // chunkCount
+	return share + (if chunkIndex <= total % chunkCount then 1 else 0)
+end
 
 local MobSpawnService = {
 	Name = "MobSpawnService",
@@ -459,8 +477,8 @@ function MobSpawnService._spawnMobAt(
 	return mob
 end
 
--- Spawns `count` mobs from the dungeon's own pool AT `position` (the Mimic
--- Vault's mimic, 2026-11-13), registered to `room` like any room mob so
+-- Spawns `count` mobs from the dungeon's own pool AT `position` (the Wheel
+-- of Fortune's Ambush), registered to `room` like any room mob so
 -- :GetMobsInRoom and OnMobDespawn track them. `corrupted` forces the
 -- corruption roll for each. Returns the mobs that spawned.
 function MobSpawnService.SpawnMobsAt(
@@ -564,7 +582,11 @@ function MobSpawnService.SpawnMobsInRoom(self: typeof(MobSpawnService), room)
 	-- PAST the first, so solo fields exactly the authored number.
 	local ladder = tuning.perRoom
 	local queue = {
-		remaining = ladder[math.min(combatSegmentIndex, #ladder)] + ((playerCount - 1) * tuning.perPlayer),
+		remaining = chunkShare(
+			ladder[math.min(combatSegmentIndex, #ladder)] + ((playerCount - 1) * tuning.perPlayer),
+			room.chunkIndex,
+			room.chunkCount
+		),
 		concurrentCap = math.min(
 			tuning.concurrentBase + (playerCount * tuning.concurrentPerPlayer),
 			tuning.concurrentMax
