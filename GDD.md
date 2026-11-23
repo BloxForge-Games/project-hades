@@ -475,7 +475,53 @@ beats a Level 2 one of the same quality.
     26% of the time and any one weapon 5.2% on Easy, 2.6% from Normal up. 3 Legendary uniques (Runeforge Greataxe, Runeshade
     Reavers, Runestorm Claymore) split the Legendary roll evenly (Hard 0.5%, Nightmare 1% of a
     drop). The Stormforge Breaker no longer drops (the Runeforge Greataxe is the same axe).
-- **No character stats**, ever. What a stat point would do, a gear line does.
+- **Character stats** (2026-11-19; "No character stats, ever" until then). See "Character stats"
+  below.
+
+### Character stats
+
+Built 2026-11-19 for the MMORPG direction: a level-up should give the player a choice, and a
+build should have an identity before any gear says so. Untested in play and untuned.
+`Shared/Data/StatPointData` holds every number; `StatPointService` is the one writer of
+`profile.StatPoints`; the Stats window opens from the hub menu.
+
+| Stat | Does |
+|---|---|
+| Strength | Melee Weapon Damage |
+| Dexterity | Bow (Ranged Weapon) damage |
+| Intellect | Arcane Damage |
+| Endurance | Max health |
+
+- **Four stats, one job each.** No crit, speed, cooldown, luck or gold stat: those are traits, and
+  a stat that repeats a trait makes the trait caps hard to hold. A crit "Luck" stat was considered
+  and dropped (it also clashes with the Luck trait's name).
+- **Points:** one per player level, 100 at most. Levels go on past the last point (the EXP curve
+  has no cap) and give no more points.
+- **Respec:** 2 Gold a point handed back, in the hub. Points are spent in the hub only.
+- **Numbers (2026-11-19, untuned):** +1% per point and at most 60 points in one stat, so a full
+  stat is +60% and the other 40 points go elsewhere (60 Strength + 40 Endurance is +60% melee
+  damage and +40% health). +0.5% a point was proposed first and dropped: a point did not show.
+  At this size level counts beside gear, not under it.
+- **Balance rules to hold when it is built:**
+  - The damage stats add into the same bucket as the Weapon Damage and Arcane Damage traits; they
+    do not multiply on top of them.
+  - Mobs pay for it, gear numbers stay: each tier's mob health rises by the damage points a
+    player of the tier's expected level has, and mob damage by the Endurance points, on an
+    assumed split of about 60% damage and 40% Endurance. Mob damage may rise by less than the
+    full share, so skipping Endurance hurts without one-shotting.
+  - Melee, bow and Arcane must pay the same per point for the risk each takes; set by play-test.
+  - Triggered relics follow the hit, so they follow the stat. Relics and DoTs that scale off Power
+    do not, unless that is added.
+- **As built:** the points join PlayerStatsService's gear stat totals as MeleeDamage,
+  RangedDamage, ArcaneDamage and Health, after the trait caps, like a race's perk. Each tier's
+  mobs are scaled for the middle of its level range (`DifficultyData.StatPointScale`): health
+  x1.003 / 1.010 / 1.018 / 1.026 and damage x1.006 / 1.018 / 1.033 / 1.048 on Easy / Normal /
+  Hard / Nightmare. The tiers stop at level 20, so 19 of the 100 points are reachable in the
+  content that exists; the rest need tiers above Nightmare.
+- **Level cap:** the game is designed for level 100; the beta stops at 20 (`ExperienceService`
+  `MAX_LEVEL`). EXP past the cap fills the bar and is not banked.
+- **Still needed:** a play-test of all four difficulties, a painted menu icon, and the EXP curve
+  past level 20.
 
 ### Enchantment tiers
 

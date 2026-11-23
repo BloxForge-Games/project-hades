@@ -34,6 +34,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local LifeService = require(ServerScriptService.Services.LifeService)
 local Attributes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.Attributes)
 local EnemyTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.EnemyTypes)
+local DifficultyData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DifficultyData)
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 
@@ -79,7 +80,10 @@ local function difficultyHealthMultiplier(enemyType: string?, archetype: string?
 			tierMultiplier = value
 		end
 	end
-	return tierMultiplier * dungeonService:GetFloorMultiplier("health")
+	-- Then what the players' character stats are worth at this tier
+	-- (DifficultyData.StatPointScale, 2026-11-19).
+	local statHealth = DifficultyData.StatPointScale(scale)
+	return tierMultiplier * dungeonService:GetFloorMultiplier("health") * statHealth
 end
 
 -- Health added per active player past the first, as a fraction of base

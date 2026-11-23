@@ -98,14 +98,18 @@ TrainingDummyService._dummies = {} :: { [Model]: DummyState }
 function TrainingDummyService.RollHit(
 	_self: typeof(TrainingDummyService),
 	player: Player,
-	baseDamage: number
+	baseDamage: number,
+	isMelee: boolean
 ): (number, boolean)
 	local damage = rollDamageVariance(baseDamage)
 	-- The WeaponDamage enchantment, Weapon Mastery armor and gear lines,
-	-- as one fraction.
+	-- as one fraction, with the melee / ranged share (a race's perk and
+	-- the Strength / Dexterity stat points), as the Dungeons' DamageService
+	-- adds them.
 	local weaponDamage = PlayerStatsService:GetEnchantmentStat(player, "WeaponDamage")
 		+ PlayerStatsService:GetGearStat(player, "WeaponDamage")
 		+ ArmorEnchantmentService:GetDamageBonus(player, false)
+		+ PlayerStatsService:GetGearStat(player, if isMelee then "MeleeDamage" else "RangedDamage")
 	local total = damage + damage * weaponDamage
 
 	local critChance = BonusStatData.Base.CritChance * 100
@@ -141,7 +145,7 @@ function TrainingDummyService.Hit(
 	if not self:IsDummy(model) or baseDamage <= 0 then
 		return
 	end
-	local value, critical = self:RollHit(player, baseDamage)
+	local value, critical = self:RollHit(player, baseDamage, isMelee)
 	DamageIndicatorService:ShowIndicator(
 		player,
 		model,
