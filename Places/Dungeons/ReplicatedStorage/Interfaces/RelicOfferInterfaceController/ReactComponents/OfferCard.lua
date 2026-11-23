@@ -354,7 +354,12 @@ local EMBER_FADE_OUT = 0.3
 -- hovered card's embers are left alone.
 local EMBER_DIM_TRANSPARENCY = 0.5
 
--- Text caps so a 4K desktop does not blow the copy up with the card.
+-- Text caps, in pixels AT A 1080-HIGH VIEWPORT. The card is a fraction of
+-- the viewport's height, so on a taller screen (1440p, ultrawide, 4K) the
+-- caps grow with it (useTextCapScale, 2026-11-18): fixed caps left the copy
+-- tiny on a big card there. Below 1080 they stay as they are (laptops and
+-- tablets were fine), and the text is TextScaled, so its box still bounds it.
+local TEXT_CAP_REFERENCE_HEIGHT = 1080
 local TITLE_MAX_TEXT_SIZE = 21
 local RARITY_MAX_TEXT_SIZE = 19
 
@@ -494,6 +499,32 @@ local localPlayer = Players.LocalPlayer
 
 --[ Component ]--
 
+-- How much the desktop text caps grow on this viewport: 1 up to
+-- TEXT_CAP_REFERENCE_HEIGHT, then in step with the viewport's height.
+local function readTextCapScale(): number
+	local camera = workspace.CurrentCamera
+	local height = if camera then camera.ViewportSize.Y else TEXT_CAP_REFERENCE_HEIGHT
+	return math.max(1, height / TEXT_CAP_REFERENCE_HEIGHT)
+end
+
+local function useTextCapScale(): number
+	local scale, setScale = React.useState(readTextCapScale)
+	React.useEffect(function()
+		local camera = workspace.CurrentCamera
+		if not camera then
+			return nil
+		end
+		local connection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+			setScale(readTextCapScale())
+		end)
+		setScale(readTextCapScale())
+		return function()
+			connection:Disconnect()
+		end
+	end, {})
+	return scale
+end
+
 -- Props:
 --   relicName      the relic this card offers
 --   index          1-based position in the hand (bob phase, slot)
@@ -531,6 +562,11 @@ local function OfferCard(props: any)
 	local count: number = props.count or 1
 	local bobIndex: number = props.bobIndex or index
 	local isPhone: boolean = props.isPhone == true
+	local textCapScale = useTextCapScale()
+	local titleMaxTextSize = math.floor(TITLE_MAX_TEXT_SIZE * textCapScale + 0.5)
+	local rarityMaxTextSize = math.floor(RARITY_MAX_TEXT_SIZE * textCapScale + 0.5)
+	local descriptionMaxTextSize = math.floor(DESCRIPTION_MAX_TEXT_SIZE * textCapScale + 0.5)
+	local tooltipMaxTextSize = math.floor(TOOLTIP_MAX_TEXT_SIZE * textCapScale + 0.5)
 	local tiltEnabled: boolean = props.tilt == true
 	local relicInfo = if face then nil else RelicData[relicName]
 	local rarity: string = if face then face.rarity else relicInfo and relicInfo.rarity or ItemRarity.Common
@@ -1330,7 +1366,7 @@ local function OfferCard(props: any)
 						TextXAlignment = Enum.TextXAlignment.Left,
 					}, {
 						UITextSizeConstraint = React.createElement("UITextSizeConstraint", {
-							MaxTextSize = if isPhone then PHONE_TOOLTIP_TEXT_SIZE else TOOLTIP_MAX_TEXT_SIZE,
+							MaxTextSize = if isPhone then PHONE_TOOLTIP_TEXT_SIZE else tooltipMaxTextSize,
 							MinTextSize = if isPhone then PHONE_TOOLTIP_TEXT_SIZE else 1,
 						}),
 					}),
@@ -1565,7 +1601,7 @@ local function OfferCard(props: any)
 								ZIndex = 3,
 							}, {
 								UITextSizeConstraint = React.createElement("UITextSizeConstraint", {
-									MaxTextSize = if isPhone then PHONE_TITLE_TEXT_SIZE else TITLE_MAX_TEXT_SIZE,
+									MaxTextSize = if isPhone then PHONE_TITLE_TEXT_SIZE else titleMaxTextSize,
 									MinTextSize = if isPhone then PHONE_TITLE_TEXT_SIZE else 1,
 								}),
 							}),
@@ -1651,7 +1687,7 @@ local function OfferCard(props: any)
 								ZIndex = 3,
 							}, {
 								UITextSizeConstraint = React.createElement("UITextSizeConstraint", {
-									MaxTextSize = RARITY_MAX_TEXT_SIZE,
+									MaxTextSize = rarityMaxTextSize,
 								}),
 								UICorner = React.createElement("UICorner", {
 									CornerRadius = UDim.new(0.1, 0),
@@ -1707,7 +1743,7 @@ local function OfferCard(props: any)
 								UITextSizeConstraint = React.createElement("UITextSizeConstraint", {
 									MaxTextSize = if isPhone
 										then PHONE_DESCRIPTION_TEXT_SIZE
-										else DESCRIPTION_MAX_TEXT_SIZE,
+										else descriptionMaxTextSize,
 									MinTextSize = if isPhone then PHONE_DESCRIPTION_TEXT_SIZE else 1,
 								}),
 							}),

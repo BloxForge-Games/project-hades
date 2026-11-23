@@ -11,6 +11,12 @@
 	local character ONCE per tick, reads the Pot Of Gold count ONCE per
 	tick, and tests every drop by plain distance from the root.
 
+	Drops collected on the same tick are taken ONE AFTER ANOTHER, nearest
+	first, PICKUP_STAGGER_SECONDS apart (2026-11-19): a pile of coins, or
+	the whole floor after a room clear, streams in as a run of ticks
+	instead of landing as one. A big batch is squeezed so that the last
+	one still leaves within PICKUP_STAGGER_MAX_SECONDS.
+
 	The sweep only runs while something is registered: a thread starts on
 	the first Register and exits once the registry empties.
 
@@ -34,6 +40,11 @@ local RelicNames = require(ReplicatedStorage.Submodules.Core.Shared.Enums.RelicN
 -- PICKUP_DELAY.
 local PICKUP_SWEEP_HZ = 10
 local PICKUP_SWEEP_INTERVAL = 1 / PICKUP_SWEEP_HZ
+
+-- See the header: the gap between two drops collected on the same tick,
+-- and the longest a whole batch may take to leave the floor.
+local PICKUP_STAGGER_SECONDS = 0.045
+local PICKUP_STAGGER_MAX_SECONDS = 1.2
 
 -- Pot Of Gold: these drop types are collected from ANY distance for owners
 -- -- the proximity gate is skipped and the drop's own fly-to-player tween
@@ -110,8 +121,22 @@ function DropPickupSweepController._sweep(self: typeof(DropPickupSweepController
 		end
 	end
 
-	for _, config in collected do
-		config.onPickup(root)
+	local count = #collected
+	if count == 0 then
+		return
+	end
+	if count > 1 then
+		table.sort(collected, function(a: SweepConfig, b: SweepConfig)
+			return (a.part.Position - rootPosition).Magnitude < (b.part.Position - rootPosition).Magnitude
+		end)
+	end
+	local gap = math.min(PICKUP_STAGGER_SECONDS, PICKUP_STAGGER_MAX_SECONDS / count)
+	for index, config in collected do
+		if index == 1 then
+			config.onPickup(root)
+		else
+			task.delay((index - 1) * gap, config.onPickup, root)
+		end
 	end
 end
 

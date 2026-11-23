@@ -633,7 +633,9 @@ local function Container(props: any)
 				AnchorPoint = Vector2.new(0, 0.5),
 				Position = UDim2.fromScale(0, 0.5),
 				Size = UDim2.fromScale(1, 1),
-				BackgroundColor3 = Color3.fromRGB(112, 33, 33),
+				-- White (2026-11-19, matching the mobs' health bar strip; a
+				-- dark red, 112,33,33, before, which barely read).
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 				BackgroundTransparency = 1, -- starts invisible
 				BorderSizePixel = 0,
 				ZIndex = 2, -- below HPFill (3), above HPBarBackground (2 via parent)

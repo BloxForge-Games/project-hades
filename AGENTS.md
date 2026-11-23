@@ -85,9 +85,10 @@ rojo sourcemap lobby.project.json --include-non-scripts -o sourcemap.lobby.json
 - **Profile schema changes** need a migration step in
   `bfg-core/Source/Server/Services/DataService/Migrations.lua` and a bump of
   `CurrentVersion`. New profiles come from `DataTemplate.lua`.
-- **Relic text is the source of truth.** Descriptions in `RelicData.lua` own
-  the numbers; code is synced to them, never the reverse. Scaling relics show
-  the real number through `runtimeDescriptionCallback`.
+- **Relic text is the source of truth.** Each relic's `detail` line in
+  `RelicData.lua` owns the numbers; code is synced to it, never the reverse.
+  `description` is the short line players see (no numbers, 2026-11-19), and
+  a scaling relic's real number lives in its `runtimeDetailCallback`.
 
 ## Code style
 

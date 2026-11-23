@@ -90,7 +90,7 @@ local TEXT_COLOR = Color3.fromRGB(255, 255, 255)
 -- flashes bright red and settles to a deeper red, pulses the number, and
 -- plays the tick.
 local COUNTDOWN_COLOR = Color3.fromRGB(208, 208, 208)
-local COUNTDOWN_URGENT_SECONDS = 10
+local COUNTDOWN_URGENT_SECONDS = 5 -- 10 until 2026-11-19
 local COUNTDOWN_FLASH_COLOR = Color3.fromRGB(255, 72, 72)
 local COUNTDOWN_URGENT_COLOR = Color3.fromRGB(205, 50, 50)
 local COUNTDOWN_FLASH_TWEEN = TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
@@ -145,7 +145,7 @@ local COUNTDOWN_BAR_FILL_COLOR = Color3.fromRGB(255, 255, 255)
 local COUNTDOWN_BAR_FILL_TRANSPARENCY = 0.1
 -- The server's hand length, for the bar's full width; a hand that reads
 -- longer on its first tick stretches it (the max seen wins).
-local COUNTDOWN_BAR_FULL_SECONDS = 15
+local COUNTDOWN_BAR_FULL_SECONDS = 20
 local HEADER_RISE = 0.03
 local COUNTDOWN_ENTRY_DELAY = 0.08
 local HEADER_IN_MOVE_TWEEN = TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)

@@ -618,7 +618,7 @@ end
 
 -- The Wheel of Fortune clown's "Spin the wheel!" (2026-11-13), a CUTSCENE
 -- beat run from his spin node's PreAction: asks the server to spin
--- (WheelOfFortuneService judges it). Refused (one spin each): the node is
+-- (WheelOfFortuneService judges it). Refused (the party's one spin is used): the node is
 -- passed at once and his "had your spin" line plays. Accepted: the bars
 -- come up (no zoom, 2026-11-13) and hold the player while it turns;
 -- when it lands WheelResult is set and the conversation advances to his
@@ -675,12 +675,12 @@ function EventController.SpinWheel(self: typeof(EventController))
 	end)
 end
 
--- Whether this player already spun the wheel the clown being talked to
--- stands in (WheelOfFortuneService sets Spun_<UserId> on the wheel).
+-- Whether the party has used its one spin of the wheel the clown being
+-- talked to stands in (WheelOfFortuneService sets Spun on the wheel).
 function EventController.HasSpunWheel(_self: typeof(EventController)): boolean
 	local model = DialogueBillboardInterface and DialogueBillboardInterface:GetActiveDialogueModel()
 	local wheel = model and model.Parent
-	return wheel ~= nil and wheel:GetAttribute("Spun_" .. Players.LocalPlayer.UserId) == true
+	return wheel ~= nil and wheel:GetAttribute("Spun") == true
 end
 
 -- The Memory Shrine's "Begin the trial" (2026-11-13): opens this

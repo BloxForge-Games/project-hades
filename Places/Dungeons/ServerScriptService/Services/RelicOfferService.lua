@@ -56,8 +56,8 @@ local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 
 -- How long a dealt hand stays open before the server picks for the
 -- player. Counted from the DEAL, not from when the cards are on screen:
--- hiding the cards does not pause it.
-local OFFER_SECONDS = 15
+-- hiding the cards does not pause it. (20 since 2026-11-19; 15 before.)
+local OFFER_SECONDS = 20
 -- How long after a hand is dealt its relics are marked seen (see _deal).
 local SEEN_AFTER_DEAL_SECONDS = 1
 

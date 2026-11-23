@@ -8,8 +8,9 @@
      without needing to know about the network layer.
 
      Death is two server-authoritative phases (see LifeService):
-       DOWNED (PlayerDied)        the body stays where it fell, fully
-                                  visible. The local player gets the
+       DOWNED (PlayerDied)        the body ragdolls (server) and lies
+                                  where it lands, fully visible. The
+                                  local player gets the
                                   impact, the Game Over screen with the
                                   revive window's bar and REVIVE button,
                                   the red hold and the half fade. Nothing
@@ -162,9 +163,8 @@ local DEATH_BLACK_HOLD_DURATION = DeathCinematicData.BlackHoldDuration
 
 -- Body fade. Starts the moment a player is FULLY dead (the server's
 -- window expired), not on a local timer: while downed the body is meant
--- to be seen lying there, revive button and all. The server keeps the
--- death pose frozen until after this tween, so the humanoid never
--- visibly stands back up under a still-visible body.
+-- to be seen lying there, revive button and all. The body stays a
+-- ragdoll under this tween; only a revive stands it back up.
 local CHARACTER_FADE_DURATION = DEATH_BLACK_HOLD_DURATION
 -- Honors CHARACTER_FADE_DURATION (a hardcoded 0.5 here used to silently
 -- disagree with the named constant). With the ~1.5s start offset + this
@@ -559,7 +559,7 @@ function LifeController.Start(self: typeof(LifeController))
 	end)
 
 	-- FULLY DEAD: the window closed with no revive. Every client fades the
-	-- body now (the server releases the frozen pose only after this tween).
+	-- body now (it stays a ragdoll until a revive).
 	-- The local player fades to black, clears the screen under it and
 	-- enters spectate -- unless this death completed a WIPE, in which case
 	-- the screen stays up and the GameOver handler owns it from here.

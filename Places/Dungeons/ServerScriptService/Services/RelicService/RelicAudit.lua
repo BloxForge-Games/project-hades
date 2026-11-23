@@ -27,7 +27,7 @@
 	                        1 Legendary LIVE relics (2026-10-31; `retired`
 	                        rows and duos are not counted); Neutral
 	                        carries the rest.
-	  5. Runtime text       runtimeDescriptionCallback runs, returns a
+	  5. Runtime text       runtimeDetailCallback runs, returns a
 	                        string, and leaves no unsubstituted %-holes.
 	  6. Markup             description font tags are balanced.
 	  7. Status coverage    every StatusConditions value has a
@@ -151,19 +151,16 @@ function RelicAudit.Run(): (number, number)
 			byRarity[data.rarity] = (byRarity[data.rarity] or 0) + 1
 		end
 
-		-- 5) runtime description
-		if data.runtimeDescriptionCallback ~= nil then
-			if type(data.runtimeDescriptionCallback) ~= "function" then
-				problem(relicName, "runtimeDescriptionCallback is not a function")
+		-- 5) runtime detail text (not shown since 2026-11-19; still the record of the numbers)
+		if data.runtimeDetailCallback ~= nil then
+			if type(data.runtimeDetailCallback) ~= "function" then
+				problem(relicName, "runtimeDetailCallback is not a function")
 			else
-				local ok, result = pcall(data.runtimeDescriptionCallback, nil)
+				local ok, result = pcall(data.runtimeDetailCallback, nil)
 				if not ok then
-					warn_(
-						relicName,
-						("runtimeDescriptionCallback errored on a nil player: %s"):format(tostring(result))
-					)
+					warn_(relicName, ("runtimeDetailCallback errored on a nil player: %s"):format(tostring(result)))
 				elseif type(result) ~= "string" then
-					problem(relicName, "runtimeDescriptionCallback did not return a string")
+					problem(relicName, "runtimeDetailCallback did not return a string")
 				elseif string.find(result, "%%[diouxXeEfgGqcs]") then
 					problem(relicName, "runtime description still contains an UNSUBSTITUTED %-placeholder")
 				end
@@ -298,7 +295,10 @@ function RelicAudit.Run(): (number, number)
 	end
 
 	for relicName, data in RelicData do
-		local description = typeof(data.description) == "string" and stripMarkup(data.description) or ""
+		-- The full text (`detail`, 2026-11-19), not the short card text: the
+		-- short `description` drops the producer wording these checks parse.
+		local fullText = if typeof(data.detail) == "string" then data.detail else data.description
+		local description = typeof(fullText) == "string" and stripMarkup(fullText) or ""
 		local lowered = description:lower()
 
 		local grantsSet: { [string]: boolean } = {}

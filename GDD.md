@@ -73,11 +73,36 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
 
 - A run is **one floor on every tier** (several floors made runs too long). Combat rooms by
   tier: Easy 3, Normal 4, Hard 5, Nightmare 5, with the miniboss after the middle one and the
-  boss last. Every combat room is two waves, except that Nightmare's rooms past the miniboss are
-  three, so a run is 6 / 8 / 10 / 12 waves (32 / 50 / 68 / 86 mobs solo). One event sits on a random door before the boss (the very first door included), and a
+  boss last. Every combat room rolls **two or three waves** (2026-11-19; two before, three past the
+  miniboss on Nightmare only), and **its mob total is the two-wave amount either way**, split
+  over the waves it rolled (**44 / 68 / 92 / 92 mobs solo since 2026-11-19**, Nightmare was 116; +35% for hordes: the ladder is 5 / 7 / 10 / 12 a wave of a two-wave room and +3 a wave per extra player; 32 / 50 / 68 / 86 before). **Up to 10 / 15 / 20 / 25 are alive at once for 1 to 4 players** (8 to 14 earlier on 2026-11-19, 6 to 9 before). One event sits on a random door before the boss, **never the first door** (2026-11-19: a run opens on a fight), and a
   second rolls at 50% on another door, never back to back (for example C E C M E C B).
+- **Event rooms lead the player (2026-11-19).** The hub's guide path (golden wisps) runs from the
+  player to the event, and to the exit gate once that player is done with it or the door has
+  opened. The Spirit Companion says what the room is and what to do in it on the way in, and
+  points at the door afterwards. The door's timer is **30 s** from the first player walking in
+  (25 before). **Combat rooms nudge with the same path:** it appears only for a player who has
+  left their next step untouched for **10 s**. That step is their vending machine after a clear
+  then the exit gate 10 s after they opened it; a doorway
+  inside a Combat room once that half's mobs are dead; and any open gate. No guide path, here
+  or in the hub, shows while the player is within 7 studs of what it points at. The path reads
+  only the map as ground (spell effects, mobs and drops neither lift nor block it), and a wisp
+  flies at one steady speed, the first 60 studs of a longer path.
+- **Melee feel (2026-11-19):** a swing lunges 2 studs (4 before) and knocks a regular mob back
+  2.5 / 3 / 4 studs for Daggers / Sword / Greatsword (1.5 / 2 / 2.5 before), so a hit moves the
+  mob further than the swing moves the player. An arrow pushes 1.5 studs (none before). A mob's health bar flashes white on every hit and
+  the health just lost drains away as a pale strip.
+- **Reward feel (2026-11-19):** coins and crystals tick when they reach the player, each tick a
+  step higher up a scale while pickups keep coming (it resets after 1 s without one), and drops
+  taken together stream in one after another. **Clearing a combat room pulls every coin and
+  crystal on the floor to each player from any distance** (orbs stay where they fell). A player's
+  own weapon takedown gives their camera a small jolt, a bigger one for an Elite, Miniboss or Boss.
+- **Going down (2026-11-20):** a player out of lives ragdolls and is knocked a little way from
+  whatever killed them (no death animation), and lies there as a ragdoll for the revive window.
+  The paid revive stands them up where they lie. There is no teammate revive.
+- **No minimap in dungeons** (off again 2026-11-19; the hub keeps its baked map).
 - **Economy per run** (solo, Runegrove): kill EXP is scaled so a run pays what it always did
-  (grunt EXP x 2.72 / 3.48 / 3.84 / 3.03). **A run pays 157 / 325 / 640 / 1274 coins** (150 / 300 /
+  (grunt EXP x 1.98 / 2.56 / 2.84 / 2.25 since the 2026-11-19 mob count; 2.72 / 3.48 / 3.84 / 3.03 before). **A run pays 157 / 325 / 640 / 1274 coins** (150 / 300 /
   600 / 1200 from 2026-11-02 until the 2026-11-04 gear cut): the reward chests 82 / 175 / 340 / 674
   (40% miniboss chest / 60% boss chest), grunt
   drops 50 / 100 / 200 / 400 and the treasure chests 25 / 50 / 100 / 200. Breaking every pot adds
@@ -115,13 +140,17 @@ resets afterwards. Roughly **6 to 15 gear drops** per run.
   chest crystals for every living player, one is a **mimic**, a punishment that pays nothing: a
   corrupted pack of 4 + 1 per player, and the door stays shut until it is dead. The vault seals,
   unopened chests going dead, once anyone steps past its exit) and the **Wheel of Fortune**
-  (2026-11-13; WheelOfFortuneData: one free spin per player, eight slices, about 23% of the weight bad:
+  (2026-11-13; **one spin for the whole party since 2026-11-19, like the Coffin: whoever talks to
+  the clown first spins and every living player takes the result**; WheelOfFortuneData: seven slices, about 16% of the weight bad:
   Gold 5% of run coins, Crystals 10%, Heal 50%, a relic hand, a JACKPOT Epic+ hand with 15%
   coins, and the bad -25% HP, Lose Relic (one random non-Cursed relic) and Ambush (a corrupted
   pack of 3 + 1 per player, door held)) and the **Memory Shrine** (2026-11-13; MemoryShrineService,
   Slay the Spire's Match and Keep: each player plays their own board once, 6 pairs (4 relics, Gold
   for 8% of the run's coins, and one Cursed relic), every face shown for 2.5 s, then 3 misses
-  allowed; a found pair is kept at once, the Cursed pair included); Normal and Hard
+  allowed; a found pair is kept at once, the Cursed pair included). **The Memory Shrine is out of the pool** (2026-11-18: its code stays,
+  no tier rolls it; the Wheel of Fortune left with it and came back 2026-11-19). **Mimics are
+  removed from the game (2026-11-19):** the Mimic Vault's code is deleted and a treasure chest
+  never turns on the party. Normal and Hard
   add the Coffin, the Cursed Shrine and the **Merchant Shop**; Nightmare adds the Sword in the Stone.
   The Merchant (2026-11-13) sells 5 relics for **Max HP or Max Mana for the rest of the run**
   (each stand rolls one, HP 70% / Mana 30%): Rare 15%, Epic 20%, Legendary 25%, never past 75%
@@ -170,6 +199,12 @@ except Death Venom.
   strike on crits), so the Critical Damage line is worth chasing.
 
 ## Relics
+
+**Relic text is short everywhere (2026-11-19).** The card, the tray and the codex show one short
+line with no percentages, damage figures or durations ("Every 3rd Melee swing fires a Flame Wave
+that Burns."); play-testers found the full lines too long. The numbers are kept beside each relic
+in RelicData as `detail` (the old full line, not shown) and `runtimeDetailCallback`, and the
+tables below still list the full effect.
 
 **No relic slots (2026-11-12).** The tray shows a column of six boxes and opens another column
 per six relics; each box wears its element tree's emblem.
@@ -461,7 +496,7 @@ Gear **never drops enchanted** (2026-11-14). An enchantment arrives as a **scrol
 enchantments (five weapon, five armor) at one tier, named like "Enflamed II Scroll". The roll is
 uniform over the ten, then the tier at 60 / 30 / 10. Sources, each rolled per player from that
 player's own chest: **Boss chest** always 1, **Miniboss chest** 35%, **Coffin chest** 25%,
-**treasure chest** 10% (a mimic pays none). In the world a scroll is a neon block in its
+**treasure chest** 10%. In the world a scroll is a neon block in its
 enchantment's colour, owned and picked up like a gear drop, and it is kept the moment it is picked
 up (profile `EnchantmentScrolls`, a map of counts). The bag's **Enchants** tab shows owned scrolls as tiles, one per stack with its count and "Tier 1 / 2 / 3", in the tier's rarity colour (Rare, Epic, Legendary); selecting one shows its name, tier, effect, what it applies to and how many are owned on the detail pane. Picking one up shows no toast.
 **Applying a scroll to gear arrives with the enchanter NPC**; until then scrolls only accumulate.
@@ -630,7 +665,8 @@ main dungeon queue.
 
 A server-wide time scale for cinematic beats (2026-11-01). Everyone in the server shares it, the
 triggering player included. Two beats ship with it: the kill that clears a Combat room (a quarter
-speed for 0.8 s, then the vending machines drop as time comes back) and an encounter death (a
+speed for 0.35 s and 0.25 s back to normal, about 0.65 s in all since 2026-11-19 (it was 0.8 s
+held, about 1.2 s); the vending machines drop during it) and an encounter death (a
 quarter speed for 1.5 s on the Boss, 1 s on a Miniboss, through the body's fall; the chest drops
 once time is back). `TimeScaleService:Slow(scale, holdSeconds)` fires one from anywhere on the
 server; `/slowmo <scale> [seconds]` for testing.

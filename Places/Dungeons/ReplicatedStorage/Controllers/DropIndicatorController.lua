@@ -1,6 +1,8 @@
 --!strict
+local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SoundService = game:GetService("SoundService")
 
 local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 local DropData = require(ReplicatedStorage.Submodules.Core.Shared.Data.DropData)
@@ -15,24 +17,73 @@ local DropTypes = require(ReplicatedStorage.Submodules.Core.Shared.Enums.DropTyp
 -- local SHOW_DELAY = 0.5
 -- local INDICATOR_ENABLED = true
 
+-- THE PITCH LADDER (2026-11-19). Each currency pickup that follows the
+-- last within LADDER_RESET_SECONDS plays one step higher up a major scale
+-- (semitones above the sound's own pitch), holding at the top: a stream of
+-- coins is a rising run of ticks, and it starts over once the stream stops.
+-- Orbs keep their one flat cue.
+local LADDER_SEMITONES = { 0, 2, 4, 5, 7, 9, 11, 12 }
+local LADDER_RESET_SECONDS = 1
+local LADDER_TYPES: { [string]: boolean } = {
+	[DropTypes.Coins] = true,
+	[DropTypes.Gems] = true,
+	[DropTypes.ArcaneCrystals] = true,
+}
+-- Slack on a cloned sound's cleanup, and its lifetime while the asset has
+-- not loaded yet (TimeLength reads 0 until it has).
+local SOUND_CLEANUP_MARGIN = 0.5
+local SOUND_UNKNOWN_LENGTH = 3
+
 local DropIndicatorController = {
 	Name = "DropIndicatorController",
+
+	_ladderStep = 0,
+	_ladderAt = -math.huge,
 }
+
+-- The pickup sound, one step up the ladder. A CLONE each time: the shared
+-- GameAssets sound cannot overlap itself, so a stream of coins used to cut
+-- its own ticks short.
+function DropIndicatorController._playLadder(self: typeof(DropIndicatorController), template: Sound)
+	local now = os.clock()
+	if now - self._ladderAt > LADDER_RESET_SECONDS then
+		self._ladderStep = 0
+	end
+	self._ladderAt = now
+	self._ladderStep = math.min(self._ladderStep + 1, #LADDER_SEMITONES)
+
+	local sound = template:Clone()
+	sound.PlaybackSpeed = template.PlaybackSpeed * 2 ^ (LADDER_SEMITONES[self._ladderStep] / 12)
+	sound.Parent = SoundService
+	sound:Play()
+	local length = if sound.TimeLength > 0 then sound.TimeLength else SOUND_UNKNOWN_LENGTH
+	Debris:AddItem(sound, length + SOUND_CLEANUP_MARGIN)
+end
 
 DropIndicatorController.OnDropIndicatorRequested = Signal.new()
 
 function DropIndicatorController.Start(self: typeof(DropIndicatorController))
 	self.OnDropIndicatorRequested:Connect(function(_: Model, dropType: string, _: number)
-		DropData[dropType].sound:Play()
-
-		if not Players.LocalPlayer.Character.HumanoidRootPart:FindFirstChild("DropParticlesAttachment") then
-			ReplicatedStorage.GameAssets.Particles.DropParticlesAttachment.DropParticlesAttachment:Clone().Parent =
-				Players.LocalPlayer.Character.HumanoidRootPart
+		if LADDER_TYPES[dropType] then
+			self:_playLadder(DropData[dropType].sound)
+		else
+			DropData[dropType].sound:Play()
 		end
 
-		Players.LocalPlayer.Character.HumanoidRootPart:FindFirstChild("DropParticlesAttachment").Particles.Color =
-			ColorSequence.new(DropData[dropType].color)
-		Players.LocalPlayer.Character.HumanoidRootPart:FindFirstChild("DropParticlesAttachment").Particles:Emit(10)
+		-- The cue can arrive after the character is gone (a coin still in
+		-- flight when the player died): the sound plays, the burst does not.
+		local character = Players.LocalPlayer.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not root then
+			return
+		end
+		local attachment = root:FindFirstChild("DropParticlesAttachment")
+		if not attachment then
+			attachment = ReplicatedStorage.GameAssets.Particles.DropParticlesAttachment.DropParticlesAttachment:Clone()
+			attachment.Parent = root
+		end
+		attachment.Particles.Color = ColorSequence.new(DropData[dropType].color)
+		attachment.Particles:Emit(10)
 
 		if dropType == DropTypes.Mana then
 			return

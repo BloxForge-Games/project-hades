@@ -38,6 +38,23 @@ local PICKUP_DELAY = 0.25
 -- float, eases into the chest), with a small lift at the midpoint so it
 -- arcs rather than slides. The image fades over the second half.
 local COLLECT_SECONDS = 0.5
+-- A drop pulled in from far away (the room-clear vacuum, Pot Of Gold)
+-- takes longer, so it reads as a flight and not a teleport: a second per
+-- COLLECT_STUDS_PER_SECOND, between COLLECT_SECONDS and this.
+local COLLECT_SECONDS_MAX = 0.9
+local COLLECT_STUDS_PER_SECOND = 60
+-- Stamped by the server on currency when its room is cleared
+-- (Server/Components/Drop): collected from any distance.
+local VACUUM_ATTRIBUTE = "Vacuum"
+-- Currency makes its pickup sound and burst when it REACHES the player
+-- (2026-11-19; at the start of the pull before), so a stream of coins
+-- lands as a run of ticks (DropIndicatorController raises their pitch).
+-- An orb keeps its cue at the start, with the heal.
+local ARRIVAL_CUE_TYPES: { [string]: boolean } = {
+	[DropTypes.Coins] = true,
+	[DropTypes.Gems] = true,
+	[DropTypes.ArcaneCrystals] = true,
+}
 local COLLECT_LIFT_STUDS = 1.25
 -- Chest height on an R6 / R15 root (its centre is at the hips).
 local COLLECT_TARGET_OFFSET = Vector3.new(0, 0.75, 0)
@@ -85,10 +102,18 @@ function Drop:_collect(root: BasePart)
 		return
 	end
 
-	DropIndicatorController.OnDropIndicatorRequested:Fire(
-		Players.LocalPlayer.Character,
-		self.Instance:GetAttribute(Attributes.DropType),
-		self.Instance:GetAttribute(Attributes.DropValue)
+	local dropValue = self.Instance:GetAttribute(Attributes.DropValue)
+	local cueOnArrival = ARRIVAL_CUE_TYPES[dropType] == true
+	local function cue()
+		DropIndicatorController.OnDropIndicatorRequested:Fire(Players.LocalPlayer.Character, dropType, dropValue)
+	end
+	if not cueOnArrival then
+		cue()
+	end
+	local collectSeconds = math.clamp(
+		(self.Instance.PrimaryPart.Position - root.Position).Magnitude / COLLECT_STUDS_PER_SECOND,
+		COLLECT_SECONDS,
+		COLLECT_SECONDS_MAX
 	)
 
 	for _, descendant in self.Instance.PrimaryPart:GetDescendants() do
@@ -103,14 +128,7 @@ function Drop:_collect(root: BasePart)
 
 	local coinImageTransparencyTween = GameClock.Tween(
 		self._billboardImage,
-		TweenInfo.new(
-			COLLECT_SECONDS / 2,
-			Enum.EasingStyle.Quad,
-			Enum.EasingDirection.Out,
-			0,
-			false,
-			COLLECT_SECONDS / 2
-		),
+		TweenInfo.new(collectSeconds / 2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, collectSeconds / 2),
 		{ ImageTransparency = 1 }
 	)
 	coinImageTransparencyTween:Play()
@@ -128,13 +146,16 @@ function Drop:_collect(root: BasePart)
 			connection:Disconnect()
 			return
 		end
-		local alpha = math.clamp((GameClock.Now() - startedAt) / COLLECT_SECONDS, 0, 1)
+		local alpha = math.clamp((GameClock.Now() - startedAt) / collectSeconds, 0, 1)
 		local eased = alpha * alpha * (3 - 2 * alpha)
 		local target = (if root.Parent then root.Position else startPosition) + COLLECT_TARGET_OFFSET
 		local lift = Vector3.new(0, COLLECT_LIFT_STUDS * math.sin(alpha * math.pi), 0)
 		part.CFrame = CFrame.new(startPosition:Lerp(target, eased) + lift) * rotation
 		if alpha >= 1 then
 			connection:Disconnect()
+			if cueOnArrival then
+				cue()
+			end
 			self.Instance:Destroy()
 		end
 	end)
@@ -142,6 +163,8 @@ end
 
 function Drop:Construct()
 	self._gone = false
+	self._taken = false
+	self._sweepReady = false
 	self._amplitude = Random.new():NextNumber(BOB_AMPLITUDE_MIN, BOB_AMPLITUDE_MAX)
 	self._durationPerCycle = Random.new():NextNumber(BOB_CYCLE_MIN, BOB_CYCLE_MAX)
 	-- The parts can stream in after the tagged Model does; wait for them.
@@ -270,19 +293,40 @@ function Drop:Start()
 		DropPickupSweepController:Unregister(self.Instance)
 	end, true)
 
-	GameClock.Delay(PICKUP_DELAY, function()
-		-- Gone during the delay (destroyed / expired): nothing to sweep.
-		if self._gone or not self.Instance.Parent then
+	-- Into the sweep, or back into it with a new radius: a vacuumed drop
+	-- (VACUUM_ATTRIBUTE) is collected from any distance.
+	local function register()
+		-- Gone (destroyed / expired) or already on its way in: nothing to sweep.
+		if self._gone or self._taken or not self.Instance.Parent then
 			return
 		end
 		DropPickupSweepController:Register(self.Instance, {
 			part = self._primaryPart,
-			radius = PICKUP_RADIUS,
+			radius = if self.Instance:GetAttribute(VACUUM_ATTRIBUTE) == true then math.huge else PICKUP_RADIUS,
 			dropType = self.Instance:GetAttribute(Attributes.DropType) :: string?,
 			onPickup = function(root: BasePart)
+				-- The sweep staggers a batch, so this can run a moment after
+				-- the drop was chosen.
+				if self._taken or not self.Instance.Parent then
+					return
+				end
+				self._taken = true
 				self:_collect(root)
 			end,
 		})
+	end
+	self._janitor:Add(
+		self.Instance:GetAttributeChangedSignal(VACUUM_ATTRIBUTE):Connect(function()
+			if self._sweepReady then
+				register()
+			end
+		end),
+		"Disconnect"
+	)
+
+	GameClock.Delay(PICKUP_DELAY, function()
+		self._sweepReady = true
+		register()
 	end)
 end
 

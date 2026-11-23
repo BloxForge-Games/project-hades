@@ -63,6 +63,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 --[ Imports ]--
 
@@ -125,6 +126,18 @@ local HEALTH_BAR_NAME = "RedBar"
 -- The fill's authored height scale, and the per-hit tween length.
 local HEALTH_BAR_HEIGHT_SCALE = 1.3
 local HEALTH_BAR_TWEEN_SECONDS = 0.1
+-- THE HIT FLASH (2026-11-19; play-testers could not tell a hit had
+-- landed): on every hit the fill flashes HEALTH_FLASH_COLOR and settles
+-- back over HEALTH_FLASH_SECONDS, and the health just lost stays behind
+-- as a pale strip (HEALTH_GHOST_NAME, under the fill) that holds for
+-- HEALTH_GHOST_HOLD_SECONDS and then drains to the new health. Hits that
+-- land while it is still draining add to the same strip.
+local HEALTH_FLASH_COLOR = Color3.fromRGB(255, 255, 255)
+local HEALTH_FLASH_SECONDS = 0.25
+local HEALTH_GHOST_NAME = "DamageGhost"
+local HEALTH_GHOST_COLOR = Color3.fromRGB(255, 240, 205)
+local HEALTH_GHOST_HOLD_SECONDS = 0.2
+local HEALTH_GHOST_DRAIN_SECONDS = 0.35
 -- How long to wait for a mob model's Humanoid to replicate before giving
 -- up on it (a model with no Humanoid is not a mob).
 local HUMANOID_WAIT_SECONDS = 5
@@ -723,6 +736,65 @@ local function healthBarSize(humanoid: Humanoid): UDim2
 	return UDim2.fromScale(math.clamp(ratio, 0, 1), HEALTH_BAR_HEIGHT_SCALE)
 end
 
+-- Each fill's own colour (read before its first flash) and each strip's
+-- running drain. Weak-keyed: a destroyed bar drops out on its own.
+local healthBarColors: { [GuiObject]: Color3 } = setmetatable({}, { __mode = "k" }) :: any
+local healthGhostTweens: { [GuiObject]: Tween } = setmetatable({}, { __mode = "k" }) :: any
+
+-- The hit flash (see HEALTH_FLASH_COLOR): call BEFORE the fill is tweened
+-- to `target`, while it still shows the health the mob had.
+local function flashHealthBar(bar: GuiObject, target: UDim2)
+	local parent = bar.Parent
+	if parent then
+		local found = parent:FindFirstChild(HEALTH_GHOST_NAME)
+		local ghost: Frame
+		if found and found:IsA("Frame") then
+			ghost = found
+			-- Still draining from an earlier hit: keep the wider strip.
+			if ghost.Size.X.Scale < bar.Size.X.Scale then
+				ghost.Size = bar.Size
+			end
+		else
+			ghost = Instance.new("Frame")
+			ghost.Name = HEALTH_GHOST_NAME
+			ghost.BackgroundColor3 = HEALTH_GHOST_COLOR
+			ghost.BorderSizePixel = 0
+			ghost.AnchorPoint = bar.AnchorPoint
+			ghost.Position = bar.Position
+			ghost.Size = bar.Size
+			ghost.ZIndex = bar.ZIndex - 1
+			ghost.Parent = parent
+		end
+		local running = healthGhostTweens[ghost]
+		if running then
+			running:Cancel()
+		end
+		local drain = TweenService:Create(
+			ghost,
+			TweenInfo.new(
+				HEALTH_GHOST_DRAIN_SECONDS,
+				Enum.EasingStyle.Quad,
+				Enum.EasingDirection.Out,
+				0,
+				false,
+				HEALTH_GHOST_HOLD_SECONDS
+			),
+			{ Size = target }
+		)
+		healthGhostTweens[ghost] = drain
+		drain:Play()
+	end
+
+	local base = healthBarColors[bar]
+	if not base then
+		base = bar.BackgroundColor3
+		healthBarColors[bar] = base
+	end
+	bar.BackgroundColor3 = HEALTH_FLASH_COLOR
+	TweenService:Create(bar, TweenInfo.new(HEALTH_FLASH_SECONDS, Enum.EasingStyle.Quad), { BackgroundColor3 = base })
+		:Play()
+end
+
 -- Per mob: the HealthChanged watch that drives its bar. Keyed by model so
 -- a model seen twice (folder churn) is wired once; dropped on destroy.
 MobController._healthWatches = {} :: { [Model]: RBXScriptConnection }
@@ -744,11 +816,17 @@ function MobController._watchMobHealth(self: typeof(MobController), mob: Instanc
 		bar.Size = healthBarSize(humanoid)
 	end
 
-	self._healthWatches[mob] = humanoid.HealthChanged:Connect(function()
+	local lastHealth = humanoid.Health
+	self._healthWatches[mob] = humanoid.HealthChanged:Connect(function(health: number)
+		local dropped = health < lastHealth
+		lastHealth = health
 		-- Looked up per hit: the billboard is cloned in after the model
 		-- (MobBase.Start), so it may not have been there on registration.
 		local liveBar = findHealthBar(mob)
 		if liveBar then
+			if dropped then
+				flashHealthBar(liveBar, healthBarSize(humanoid))
+			end
 			tweenGui.size(
 				liveBar,
 				healthBarSize(humanoid),

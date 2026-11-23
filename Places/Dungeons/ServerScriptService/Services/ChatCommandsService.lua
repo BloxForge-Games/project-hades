@@ -505,7 +505,7 @@ COMMANDS = {
 	},
 	event = {
 		usage = "/event [name]",
-		description = "Builds a fresh copy of the event room [name] (mimic, wheel, memory, merchant, shrine, greater, coffin, forge, fountain, sword) in open air above the floor and teleports you into it; no name lists the events.",
+		description = "Builds a fresh copy of the event room [name] (wheel, memory, merchant, shrine, greater, coffin, forge, fountain, sword) in open air above the floor and teleports you into it; no name lists the events.",
 		handler = function(player: Player, args: { string }): string?
 			local dungeonService = Blitz.OptionalService("DungeonService")
 			local dungeon = dungeonService and dungeonService:GetActiveDungeon()
@@ -521,7 +521,6 @@ COMMANDS = {
 			end
 			-- Short names for the prefabs whose names do not contain them.
 			local aliases = {
-				mimic = "mimicvault",
 				wheel = "wheeloffortune",
 				merchant = "merchantshop",
 				broker = "merchantshop",
@@ -569,6 +568,11 @@ COMMANDS = {
 			end
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.CFrame = CFrame.new(room.model:GetPivot().Position + Vector3.new(0, 5, 0))
+			-- The guide path and the companion's line, as if walked in.
+			local eventGuide = Blitz.OptionalService("EventGuideService")
+			if eventGuide then
+				eventGuide:SetDebugRoom(player, room)
+			end
 			return ("Built a %s room and teleported you there."):format(prefabName)
 		end,
 	},

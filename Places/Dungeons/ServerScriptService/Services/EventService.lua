@@ -63,6 +63,7 @@ local rollItemRarity = require(ReplicatedStorage.Submodules.Core.Shared.Function
 local Log = require(ReplicatedStorage.Submodules.Core.Shared.Functions.Log)
 local Blitz = require(ReplicatedStorage.Submodules.Core.Shared.Blitz)
 local GameClock = require(ReplicatedStorage.Submodules.Core.Shared.GameClock)
+local Signal = require(ReplicatedStorage.Submodules.Core.Packages.Signal)
 
 -- DungeonService is never required here: consumers reach it through
 -- Blitz.OptionalService at call time or its signals (the service graph runs
@@ -79,15 +80,6 @@ local function getCoffinEventService(): any
 		coffinEventServiceLazy = (require :: any)(ServerScriptService.Services.CoffinEventService)
 	end
 	return coffinEventServiceLazy
-end
-
--- MimicVaultService requires this module too: reached the same lazy way.
-local mimicVaultServiceLazy: any = nil
-local function getMimicVaultService(): any
-	if mimicVaultServiceLazy == nil then
-		mimicVaultServiceLazy = (require :: any)(ServerScriptService.Services.MimicVaultService)
-	end
-	return mimicVaultServiceLazy
 end
 
 -- MemoryShrineService requires this module too: reached the same lazy way.
@@ -355,6 +347,11 @@ local EventService = {
 	-- CursedShrine = finished a conversation; MerchantShop = chose
 	-- "I'm ready to continue".
 	_interactions = {},
+
+	-- (player, roomId): `player` has just been counted as done with the
+	-- Event room `roomId` (2026-11-19; EventGuideService turns their guide
+	-- path from the event to the exit gate on it).
+	OnInteracted = Signal.new(),
 }
 
 --[ Private ]--
@@ -690,13 +687,6 @@ function EventService.WireEventRoom(self: typeof(EventService), room: any): numb
 		else
 			warn("[EventService] GreaterShrine room has no Interactables model — event not wired")
 		end
-	elseif eventKind == "MimicVault" then
-		-- Three shared chests, one a mimic: MimicVaultService runs the
-		-- room (its own prompts, no dialogue).
-		if getMimicVaultService() then
-			getMimicVaultService():RegisterRoom(room)
-			wired += 1
-		end
 	elseif eventKind == "MemoryShrine" then
 		-- A board of pairs each: MemoryShrineService runs the room.
 		if getMemoryShrineService() then
@@ -704,7 +694,7 @@ function EventService.WireEventRoom(self: typeof(EventService), room: any): numb
 			wired += 1
 		end
 	elseif eventKind == "WheelOfFortune" then
-		-- One free spin each: WheelOfFortuneService runs the room.
+		-- One spin for the whole party: WheelOfFortuneService runs the room.
 		if getWheelOfFortuneService() then
 			getWheelOfFortuneService():RegisterRoom(room)
 			wired += 1
@@ -805,6 +795,18 @@ function EventService.RegisterEventModel(self: typeof(EventService), model: Inst
 	self._eventModels[model] = { kind = kind, room = room }
 end
 
+-- The model a player walks up to in Event room `roomId` (the shrine, the
+-- NPC, the clown) and the event's kind, or nil for a room with none
+-- wired. EventGuideService points the guide path at it.
+function EventService.GetEventModel(self: typeof(EventService), roomId: number): (Instance?, string?)
+	for model, entry in self._eventModels do
+		if entry.room and entry.room.id == roomId and model.Parent then
+			return model, entry.kind
+		end
+	end
+	return nil, nil
+end
+
 -- DungeonService polls this during the event exit-door hold.
 function EventService.GetEventInteractions(self: typeof(EventService), roomId: number): { [number]: boolean }
 	return self._interactions[roomId] or {}
@@ -816,6 +818,7 @@ end
 function EventService.MarkInteracted(self: typeof(EventService), player: Player, roomId: number)
 	self._interactions[roomId] = self._interactions[roomId] or {}
 	self._interactions[roomId][player.UserId] = true
+	self.OnInteracted:Fire(player, roomId)
 end
 
 -- "<Name> wishes to continue." to the whole party — the Merchant's leave
@@ -856,6 +859,7 @@ function EventService._onMarkEventInteracted(_self: typeof(EventService), player
 	local roomId = entry.room.id
 	EventService._interactions[roomId] = EventService._interactions[roomId] or {}
 	EventService._interactions[roomId][player.UserId] = true
+	EventService.OnInteracted:Fire(player, roomId)
 
 	-- The Merchant's "I want to leave" is an explicit vote — tell the party.
 	if entry.kind == "MerchantShop" then

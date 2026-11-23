@@ -273,6 +273,9 @@ end
 
 --[ Kill credit ]--
 
+-- Makes each Attributes.KillPunch write a new value.
+local killPunchCount = 0
+
 -- The player whose hit killed this mob (the SlainBy stamp), while they
 -- are still here with a character. nil for a non-player death (a room
 -- despawn, a trap with no owner) or a killer who left.
@@ -294,6 +297,20 @@ function MobDeath.GrantKill(context: Context)
 	local slainBy = context.model:GetAttribute(Attributes.SlainBy)
 	if type(slainBy) == "string" and slainBy ~= "" then
 		ExpRewardService:GrantKill(context.enemyType, rewardMultiplier(context.model))
+	end
+
+	-- The kill jolt (Attributes.KillPunch): the killer's own client only,
+	-- and only when a weapon hit did it, not a spell, a status or a relic.
+	local killer = MobDeath.ResolveKiller(context.model)
+	if
+		killer
+		and DamageService
+		and DamageService:LastHitWasWeapon(context.model, killer.Name, ASSIST_WINDOW_SECONDS)
+	then
+		killPunchCount += 1
+		local enemyType = context.enemyType
+		local big = enemyType == EnemyType.Elite or enemyType == EnemyType.Miniboss or enemyType == EnemyType.Boss
+		killer:SetAttribute(Attributes.KillPunch, tostring(killPunchCount) .. "|" .. (if big then "Big" else ""))
 	end
 end
 
